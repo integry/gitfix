@@ -2,9 +2,13 @@
 
 An automated system that monitors GitHub issues, uses Anthropic's Claude Code to generate solutions, and automates the Git workflow including PR creation.
 
-## Stage 1: Authentication, Logging & Project Setup
+## Current Implementation
 
-This initial implementation establishes the foundational components for the automated GitHub issue processor.
+### Stage 1: Authentication, Logging & Project Setup
+✅ Foundational components for the automated GitHub issue processor
+
+### Stage 2: GitHub Issue Detection Daemon
+✅ Daemon that polls GitHub repositories for AI-eligible issues
 
 ## Prerequisites
 
@@ -37,11 +41,21 @@ Create a GitHub App with the following permissions:
    cp .env.example .env
    ```
 
-2. Fill in your GitHub App credentials:
+2. Fill in your credentials and daemon configuration:
    ```
+   # GitHub App Configuration
    GH_APP_ID=your_app_id
    GH_PRIVATE_KEY_PATH=./your-app-private-key.pem
    GH_INSTALLATION_ID=your_installation_id
+   
+   # Daemon Configuration
+   GITHUB_REPOS_TO_MONITOR=owner/repo1,owner/repo2
+   POLLING_INTERVAL_MS=60000
+   
+   # Issue Detection Configuration
+   AI_PRIMARY_TAG=AI
+   AI_EXCLUDE_TAGS_PROCESSING=AI-processing
+   AI_EXCLUDE_TAGS_DONE=AI-done
    ```
 
 3. Place your GitHub App private key file in the project root
@@ -68,10 +82,14 @@ gitfix/
 ├── src/
 │   ├── auth/
 │   │   └── githubAuth.js    # GitHub App authentication
-│   └── utils/
-│       └── logger.js         # Structured logging utility
+│   ├── utils/
+│   │   ├── errorHandler.js  # Error handling utilities
+│   │   └── logger.js        # Structured logging utility
+│   ├── daemon.js            # Issue detection daemon
+│   └── index.js             # Example usage
 ├── config/
 │   └── index.js             # Configuration management
+├── test/                    # Test files
 ├── scripts/                 # Future automation scripts
 ├── .env.example            # Example environment variables
 ├── .gitignore             # Git ignore patterns
@@ -79,6 +97,24 @@ gitfix/
 ```
 
 ## Usage
+
+### Running the Issue Detection Daemon
+
+Start the daemon to monitor GitHub repositories for AI-eligible issues:
+
+```bash
+# Production mode
+npm run daemon
+
+# Development mode with debug logging
+npm run daemon:dev
+```
+
+The daemon will:
+- Poll configured repositories at the specified interval
+- Search for open issues with the AI tag
+- Exclude issues already being processed or completed
+- Log all detected issues for processing
 
 ### GitHub Authentication
 
@@ -134,7 +170,7 @@ npm test
 ## Next Steps
 
 Future issues in this epic will implement:
-- Issue detection and monitoring
+- ✅ Issue detection and monitoring (Stage 2)
 - Task queuing system
 - Git environment management
 - Claude Code integration
