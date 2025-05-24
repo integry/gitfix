@@ -10,11 +10,16 @@ An automated system that monitors GitHub issues, uses Anthropic's Claude Code to
 ### Stage 2: GitHub Issue Detection Daemon
 ✅ Daemon that polls GitHub repositories for AI-eligible issues
 
+### Stage 3: Task Queue and Worker Infrastructure
+✅ BullMQ-based task queue with Redis for managing detected issues
+✅ Worker processes that tag issues and prepare for AI processing
+
 ## Prerequisites
 
 - Node.js 18+ installed
 - GitHub App created with appropriate permissions
 - Claude Max plan subscription
+- Redis server running (for task queue)
 
 ## Setup
 
@@ -114,7 +119,28 @@ The daemon will:
 - Poll configured repositories at the specified interval
 - Search for open issues with the AI tag
 - Exclude issues already being processed or completed
-- Log all detected issues for processing
+- Add detected issues to the task queue for processing
+
+### Running the Worker Process
+
+Start one or more workers to process issues from the queue:
+
+```bash
+# Production mode
+npm run worker
+
+# Development mode with debug logging
+npm run worker:dev
+
+# Run multiple workers (in separate terminals)
+npm run worker & npm run worker
+```
+
+The worker will:
+- Pull jobs from the Redis-backed task queue
+- Add "AI-processing" tag to issues being worked on
+- Post a comment indicating processing has started
+- Prepare for future Claude Code integration
 
 ### GitHub Authentication
 
@@ -144,6 +170,23 @@ console.log(config.github.appId);
 console.log(config.logging.level);
 ```
 
+## Redis Setup
+
+The task queue requires Redis. Install and start Redis:
+
+```bash
+# macOS
+brew install redis
+brew services start redis
+
+# Ubuntu/Debian
+sudo apt-get install redis-server
+sudo systemctl start redis
+
+# Docker
+docker run -d -p 6379:6379 redis:alpine
+```
+
 ## Error Handling
 
 The project implements consistent error handling patterns:
@@ -152,6 +195,7 @@ The project implements consistent error handling patterns:
 2. Errors are logged with full context
 3. Critical configuration errors cause early exit
 4. Non-critical errors are handled gracefully
+5. Queue jobs retry automatically with exponential backoff
 
 ## Security Best Practices
 
@@ -171,7 +215,7 @@ npm test
 
 Future issues in this epic will implement:
 - ✅ Issue detection and monitoring (Stage 2)
-- Task queuing system
+- ✅ Task queuing system (Stage 3)
 - Git environment management
 - Claude Code integration
 - Automated PR creation
