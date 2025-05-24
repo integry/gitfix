@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
 import logger from './utils/logger.js';
 import { withErrorHandling, handleError } from './utils/errorHandler.js';
+import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
@@ -106,7 +107,7 @@ async function pollForIssues() {
             const issues = await fetchIssuesForRepo(octokit, repoFullName);
             
             if (issues.length > 0) {
-                issues.forEach(issue => {
+                for (const issue of issues) {
                     logger.info({ 
                         issueId: issue.id, 
                         issueNumber: issue.number, 
@@ -115,9 +116,37 @@ async function pollForIssues() {
                         repository: repoFullName
                     }, 'Detected eligible issue');
                     
-                    // TODO: In the next stage, this issue will be added to a task queue
-                    allDetectedIssues.push(issue);
-                });
+                    // Add issue to the queue
+                    try {
+                        const jobId = `issue-${issue.repoOwner}-${issue.repoName}-${issue.number}`;
+                        await issueQueue.add('processGitHubIssue', issue, {
+                            jobId,
+                            // Prevent duplicate jobs for the same issue
+                            attempts: 3,
+                            backoff: {
+                                type: 'exponential',
+                                delay: 2000,
+                            },
+                        });
+                        
+                        logger.info({ 
+                            jobId,
+                            issueNumber: issue.number,
+                            repository: repoFullName
+                        }, 'Successfully added issue to processing queue');
+                        
+                        allDetectedIssues.push(issue);
+                    } catch (error) {
+                        if (error.message?.includes('Job already exists')) {
+                            logger.debug({ 
+                                issueNumber: issue.number,
+                                repository: repoFullName 
+                            }, 'Issue already in queue, skipping');
+                        } else {
+                            handleError(error, `Failed to add issue ${issue.number} to queue`);
+                        }
+                    }
+                }
             }
         } catch (error) {
             handleError(error, `Error polling repository ${repoFullName}`);
@@ -160,15 +189,17 @@ function startDaemon() {
     const intervalId = setInterval(safePoll, POLLING_INTERVAL_MS);
 
     // Handle graceful shutdown
-    process.on('SIGINT', () => {
+    process.on('SIGINT', async () => {
         logger.info('Received SIGINT, shutting down gracefully...');
         clearInterval(intervalId);
+        await shutdownQueue();
         process.exit(0);
     });
 
-    process.on('SIGTERM', () => {
+    process.on('SIGTERM', async () => {
         logger.info('Received SIGTERM, shutting down gracefully...');
         clearInterval(intervalId);
+        await shutdownQueue();
         process.exit(0);
     });
 }
