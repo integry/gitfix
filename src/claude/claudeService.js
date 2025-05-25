@@ -83,8 +83,9 @@ export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
             // Mount the worktree as the workspace
             '-v', `${worktreePath}:/home/node/workspace:rw`,
             
-            // Mount Claude config directory (read-only for security)
-            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:ro`,
+            // Mount Claude config directory and main config file
+            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:rw`,
+            '-v', `${path.join(os.homedir(), '.claude.json')}:/home/node/.claude.json:rw`,
             
             // Pass GitHub token as environment variable
             '-e', `GH_TOKEN=${githubToken}`,
@@ -99,7 +100,6 @@ export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
             'claude',
             '-p', prompt,
             '--output-format', 'json',
-            '--dangerously-skip-permissions',
             '--max-turns', CLAUDE_MAX_TURNS.toString()
         ];
 
