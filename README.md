@@ -19,6 +19,13 @@ An automated system that monitors GitHub issues, uses Anthropic's Claude Code to
 ✅ Git worktree creation for isolated issue processing
 ✅ Branch management and cleanup automation
 
+### Stage 5: Claude Code Integration & Execution
+✅ Docker-based Claude Code CLI execution environment
+✅ Secure containerization with network restrictions
+✅ Automated prompt engineering and context provisioning
+✅ Claude output parsing and error handling
+✅ Integration with worker process pipeline
+
 ## Prerequisites
 
 - Node.js 18+ installed
@@ -93,16 +100,46 @@ git --version
 git worktree --help
 ```
 
-### 4. Claude Authentication
+### 4. Claude Code Setup
 
-For Claude Code CLI access:
+For Claude Code CLI integration:
 
-1. Ensure you have a Claude Max subscription
-2. Run `claude login` on your local machine
-3. This generates `~/.config/claude-code/auth.json`
-4. This file will be used for non-interactive Claude Code execution in later stages
+1. **Install Claude Code CLI globally:**
+   ```bash
+   npm install -g @anthropic-ai/claude-code
+   ```
 
-### 4. Installation
+2. **Authenticate with Claude:**
+   ```bash
+   claude login
+   ```
+   This generates `~/.config/claude-code/auth.json` needed for non-interactive execution.
+
+3. **Install Docker:**
+   The worker uses Docker to run Claude Code in a secure, isolated environment.
+   ```bash
+   # Ubuntu/Debian
+   sudo apt-get update
+   sudo apt-get install docker.io
+   sudo usermod -aG docker $USER
+   
+   # macOS (with Homebrew)
+   brew install docker
+   
+   # Verify installation
+   docker --version
+   ```
+
+4. **Configure Claude settings in .env:**
+   ```bash
+   # Claude Code Configuration
+   CLAUDE_DOCKER_IMAGE=claude-code-processor:latest
+   CLAUDE_CONFIG_PATH=~/.config/claude-code
+   CLAUDE_MAX_TURNS=10
+   CLAUDE_TIMEOUT_MS=300000
+   ```
+
+### 5. Installation
 
 ```bash
 npm install
@@ -115,15 +152,22 @@ gitfix/
 ├── src/
 │   ├── auth/
 │   │   └── githubAuth.js    # GitHub App authentication
+│   ├── claude/
+│   │   └── claudeService.js # Claude Code CLI integration
+│   ├── git/
+│   │   └── repoManager.js   # Git operations and worktree management
+│   ├── queue/
+│   │   └── taskQueue.js     # BullMQ task queue setup
 │   ├── utils/
 │   │   ├── errorHandler.js  # Error handling utilities
 │   │   └── logger.js        # Structured logging utility
 │   ├── daemon.js            # Issue detection daemon
-│   └── index.js             # Example usage
-├── config/
-│   └── index.js             # Configuration management
+│   └── worker.js            # Job processing worker
+├── scripts/
+│   ├── claude-entrypoint.sh # Docker entrypoint for Claude execution
+│   └── init-firewall.sh     # Security firewall setup
 ├── test/                    # Test files
-├── scripts/                 # Future automation scripts
+├── Dockerfile.claude        # Docker image for Claude Code execution
 ├── .env.example            # Example environment variables
 ├── .gitignore             # Git ignore patterns
 └── package.json           # Project dependencies
@@ -168,7 +212,9 @@ The worker will:
 - Pull jobs from the Redis-backed task queue
 - Add "AI-processing" tag to issues being worked on
 - Post a comment indicating processing has started
-- Prepare for future Claude Code integration
+- Set up isolated Git worktree for the issue
+- Execute Claude Code in secure Docker environment
+- Parse and handle Claude's analysis and code changes
 
 ### GitHub Authentication
 
@@ -241,13 +287,14 @@ npm test
 
 ## Next Steps
 
-Future issues in this epic will implement:
+Implementation status across stages:
 - ✅ Issue detection and monitoring (Stage 2)
 - ✅ Task queuing system (Stage 3)
-- Git environment management
-- Claude Code integration
-- Automated PR creation
-- Pre-PR checks and validation
+- ✅ Git environment management (Stage 4)
+- ✅ Claude Code integration (Stage 5)
+- 🚧 Automated commit and PR creation (Stage 6)
+- 🚧 Pre-PR checks and validation (Stage 7)
+- 🚧 Advanced features and cleanup (Stage 8)
 
 ## Contributing
 
