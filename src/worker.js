@@ -3,6 +3,12 @@ import { GITHUB_ISSUE_QUEUE_NAME, createWorker } from './queue/taskQueue.js';
 import logger from './utils/logger.js';
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
 import { withErrorHandling } from './utils/errorHandler.js';
+import { 
+    ensureRepoCloned, 
+    createWorktreeForIssue, 
+    cleanupWorktree,
+    getRepoUrl 
+} from './git/repoManager.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
@@ -109,33 +115,121 @@ async function processGitHubIssueJob(job) {
         logger.info({ 
             jobId, 
             issueNumber: issue.number 
-        }, 'Starting core processing (placeholder for Git operations and Claude integration)...');
+        }, 'Starting Git environment setup...');
+
+        // Update progress: Git setup phase
+        await job.updateProgress(25);
         
-        // TODO: Future implementation will include:
-        // 1. Clone/pull the repository
-        // 2. Create a new branch for the issue
-        // 3. Execute Claude Code to analyze and fix the issue
-        // 4. Commit changes
-        // 5. Push branch and create PR
-        // 6. Update issue with results
+        // Get GitHub token for cloning
+        const githubToken = await octokit.auth();
+        const repoUrl = getRepoUrl(issue);
         
-        // Simulate processing work
-        const simulatedWorkMs = parseInt(process.env.SIMULATED_WORK_MS || '5000', 10);
-        await new Promise(resolve => setTimeout(resolve, simulatedWorkMs));
+        let localRepoPath;
+        let worktreeInfo;
         
-        logger.info({ 
-            jobId, 
-            issueNumber: issue.number,
-            simulatedWorkMs
-        }, 'Core processing simulation complete');
+        try {
+            // Step 1: Ensure repository is cloned/updated
+            logger.info({ 
+                jobId, 
+                repo: `${issue.repoOwner}/${issue.repoName}`,
+                repoUrl 
+            }, 'Cloning/updating repository...');
+            
+            localRepoPath = await ensureRepoCloned(
+                repoUrl, 
+                issue.repoOwner, 
+                issue.repoName, 
+                githubToken.token
+            );
+            
+            await job.updateProgress(50);
+            
+            // Step 2: Create worktree for this issue
+            logger.info({ 
+                jobId, 
+                issueNumber: issue.number,
+                issueTitle: issue.title,
+                localRepoPath
+            }, 'Creating Git worktree for issue...');
+            
+            worktreeInfo = await createWorktreeForIssue(
+                localRepoPath,
+                issue.number,
+                issue.title,
+                issue.repoOwner,
+                issue.repoName
+            );
+            
+            await job.updateProgress(75);
+            
+            logger.info({ 
+                jobId, 
+                issueNumber: issue.number,
+                worktreePath: worktreeInfo.worktreePath,
+                branchName: worktreeInfo.branchName
+            }, 'Git environment setup complete');
+            
+            // TODO: Future implementation will include:
+            // 3. Execute Claude Code to analyze and fix the issue
+            // 4. Commit changes
+            // 5. Push branch and create PR
+            // 6. Update issue with results
+            
+            // Simulate Claude processing work
+            const simulatedWorkMs = parseInt(process.env.SIMULATED_WORK_MS || '3000', 10);
+            logger.info({ 
+                jobId, 
+                issueNumber: issue.number,
+                worktreePath: worktreeInfo.worktreePath
+            }, 'Simulating Claude Code execution...');
+            
+            await new Promise(resolve => setTimeout(resolve, simulatedWorkMs));
+            
+            logger.info({ 
+                jobId, 
+                issueNumber: issue.number,
+                simulatedWorkMs,
+                worktreePath: worktreeInfo.worktreePath
+            }, 'Processing simulation complete');
+            
+        } finally {
+            // Cleanup: Remove worktree after processing
+            if (worktreeInfo) {
+                try {
+                    logger.info({ 
+                        jobId, 
+                        issueNumber: issue.number,
+                        worktreePath: worktreeInfo.worktreePath
+                    }, 'Cleaning up Git worktree...');
+                    
+                    await cleanupWorktree(
+                        localRepoPath, 
+                        worktreeInfo.worktreePath, 
+                        worktreeInfo.branchName,
+                        true // Delete the branch since we're just simulating
+                    );
+                } catch (cleanupError) {
+                    logger.warn({ 
+                        jobId, 
+                        issueNumber: issue.number,
+                        error: cleanupError.message
+                    }, 'Failed to cleanup worktree');
+                }
+            }
+        }
 
         // Update progress tracking
         await job.updateProgress(100);
 
         return { 
-            status: 'simulated_processing_complete', 
+            status: 'git_environment_ready', 
             issueNumber: issue.number,
             repository: `${issue.repoOwner}/${issue.repoName}`,
+            gitSetup: {
+                localRepoPath: localRepoPath,
+                worktreeCreated: !!worktreeInfo,
+                branchName: worktreeInfo?.branchName
+            },
             processingTime: simulatedWorkMs
         };
 

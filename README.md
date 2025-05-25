@@ -14,12 +14,19 @@ An automated system that monitors GitHub issues, uses Anthropic's Claude Code to
 ✅ BullMQ-based task queue with Redis for managing detected issues
 ✅ Worker processes that tag issues and prepare for AI processing
 
+### Stage 4: Git Environment Management
+✅ Repository cloning and updating with authentication
+✅ Git worktree creation for isolated issue processing
+✅ Branch management and cleanup automation
+
 ## Prerequisites
 
 - Node.js 18+ installed
 - GitHub App created with appropriate permissions
 - Claude Max plan subscription
 - Redis server running (for task queue)
+- Git installed (version 2.25+ recommended for worktree support)
+- Sufficient disk space for repository clones and worktrees
 
 ## Setup
 
@@ -61,11 +68,32 @@ Create a GitHub App with the following permissions:
    AI_PRIMARY_TAG=AI
    AI_EXCLUDE_TAGS_PROCESSING=AI-processing
    AI_EXCLUDE_TAGS_DONE=AI-done
+   
+   # Git Configuration
+   GIT_CLONES_BASE_PATH=/tmp/git-processor/clones
+   GIT_WORKTREES_BASE_PATH=/tmp/git-processor/worktrees
+   GIT_DEFAULT_BRANCH=main
+   GIT_SHALLOW_CLONE_DEPTH=
    ```
 
 3. Place your GitHub App private key file in the project root
 
-### 3. Claude Authentication
+### 3. Git Environment Setup
+
+Ensure the worker can access repository storage directories:
+
+```bash
+# Create directories with appropriate permissions
+sudo mkdir -p /tmp/git-processor/{clones,worktrees}
+sudo chown -R $(whoami) /tmp/git-processor
+chmod 755 /tmp/git-processor
+
+# Verify Git installation and worktree support
+git --version
+git worktree --help
+```
+
+### 4. Claude Authentication
 
 For Claude Code CLI access:
 
