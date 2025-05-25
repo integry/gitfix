@@ -9,6 +9,7 @@ import {
     cleanupWorktree,
     getRepoUrl 
 } from './git/repoManager.js';
+import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
@@ -169,28 +170,35 @@ async function processGitHubIssueJob(job) {
                 branchName: worktreeInfo.branchName
             }, 'Git environment setup complete');
             
+            // Step 3: Execute Claude Code to analyze and fix the issue
+            logger.info({ 
+                jobId, 
+                issueNumber: issue.number,
+                worktreePath: worktreeInfo.worktreePath
+            }, 'Starting Claude Code execution...');
+            
+            await job.updateProgress(80);
+            
+            const claudeResult = await executeClaudeCode({
+                worktreePath: worktreeInfo.worktreePath,
+                issue: issue,
+                githubToken: githubToken.token
+            });
+            
+            logger.info({ 
+                jobId, 
+                issueNumber: issue.number,
+                claudeSuccess: claudeResult.success,
+                executionTime: claudeResult.executionTime,
+                modifiedFiles: claudeResult.modifiedFiles?.length || 0
+            }, 'Claude Code execution completed');
+            
             // TODO: Future implementation will include:
-            // 3. Execute Claude Code to analyze and fix the issue
-            // 4. Commit changes
+            // 4. Commit changes (if Claude made any)
             // 5. Push branch and create PR
-            // 6. Update issue with results
+            // 6. Update issue with results and conversation log
             
-            // Simulate Claude processing work
-            const simulatedWorkMs = parseInt(process.env.SIMULATED_WORK_MS || '3000', 10);
-            logger.info({ 
-                jobId, 
-                issueNumber: issue.number,
-                worktreePath: worktreeInfo.worktreePath
-            }, 'Simulating Claude Code execution...');
-            
-            await new Promise(resolve => setTimeout(resolve, simulatedWorkMs));
-            
-            logger.info({ 
-                jobId, 
-                issueNumber: issue.number,
-                simulatedWorkMs,
-                worktreePath: worktreeInfo.worktreePath
-            }, 'Processing simulation complete');
+            await job.updateProgress(90);
             
         } finally {
             // Cleanup: Remove worktree after processing
@@ -222,7 +230,7 @@ async function processGitHubIssueJob(job) {
         await job.updateProgress(100);
 
         return { 
-            status: 'git_environment_ready', 
+            status: claudeResult?.success ? 'claude_processing_complete' : 'claude_processing_failed', 
             issueNumber: issue.number,
             repository: `${issue.repoOwner}/${issue.repoName}`,
             gitSetup: {
@@ -230,7 +238,13 @@ async function processGitHubIssueJob(job) {
                 worktreeCreated: !!worktreeInfo,
                 branchName: worktreeInfo?.branchName
             },
-            processingTime: simulatedWorkMs
+            claudeResult: {
+                success: claudeResult?.success || false,
+                executionTime: claudeResult?.executionTime || 0,
+                modifiedFiles: claudeResult?.modifiedFiles || [],
+                conversationLog: claudeResult?.conversationLog || [],
+                error: claudeResult?.error || null
+            }
         };
 
     } catch (error) {
@@ -251,13 +265,24 @@ async function processGitHubIssueJob(job) {
 /**
  * Starts the worker process
  */
-function startWorker() {
+async function startWorker() {
     logger.info({
         queue: GITHUB_ISSUE_QUEUE_NAME,
         processingTag: AI_PROCESSING_TAG,
         primaryTag: AI_PRIMARY_TAG,
         doneTag: AI_EXCLUDE_TAGS_DONE
     }, 'Starting GitHub Issue Worker...');
+    
+    // Ensure Claude Docker image is built before starting worker
+    logger.info('Checking Claude Code Docker image...');
+    const imageReady = await buildClaudeDockerImage();
+    
+    if (!imageReady) {
+        logger.error('Failed to build Claude Code Docker image. Worker may not function properly.');
+        // Continue anyway - worker can still handle Git operations
+    } else {
+        logger.info('Claude Code Docker image is ready');
+    }
     
     const worker = createWorker(GITHUB_ISSUE_QUEUE_NAME, processGitHubIssueJob);
 
@@ -282,5 +307,8 @@ export { processGitHubIssueJob, startWorker };
 
 // Start worker if this is the main module
 if (import.meta.url === `file://${process.argv[1]}`) {
-    startWorker();
+    startWorker().catch(error => {
+        logger.error({ error: error.message }, 'Failed to start worker');
+        process.exit(1);
+    });
 }

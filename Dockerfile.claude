@@ -1,0 +1,52 @@
+# Dockerfile for Claude Code execution environment
+# Based on Anthropic's official devcontainer setup for secure AI code execution
+
+FROM node:20-slim
+
+# Install required system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    ca-certificates \
+    iptables \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update \
+    && apt-get install gh -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 nodeuser && \
+    echo "nodeuser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+# Install Claude Code CLI globally
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create directories for workspace and config
+RUN mkdir -p /home/nodeuser/workspace /home/nodeuser/.config/claude-code && \
+    chown -R nodeuser:nodeuser /home/nodeuser
+
+# Copy firewall initialization script
+COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+# Switch to non-root user
+USER nodeuser
+WORKDIR /home/nodeuser/workspace
+
+# Set up Git configuration for the container user
+RUN git config --global user.name "Claude Code Bot" && \
+    git config --global user.email "claude-bot@anthropic.com" && \
+    git config --global init.defaultBranch main
+
+# Create entrypoint script
+COPY --chown=nodeuser:nodeuser scripts/claude-entrypoint.sh /home/nodeuser/claude-entrypoint.sh
+RUN chmod +x /home/nodeuser/claude-entrypoint.sh
+
+# Set default entrypoint
+ENTRYPOINT ["/home/nodeuser/claude-entrypoint.sh"]
