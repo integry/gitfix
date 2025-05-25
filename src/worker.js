@@ -127,6 +127,7 @@ async function processGitHubIssueJob(job) {
         
         let localRepoPath;
         let worktreeInfo;
+        let claudeResult;
         
         try {
             // Step 1: Ensure repository is cloned/updated
@@ -179,7 +180,7 @@ async function processGitHubIssueJob(job) {
             
             await job.updateProgress(80);
             
-            const claudeResult = await executeClaudeCode({
+            claudeResult = await executeClaudeCode({
                 worktreePath: worktreeInfo.worktreePath,
                 issue: issue,
                 githubToken: githubToken.token

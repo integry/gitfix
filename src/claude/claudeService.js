@@ -6,7 +6,7 @@ import { handleError } from '../utils/errorHandler.js';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
-const CLAUDE_CONFIG_PATH = process.env.CLAUDE_CONFIG_PATH || path.join(os.homedir(), '.config', 'claude-code');
+const CLAUDE_CONFIG_PATH = process.env.CLAUDE_CONFIG_PATH || path.join(os.homedir(), '.claude');
 const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '10', 10);
 const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10); // 5 minutes
 
@@ -84,7 +84,7 @@ export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
             '-v', `${worktreePath}:/home/node/workspace:rw`,
             
             // Mount Claude config directory (read-only for security)
-            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.config/claude-code:ro`,
+            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:ro`,
             
             // Pass GitHub token as environment variable
             '-e', `GH_TOKEN=${githubToken}`,

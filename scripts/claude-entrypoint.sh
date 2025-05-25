@@ -4,14 +4,8 @@
 
 set -e
 
-# Initialize firewall if running as root or with sudo capabilities
-if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
-    echo "Initializing container firewall..."
-    sudo /usr/local/bin/init-firewall.sh
-else
-    echo "Warning: Cannot initialize firewall - no sudo privileges"
-    echo "Consider running container with --privileged or proper sudo setup"
-fi
+# Skip firewall initialization for now (requires privileged container)
+echo "Skipping firewall setup (would require --privileged Docker flag)"
 
 # Ensure GitHub token is available
 if [ -z "$GH_TOKEN" ]; then
@@ -23,10 +17,10 @@ else
 fi
 
 # Ensure Claude config is mounted and accessible
-if [ ! -f "/home/node/.config/claude-code/auth.json" ]; then
-    echo "Warning: Claude auth.json not found"
+if [ ! -f "/home/node/.claude/.credentials.json" ]; then
+    echo "Warning: Claude credentials not found"
     echo "Ensure Claude config directory is properly mounted"
-    echo "Expected path: /home/node/.config/claude-code/auth.json"
+    echo "Expected path: /home/node/.claude/.credentials.json"
 else
     echo "Claude authentication configuration found"
 fi
