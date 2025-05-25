@@ -20,24 +20,23 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && apt-get install gh -y \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for security
-RUN useradd -m -u 1000 nodeuser && \
-    echo "nodeuser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+# Use the existing node user (UID 1000) and give it sudo privileges
+RUN echo "node ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
 # Create directories for workspace and config
-RUN mkdir -p /home/nodeuser/workspace /home/nodeuser/.config/claude-code && \
-    chown -R nodeuser:nodeuser /home/nodeuser
+RUN mkdir -p /home/node/workspace /home/node/.config/claude-code && \
+    chown -R node:node /home/node
 
 # Copy firewall initialization script
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh
 
 # Switch to non-root user
-USER nodeuser
-WORKDIR /home/nodeuser/workspace
+USER node
+WORKDIR /home/node/workspace
 
 # Set up Git configuration for the container user
 RUN git config --global user.name "Claude Code Bot" && \
@@ -45,8 +44,8 @@ RUN git config --global user.name "Claude Code Bot" && \
     git config --global init.defaultBranch main
 
 # Create entrypoint script
-COPY --chown=nodeuser:nodeuser scripts/claude-entrypoint.sh /home/nodeuser/claude-entrypoint.sh
-RUN chmod +x /home/nodeuser/claude-entrypoint.sh
+COPY --chown=node:node scripts/claude-entrypoint.sh /home/node/claude-entrypoint.sh
+RUN chmod +x /home/node/claude-entrypoint.sh
 
 # Set default entrypoint
-ENTRYPOINT ["/home/nodeuser/claude-entrypoint.sh"]
+ENTRYPOINT ["/home/node/claude-entrypoint.sh"]

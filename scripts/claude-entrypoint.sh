@@ -23,18 +23,18 @@ else
 fi
 
 # Ensure Claude config is mounted and accessible
-if [ ! -f "/home/nodeuser/.config/claude-code/auth.json" ]; then
+if [ ! -f "/home/node/.config/claude-code/auth.json" ]; then
     echo "Warning: Claude auth.json not found"
     echo "Ensure Claude config directory is properly mounted"
-    echo "Expected path: /home/nodeuser/.config/claude-code/auth.json"
+    echo "Expected path: /home/node/.config/claude-code/auth.json"
 else
     echo "Claude authentication configuration found"
 fi
 
 # Set proper permissions for workspace
-if [ -d "/home/nodeuser/workspace" ]; then
+if [ -d "/home/node/workspace" ]; then
     # Ensure the user owns the workspace
-    sudo chown -R nodeuser:nodeuser /home/nodeuser/workspace
+    sudo chown -R node:node /home/node/workspace
     echo "Workspace permissions set"
 fi
 

@@ -81,16 +81,16 @@ export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
             '--network', 'bridge', // Restrict network access
             
             // Mount the worktree as the workspace
-            '-v', `${worktreePath}:/home/nodeuser/workspace:rw`,
+            '-v', `${worktreePath}:/home/node/workspace:rw`,
             
             // Mount Claude config directory (read-only for security)
-            '-v', `${CLAUDE_CONFIG_PATH}:/home/nodeuser/.config/claude-code:ro`,
+            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.config/claude-code:ro`,
             
             // Pass GitHub token as environment variable
             '-e', `GH_TOKEN=${githubToken}`,
             
             // Set working directory
-            '-w', '/home/nodeuser/workspace',
+            '-w', '/home/node/workspace',
             
             // Use the Claude Code Docker image
             CLAUDE_DOCKER_IMAGE,
