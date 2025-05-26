@@ -36,11 +36,14 @@ Important notes:
 - You are working in a git worktree environment
 - Use the GitHub CLI (\`gh\`) for all GitHub-related tasks
 - Always commit and push your changes before creating the PR
-- If you encounter authentication or permission issues, continue with the implementation and document any blockers
+- For push operations, you may need to set up the remote URL with authentication
+- If \`git push\` fails, try: \`git push --set-upstream origin <branch-name>\`
+- For PR creation, use: \`gh pr create --title "Title" --body "Description"\`
+- If authentication fails, try: \`gh auth status\` to verify setup
 - Focus on completing the core functionality first, then handle git operations
 - Make sure to create a meaningful branch name and PR description
 
-Remember: The goal is to fully implement the requested feature and create a complete pull request.`;
+CRITICAL: The main goal is to create a working pull request. If git operations fail, try alternative approaches and document the exact error messages.`;
 }
 
 /**

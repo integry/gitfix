@@ -15,7 +15,7 @@ import Redis from 'ioredis';
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
-const AI_EXCLUDE_TAGS_DONE = process.env.AI_EXCLUDE_TAGS_DONE || 'AI-done';
+const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 
 /**
  * Processes a GitHub issue job from the queue
@@ -54,7 +54,7 @@ async function processGitHubIssueJob(job) {
         const currentLabels = currentIssueData.data.labels.map(label => label.name);
         const hasProcessingTag = currentLabels.includes(AI_PROCESSING_TAG);
         const hasPrimaryTag = currentLabels.includes(AI_PRIMARY_TAG);
-        const hasDoneTag = currentLabels.includes(AI_EXCLUDE_TAGS_DONE);
+        const hasDoneTag = currentLabels.includes(AI_DONE_TAG);
 
         // Validate issue state
         if (!hasPrimaryTag) {
@@ -73,7 +73,7 @@ async function processGitHubIssueJob(job) {
             logger.warn({ 
                 jobId, 
                 issueNumber: issueRef.number 
-            }, `Issue already has '${AI_EXCLUDE_TAGS_DONE}' tag. Skipping.`);
+            }, `Issue already has '${AI_DONE_TAG}' tag. Skipping.`);
             return { 
                 status: 'skipped', 
                 reason: 'Already done',
@@ -251,11 +251,133 @@ async function processGitHubIssueJob(job) {
                 issueNumber: issueRef.number 
             }, 'Posted completion comment to issue');
             
-            // TODO: Future implementation will include:
-            // 4. Commit changes (if Claude made any)
-            // 5. Push branch and create PR
+            // Check if a PR was created by looking for recent PRs
+            let prInfo = null;
+            try {
+                logger.info({ 
+                    jobId, 
+                    issueNumber: issueRef.number 
+                }, 'Checking for created pull requests...');
+                
+                const prsResponse = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
+                    owner: issueRef.repoOwner,
+                    repo: issueRef.repoName,
+                    state: 'open',
+                    sort: 'created',
+                    direction: 'desc',
+                    per_page: 10
+                });
+                
+                // Look for PRs created in the last 30 minutes that might be from this run
+                const recentTime = new Date(Date.now() - 30 * 60 * 1000);
+                const recentPR = prsResponse.data.find(pr => {
+                    const createdAt = new Date(pr.created_at);
+                    return createdAt > recentTime && 
+                           (pr.title.includes(`#${issueRef.number}`) || 
+                            pr.head.ref.includes(`${issueRef.number}`) ||
+                            pr.body?.includes(`#${issueRef.number}`));
+                });
+                
+                if (recentPR) {
+                    prInfo = {
+                        number: recentPR.number,
+                        url: recentPR.html_url,
+                        title: recentPR.title,
+                        branch: recentPR.head.ref
+                    };
+                    logger.info({ 
+                        jobId, 
+                        issueNumber: issueRef.number,
+                        prNumber: recentPR.number,
+                        prUrl: recentPR.html_url
+                    }, 'Found created pull request');
+                }
+            } catch (prCheckError) {
+                logger.warn({ 
+                    jobId, 
+                    issueNumber: issueRef.number,
+                    error: prCheckError.message
+                }, 'Failed to check for created pull requests');
+            }
             
-            await job.updateProgress(90);
+            // Update issue labels: remove AI-processing, add AI-done
+            try {
+                logger.info({ 
+                    jobId, 
+                    issueNumber: issueRef.number 
+                }, 'Updating issue labels...');
+                
+                // Remove AI-processing label
+                try {
+                    await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        issue_number: issueRef.number,
+                        name: AI_PROCESSING_TAG,
+                    });
+                    logger.info({ 
+                        jobId, 
+                        issueNumber: issueRef.number 
+                    }, `Removed '${AI_PROCESSING_TAG}' label`);
+                } catch (removeError) {
+                    logger.warn({ 
+                        jobId, 
+                        issueNumber: issueRef.number,
+                        error: removeError.message
+                    }, `Failed to remove '${AI_PROCESSING_TAG}' label`);
+                }
+                
+                // Add AI-done label
+                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                    owner: issueRef.repoOwner,
+                    repo: issueRef.repoName,
+                    issue_number: issueRef.number,
+                    labels: [AI_DONE_TAG],
+                });
+                logger.info({ 
+                    jobId, 
+                    issueNumber: issueRef.number 
+                }, `Added '${AI_DONE_TAG}' label`);
+                
+            } catch (labelError) {
+                logger.warn({ 
+                    jobId, 
+                    issueNumber: issueRef.number,
+                    error: labelError.message
+                }, 'Failed to update issue labels');
+            }
+            
+            // Update the completion comment if we found a PR
+            if (prInfo) {
+                try {
+                    const prUpdateComment = `\n\n**🎉 Pull Request Created Successfully!**\n\n` +
+                                          `- **PR #${prInfo.number}**: [${prInfo.title}](${prInfo.url})\n` +
+                                          `- **Branch**: \`${prInfo.branch}\`\n` +
+                                          `- **Status**: Ready for review\n\n` +
+                                          `The implementation is now available for review and can be merged when approved.`;
+                    
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        issue_number: issueRef.number,
+                        body: prUpdateComment,
+                    });
+                    
+                    logger.info({ 
+                        jobId, 
+                        issueNumber: issueRef.number,
+                        prNumber: prInfo.number
+                    }, 'Posted PR update comment');
+                } catch (updateError) {
+                    logger.warn({ 
+                        jobId, 
+                        issueNumber: issueRef.number,
+                        error: updateError.message
+                    }, 'Failed to post PR update comment');
+                }
+            }
+            
+            await job.updateProgress(95);
             
         } finally {
             // Cleanup: Remove worktree after processing
@@ -331,7 +453,7 @@ async function createLogFiles(claudeResult, issueRef) {
     const os = await import('os');
     
     const logDir = path.join(os.tmpdir(), 'claude-logs');
-    await fs.mkdir(logDir, { recursive: true });
+    await fs.promises.mkdir(logDir, { recursive: true });
     
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filePrefix = `issue-${issueRef.number}-${timestamp}`;
@@ -348,15 +470,17 @@ async function createLogFiles(claudeResult, issueRef) {
             repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
             messages: claudeResult.conversationLog
         };
-        await fs.writeFile(conversationPath, JSON.stringify(conversationData, null, 2));
+        await fs.promises.writeFile(conversationPath, JSON.stringify(conversationData, null, 2));
         files.conversation = conversationPath;
+        logger.info({ conversationPath, messageCount: claudeResult.conversationLog.length }, 'Created conversation log file');
     }
     
     // Create raw output file
     if (claudeResult?.rawOutput) {
         const outputPath = path.join(logDir, `${filePrefix}-output.txt`);
-        await fs.writeFile(outputPath, claudeResult.rawOutput);
+        await fs.promises.writeFile(outputPath, claudeResult.rawOutput);
         files.output = outputPath;
+        logger.info({ outputPath, size: claudeResult.rawOutput.length }, 'Created raw output log file');
     }
     
     return files;
@@ -397,20 +521,45 @@ async function generateCompletionComment(claudeResult, issueRef) {
         }
     }
     
-    // Create log files for detailed data
+    // Create log files and include summaries in comment
     try {
         const logFiles = await createLogFiles(claudeResult, issueRef);
         
         if (Object.keys(logFiles).length > 0) {
             comment += `**📁 Detailed Logs:**\n`;
-            comment += `Detailed execution logs have been generated for this run:\n`;
-            if (logFiles.conversation) {
-                comment += `- Conversation Log: ${claudeResult.conversationLog?.length || 0} messages\n`;
+            comment += `Execution logs generated:\n`;
+            
+            // Add conversation summary
+            if (logFiles.conversation && claudeResult.conversationLog?.length > 0) {
+                comment += `- Conversation: ${claudeResult.conversationLog.length} messages\n`;
+                comment += `- Session: \`${claudeResult.sessionId}\`\n`;
             }
+            
+            // Add output summary
             if (logFiles.output) {
-                comment += `- Raw Output: ${(claudeResult.rawOutput?.length || 0)} characters\n`;
+                comment += `- Raw Output: ${(claudeResult.rawOutput?.length || 0).toLocaleString()} characters\n`;
             }
-            comment += `\n*Note: Log files are temporarily stored for debugging purposes.*\n\n`;
+            
+            // Add log file paths for debugging
+            comment += `\nLog files stored at:\n`;
+            Object.entries(logFiles).forEach(([type, path]) => {
+                comment += `- ${type}: \`${path}\`\n`;
+            });
+            
+            comment += `\n<details>\n<summary>💬 Latest Conversation Messages</summary>\n\n`;
+            if (claudeResult.conversationLog && claudeResult.conversationLog.length > 0) {
+                const lastMessages = claudeResult.conversationLog.slice(-3);
+                comment += `\`\`\`\n`;
+                lastMessages.forEach(msg => {
+                    if (msg.type === 'assistant') {
+                        const content = msg.message?.content?.[0]?.text || '[content unavailable]';
+                        const preview = content.substring(0, 200);
+                        comment += `ASSISTANT: ${preview}${content.length > 200 ? '...' : ''}\n\n`;
+                    }
+                });
+                comment += `\`\`\`\n`;
+            }
+            comment += `</details>\n\n`;
         }
     } catch (logError) {
         logger.warn({
@@ -524,7 +673,7 @@ async function startWorker(options = {}) {
         queue: GITHUB_ISSUE_QUEUE_NAME,
         processingTag: AI_PROCESSING_TAG,
         primaryTag: AI_PRIMARY_TAG,
-        doneTag: AI_EXCLUDE_TAGS_DONE,
+        doneTag: AI_DONE_TAG,
         resetPerformed: options.reset || false
     }, 'Starting GitHub Issue Worker...');
     

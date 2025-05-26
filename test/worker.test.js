@@ -4,7 +4,7 @@ import assert from 'node:assert';
 // Set up environment variables for testing
 process.env.AI_PROCESSING_TAG = 'AI-processing';
 process.env.AI_PRIMARY_TAG = 'AI';
-process.env.AI_EXCLUDE_TAGS_DONE = 'AI-done';
+process.env.AI_DONE_TAG = 'AI-done';
 process.env.SIMULATED_WORK_MS = '100'; // Fast for testing
 
 // Mock modules

@@ -105,7 +105,7 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
         .substring(0, 50);
     
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-    const branchName = `ai-fix/${issueId}-${sanitizedTitle}`;
+    const branchName = `ai-fix/${issueId}-${sanitizedTitle}-${timestamp}`;
     const worktreeDirName = `issue-${issueId}-${timestamp}`;
     const worktreePath = path.join(WORKTREES_BASE_PATH, owner, repoName, worktreeDirName);
     
@@ -150,14 +150,49 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
             issueId
         }, 'Creating Git worktree...');
         
+        // Clean up any existing worktrees and branches
+        try {
+            // First, try to prune any stale worktree references
+            await git.raw(['worktree', 'prune']);
+            logger.debug('Pruned stale worktree references');
+        } catch (pruneError) {
+            logger.debug({ error: pruneError.message }, 'Failed to prune worktrees, continuing');
+        }
+        
         // Check if the branch already exists
-        let branchExists = false;
         try {
             await git.revparse([branchName]);
-            branchExists = true;
             logger.info({ branchName }, 'Branch already exists, will delete and recreate');
             
-            // Delete the existing branch to start fresh
+            // Try to remove any worktrees using this branch
+            try {
+                const worktreeList = await git.raw(['worktree', 'list', '--porcelain']);
+                const worktreeLines = worktreeList.split('\n');
+                
+                for (let i = 0; i < worktreeLines.length; i++) {
+                    const line = worktreeLines[i];
+                    if (line.startsWith('worktree ')) {
+                        const worktreePath = line.substring('worktree '.length);
+                        const branchLine = worktreeLines[i + 1];
+                        if (branchLine && branchLine.startsWith('branch ') && 
+                            branchLine.substring('branch refs/heads/'.length) === branchName) {
+                            logger.info({ worktreePath, branchName }, 'Removing existing worktree for branch');
+                            try {
+                                await git.raw(['worktree', 'remove', worktreePath, '--force']);
+                            } catch (removeError) {
+                                logger.warn({ 
+                                    worktreePath, 
+                                    error: removeError.message 
+                                }, 'Failed to remove existing worktree');
+                            }
+                        }
+                    }
+                }
+            } catch (listError) {
+                logger.debug({ error: listError.message }, 'Failed to list worktrees');
+            }
+            
+            // Now try to delete the branch
             try {
                 await git.branch(['-D', branchName]);
                 logger.info({ branchName }, 'Deleted existing branch');
@@ -167,7 +202,6 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
                     error: deleteError.message 
                 }, 'Failed to delete existing branch, continuing anyway');
             }
-            branchExists = false;
         } catch (revparseError) {
             // Branch doesn't exist, which is what we want
             logger.debug({ branchName }, 'Branch does not exist, will create new one');

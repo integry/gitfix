@@ -6,7 +6,7 @@ import { fetchIssuesForRepo, pollForIssues } from '../src/daemon.js';
 process.env.GITHUB_REPOS_TO_MONITOR = 'test-owner/test-repo';
 process.env.AI_PRIMARY_TAG = 'AI';
 process.env.AI_EXCLUDE_TAGS_PROCESSING = 'AI-processing';
-process.env.AI_EXCLUDE_TAGS_DONE = 'AI-done';
+process.env.AI_DONE_TAG = 'AI-done';
 
 test('fetchIssuesForRepo handles invalid repository format', async () => {
     const mockOctokit = {};

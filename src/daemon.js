@@ -10,7 +10,7 @@ const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000', 10);
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
-const AI_EXCLUDE_TAGS_DONE = process.env.AI_EXCLUDE_TAGS_DONE || 'AI-done';
+const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 
 // Parse repositories list
 const getRepos = () => {
@@ -34,7 +34,7 @@ async function fetchIssuesForRepo(octokit, repoFullName) {
     }
 
     // Build exclusion labels query
-    const excludeLabelsQuery = [AI_EXCLUDE_TAGS_PROCESSING, AI_EXCLUDE_TAGS_DONE]
+    const excludeLabelsQuery = [AI_EXCLUDE_TAGS_PROCESSING, AI_DONE_TAG]
         .map(tag => `-label:"${tag}"`)
         .join(' ');
 
@@ -236,7 +236,7 @@ async function resetIssueLabels() {
 
             try {
                 // Search for issues with processing or done labels
-                const searchQuery = `repo:${repoFullName} is:issue is:open (label:"${AI_EXCLUDE_TAGS_PROCESSING}" OR label:"${AI_EXCLUDE_TAGS_DONE}")`;
+                const searchQuery = `repo:${repoFullName} is:issue is:open (label:"${AI_EXCLUDE_TAGS_PROCESSING}" OR label:"${AI_DONE_TAG}")`;
                 
                 const searchResponse = await octokit.request('GET /search/issues', {
                     q: searchQuery,
@@ -250,8 +250,8 @@ async function resetIssueLabels() {
                     if (currentLabels.includes(AI_EXCLUDE_TAGS_PROCESSING)) {
                         labelsToRemove.push(AI_EXCLUDE_TAGS_PROCESSING);
                     }
-                    if (currentLabels.includes(AI_EXCLUDE_TAGS_DONE)) {
-                        labelsToRemove.push(AI_EXCLUDE_TAGS_DONE);
+                    if (currentLabels.includes(AI_DONE_TAG)) {
+                        labelsToRemove.push(AI_DONE_TAG);
                     }
 
                     if (labelsToRemove.length > 0) {
@@ -328,7 +328,7 @@ async function startDaemon(options = {}) {
         pollingInterval: POLLING_INTERVAL_MS,
         primaryTag: AI_PRIMARY_TAG,
         excludeProcessingTag: AI_EXCLUDE_TAGS_PROCESSING,
-        excludeDoneTag: AI_EXCLUDE_TAGS_DONE,
+        excludeDoneTag: AI_DONE_TAG,
         resetPerformed: !!options.reset
     }, 'GitHub Issue Detection Daemon starting...');
 
@@ -385,7 +385,7 @@ Environment Variables:
   POLLING_INTERVAL_MS        Polling interval in milliseconds (default: 60000)
   AI_PRIMARY_TAG             Primary tag to look for (default: AI)
   AI_EXCLUDE_TAGS_PROCESSING Processing tag to exclude (default: AI-processing)
-  AI_EXCLUDE_TAGS_DONE       Done tag to exclude (default: AI-done)
+  AI_DONE_TAG                Done tag to exclude (default: AI-done)
 
 Examples:
   node src/daemon.js                Start the daemon normally
