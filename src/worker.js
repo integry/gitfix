@@ -132,6 +132,7 @@ async function processGitHubIssueJob(job) {
         let localRepoPath;
         let worktreeInfo;
         let claudeResult;
+        let postProcessingResult = null;
         
         try {
             // Step 1: Ensure repository is cloned/updated
@@ -241,7 +242,6 @@ async function processGitHubIssueJob(job) {
             }
             
             // Step 4: Post-processing (commit, push, create PR, update labels)
-            let postProcessingResult = null;
             if (claudeResult?.success) {
                 try {
                     logger.info({ 
