@@ -233,18 +233,88 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
 }
 
 /**
- * Cleans up a Git worktree and optionally its branch
+ * Cleans up a Git worktree and optionally its branch with retention strategy
  * @param {string} localRepoPath - Path to the main repository clone
  * @param {string} worktreePath - Path to the worktree to remove
  * @param {string} branchName - Branch name to optionally delete
- * @param {boolean} deleteBranch - Whether to delete the local branch
+ * @param {Object} options - Cleanup options
+ * @param {boolean} options.deleteBranch - Whether to delete the local branch
+ * @param {boolean} options.success - Whether the task was successful
+ * @param {string} options.retentionStrategy - Retention strategy ('always_delete', 'keep_on_failure', 'keep_for_hours')
+ * @param {number} options.retentionHours - Hours to retain on failure (default: 24)
  */
-export async function cleanupWorktree(localRepoPath, worktreePath, branchName, deleteBranch = false) {
+export async function cleanupWorktree(localRepoPath, worktreePath, branchName, options = {}) {
+    const {
+        deleteBranch = false,
+        success = true,
+        retentionStrategy = process.env.WORKTREE_RETENTION_STRATEGY || 'always_delete',
+        retentionHours = parseInt(process.env.WORKTREE_RETENTION_HOURS || '24', 10)
+    } = options;
+
     logger.info({ 
         worktreePath, 
         branchName, 
-        deleteBranch 
+        deleteBranch,
+        success,
+        retentionStrategy,
+        retentionHours
     }, 'Cleaning up Git worktree...');
+    
+    // Apply retention strategy
+    if (!success && retentionStrategy === 'keep_on_failure') {
+        logger.info({
+            worktreePath,
+            branchName,
+            retentionStrategy
+        }, 'Keeping worktree due to failure and retention strategy');
+        
+        // Create a marker file with retention info
+        try {
+            const retentionInfo = {
+                timestamp: new Date().toISOString(),
+                issueProcessed: true,
+                success: false,
+                retentionHours,
+                scheduledCleanup: new Date(Date.now() + retentionHours * 60 * 60 * 1000).toISOString()
+            };
+            await fs.writeJson(path.join(worktreePath, '.retention-info.json'), retentionInfo);
+            logger.info({ worktreePath }, 'Created retention marker file');
+        } catch (markerError) {
+            logger.warn({
+                worktreePath,
+                error: markerError.message
+            }, 'Failed to create retention marker file');
+        }
+        return;
+    }
+
+    if (!success && retentionStrategy === 'keep_for_hours') {
+        // Schedule cleanup for later (this would typically be handled by a cron job)
+        logger.info({
+            worktreePath,
+            retentionHours
+        }, `Scheduling worktree cleanup in ${retentionHours} hours`);
+        
+        try {
+            const retentionInfo = {
+                timestamp: new Date().toISOString(),
+                issueProcessed: true,
+                success: false,
+                retentionHours,
+                scheduledCleanup: new Date(Date.now() + retentionHours * 60 * 60 * 1000).toISOString()
+            };
+            await fs.writeJson(path.join(worktreePath, '.retention-info.json'), retentionInfo);
+            logger.info({ worktreePath }, 'Scheduled cleanup with retention marker');
+        } catch (markerError) {
+            logger.warn({
+                worktreePath,
+                error: markerError.message
+            }, 'Failed to create retention marker, proceeding with immediate cleanup');
+        }
+        
+        // For now, still clean up immediately but log the intention
+        // In a production system, this would exit here and let a cron job handle it
+    }
     
     const git = simpleGit(localRepoPath);
     
@@ -295,6 +365,101 @@ export async function cleanupWorktree(localRepoPath, worktreePath, branchName, d
 }
 
 /**
+ * Cleans up old worktrees based on retention policies (for cron jobs)
+ * @param {string} worktreesBasePath - Base path for worktrees
+ * @returns {Promise<{cleaned: number, retained: number}>} Cleanup results
+ */
+export async function cleanupExpiredWorktrees(worktreesBasePath = WORKTREES_BASE_PATH) {
+    logger.info({ worktreesBasePath }, 'Starting cleanup of expired worktrees...');
+    
+    let cleaned = 0;
+    let retained = 0;
+    
+    try {
+        if (!await fs.pathExists(worktreesBasePath)) {
+            logger.info({ worktreesBasePath }, 'Worktrees base path does not exist, nothing to clean');
+            return { cleaned, retained };
+        }
+        
+        // Walk through all worktree directories
+        const processDirectory = async (dirPath) => {
+            const items = await fs.readdir(dirPath);
+            
+            for (const item of items) {
+                const itemPath = path.join(dirPath, item);
+                const stats = await fs.stat(itemPath);
+                
+                if (stats.isDirectory()) {
+                    const retentionFile = path.join(itemPath, '.retention-info.json');
+                    
+                    if (await fs.pathExists(retentionFile)) {
+                        try {
+                            const retentionInfo = await fs.readJson(retentionFile);
+                            const scheduledCleanup = new Date(retentionInfo.scheduledCleanup);
+                            const now = new Date();
+                            
+                            if (now >= scheduledCleanup) {
+                                logger.info({
+                                    worktreePath: itemPath,
+                                    scheduledCleanup: retentionInfo.scheduledCleanup
+                                }, 'Cleaning up expired worktree');
+                                
+                                await fs.remove(itemPath);
+                                cleaned++;
+                            } else {
+                                logger.debug({
+                                    worktreePath: itemPath,
+                                    scheduledCleanup: retentionInfo.scheduledCleanup
+                                }, 'Retaining worktree until scheduled cleanup time');
+                                retained++;
+                            }
+                        } catch (retentionError) {
+                            logger.warn({
+                                worktreePath: itemPath,
+                                error: retentionError.message
+                            }, 'Failed to read retention info, skipping cleanup');
+                            retained++;
+                        }
+                    } else {
+                        // Check if it's an old directory (fallback cleanup)
+                        const ageHours = (Date.now() - stats.mtime.getTime()) / (1000 * 60 * 60);
+                        const maxAgeHours = parseInt(process.env.WORKTREE_MAX_AGE_HOURS || '72', 10);
+                        
+                        if (ageHours > maxAgeHours) {
+                            logger.info({
+                                worktreePath: itemPath,
+                                ageHours: Math.round(ageHours),
+                                maxAgeHours
+                            }, 'Cleaning up old worktree (fallback cleanup)');
+                            
+                            await fs.remove(itemPath);
+                            cleaned++;
+                        } else {
+                            // Recursively process subdirectories
+                            await processDirectory(itemPath);
+                        }
+                    }
+                }
+            }
+        };
+        
+        await processDirectory(worktreesBasePath);
+        
+        logger.info({
+            worktreesBasePath,
+            cleaned,
+            retained
+        }, 'Expired worktrees cleanup completed');
+        
+    } catch (error) {
+        handleError(error, 'Failed to cleanup expired worktrees');
+        throw error;
+    }
+    
+    return { cleaned, retained };
+}
+
+/**
  * Gets the repository URL from issue data
  * @param {Object} issue - Issue object containing repository information
  * @returns {string} Repository URL
@@ -304,13 +469,15 @@ export function getRepoUrl(issue) {
 }
 
 /**
- * Commits changes in a worktree
+ * Commits changes in a worktree with Claude-optimized message
  * @param {string} worktreePath - Path to the worktree
- * @param {string} commitMessage - Commit message
+ * @param {string|Object} commitMessage - Commit message string or object with suggested message
  * @param {Object} author - Author information {name, email}
- * @returns {Promise<string>} Commit hash
+ * @param {number} issueNumber - Issue number for structured commit message
+ * @param {string} issueTitle - Issue title for context
+ * @returns {Promise<{commitHash: string, commitMessage: string}|null>} Commit result
  */
-export async function commitChanges(worktreePath, commitMessage, author) {
+export async function commitChanges(worktreePath, commitMessage, author, issueNumber, issueTitle) {
     const git = simpleGit(worktreePath);
     
     try {
@@ -330,16 +497,36 @@ export async function commitChanges(worktreePath, commitMessage, author) {
             return null;
         }
         
+        // Generate structured commit message
+        let finalCommitMessage;
+        if (typeof commitMessage === 'object' && commitMessage.claudeSuggested) {
+            // Use Claude's suggested message if available and well-formed
+            finalCommitMessage = commitMessage.claudeSuggested;
+        } else if (typeof commitMessage === 'string') {
+            finalCommitMessage = commitMessage;
+        } else {
+            // Generate default structured commit message
+            const shortTitle = issueTitle ? issueTitle.substring(0, 50).replace(/\s+/g, ' ').trim() : 'issue fix';
+            finalCommitMessage = `fix(ai): Resolve issue #${issueNumber} - ${shortTitle}
+
+Implemented by Claude Code. Full conversation log in PR comment.`;
+        }
+        
         // Commit changes
-        const result = await git.commit(commitMessage);
+        const result = await git.commit(finalCommitMessage);
         
         logger.info({ 
             worktreePath, 
             commitHash: result.commit,
-            filesChanged: status.files.length
+            filesChanged: status.files.length,
+            issueNumber,
+            commitMessage: finalCommitMessage
         }, 'Changes committed successfully');
         
-        return result.commit;
+        return {
+            commitHash: result.commit,
+            commitMessage: finalCommitMessage
+        };
         
     } catch (error) {
         handleError(error, `Failed to commit changes in worktree ${worktreePath}`);
