@@ -304,13 +304,15 @@ export function getRepoUrl(issue) {
 }
 
 /**
- * Commits changes in a worktree
+ * Commits changes in a worktree with Claude-optimized message
  * @param {string} worktreePath - Path to the worktree
- * @param {string} commitMessage - Commit message
+ * @param {string|Object} commitMessage - Commit message string or object with suggested message
  * @param {Object} author - Author information {name, email}
- * @returns {Promise<string>} Commit hash
+ * @param {number} issueNumber - Issue number for structured commit message
+ * @param {string} issueTitle - Issue title for context
+ * @returns {Promise<{commitHash: string, commitMessage: string}|null>} Commit result
  */
-export async function commitChanges(worktreePath, commitMessage, author) {
+export async function commitChanges(worktreePath, commitMessage, author, issueNumber, issueTitle) {
     const git = simpleGit(worktreePath);
     
     try {
@@ -330,16 +332,36 @@ export async function commitChanges(worktreePath, commitMessage, author) {
             return null;
         }
         
+        // Generate structured commit message
+        let finalCommitMessage;
+        if (typeof commitMessage === 'object' && commitMessage.claudeSuggested) {
+            // Use Claude's suggested message if available and well-formed
+            finalCommitMessage = commitMessage.claudeSuggested;
+        } else if (typeof commitMessage === 'string') {
+            finalCommitMessage = commitMessage;
+        } else {
+            // Generate default structured commit message
+            const shortTitle = issueTitle ? issueTitle.substring(0, 50).replace(/\s+/g, ' ').trim() : 'issue fix';
+            finalCommitMessage = `fix(ai): Resolve issue #${issueNumber} - ${shortTitle}
+
+Implemented by Claude Code. Full conversation log in PR comment.`;
+        }
+        
         // Commit changes
-        const result = await git.commit(commitMessage);
+        const result = await git.commit(finalCommitMessage);
         
         logger.info({ 
             worktreePath, 
             commitHash: result.commit,
-            filesChanged: status.files.length
+            filesChanged: status.files.length,
+            issueNumber,
+            commitMessage: finalCommitMessage
         }, 'Changes committed successfully');
         
-        return result.commit;
+        return {
+            commitHash: result.commit,
+            commitMessage: finalCommitMessage
+        };
         
     } catch (error) {
         handleError(error, `Failed to commit changes in worktree ${worktreePath}`);

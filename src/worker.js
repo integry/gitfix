@@ -7,8 +7,11 @@ import {
     ensureRepoCloned, 
     createWorktreeForIssue, 
     cleanupWorktree,
-    getRepoUrl 
+    getRepoUrl,
+    commitChanges,
+    pushBranch
 } from './git/repoManager.js';
+import { completePostProcessing } from './githubService.js';
 import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
 import Redis from 'ioredis';
 
@@ -237,19 +240,100 @@ async function processGitHubIssueJob(job) {
                 }, 'Failed to list files in worktree');
             }
             
-            // Post completion comment with detailed logs
-            const completionComment = await generateCompletionComment(claudeResult, issueRef);
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                owner: issueRef.repoOwner,
-                repo: issueRef.repoName,
-                issue_number: issueRef.number,
-                body: completionComment,
-            });
+            // Stage 6: Enhanced Post-Processing with PR Creation
+            let postProcessingResult = null;
+            if (claudeResult?.success) {
+                try {
+                    logger.info({ 
+                        jobId, 
+                        issueNumber: issueRef.number,
+                        worktreePath: worktreeInfo.worktreePath
+                    }, 'Starting enhanced post-processing: commit, push, and PR creation...');
+
+                    // Commit changes with structured message
+                    const commitResult = await commitChanges(
+                        worktreeInfo.worktreePath,
+                        `fix(ai): Resolve issue #${issueRef.number} - ${currentIssueData.data.title.substring(0, 50)}
+
+Implemented by Claude Code. Full conversation log in PR comment.`,
+                        {
+                            name: 'Claude Code',
+                            email: 'claude-code@anthropic.com'
+                        },
+                        issueRef.number,
+                        currentIssueData.data.title
+                    );
+
+                    if (commitResult) {
+                        // Push branch to remote
+                        await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName);
+                        
+                        // Complete post-processing (PR creation, comments, labels)
+                        postProcessingResult = await completePostProcessing({
+                            owner: issueRef.repoOwner,
+                            repoName: issueRef.repoName,
+                            branchName: worktreeInfo.branchName,
+                            issueNumber: issueRef.number,
+                            issueTitle: currentIssueData.data.title,
+                            commitMessage: commitResult.commitMessage,
+                            claudeResult,
+                            processingTags: [AI_PROCESSING_TAG],
+                            completionTags: [AI_DONE_TAG]
+                        });
+
+                        logger.info({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            prNumber: postProcessingResult.pr?.number,
+                            prUrl: postProcessingResult.pr?.url
+                        }, 'Enhanced post-processing completed successfully');
+                    } else {
+                        logger.info({
+                            jobId,
+                            issueNumber: issueRef.number
+                        }, 'No changes to commit, using fallback completion comment');
+                        
+                        // Fallback to original completion comment
+                        const completionComment = await generateCompletionComment(claudeResult, issueRef);
+                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            issue_number: issueRef.number,
+                            body: completionComment,
+                        });
+                    }
+
+                } catch (postProcessingError) {
+                    logger.error({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        error: postProcessingError.message
+                    }, 'Enhanced post-processing failed, falling back to original method');
+
+                    // Fallback to original completion comment
+                    const completionComment = await generateCompletionComment(claudeResult, issueRef);
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        issue_number: issueRef.number,
+                        body: completionComment,
+                    });
+                }
+            } else {
+                // Claude failed, use original completion comment
+                const completionComment = await generateCompletionComment(claudeResult, issueRef);
+                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                    owner: issueRef.repoOwner,
+                    repo: issueRef.repoName,
+                    issue_number: issueRef.number,
+                    body: completionComment,
+                });
+            }
             
             logger.info({ 
                 jobId, 
                 issueNumber: issueRef.number 
-            }, 'Posted completion comment to issue');
+            }, 'Completion processing finished');
             
             // Check if a PR was created by looking for recent PRs
             let prInfo = null;
