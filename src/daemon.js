@@ -3,6 +3,7 @@ import { getAuthenticatedOctokit } from './auth/githubAuth.js';
 import logger from './utils/logger.js';
 import { withErrorHandling, handleError } from './utils/errorHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
+import Redis from 'ioredis';
 
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
@@ -116,10 +117,15 @@ async function pollForIssues() {
                         repository: repoFullName
                     }, 'Detected eligible issue');
                     
-                    // Add issue to the queue
+                    // Add issue to the queue (minimal data - worker will fetch details from GitHub)
                     try {
                         const jobId = `issue-${issue.repoOwner}-${issue.repoName}-${issue.number}`;
-                        await issueQueue.add('processGitHubIssue', issue, {
+                        const issueJob = {
+                            repoOwner: issue.repoOwner,
+                            repoName: issue.repoName,
+                            number: issue.number
+                        };
+                        await issueQueue.add('processGitHubIssue', issueJob, {
                             jobId,
                             // Prevent duplicate jobs for the same issue
                             attempts: 3,
@@ -162,9 +168,139 @@ async function pollForIssues() {
 }
 
 /**
+ * Clears all queue data from Redis
+ */
+async function resetQueues() {
+    logger.info('Resetting all queue data...');
+    
+    try {
+        // Create Redis connection with same config as queue
+        const redis = new Redis({
+            host: process.env.REDIS_HOST || '127.0.0.1',
+            port: parseInt(process.env.REDIS_PORT || '6379', 10),
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false,
+        });
+
+        // Get all keys related to our queue
+        const queueName = process.env.GITHUB_ISSUE_QUEUE_NAME || 'github-issue-processor';
+        const keys = await redis.keys(`bull:${queueName}:*`);
+        
+        if (keys.length > 0) {
+            logger.info({
+                queueName,
+                keysCount: keys.length
+            }, 'Found queue keys to delete');
+            
+            // Delete all queue-related keys
+            await redis.del(...keys);
+            
+            logger.info({
+                queueName,
+                deletedKeys: keys.length
+            }, 'Successfully cleared all queue data');
+        } else {
+            logger.info({ queueName }, 'No queue data found to clear');
+        }
+        
+        // Clean up Redis connection
+        await redis.quit();
+        
+    } catch (error) {
+        handleError(error, 'Failed to reset queues');
+        throw error;
+    }
+}
+
+/**
+ * Removes processing tags from GitHub issues to allow reprocessing
+ */
+async function resetIssueLabels() {
+    logger.info('Resetting issue labels...');
+    
+    const repos = getRepos();
+    if (repos.length === 0) {
+        logger.warn('No repositories configured for label reset');
+        return;
+    }
+
+    try {
+        const octokit = await getAuthenticatedOctokit();
+        let totalReset = 0;
+
+        for (const repoFullName of repos) {
+            const [owner, repo] = repoFullName.split('/');
+            if (!owner || !repo) continue;
+
+            logger.info({ repository: repoFullName }, 'Checking for issues with processing labels...');
+
+            try {
+                // Search for issues with processing or done labels
+                const searchQuery = `repo:${repoFullName} is:issue is:open (label:"${AI_EXCLUDE_TAGS_PROCESSING}" OR label:"${AI_EXCLUDE_TAGS_DONE}")`;
+                
+                const searchResponse = await octokit.request('GET /search/issues', {
+                    q: searchQuery,
+                    per_page: 100
+                });
+
+                for (const issue of searchResponse.data.items) {
+                    const labelsToRemove = [];
+                    const currentLabels = issue.labels.map(label => label.name);
+                    
+                    if (currentLabels.includes(AI_EXCLUDE_TAGS_PROCESSING)) {
+                        labelsToRemove.push(AI_EXCLUDE_TAGS_PROCESSING);
+                    }
+                    if (currentLabels.includes(AI_EXCLUDE_TAGS_DONE)) {
+                        labelsToRemove.push(AI_EXCLUDE_TAGS_DONE);
+                    }
+
+                    if (labelsToRemove.length > 0) {
+                        logger.info({
+                            repository: repoFullName,
+                            issueNumber: issue.number,
+                            labelsToRemove
+                        }, 'Removing processing labels from issue');
+
+                        for (const label of labelsToRemove) {
+                            await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                                owner,
+                                repo,
+                                issue_number: issue.number,
+                                name: label
+                            });
+                        }
+                        totalReset++;
+                    }
+                }
+
+                logger.info({
+                    repository: repoFullName,
+                    issuesFound: searchResponse.data.items.length
+                }, 'Processed repository for label reset');
+
+            } catch (repoError) {
+                logger.error({
+                    repository: repoFullName,
+                    error: repoError.message
+                }, 'Failed to reset labels for repository');
+            }
+        }
+
+        logger.info({
+            totalIssuesReset: totalReset,
+            repositoriesProcessed: repos.length
+        }, 'Completed issue label reset');
+
+    } catch (error) {
+        handleError(error, 'Failed to reset issue labels');
+        throw error;
+    }
+}
+
+/**
  * Starts the daemon with configured polling interval
  */
-function startDaemon() {
+async function startDaemon(options = {}) {
     const repos = getRepos();
     
     // Validate required configuration
@@ -173,12 +309,27 @@ function startDaemon() {
         process.exit(1);
     }
     
+    // Handle reset flag
+    if (options.reset) {
+        logger.info('Reset flag detected, clearing all queue data and issue labels...');
+        
+        try {
+            await resetQueues();
+            await resetIssueLabels();
+            logger.info('Reset completed successfully');
+        } catch (error) {
+            logger.error({ error: error.message }, 'Reset failed');
+            process.exit(1);
+        }
+    }
+    
     logger.info({
         repositories: repos,
         pollingInterval: POLLING_INTERVAL_MS,
         primaryTag: AI_PRIMARY_TAG,
         excludeProcessingTag: AI_EXCLUDE_TAGS_PROCESSING,
-        excludeDoneTag: AI_EXCLUDE_TAGS_DONE
+        excludeDoneTag: AI_EXCLUDE_TAGS_DONE,
+        resetPerformed: !!options.reset
     }, 'GitHub Issue Detection Daemon starting...');
 
     // Initial poll
@@ -205,9 +356,58 @@ function startDaemon() {
 }
 
 // Export functions for testing
-export { fetchIssuesForRepo, pollForIssues, startDaemon };
+export { fetchIssuesForRepo, pollForIssues, startDaemon, resetQueues, resetIssueLabels };
+
+/**
+ * Parse command line arguments
+ */
+function parseArgs() {
+    const args = process.argv.slice(2);
+    const options = {};
+    
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        
+        if (arg === '--reset' || arg === '-r') {
+            options.reset = true;
+        } else if (arg === '--help' || arg === '-h') {
+            console.log(`
+GitHub Issue Detection Daemon
+
+Usage: node src/daemon.js [options]
+
+Options:
+  --reset, -r    Clear all queue data and remove processing labels from issues
+  --help, -h     Show this help message
+
+Environment Variables:
+  GITHUB_REPOS_TO_MONITOR    Comma-separated list of repositories to monitor
+  POLLING_INTERVAL_MS        Polling interval in milliseconds (default: 60000)
+  AI_PRIMARY_TAG             Primary tag to look for (default: AI)
+  AI_EXCLUDE_TAGS_PROCESSING Processing tag to exclude (default: AI-processing)
+  AI_EXCLUDE_TAGS_DONE       Done tag to exclude (default: AI-done)
+
+Examples:
+  node src/daemon.js                Start the daemon normally
+  node src/daemon.js --reset        Reset all queues and issue labels, then start
+  npm run daemon:dev -- --reset     Reset using npm script
+            `);
+            process.exit(0);
+        } else {
+            console.error(`Unknown argument: ${arg}`);
+            console.error('Use --help for usage information');
+            process.exit(1);
+        }
+    }
+    
+    return options;
+}
 
 // Start daemon if this is the main module
 if (import.meta.url === `file://${process.argv[1]}`) {
-    startDaemon();
+    const options = parseArgs();
+    startDaemon(options).catch(error => {
+        logger.error({ error: error.message }, 'Daemon startup failed');
+        process.exit(1);
+    });
 }

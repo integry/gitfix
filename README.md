@@ -185,6 +185,9 @@ npm run daemon
 
 # Development mode with debug logging
 npm run daemon:dev
+
+# Reset all queue data and issue labels, then start daemon
+npm run daemon:reset:dev
 ```
 
 The daemon will:
@@ -192,6 +195,23 @@ The daemon will:
 - Search for open issues with the AI tag
 - Exclude issues already being processed or completed
 - Add detected issues to the task queue for processing
+
+#### Resetting Queue State
+
+If jobs get stuck in failed/processing states, use the reset option to clear all queue data:
+
+```bash
+# Clear all queue data and remove processing labels from issues
+npm run daemon:reset:dev
+
+# Or with direct node command
+node src/daemon.js --reset
+```
+
+This will:
+- Clear all Redis queue data (waiting, active, completed, failed jobs)
+- Remove "AI-processing" and "AI-done" labels from GitHub issues
+- Allow issues to be reprocessed from a clean state
 
 ### Running the Worker Process
 

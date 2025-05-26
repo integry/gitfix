@@ -104,8 +104,9 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
         .replace(/^-|-$/g, '')
         .substring(0, 50);
     
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const branchName = `ai-fix/${issueId}-${sanitizedTitle}`;
-    const worktreeDirName = `issue-${issueId}`;
+    const worktreeDirName = `issue-${issueId}-${timestamp}`;
     const worktreePath = path.join(WORKTREES_BASE_PATH, owner, repoName, worktreeDirName);
     
     try {
@@ -148,6 +149,29 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
             baseBranch,
             issueId
         }, 'Creating Git worktree...');
+        
+        // Check if the branch already exists
+        let branchExists = false;
+        try {
+            await git.revparse([branchName]);
+            branchExists = true;
+            logger.info({ branchName }, 'Branch already exists, will delete and recreate');
+            
+            // Delete the existing branch to start fresh
+            try {
+                await git.branch(['-D', branchName]);
+                logger.info({ branchName }, 'Deleted existing branch');
+            } catch (deleteError) {
+                logger.warn({ 
+                    branchName, 
+                    error: deleteError.message 
+                }, 'Failed to delete existing branch, continuing anyway');
+            }
+            branchExists = false;
+        } catch (revparseError) {
+            // Branch doesn't exist, which is what we want
+            logger.debug({ branchName }, 'Branch does not exist, will create new one');
+        }
         
         // Create the worktree with new branch
         await git.raw([

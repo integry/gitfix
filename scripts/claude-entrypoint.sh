@@ -12,8 +12,8 @@ if [ -z "$GH_TOKEN" ]; then
     echo "Warning: GH_TOKEN environment variable not set"
     echo "GitHub operations may fail"
 else
-    echo "GitHub token detected, configuring gh CLI..."
-    echo "$GH_TOKEN" | gh auth login --with-token
+    echo "GitHub token detected (using environment variable)"
+    echo "GitHub CLI will use GH_TOKEN environment variable for authentication"
 fi
 
 # Ensure Claude config is mounted and accessible
@@ -27,9 +27,12 @@ fi
 
 # Set proper permissions for workspace
 if [ -d "/home/node/workspace" ]; then
-    # Ensure the user owns the workspace
-    sudo chown -R node:node /home/node/workspace
-    echo "Workspace permissions set"
+    # Try to ensure the user owns the workspace (skip if sudo fails in restricted container)
+    if sudo chown -R node:node /home/node/workspace 2>/dev/null; then
+        echo "Workspace permissions set"
+    else
+        echo "Workspace permissions already set (sudo not available in restricted container)"
+    fi
 fi
 
 # If arguments are provided, execute them

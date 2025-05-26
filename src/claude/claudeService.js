@@ -7,70 +7,63 @@ import { handleError } from '../utils/errorHandler.js';
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
 const CLAUDE_CONFIG_PATH = process.env.CLAUDE_CONFIG_PATH || path.join(os.homedir(), '.claude');
-const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '10', 10);
+const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '1000', 10);
 const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10); // 5 minutes
 
 /**
  * Generates a context-aware prompt for Claude Code to analyze and fix GitHub issues
- * @param {Object} issue - GitHub issue details
- * @param {string} issue.number - Issue number
- * @param {string} issue.title - Issue title
- * @param {string} issue.body - Issue description
- * @param {string} issue.repoOwner - Repository owner
- * @param {string} issue.repoName - Repository name
+ * @param {Object} issueRef - GitHub issue reference
+ * @param {string} issueRef.number - Issue number
+ * @param {string} issueRef.repoOwner - Repository owner
+ * @param {string} issueRef.repoName - Repository name
  * @returns {string} Formatted prompt for Claude
  */
-function generateClaudePrompt(issue) {
-    return `You are an expert software engineer tasked with analyzing and fixing a GitHub issue.
+function generateClaudePrompt(issueRef) {
+    return `Please analyze and fix the GitHub issue: #${issueRef.number}.
 
-## Issue Details
-**Repository:** ${issue.repoOwner}/${issue.repoName}
-**Issue #${issue.number}:** ${issue.title}
+Follow these steps systematically:
+1. Use \`gh issue view ${issueRef.number}\` to get the issue details
+2. Understand the problem described in the issue
+3. Search the codebase for relevant files
+4. Implement the necessary changes to fix the issue
+5. Write and run tests to verify the fix (if applicable)
+6. Ensure code passes linting and type checking (if applicable)
+7. Create a descriptive commit message and commit your changes
+8. Push your branch to the remote repository
+9. Create a pull request using \`gh pr create\`
 
-**Issue Description:**
-${issue.body || 'No description provided.'}
+Important notes:
+- You are working in a git worktree environment
+- Use the GitHub CLI (\`gh\`) for all GitHub-related tasks
+- Always commit and push your changes before creating the PR
+- If you encounter authentication or permission issues, continue with the implementation and document any blockers
+- Focus on completing the core functionality first, then handle git operations
+- Make sure to create a meaningful branch name and PR description
 
-## Your Task
-1. **Analyze the codebase** in the current workspace directory to understand the project structure and identify relevant files
-2. **Understand the issue** described above and determine what needs to be implemented or fixed
-3. **Implement the necessary changes** to address the issue requirements
-4. **Ensure code quality** by following existing patterns and best practices in the codebase
-5. **Test your changes** if possible (write tests or verify existing tests still pass)
-
-## Guidelines
-- Focus on implementing the specific requirements mentioned in the issue
-- Follow the existing code style and patterns in the project
-- Make minimal, targeted changes that address the issue without breaking existing functionality
-- If the issue is unclear, make reasonable assumptions and document them in your implementation
-- Prioritize clean, maintainable code over complex solutions
-
-## Workspace
-The repository has been checked out to the current working directory. You have full access to read, analyze, and modify files as needed.
-
-Please proceed with analyzing the codebase and implementing the solution for this issue.`;
+Remember: The goal is to fully implement the requested feature and create a complete pull request.`;
 }
 
 /**
  * Executes Claude Code CLI in a Docker container to analyze and fix a GitHub issue
  * @param {Object} options - Execution options
  * @param {string} options.worktreePath - Path to the Git worktree containing the repository
- * @param {Object} options.issue - GitHub issue details
+ * @param {Object} options.issueRef - GitHub issue reference
  * @param {string} options.githubToken - GitHub authentication token
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken }) {
     const startTime = Date.now();
     
     logger.info({
-        issueNumber: issue.number,
-        repository: `${issue.repoOwner}/${issue.repoName}`,
+        issueNumber: issueRef.number,
+        repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
         worktreePath,
         dockerImage: CLAUDE_DOCKER_IMAGE
     }, 'Starting Claude Code execution...');
 
     try {
         // Generate the prompt for Claude
-        const prompt = generateClaudePrompt(issue);
+        const prompt = generateClaudePrompt(issueRef);
         
         // Construct Docker run command
         const dockerArgs = [
@@ -99,14 +92,17 @@ export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
             // Execute Claude Code CLI with the generated prompt
             'claude',
             '-p', prompt,
-            '--output-format', 'json',
-            '--max-turns', CLAUDE_MAX_TURNS.toString()
+            '--max-turns', CLAUDE_MAX_TURNS.toString(),
+            '--output-format', 'stream-json',
+            '--verbose',
+            '--dangerously-skip-permissions'
         ];
 
         logger.debug({
-            issueNumber: issue.number,
-            dockerArgs: dockerArgs.slice(0, -3), // Hide the prompt for brevity
-            promptLength: prompt.length
+            issueNumber: issueRef.number,
+            dockerArgs: dockerArgs, // Show full command
+            promptLength: prompt.length,
+            fullPrompt: prompt
         }, 'Executing Docker command for Claude Code');
 
         // Execute Docker command
@@ -118,53 +114,89 @@ export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
         const executionTime = Date.now() - startTime;
 
         logger.info({
-            issueNumber: issue.number,
-            repository: `${issue.repoOwner}/${issue.repoName}`,
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
             executionTime,
             outputLength: result.stdout?.length || 0,
-            success: result.exitCode === 0
+            success: result.exitCode === 0,
+            exitCode: result.exitCode,
+            fullStdout: result.stdout,
+            fullStderr: result.stderr
         }, 'Claude Code execution completed');
 
-        // Parse Claude's JSON output
-        let claudeOutput;
-        try {
-            claudeOutput = JSON.parse(result.stdout || '{}');
-        } catch (parseError) {
-            logger.warn({
-                issueNumber: issue.number,
-                parseError: parseError.message,
-                rawOutput: result.stdout?.substring(0, 500)
-            }, 'Failed to parse Claude output as JSON, using raw output');
-            
-            claudeOutput = {
-                success: result.exitCode === 0,
-                rawOutput: result.stdout,
-                error: result.stderr
-            };
+        // Parse Claude's stream-json output
+        let claudeOutput = {
+            success: result.exitCode === 0,
+            rawOutput: result.stdout,
+            error: result.stderr,
+            conversationLog: [],
+            sessionId: null,
+            finalResult: null
+        };
+        
+        // Parse stream-json output line by line
+        if (result.stdout) {
+            const lines = result.stdout.split('\n').filter(line => line.trim());
+            for (const line of lines) {
+                try {
+                    const jsonLine = JSON.parse(line);
+                    
+                    // Collect conversation messages
+                    if (jsonLine.type === 'user' || jsonLine.type === 'assistant') {
+                        claudeOutput.conversationLog.push(jsonLine);
+                    }
+                    
+                    // Extract session ID
+                    if (jsonLine.session_id) {
+                        claudeOutput.sessionId = jsonLine.session_id;
+                    }
+                    
+                    // Extract final result
+                    if (jsonLine.type === 'result') {
+                        claudeOutput.finalResult = jsonLine;
+                        claudeOutput.success = !jsonLine.is_error;
+                    }
+                } catch (parseError) {
+                    // Skip non-JSON lines (like entrypoint output)
+                    continue;
+                }
+            }
         }
 
         // Extract key information from Claude's response
         const response = {
-            success: result.exitCode === 0,
+            success: claudeOutput.success,
             executionTime,
             output: claudeOutput,
             logs: result.stderr || '',
             exitCode: result.exitCode,
+            rawOutput: result.stdout,
+            
+            // Extract conversation and session info
+            conversationLog: claudeOutput.conversationLog || [],
+            sessionId: claudeOutput.sessionId,
+            finalResult: claudeOutput.finalResult,
             
             // Extract specific fields if available in Claude's structured output
-            conversationLog: claudeOutput.conversation || [],
-            modifiedFiles: claudeOutput.modifiedFiles || [],
-            commitMessage: claudeOutput.commitMessage || null,
-            summary: claudeOutput.summary || null
+            modifiedFiles: [], // Will be determined by file system inspection
+            commitMessage: null, // Will be extracted from conversation if present
+            summary: claudeOutput.finalResult?.result || null
         };
 
         if (!response.success) {
             logger.error({
-                issueNumber: issue.number,
+                issueNumber: issueRef.number,
                 exitCode: result.exitCode,
                 stderr: result.stderr,
-                stdout: result.stdout?.substring(0, 1000)
+                stdout: result.stdout
             }, 'Claude Code execution failed');
+        } else {
+            logger.info({
+                issueNumber: issueRef.number,
+                exitCode: result.exitCode,
+                stderr: result.stderr,
+                stdout: result.stdout
+            }, 'Claude Code execution succeeded - full output');
         }
 
         return response;
@@ -173,8 +205,8 @@ export async function executeClaudeCode({ worktreePath, issue, githubToken }) {
         const executionTime = Date.now() - startTime;
         
         logger.error({
-            issueNumber: issue.number,
-            repository: `${issue.repoOwner}/${issue.repoName}`,
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
             executionTime,
             error: error.message,
             stack: error.stack

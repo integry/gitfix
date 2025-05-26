@@ -8,8 +8,12 @@
     "start": "node src/index.js",
     "daemon": "node src/daemon.js",
     "daemon:dev": "LOG_LEVEL=debug node src/daemon.js",
+    "daemon:reset": "node src/daemon.js --reset",
+    "daemon:reset:dev": "LOG_LEVEL=debug node src/daemon.js --reset",
     "worker": "node src/worker.js",
-    "worker:dev": "LOG_LEVEL=debug node src/worker.js"
+    "worker:dev": "LOG_LEVEL=debug node src/worker.js",
+    "worker:reset": "node src/worker.js --reset",
+    "worker:reset:dev": "LOG_LEVEL=debug node src/worker.js --reset"
   },
   "keywords": [],
   "author": "",

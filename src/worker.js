@@ -10,6 +10,7 @@ import {
     getRepoUrl 
 } from './git/repoManager.js';
 import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
+import Redis from 'ioredis';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
@@ -22,13 +23,13 @@ const AI_EXCLUDE_TAGS_DONE = process.env.AI_EXCLUDE_TAGS_DONE || 'AI-done';
  * @returns {Promise<Object>} Processing result
  */
 async function processGitHubIssueJob(job) {
-    const { id: jobId, name: jobName, data: issue } = job;
+    const { id: jobId, name: jobName, data: issueRef } = job;
     
     logger.info({ 
         jobId, 
         jobName, 
-        issueNumber: issue.number, 
-        repo: `${issue.repoOwner}/${issue.repoName}` 
+        issueNumber: issueRef.number, 
+        repo: `${issueRef.repoOwner}/${issueRef.repoName}` 
     }, 'Processing job started');
 
     let octokit;
@@ -45,9 +46,9 @@ async function processGitHubIssueJob(job) {
     try {
         // Get current issue state
         const currentIssueData = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-            owner: issue.repoOwner,
-            repo: issue.repoName,
-            issue_number: issue.number,
+            owner: issueRef.repoOwner,
+            repo: issueRef.repoName,
+            issue_number: issueRef.number,
         });
 
         const currentLabels = currentIssueData.data.labels.map(label => label.name);
@@ -59,24 +60,24 @@ async function processGitHubIssueJob(job) {
         if (!hasPrimaryTag) {
             logger.warn({ 
                 jobId, 
-                issueNumber: issue.number 
+                issueNumber: issueRef.number 
             }, `Issue no longer has primary tag '${AI_PRIMARY_TAG}'. Skipping.`);
             return { 
                 status: 'skipped', 
                 reason: 'Primary tag missing',
-                issueNumber: issue.number 
+                issueNumber: issueRef.number 
             };
         }
 
         if (hasDoneTag) {
             logger.warn({ 
                 jobId, 
-                issueNumber: issue.number 
+                issueNumber: issueRef.number 
             }, `Issue already has '${AI_EXCLUDE_TAGS_DONE}' tag. Skipping.`);
             return { 
                 status: 'skipped', 
                 reason: 'Already done',
-                issueNumber: issue.number 
+                issueNumber: issueRef.number 
             };
         }
 
@@ -84,38 +85,38 @@ async function processGitHubIssueJob(job) {
         if (!hasProcessingTag) {
             logger.info({ 
                 jobId, 
-                issueNumber: issue.number 
+                issueNumber: issueRef.number 
             }, `Adding '${AI_PROCESSING_TAG}' tag to issue`);
             
             await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                owner: issue.repoOwner,
-                repo: issue.repoName,
-                issue_number: issue.number,
+                owner: issueRef.repoOwner,
+                repo: issueRef.repoName,
+                issue_number: issueRef.number,
                 labels: [AI_PROCESSING_TAG],
             });
             
             logger.info({ 
                 jobId, 
-                issueNumber: issue.number 
+                issueNumber: issueRef.number 
             }, `Successfully added '${AI_PROCESSING_TAG}' tag`);
         } else {
             logger.info({ 
                 jobId, 
-                issueNumber: issue.number 
+                issueNumber: issueRef.number 
             }, `Issue already has '${AI_PROCESSING_TAG}' tag, continuing with processing`);
         }
 
         // Add a comment to the issue indicating processing has started
         await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-            owner: issue.repoOwner,
-            repo: issue.repoName,
-            issue_number: issue.number,
+            owner: issueRef.repoOwner,
+            repo: issueRef.repoName,
+            issue_number: issueRef.number,
             body: `🤖 AI processing has started for this issue.\n\nI'll analyze the problem and work on a solution. This may take a few minutes.`,
         });
 
         logger.info({ 
             jobId, 
-            issueNumber: issue.number 
+            issueNumber: issueRef.number 
         }, 'Starting Git environment setup...');
 
         // Update progress: Git setup phase
@@ -123,7 +124,7 @@ async function processGitHubIssueJob(job) {
         
         // Get GitHub token for cloning
         const githubToken = await octokit.auth();
-        const repoUrl = getRepoUrl(issue);
+        const repoUrl = getRepoUrl(issueRef);
         
         let localRepoPath;
         let worktreeInfo;
@@ -133,14 +134,14 @@ async function processGitHubIssueJob(job) {
             // Step 1: Ensure repository is cloned/updated
             logger.info({ 
                 jobId, 
-                repo: `${issue.repoOwner}/${issue.repoName}`,
+                repo: `${issueRef.repoOwner}/${issueRef.repoName}`,
                 repoUrl 
             }, 'Cloning/updating repository...');
             
             localRepoPath = await ensureRepoCloned(
                 repoUrl, 
-                issue.repoOwner, 
-                issue.repoName, 
+                issueRef.repoOwner, 
+                issueRef.repoName, 
                 githubToken.token
             );
             
@@ -149,24 +150,24 @@ async function processGitHubIssueJob(job) {
             // Step 2: Create worktree for this issue
             logger.info({ 
                 jobId, 
-                issueNumber: issue.number,
-                issueTitle: issue.title,
+                issueNumber: issueRef.number,
+                issueTitle: currentIssueData.data.title,
                 localRepoPath
             }, 'Creating Git worktree for issue...');
             
             worktreeInfo = await createWorktreeForIssue(
                 localRepoPath,
-                issue.number,
-                issue.title,
-                issue.repoOwner,
-                issue.repoName
+                issueRef.number,
+                currentIssueData.data.title,
+                issueRef.repoOwner,
+                issueRef.repoName
             );
             
             await job.updateProgress(75);
             
             logger.info({ 
                 jobId, 
-                issueNumber: issue.number,
+                issueNumber: issueRef.number,
                 worktreePath: worktreeInfo.worktreePath,
                 branchName: worktreeInfo.branchName
             }, 'Git environment setup complete');
@@ -174,7 +175,7 @@ async function processGitHubIssueJob(job) {
             // Step 3: Execute Claude Code to analyze and fix the issue
             logger.info({ 
                 jobId, 
-                issueNumber: issue.number,
+                issueNumber: issueRef.number,
                 worktreePath: worktreeInfo.worktreePath
             }, 'Starting Claude Code execution...');
             
@@ -182,22 +183,77 @@ async function processGitHubIssueJob(job) {
             
             claudeResult = await executeClaudeCode({
                 worktreePath: worktreeInfo.worktreePath,
-                issue: issue,
+                issueRef: issueRef,
                 githubToken: githubToken.token
             });
             
             logger.info({ 
                 jobId, 
-                issueNumber: issue.number,
+                issueNumber: issueRef.number,
                 claudeSuccess: claudeResult.success,
                 executionTime: claudeResult.executionTime,
-                modifiedFiles: claudeResult.modifiedFiles?.length || 0
-            }, 'Claude Code execution completed');
+                modifiedFiles: claudeResult.modifiedFiles?.length || 0,
+                claudeOutputSample: claudeResult.output?.rawOutput?.substring(0, 500),
+                claudeFullOutput: claudeResult.output,
+                claudeExitCode: claudeResult.exitCode,
+                claudeLogs: claudeResult.logs
+            }, 'Claude Code execution completed - detailed output');
+            
+            // Check what files exist in the worktree after Claude execution
+            try {
+                const fs = await import('fs');
+                const path = await import('path');
+                
+                const listFiles = (dir) => {
+                    const files = [];
+                    const items = fs.readdirSync(dir);
+                    for (const item of items) {
+                        const fullPath = path.join(dir, item);
+                        const stat = fs.statSync(fullPath);
+                        if (stat.isDirectory() && !item.startsWith('.')) {
+                            files.push(...listFiles(fullPath));
+                        } else if (stat.isFile()) {
+                            files.push(fullPath);
+                        }
+                    }
+                    return files;
+                };
+                
+                const filesInWorktree = listFiles(worktreeInfo.worktreePath);
+                
+                logger.info({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    worktreePath: worktreeInfo.worktreePath,
+                    filesInWorktree,
+                    fileCount: filesInWorktree.length
+                }, 'Files in worktree after Claude execution');
+                
+            } catch (listError) {
+                logger.warn({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    error: listError.message
+                }, 'Failed to list files in worktree');
+            }
+            
+            // Post completion comment with detailed logs
+            const completionComment = await generateCompletionComment(claudeResult, issueRef);
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner: issueRef.repoOwner,
+                repo: issueRef.repoName,
+                issue_number: issueRef.number,
+                body: completionComment,
+            });
+            
+            logger.info({ 
+                jobId, 
+                issueNumber: issueRef.number 
+            }, 'Posted completion comment to issue');
             
             // TODO: Future implementation will include:
             // 4. Commit changes (if Claude made any)
             // 5. Push branch and create PR
-            // 6. Update issue with results and conversation log
             
             await job.updateProgress(90);
             
@@ -207,7 +263,7 @@ async function processGitHubIssueJob(job) {
                 try {
                     logger.info({ 
                         jobId, 
-                        issueNumber: issue.number,
+                        issueNumber: issueRef.number,
                         worktreePath: worktreeInfo.worktreePath
                     }, 'Cleaning up Git worktree...');
                     
@@ -220,7 +276,7 @@ async function processGitHubIssueJob(job) {
                 } catch (cleanupError) {
                     logger.warn({ 
                         jobId, 
-                        issueNumber: issue.number,
+                        issueNumber: issueRef.number,
                         error: cleanupError.message
                     }, 'Failed to cleanup worktree');
                 }
@@ -232,8 +288,8 @@ async function processGitHubIssueJob(job) {
 
         return { 
             status: claudeResult?.success ? 'claude_processing_complete' : 'claude_processing_failed', 
-            issueNumber: issue.number,
-            repository: `${issue.repoOwner}/${issue.repoName}`,
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
             gitSetup: {
                 localRepoPath: localRepoPath,
                 worktreeCreated: !!worktreeInfo,
@@ -251,7 +307,7 @@ async function processGitHubIssueJob(job) {
     } catch (error) {
         logger.error({ 
             jobId, 
-            issueNumber: issue.number, 
+            issueNumber: issueRef.number, 
             errMessage: error.message, 
             stack: error.stack 
         }, 'Error processing GitHub issue job');
@@ -264,14 +320,212 @@ async function processGitHubIssueJob(job) {
 }
 
 /**
+ * Creates log files for detailed Claude execution data
+ * @param {Object} claudeResult - Result from Claude Code execution
+ * @param {Object} issueRef - Issue reference
+ * @returns {Promise<Object>} File paths and metadata
+ */
+async function createLogFiles(claudeResult, issueRef) {
+    const fs = await import('fs');
+    const path = await import('path');
+    const os = await import('os');
+    
+    const logDir = path.join(os.tmpdir(), 'claude-logs');
+    await fs.mkdir(logDir, { recursive: true });
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePrefix = `issue-${issueRef.number}-${timestamp}`;
+    
+    const files = {};
+    
+    // Create conversation log file
+    if (claudeResult?.conversationLog && claudeResult.conversationLog.length > 0) {
+        const conversationPath = path.join(logDir, `${filePrefix}-conversation.json`);
+        const conversationData = {
+            sessionId: claudeResult.sessionId,
+            timestamp: new Date().toISOString(),
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+            messages: claudeResult.conversationLog
+        };
+        await fs.writeFile(conversationPath, JSON.stringify(conversationData, null, 2));
+        files.conversation = conversationPath;
+    }
+    
+    // Create raw output file
+    if (claudeResult?.rawOutput) {
+        const outputPath = path.join(logDir, `${filePrefix}-output.txt`);
+        await fs.writeFile(outputPath, claudeResult.rawOutput);
+        files.output = outputPath;
+    }
+    
+    return files;
+}
+
+/**
+ * Generates a detailed completion comment for GitHub issues
+ * @param {Object} claudeResult - Result from Claude Code execution
+ * @param {Object} issueRef - Issue reference
+ * @returns {Promise<string>} Formatted completion comment
+ */
+async function generateCompletionComment(claudeResult, issueRef) {
+    const timestamp = new Date().toISOString();
+    const isSuccess = claudeResult?.success || false;
+    const executionTime = Math.round((claudeResult?.executionTime || 0) / 1000);
+    
+    let comment = `🤖 **AI Processing ${isSuccess ? 'Completed' : 'Failed'}**\n\n`;
+    comment += `**Execution Details:**\n`;
+    comment += `- Issue: #${issueRef.number}\n`;
+    comment += `- Repository: ${issueRef.repoOwner}/${issueRef.repoName}\n`;
+    comment += `- Status: ${isSuccess ? '✅ Success' : '❌ Failed'}\n`;
+    comment += `- Execution Time: ${executionTime}s\n`;
+    comment += `- Timestamp: ${timestamp}\n\n`;
+    
+    if (claudeResult?.summary) {
+        comment += `**Summary:**\n${claudeResult.summary}\n\n`;
+    }
+    
+    if (claudeResult?.finalResult) {
+        const result = claudeResult.finalResult;
+        comment += `**Claude Code Results:**\n`;
+        comment += `- Turns Used: ${result.num_turns || 'unknown'}\n`;
+        comment += `- Cost: $${result.cost_usd || 'unknown'}\n`;
+        comment += `- Session ID: \`${claudeResult.sessionId || 'unknown'}\`\n\n`;
+        
+        if (result.subtype === 'error_max_turns') {
+            comment += `⚠️ **Max Turns Reached**: Claude reached the maximum number of conversation turns (${result.num_turns}) before completing all tasks. Consider increasing the turn limit or breaking down the task into smaller parts.\n\n`;
+        }
+    }
+    
+    // Create log files for detailed data
+    try {
+        const logFiles = await createLogFiles(claudeResult, issueRef);
+        
+        if (Object.keys(logFiles).length > 0) {
+            comment += `**📁 Detailed Logs:**\n`;
+            comment += `Detailed execution logs have been generated for this run:\n`;
+            if (logFiles.conversation) {
+                comment += `- Conversation Log: ${claudeResult.conversationLog?.length || 0} messages\n`;
+            }
+            if (logFiles.output) {
+                comment += `- Raw Output: ${(claudeResult.rawOutput?.length || 0)} characters\n`;
+            }
+            comment += `\n*Note: Log files are temporarily stored for debugging purposes.*\n\n`;
+        }
+    } catch (logError) {
+        logger.warn({
+            issueNumber: issueRef.number,
+            error: logError.message
+        }, 'Failed to create log files');
+    }
+    
+    comment += `---\n*Powered by Claude Code v${process.env.npm_package_version || 'unknown'}*`;
+    
+    return comment;
+}
+
+/**
+ * Resets all worker-related queue data
+ */
+async function resetWorkerQueues() {
+    logger.info('Resetting worker queue data...');
+    
+    try {
+        const redis = new Redis({
+            host: process.env.REDIS_HOST || '127.0.0.1',
+            port: parseInt(process.env.REDIS_PORT || '6379', 10),
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false,
+        });
+
+        // Get all keys related to our queue
+        const queueName = GITHUB_ISSUE_QUEUE_NAME;
+        const keys = await redis.keys(`bull:${queueName}:*`);
+        
+        if (keys.length > 0) {
+            logger.info({
+                queueName,
+                keysCount: keys.length
+            }, 'Found worker queue keys to delete');
+            
+            // Delete all queue-related keys
+            await redis.del(...keys);
+            
+            logger.info({
+                queueName,
+                deletedKeys: keys.length
+            }, 'Successfully cleared all worker queue data');
+        } else {
+            logger.info({ queueName }, 'No worker queue data found to clear');
+        }
+        
+        // Clean up Redis connection
+        await redis.quit();
+        
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to reset worker queue data');
+        throw error;
+    }
+}
+
+/**
+ * Parse command line arguments
+ */
+function parseArguments() {
+    const args = process.argv.slice(2);
+    const options = {
+        reset: false,
+        help: false
+    };
+    
+    for (const arg of args) {
+        switch (arg) {
+            case '--reset':
+                options.reset = true;
+                break;
+            case '--help':
+            case '-h':
+                options.help = true;
+                break;
+            default:
+                if (arg.startsWith('--')) {
+                    logger.warn({ argument: arg }, 'Unknown command line argument');
+                }
+        }
+    }
+    
+    return options;
+}
+
+/**
+ * Display help information
+ */
+function showHelp() {
+    console.log(`
+GitHub Issue Worker
+
+Usage: node src/worker.js [options]
+
+Options:
+  --reset    Clear all queue data before starting worker
+  --help     Show this help message
+
+Examples:
+  node src/worker.js                 # Start worker normally
+  node src/worker.js --reset         # Reset queues and start worker
+`);
+}
+
+/**
  * Starts the worker process
  */
-async function startWorker() {
+async function startWorker(options = {}) {
     logger.info({
         queue: GITHUB_ISSUE_QUEUE_NAME,
         processingTag: AI_PROCESSING_TAG,
         primaryTag: AI_PRIMARY_TAG,
-        doneTag: AI_EXCLUDE_TAGS_DONE
+        doneTag: AI_EXCLUDE_TAGS_DONE,
+        resetPerformed: options.reset || false
     }, 'Starting GitHub Issue Worker...');
     
     // Ensure Claude Docker image is built before starting worker
@@ -308,8 +562,27 @@ export { processGitHubIssueJob, startWorker };
 
 // Start worker if this is the main module
 if (import.meta.url === `file://${process.argv[1]}`) {
-    startWorker().catch(error => {
-        logger.error({ error: error.message }, 'Failed to start worker');
-        process.exit(1);
-    });
+    const options = parseArguments();
+    
+    if (options.help) {
+        showHelp();
+        process.exit(0);
+    }
+    
+    async function main() {
+        try {
+            if (options.reset) {
+                logger.info('Reset flag detected, clearing worker queue data...');
+                await resetWorkerQueues();
+                logger.info('Worker reset completed successfully');
+            }
+            
+            await startWorker(options);
+        } catch (error) {
+            logger.error({ error: error.message }, 'Failed to start worker');
+            process.exit(1);
+        }
+    }
+    
+    main();
 }
