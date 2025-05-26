@@ -240,7 +240,7 @@ async function processGitHubIssueJob(job) {
                 }, 'Failed to list files in worktree');
             }
             
-            // Stage 6: Enhanced Post-Processing with PR Creation
+            // Step 4: Post-processing (commit, push, create PR, update labels)
             let postProcessingResult = null;
             if (claudeResult?.success) {
                 try {
@@ -248,14 +248,21 @@ async function processGitHubIssueJob(job) {
                         jobId, 
                         issueNumber: issueRef.number,
                         worktreePath: worktreeInfo.worktreePath
-                    }, 'Starting enhanced post-processing: commit, push, and PR creation...');
+                    }, 'Starting post-processing: commit, push, and PR creation...');
 
-                    // Commit changes with structured message
+                    // Extract commit message from Claude result if available
+                    let commitMessage = `fix(ai): Resolve issue #${issueRef.number} - ${currentIssueData.data.title.substring(0, 50)}
+
+Implemented by Claude Code. Full conversation log in PR comment.`;
+                    
+                    if (claudeResult.suggestedCommitMessage) {
+                        commitMessage = claudeResult.suggestedCommitMessage;
+                    }
+
+                    // Commit changes
                     const commitResult = await commitChanges(
                         worktreeInfo.worktreePath,
-                        `fix(ai): Resolve issue #${issueRef.number} - ${currentIssueData.data.title.substring(0, 50)}
-
-Implemented by Claude Code. Full conversation log in PR comment.`,
+                        commitMessage,
                         {
                             name: 'Claude Code',
                             email: 'claude-code@anthropic.com'
@@ -265,9 +272,21 @@ Implemented by Claude Code. Full conversation log in PR comment.`,
                     );
 
                     if (commitResult) {
+                        logger.info({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            commitHash: commitResult.commitHash
+                        }, 'Changes committed successfully');
+
                         // Push branch to remote
                         await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName);
                         
+                        logger.info({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            branchName: worktreeInfo.branchName
+                        }, 'Branch pushed to remote successfully');
+
                         // Complete post-processing (PR creation, comments, labels)
                         postProcessingResult = await completePostProcessing({
                             owner: issueRef.repoOwner,
@@ -286,14 +305,29 @@ Implemented by Claude Code. Full conversation log in PR comment.`,
                             issueNumber: issueRef.number,
                             prNumber: postProcessingResult.pr?.number,
                             prUrl: postProcessingResult.pr?.url
-                        }, 'Enhanced post-processing completed successfully');
+                        }, 'Post-processing completed successfully');
+
                     } else {
                         logger.info({
                             jobId,
                             issueNumber: issueRef.number
-                        }, 'No changes to commit, using fallback completion comment');
-                        
-                        // Fallback to original completion comment
+                        }, 'No changes to commit, posting completion comment only');
+
+                        // Just update labels if no changes were made
+                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            issue_number: issueRef.number,
+                            name: AI_PROCESSING_TAG,
+                        });
+
+                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            issue_number: issueRef.number,
+                            labels: [AI_DONE_TAG],
+                        });
+
                         const completionComment = await generateCompletionComment(claudeResult, issueRef);
                         await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                             owner: issueRef.repoOwner,
@@ -308,90 +342,58 @@ Implemented by Claude Code. Full conversation log in PR comment.`,
                         jobId,
                         issueNumber: issueRef.number,
                         error: postProcessingError.message
-                    }, 'Enhanced post-processing failed, falling back to original method');
+                    }, 'Post-processing failed');
 
-                    // Fallback to original completion comment
-                    const completionComment = await generateCompletionComment(claudeResult, issueRef);
+                    // Try to update labels to indicate post-processing failure
+                    try {
+                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            issue_number: issueRef.number,
+                            name: AI_PROCESSING_TAG,
+                        });
+
+                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            issue_number: issueRef.number,
+                            labels: ['AI-failed-post-processing'],
+                        });
+                    } catch (labelError) {
+                        logger.warn({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            error: labelError.message
+                        }, 'Failed to update labels after post-processing failure');
+                    }
+
+                    // Still post a completion comment with error details
+                    const errorComment = `🤖 **AI Processing Completed with Post-Processing Errors**
+
+Claude Code successfully analyzed and potentially fixed the issue, but encountered errors during post-processing (commit/PR creation).
+
+**Error Details:**
+- Post-processing Error: ${postProcessingError.message}
+
+Please check the logs and manually review any changes made to the codebase.
+
+---
+*Powered by Claude Code*`;
+                    
                     await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                         owner: issueRef.repoOwner,
                         repo: issueRef.repoName,
                         issue_number: issueRef.number,
-                        body: completionComment,
+                        body: errorComment,
                     });
                 }
             } else {
-                // Claude failed, use original completion comment
-                const completionComment = await generateCompletionComment(claudeResult, issueRef);
-                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                    owner: issueRef.repoOwner,
-                    repo: issueRef.repoName,
-                    issue_number: issueRef.number,
-                    body: completionComment,
-                });
-            }
-            
-            logger.info({ 
-                jobId, 
-                issueNumber: issueRef.number 
-            }, 'Completion processing finished');
-            
-            // Check if a PR was created by looking for recent PRs
-            let prInfo = null;
-            try {
-                logger.info({ 
-                    jobId, 
-                    issueNumber: issueRef.number 
-                }, 'Checking for created pull requests...');
-                
-                const prsResponse = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
-                    owner: issueRef.repoOwner,
-                    repo: issueRef.repoName,
-                    state: 'open',
-                    sort: 'created',
-                    direction: 'desc',
-                    per_page: 10
-                });
-                
-                // Look for PRs created in the last 30 minutes that might be from this run
-                const recentTime = new Date(Date.now() - 30 * 60 * 1000);
-                const recentPR = prsResponse.data.find(pr => {
-                    const createdAt = new Date(pr.created_at);
-                    return createdAt > recentTime && 
-                           (pr.title.includes(`#${issueRef.number}`) || 
-                            pr.head.ref.includes(`${issueRef.number}`) ||
-                            pr.body?.includes(`#${issueRef.number}`));
-                });
-                
-                if (recentPR) {
-                    prInfo = {
-                        number: recentPR.number,
-                        url: recentPR.html_url,
-                        title: recentPR.title,
-                        branch: recentPR.head.ref
-                    };
-                    logger.info({ 
-                        jobId, 
-                        issueNumber: issueRef.number,
-                        prNumber: recentPR.number,
-                        prUrl: recentPR.html_url
-                    }, 'Found created pull request');
-                }
-            } catch (prCheckError) {
-                logger.warn({ 
-                    jobId, 
-                    issueNumber: issueRef.number,
-                    error: prCheckError.message
-                }, 'Failed to check for created pull requests');
-            }
-            
-            // Update issue labels: remove AI-processing, add AI-done
-            try {
-                logger.info({ 
-                    jobId, 
-                    issueNumber: issueRef.number 
-                }, 'Updating issue labels...');
-                
-                // Remove AI-processing label
+                // Claude failed, just update labels
+                logger.warn({
+                    jobId,
+                    issueNumber: issueRef.number
+                }, 'Claude processing failed, updating labels only');
+
                 try {
                     await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
                         owner: issueRef.repoOwner,
@@ -399,72 +401,34 @@ Implemented by Claude Code. Full conversation log in PR comment.`,
                         issue_number: issueRef.number,
                         name: AI_PROCESSING_TAG,
                     });
-                    logger.info({ 
-                        jobId, 
-                        issueNumber: issueRef.number 
-                    }, `Removed '${AI_PROCESSING_TAG}' label`);
-                } catch (removeError) {
-                    logger.warn({ 
-                        jobId, 
-                        issueNumber: issueRef.number,
-                        error: removeError.message
-                    }, `Failed to remove '${AI_PROCESSING_TAG}' label`);
-                }
-                
-                // Add AI-done label
-                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                    owner: issueRef.repoOwner,
-                    repo: issueRef.repoName,
-                    issue_number: issueRef.number,
-                    labels: [AI_DONE_TAG],
-                });
-                logger.info({ 
-                    jobId, 
-                    issueNumber: issueRef.number 
-                }, `Added '${AI_DONE_TAG}' label`);
-                
-            } catch (labelError) {
-                logger.warn({ 
-                    jobId, 
-                    issueNumber: issueRef.number,
-                    error: labelError.message
-                }, 'Failed to update issue labels');
-            }
-            
-            // Update the completion comment if we found a PR
-            if (prInfo) {
-                try {
-                    const prUpdateComment = `\n\n**🎉 Pull Request Created Successfully!**\n\n` +
-                                          `- **PR #${prInfo.number}**: [${prInfo.title}](${prInfo.url})\n` +
-                                          `- **Branch**: \`${prInfo.branch}\`\n` +
-                                          `- **Status**: Ready for review\n\n` +
-                                          `The implementation is now available for review and can be merged when approved.`;
-                    
-                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
                         owner: issueRef.repoOwner,
                         repo: issueRef.repoName,
                         issue_number: issueRef.number,
-                        body: prUpdateComment,
+                        labels: ['AI-failed-claude'],
                     });
-                    
-                    logger.info({ 
-                        jobId, 
+                } catch (labelError) {
+                    logger.warn({
+                        jobId,
                         issueNumber: issueRef.number,
-                        prNumber: prInfo.number
-                    }, 'Posted PR update comment');
-                } catch (updateError) {
-                    logger.warn({ 
-                        jobId, 
-                        issueNumber: issueRef.number,
-                        error: updateError.message
-                    }, 'Failed to post PR update comment');
+                        error: labelError.message
+                    }, 'Failed to update labels after Claude failure');
                 }
+
+                const failureComment = await generateCompletionComment(claudeResult, issueRef);
+                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                    owner: issueRef.repoOwner,
+                    repo: issueRef.repoName,
+                    issue_number: issueRef.number,
+                    body: failureComment,
+                });
             }
             
             await job.updateProgress(95);
             
         } finally {
-            // Cleanup: Remove worktree after processing
+            // Cleanup: Remove worktree after processing with retention strategy
             if (worktreeInfo) {
                 try {
                     logger.info({ 
@@ -473,11 +437,17 @@ Implemented by Claude Code. Full conversation log in PR comment.`,
                         worktreePath: worktreeInfo.worktreePath
                     }, 'Cleaning up Git worktree...');
                     
+                    const wasSuccessful = claudeResult?.success && postProcessingResult?.pr;
+                    
                     await cleanupWorktree(
                         localRepoPath, 
                         worktreeInfo.worktreePath, 
                         worktreeInfo.branchName,
-                        true // Delete the branch since we're just simulating
+                        {
+                            deleteBranch: !wasSuccessful, // Keep branch if successful (it's in the PR)
+                            success: wasSuccessful,
+                            retentionStrategy: process.env.WORKTREE_RETENTION_STRATEGY || 'always_delete'
+                        }
                     );
                 } catch (cleanupError) {
                     logger.warn({ 
@@ -492,8 +462,12 @@ Implemented by Claude Code. Full conversation log in PR comment.`,
         // Update progress tracking
         await job.updateProgress(100);
 
+        const finalStatus = claudeResult?.success ? 
+            (postProcessingResult?.pr ? 'complete_with_pr' : 'claude_success_no_changes') : 
+            'claude_processing_failed';
+
         return { 
-            status: claudeResult?.success ? 'claude_processing_complete' : 'claude_processing_failed', 
+            status: finalStatus,
             issueNumber: issueRef.number,
             repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
             gitSetup: {
@@ -507,6 +481,11 @@ Implemented by Claude Code. Full conversation log in PR comment.`,
                 modifiedFiles: claudeResult?.modifiedFiles || [],
                 conversationLog: claudeResult?.conversationLog || [],
                 error: claudeResult?.error || null
+            },
+            postProcessing: {
+                success: !!postProcessingResult,
+                pr: postProcessingResult?.pr || null,
+                updatedLabels: postProcessingResult?.updatedLabels || []
             }
         };
 
