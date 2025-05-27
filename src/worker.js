@@ -326,7 +326,10 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                         }, 'Changes committed successfully');
 
                         // Push branch to remote
-                        await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName);
+                        await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                            repoUrl,
+                            authToken: githubToken.token
+                        });
                         
                         logger.info({
                             jobId,

@@ -5,6 +5,18 @@ import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 
+/**
+ * Sets up authenticated remote URL for a Git repository
+ * @param {Object} git - SimpleGit instance
+ * @param {string} repoUrl - Base repository URL
+ * @param {string} authToken - GitHub authentication token
+ * @returns {Promise<void>}
+ */
+async function setupAuthenticatedRemote(git, repoUrl, authToken) {
+    const authenticatedUrl = repoUrl.replace('https://', `https://x-access-token:${authToken}@`);
+    await git.remote(['set-url', 'origin', authenticatedUrl]);
+}
+
 // Configuration from environment variables
 const CLONES_BASE_PATH = process.env.GIT_CLONES_BASE_PATH || "/tmp/git-processor/clones";
 const WORKTREES_BASE_PATH = process.env.GIT_WORKTREES_BASE_PATH || "/tmp/git-processor/worktrees";
@@ -41,6 +53,10 @@ export async function ensureRepoCloned(repoUrl, owner, repoName, authToken) {
             }, 'Repository exists locally. Fetching updates...');
             
             const git = simpleGit(localRepoPath);
+            
+            // Set up authentication for fetch
+            await setupAuthenticatedRemote(git, repoUrl, authToken);
+            
             await git.fetch(['origin', '--prune']);
             
             logger.info({ 
@@ -777,13 +793,22 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
  * Pushes branch from worktree to remote
  * @param {string} worktreePath - Path to the worktree
  * @param {string} branchName - Branch name to push
- * @param {string} remote - Remote name (default: 'origin')
+ * @param {Object} options - Push options
+ * @param {string} options.repoUrl - Repository URL for authentication
+ * @param {string} options.authToken - GitHub authentication token
+ * @param {string} options.remote - Remote name (default: 'origin')
  * @returns {Promise<void>}
  */
-export async function pushBranch(worktreePath, branchName, remote = 'origin') {
+export async function pushBranch(worktreePath, branchName, options = {}) {
+    const { repoUrl, authToken, remote = 'origin' } = options;
     const git = simpleGit(worktreePath);
     
     try {
+        // Set up authentication if provided
+        if (repoUrl && authToken) {
+            await setupAuthenticatedRemote(git, repoUrl, authToken);
+        }
+        
         await git.push([remote, branchName, '--set-upstream']);
         
         logger.info({ 
