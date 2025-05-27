@@ -211,17 +211,19 @@ export function generateEnhancedClaudePrompt(options) {
 ${currentIssueData.body || 'No description provided'}
 
 **IMPORTANT INSTRUCTIONS:**
-1. You are working in the directory: ${worktreePath}
-2. Make your changes and commit them to the current branch: ${branchName}
-3. When creating a Pull Request, use EXACTLY these details:
+1. First, use \`gh issue view ${issueRef.number}\` to get the full issue details
+2. Use \`gh issue view ${issueRef.number} --comments\` to read all issue comments for additional context
+3. You are working in the directory: ${worktreePath}
+4. Make your changes and commit them to the current branch: ${branchName}
+5. When creating a Pull Request, use EXACTLY these details:
    - Repository: ${issueRef.repoOwner}/${issueRef.repoName}
    - Head branch: ${branchName}
    - Base branch: ${baseBranch}
    - DO NOT hallucinate or guess repository names
-4. The PR should reference issue #${issueRef.number}
-5. Test your changes thoroughly before creating the PR
+6. The PR should reference issue #${issueRef.number}
+7. Test your changes thoroughly before creating the PR
 
-Please analyze the issue, implement a solution, and create a Pull Request with the exact repository information provided above.`;
+Please analyze the complete issue and comments, implement a solution, and create a Pull Request with the exact repository information provided above.`;
 
     return prompt;
 }

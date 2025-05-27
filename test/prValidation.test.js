@@ -56,6 +56,11 @@ describe('PR Validation Utils', () => {
         // Verify explicit instructions are present
         assert.ok(prompt.includes('CRITICAL - USE EXACTLY AS PROVIDED'));
         assert.ok(prompt.includes('IMPORTANT INSTRUCTIONS:'));
+        
+        // Verify comment reading instructions are included
+        assert.ok(prompt.includes('gh issue view 123'));
+        assert.ok(prompt.includes('gh issue view 123 --comments'));
+        assert.ok(prompt.includes('read all issue comments for additional context'));
     });
 
     test('generateEnhancedClaudePrompt should handle missing issue body gracefully', () => {

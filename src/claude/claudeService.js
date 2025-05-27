@@ -28,14 +28,15 @@ function generateClaudePrompt(issueRef) {
 
 Follow these steps systematically:
 1. Use \`gh issue view ${issueRef.number}\` to get the issue details
-2. Understand the problem described in the issue
-3. Search the codebase for relevant files
-4. Implement the necessary changes to fix the issue
-5. Write and run tests to verify the fix (if applicable)
-6. Ensure code passes linting and type checking (if applicable)
-7. Create a descriptive commit message and commit your changes
-8. Push your branch to the remote repository
-9. Create a pull request using \`gh pr create\`
+2. Use \`gh issue view ${issueRef.number} --comments\` to read all issue comments for additional context
+3. Understand the complete problem described in the issue and comments
+4. Search the codebase for relevant files
+5. Implement the necessary changes to fix the issue
+6. Write and run tests to verify the fix (if applicable)
+7. Ensure code passes linting and type checking (if applicable)
+8. Create a descriptive commit message and commit your changes
+9. Push your branch to the remote repository
+10. Create a pull request using \`gh pr create\`
 
 **CRITICAL INSTRUCTIONS FOR PR CREATION:**
 - Repository is EXACTLY: ${issueRef.repoOwner}/${issueRef.repoName}
