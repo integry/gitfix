@@ -176,7 +176,7 @@ async function processGitHubIssueJob(job) {
         
         let localRepoPath;
         let worktreeInfo;
-        let claudeResult;
+        let claudeResult = null;
         let postProcessingResult = null;
         
         try {
