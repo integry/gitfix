@@ -13,7 +13,8 @@
     "worker": "node src/worker.js",
     "worker:dev": "LOG_LEVEL=debug node src/worker.js",
     "worker:reset": "node src/worker.js --reset",
-    "worker:reset:dev": "LOG_LEVEL=debug node src/worker.js --reset"
+    "worker:reset:dev": "LOG_LEVEL=debug node src/worker.js --reset",
+    "config:repos": "node scripts/list-repo-configs.js"
   },
   "keywords": [],
   "author": "",
