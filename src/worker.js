@@ -232,12 +232,32 @@ async function processGitHubIssueJob(job) {
             
             await job.updateProgress(80);
             
+            correlatedLogger.info({
+                jobId,
+                issueNumber: issueRef.number,
+                worktreePath: worktreeInfo.worktreePath
+            }, 'EXECUTION DEBUG: About to execute Claude Code');
+
             claudeResult = await executeClaudeCode({
                 worktreePath: worktreeInfo.worktreePath,
                 issueRef: issueRef,
                 githubToken: githubToken.token
             });
             
+            correlatedLogger.info({
+                jobId,
+                issueNumber: issueRef.number,
+                claudeSuccess: claudeResult.success,
+                claudeResultStructure: {
+                    success: claudeResult.success,
+                    executionTime: claudeResult.executionTime,
+                    modifiedFilesCount: claudeResult.modifiedFiles?.length || 0,
+                    hasOutput: !!claudeResult.output,
+                    exitCode: claudeResult.exitCode,
+                    hasLogs: !!claudeResult.logs
+                }
+            }, 'EXECUTION DEBUG: Claude Code execution completed');
+
             logger.info({ 
                 jobId, 
                 issueNumber: issueRef.number,
@@ -289,7 +309,21 @@ async function processGitHubIssueJob(job) {
             }
             
             // Step 4: Post-processing (commit, push, create PR, update labels)
+            correlatedLogger.info({
+                jobId,
+                issueNumber: issueRef.number,
+                claudeSuccess: claudeResult?.success,
+                beforePostProcessingCondition: 'CHECKING_CLAUDE_SUCCESS'
+            }, 'POST-PROCESSING DEBUG: Checking if should start post-processing');
+
             if (claudeResult?.success) {
+                correlatedLogger.info({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    worktreePath: worktreeInfo.worktreePath,
+                    postProcessingCondition: 'CLAUDE_SUCCESS_TRUE'
+                }, 'POST-PROCESSING DEBUG: Claude succeeded, starting post-processing');
+
                 try {
                     logger.info({ 
                         jobId, 
@@ -338,6 +372,13 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                         }, 'Branch pushed to remote successfully');
 
                         // Complete post-processing (PR creation, comments, labels)
+                        correlatedLogger.info({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            branchName: worktreeInfo.branchName,
+                            aboutToCallCompletePostProcessing: 'TRUE'
+                        }, 'POST-PROCESSING DEBUG: About to call completePostProcessing');
+
                         postProcessingResult = await completePostProcessing({
                             owner: issueRef.repoOwner,
                             repoName: issueRef.repoName,
@@ -349,6 +390,15 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                             processingTags: [AI_PROCESSING_TAG],
                             completionTags: [AI_DONE_TAG]
                         });
+
+                        correlatedLogger.info({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            postProcessingSuccess: !!postProcessingResult.pr,
+                            prNumber: postProcessingResult.pr?.number,
+                            prUrl: postProcessingResult.pr?.url,
+                            postProcessingResultKeys: Object.keys(postProcessingResult || {})
+                        }, 'POST-PROCESSING DEBUG: completePostProcessing returned');
 
                         logger.info({
                             jobId,
@@ -483,6 +533,14 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                     }
 
                 } catch (postProcessingError) {
+                    correlatedLogger.error({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        error: postProcessingError.message,
+                        errorStack: postProcessingError.stack,
+                        postProcessingErrorCaught: 'TRUE'
+                    }, 'POST-PROCESSING DEBUG: Caught error in post-processing');
+
                     logger.error({
                         jobId,
                         issueNumber: issueRef.number,
@@ -599,6 +657,13 @@ Please check the logs and manually review any changes made to the codebase.
                 }
             } else {
                 // Claude failed, just update labels
+                correlatedLogger.warn({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    claudeSuccess: claudeResult?.success,
+                    claudeFailureHandling: 'TRUE'
+                }, 'EXECUTION DEBUG: Claude processing failed, updating labels only');
+
                 logger.warn({
                     jobId,
                     issueNumber: issueRef.number
@@ -640,79 +705,112 @@ Please check the logs and manually review any changes made to the codebase.
         } finally {
             // CRITICAL: Always validate PR creation after Claude execution, regardless of post-processing results
             // This catches cases where Claude creates PR independently but our system doesn't detect it
+            
+            correlatedLogger.info({
+                jobId,
+                issueNumber: issueRef.number,
+                workerFinally: 'ENTERED_FINALLY_BLOCK'
+            }, 'WORKER DEBUG: Entered finally block - this should ALWAYS appear');
+
+            // Log all variables for debugging with complete details
+            correlatedLogger.info({
+                jobId,
+                issueNumber: issueRef.number,
+                claudeResultExists: !!claudeResult,
+                claudeSuccess: claudeResult?.success,
+                claudeResultType: typeof claudeResult,
+                claudeResultKeys: claudeResult ? Object.keys(claudeResult) : null,
+                worktreeInfoExists: !!worktreeInfo,
+                worktreeInfoType: typeof worktreeInfo,
+                branchName: worktreeInfo?.branchName,
+                worktreePath: worktreeInfo?.worktreePath,
+                worktreeInfoKeys: worktreeInfo ? Object.keys(worktreeInfo) : null,
+                postProcessingSuccess: !!postProcessingResult?.pr,
+                postProcessingResultExists: !!postProcessingResult,
+                postProcessingResultType: typeof postProcessingResult,
+                postProcessingResultKeys: postProcessingResult ? Object.keys(postProcessingResult) : null
+            }, 'VALIDATION DEBUG: Complete variable state check for final PR validation');
+
             if (claudeResult?.success && worktreeInfo?.branchName) {
                 correlatedLogger.info({
                     jobId,
                     issueNumber: issueRef.number,
                     branchName: worktreeInfo.branchName,
                     postProcessingSuccess: !!postProcessingResult?.pr
-                }, 'Performing final PR validation after Claude execution');
+                }, 'CRITICAL: Performing final PR validation after Claude execution');
 
-                const finalPRValidation = await validatePRCreation({
-                    owner: issueRef.repoOwner,
-                    repoName: issueRef.repoName,
-                    branchName: worktreeInfo.branchName,
-                    expectedPrNumber: postProcessingResult?.pr?.number,
-                    correlationId
-                });
+                try {
+                    const finalPRValidation = await validatePRCreation({
+                        owner: issueRef.repoOwner,
+                        repoName: issueRef.repoName,
+                        branchName: worktreeInfo.branchName,
+                        expectedPrNumber: postProcessingResult?.pr?.number,
+                        correlationId
+                    });
 
-                if (finalPRValidation.isValid && !postProcessingResult?.pr) {
-                    // PR exists but post-processing didn't detect it - update our results
                     correlatedLogger.info({
                         jobId,
                         issueNumber: issueRef.number,
-                        prNumber: finalPRValidation.pr.number,
-                        prUrl: finalPRValidation.pr.url
-                    }, 'Found PR that post-processing missed - updating results and labels');
+                        validationResult: finalPRValidation
+                    }, 'VALIDATION COMPLETED: Final PR validation result');
 
-                    // Update post-processing result
-                    postProcessingResult = { 
-                        pr: finalPRValidation.pr, 
-                        updatedLabels: postProcessingResult?.updatedLabels || [] 
-                    };
-
-                    // Update issue labels since post-processing missed the PR
-                    try {
-                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            name: AI_PROCESSING_TAG,
-                        });
-
-                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            labels: [AI_DONE_TAG],
-                        });
-
+                    if (finalPRValidation.isValid && !postProcessingResult?.pr) {
+                        // PR exists but post-processing didn't detect it - update our results
                         correlatedLogger.info({
                             jobId,
-                            issueNumber: issueRef.number
-                        }, 'Updated issue labels after finding missed PR');
+                            issueNumber: issueRef.number,
+                            prNumber: finalPRValidation.pr.number,
+                            prUrl: finalPRValidation.pr.url
+                        }, 'Found PR that post-processing missed - updating results and labels');
 
-                    } catch (labelUpdateError) {
+                        // Update post-processing result
+                        postProcessingResult = { 
+                            pr: finalPRValidation.pr, 
+                            updatedLabels: postProcessingResult?.updatedLabels || [] 
+                        };
+
+                        // Update issue labels since post-processing missed the PR
+                        try {
+                            await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                                owner: issueRef.repoOwner,
+                                repo: issueRef.repoName,
+                                issue_number: issueRef.number,
+                                name: AI_PROCESSING_TAG,
+                            });
+
+                            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                                owner: issueRef.repoOwner,
+                                repo: issueRef.repoName,
+                                issue_number: issueRef.number,
+                                labels: [AI_DONE_TAG],
+                            });
+
+                            correlatedLogger.info({
+                                jobId,
+                                issueNumber: issueRef.number
+                            }, 'Updated issue labels after finding missed PR');
+
+                        } catch (labelUpdateError) {
+                            correlatedLogger.warn({
+                                error: labelUpdateError.message
+                            }, 'Failed to update labels after finding missed PR');
+                        }
+
+                    } else if (!finalPRValidation.isValid && claudeResult?.success) {
+                        // Claude succeeded but no PR exists - trigger retry
                         correlatedLogger.warn({
-                            error: labelUpdateError.message
-                        }, 'Failed to update labels after finding missed PR');
-                    }
+                            jobId,
+                            issueNumber: issueRef.number,
+                            branchName: worktreeInfo.branchName,
+                            validationError: finalPRValidation.error
+                        }, 'Claude succeeded but no PR found - triggering emergency retry');
 
-                } else if (!finalPRValidation.isValid && claudeResult?.success) {
-                    // Claude succeeded but no PR exists - trigger retry
-                    correlatedLogger.warn({
-                        jobId,
-                        issueNumber: issueRef.number,
-                        branchName: worktreeInfo.branchName,
-                        validationError: finalPRValidation.error
-                    }, 'Claude succeeded but no PR found - triggering emergency retry');
-
-                    // Validate repository information
-                    const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
+                        // Validate repository information
+                        const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
                     
-                    if (repoValidation.isValid) {
-                        // Generate enhanced prompt focused purely on PR creation
-                        const emergencyPrompt = `The code changes for GitHub issue #${issueRef.number} have already been implemented and committed to branch ${worktreeInfo.branchName}.
+                        if (repoValidation.isValid) {
+                            // Generate enhanced prompt focused purely on PR creation
+                            const emergencyPrompt = `The code changes for GitHub issue #${issueRef.number} have already been implemented and committed to branch ${worktreeInfo.branchName}.
 
 **URGENT TASK: CREATE PULL REQUEST**
 
@@ -736,49 +834,66 @@ After creating the PR, verify it exists with: \`gh pr list\`
 
 This is an emergency retry - the main implementation is complete, you just need to create the PR.`;
 
-                        // Emergency retry focused only on PR creation
-                        const emergencyRetry = await executeClaudeCode({
-                            worktreePath: worktreeInfo.worktreePath,
-                            issueRef: issueRef,
-                            githubToken: githubToken.token,
-                            customPrompt: emergencyPrompt,
-                            isRetry: true,
-                            retryReason: 'Emergency PR creation - main implementation complete'
-                        });
+                            // Emergency retry focused only on PR creation
+                            const emergencyRetry = await executeClaudeCode({
+                                worktreePath: worktreeInfo.worktreePath,
+                                issueRef: issueRef,
+                                githubToken: githubToken.token,
+                                customPrompt: emergencyPrompt,
+                                isRetry: true,
+                                retryReason: 'Emergency PR creation - main implementation complete'
+                            });
 
-                        correlatedLogger.info({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            emergencyRetrySuccess: emergencyRetry.success
-                        }, 'Emergency PR creation retry completed');
+                            correlatedLogger.info({
+                                jobId,
+                                issueNumber: issueRef.number,
+                                emergencyRetrySuccess: emergencyRetry.success
+                            }, 'Emergency PR creation retry completed');
 
-                        // Final validation after emergency retry
-                        if (emergencyRetry.success) {
-                            const emergencyValidation = await validatePRCreation({
-                                owner: issueRef.repoOwner,
-                                repoName: issueRef.repoName,
-                                branchName: worktreeInfo.branchName,
+                            // Final validation after emergency retry
+                            if (emergencyRetry.success) {
+                                const emergencyValidation = await validatePRCreation({
+                                    owner: issueRef.repoOwner,
+                                    repoName: issueRef.repoName,
+                                    branchName: worktreeInfo.branchName,
                                 expectedPrNumber: null,
                                 correlationId
                             });
 
-                            if (emergencyValidation.isValid) {
-                                correlatedLogger.info({
-                                    jobId,
-                                    issueNumber: issueRef.number,
-                                    prNumber: emergencyValidation.pr.number,
-                                    prUrl: emergencyValidation.pr.url
-                                }, 'Emergency PR creation successful');
+                                if (emergencyValidation.isValid) {
+                                    correlatedLogger.info({
+                                        jobId,
+                                        issueNumber: issueRef.number,
+                                        prNumber: emergencyValidation.pr.number,
+                                        prUrl: emergencyValidation.pr.url
+                                    }, 'Emergency PR creation successful');
 
-                                // Update final results
-                                postProcessingResult = { 
-                                    pr: emergencyValidation.pr, 
-                                    updatedLabels: [] 
-                                };
+                                    // Update final results
+                                    postProcessingResult = { 
+                                        pr: emergencyValidation.pr, 
+                                        updatedLabels: [] 
+                                    };
+                                }
                             }
                         }
                     }
+                } catch (validationError) {
+                    correlatedLogger.error({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        error: validationError.message,
+                        stack: validationError.stack
+                    }, 'CRITICAL ERROR: Final PR validation failed with exception');
                 }
+            } else {
+                correlatedLogger.warn({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    claudeResultExists: !!claudeResult,
+                    claudeSuccess: claudeResult?.success,
+                    worktreeInfoExists: !!worktreeInfo,
+                    branchName: worktreeInfo?.branchName
+                }, 'VALIDATION SKIPPED: Conditions not met for final PR validation');
             }
             // Cleanup: Remove worktree after processing with retention strategy
             if (worktreeInfo) {
