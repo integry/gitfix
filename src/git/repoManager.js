@@ -59,6 +59,24 @@ export async function ensureRepoCloned(repoUrl, owner, repoName, authToken) {
             
             await git.fetch(['origin', '--prune']);
             
+            // Ensure we're on the correct default branch in the main repository
+            const defaultBranch = await detectDefaultBranch(git, owner, repoName);
+            
+            try {
+                // Check out the default branch to ensure worktrees are created from the correct base
+                await git.checkout(defaultBranch);
+                logger.info({ 
+                    repo: `${owner}/${repoName}`, 
+                    defaultBranch 
+                }, 'Checked out default branch in main repository');
+            } catch (checkoutError) {
+                logger.warn({ 
+                    repo: `${owner}/${repoName}`, 
+                    defaultBranch,
+                    error: checkoutError.message 
+                }, 'Failed to checkout default branch, continuing anyway');
+            }
+            
             logger.info({ 
                 repo: `${owner}/${repoName}`, 
                 path: localRepoPath 
@@ -96,6 +114,24 @@ export async function ensureRepoCloned(repoUrl, owner, repoName, authToken) {
                     repo: `${owner}/${repoName}`, 
                     error: headError.message 
                 }, 'Failed to set remote HEAD, continuing anyway');
+            }
+            
+            // Ensure we're on the correct default branch in the main repository after clone
+            const defaultBranch = await detectDefaultBranch(repoGit, owner, repoName);
+            
+            try {
+                // Check out the default branch to ensure worktrees are created from the correct base
+                await repoGit.checkout(defaultBranch);
+                logger.info({ 
+                    repo: `${owner}/${repoName}`, 
+                    defaultBranch 
+                }, 'Checked out default branch in main repository after clone');
+            } catch (checkoutError) {
+                logger.warn({ 
+                    repo: `${owner}/${repoName}`, 
+                    defaultBranch,
+                    error: checkoutError.message 
+                }, 'Failed to checkout default branch after clone, continuing anyway');
             }
             
             logger.info({ 
