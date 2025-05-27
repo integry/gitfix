@@ -21,6 +21,11 @@ const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10
 function generateClaudePrompt(issueRef) {
     return `Please analyze and fix the GitHub issue: #${issueRef.number}.
 
+**REPOSITORY INFORMATION (CRITICAL - DO NOT HALLUCINATE):**
+- Repository Owner: ${issueRef.repoOwner}
+- Repository Name: ${issueRef.repoName}
+- Full Repository: ${issueRef.repoOwner}/${issueRef.repoName}
+
 Follow these steps systematically:
 1. Use \`gh issue view ${issueRef.number}\` to get the issue details
 2. Understand the problem described in the issue
@@ -31,6 +36,13 @@ Follow these steps systematically:
 7. Create a descriptive commit message and commit your changes
 8. Push your branch to the remote repository
 9. Create a pull request using \`gh pr create\`
+
+**CRITICAL INSTRUCTIONS FOR PR CREATION:**
+- Repository is EXACTLY: ${issueRef.repoOwner}/${issueRef.repoName}
+- DO NOT guess or hallucinate repository names
+- When using \`gh pr create\`, ensure you're in the correct repository directory
+- Verify with \`gh repo view\` that you're working with the right repository
+- Double-check all git remotes with \`git remote -v\`
 
 Important notes:
 - You are working in a git worktree environment
@@ -43,7 +55,7 @@ Important notes:
 - Focus on completing the core functionality first, then handle git operations
 - Make sure to create a meaningful branch name and PR description
 
-CRITICAL: The main goal is to create a working pull request. If git operations fail, try alternative approaches and document the exact error messages.`;
+CRITICAL: The main goal is to create a working pull request for repository ${issueRef.repoOwner}/${issueRef.repoName}. If git operations fail, try alternative approaches and document the exact error messages.`;
 }
 
 /**
@@ -52,21 +64,34 @@ CRITICAL: The main goal is to create a working pull request. If git operations f
  * @param {string} options.worktreePath - Path to the Git worktree containing the repository
  * @param {Object} options.issueRef - GitHub issue reference
  * @param {string} options.githubToken - GitHub authentication token
+ * @param {string} options.customPrompt - Custom prompt to use instead of default (optional)
+ * @param {boolean} options.isRetry - Whether this is a retry attempt (optional)
+ * @param {string} options.retryReason - Reason for retry (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason }) {
     const startTime = Date.now();
     
     logger.info({
         issueNumber: issueRef.number,
         repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
         worktreePath,
-        dockerImage: CLAUDE_DOCKER_IMAGE
-    }, 'Starting Claude Code execution...');
+        dockerImage: CLAUDE_DOCKER_IMAGE,
+        isRetry,
+        retryReason
+    }, isRetry ? 'Starting Claude Code execution (RETRY)...' : 'Starting Claude Code execution...');
 
     try {
         // Generate the prompt for Claude
-        const prompt = generateClaudePrompt(issueRef);
+        const prompt = customPrompt || generateClaudePrompt(issueRef);
+        
+        if (isRetry) {
+            logger.info({
+                issueNumber: issueRef.number,
+                retryReason,
+                promptLength: prompt.length
+            }, 'Using enhanced prompt for retry execution');
+        }
         
         // Construct Docker run command
         const dockerArgs = [

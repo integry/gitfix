@@ -15,6 +15,11 @@ import {
 } from './git/repoManager.js';
 import { completePostProcessing } from './githubService.js';
 import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
+import { 
+    validatePRCreation, 
+    generateEnhancedClaudePrompt, 
+    validateRepositoryInfo 
+} from './utils/prValidation.js';
 import Redis from 'ioredis';
 
 // Configuration
@@ -348,6 +353,95 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                             prNumber: postProcessingResult.pr?.number,
                             prUrl: postProcessingResult.pr?.url
                         }, 'Post-processing completed successfully');
+
+                        // Step 5: Validate PR creation and retry if needed
+                        const prValidationResult = await validatePRCreation({
+                            owner: issueRef.repoOwner,
+                            repoName: issueRef.repoName,
+                            branchName: worktreeInfo.branchName,
+                            expectedPrNumber: postProcessingResult.pr?.number,
+                            correlationId
+                        });
+
+                        if (!prValidationResult.isValid) {
+                            correlatedLogger.warn({
+                                jobId,
+                                issueNumber: issueRef.number,
+                                branchName: worktreeInfo.branchName,
+                                validationError: prValidationResult.error
+                            }, 'PR validation failed - attempting Claude retry with enhanced prompt');
+
+                            // Validate repository information first
+                            const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
+                            
+                            if (repoValidation.isValid) {
+                                // Generate enhanced prompt with explicit repository metadata
+                                const enhancedPrompt = generateEnhancedClaudePrompt({
+                                    issueRef,
+                                    currentIssueData: currentIssueData.data,
+                                    worktreePath: worktreeInfo.worktreePath,
+                                    branchName: worktreeInfo.branchName,
+                                    baseBranch: repoValidation.repoData.defaultBranch
+                                });
+
+                                // Retry Claude execution with enhanced prompt
+                                const retryResult = await executeClaudeCode({
+                                    worktreePath: worktreeInfo.worktreePath,
+                                    issueRef: issueRef,
+                                    githubToken: githubToken.token,
+                                    customPrompt: enhancedPrompt,
+                                    isRetry: true,
+                                    retryReason: `PR validation failed: ${prValidationResult.error}`
+                                });
+
+                                correlatedLogger.info({
+                                    jobId,
+                                    issueNumber: issueRef.number,
+                                    retrySuccess: retryResult.success,
+                                    originalClaudeSuccess: claudeResult.success
+                                }, 'Claude retry execution completed');
+
+                                // Validate PR creation again after retry
+                                const retryValidationResult = await validatePRCreation({
+                                    owner: issueRef.repoOwner,
+                                    repoName: issueRef.repoName,
+                                    branchName: worktreeInfo.branchName,
+                                    expectedPrNumber: postProcessingResult.pr?.number,
+                                    correlationId
+                                });
+
+                                if (retryValidationResult.isValid) {
+                                    correlatedLogger.info({
+                                        jobId,
+                                        issueNumber: issueRef.number,
+                                        prNumber: retryValidationResult.pr.number,
+                                        prUrl: retryValidationResult.pr.url
+                                    }, 'PR validation successful after retry');
+                                    
+                                    // Update post-processing result with validated PR info
+                                    postProcessingResult.pr = retryValidationResult.pr;
+                                } else {
+                                    correlatedLogger.error({
+                                        jobId,
+                                        issueNumber: issueRef.number,
+                                        retryValidationError: retryValidationResult.error
+                                    }, 'PR validation still failed after retry');
+                                }
+                            } else {
+                                correlatedLogger.error({
+                                    jobId,
+                                    issueNumber: issueRef.number,
+                                    repoValidationError: repoValidation.error
+                                }, 'Repository validation failed - cannot retry Claude execution');
+                            }
+                        } else {
+                            correlatedLogger.info({
+                                jobId,
+                                issueNumber: issueRef.number,
+                                prNumber: prValidationResult.pr.number,
+                                prUrl: prValidationResult.pr.url
+                            }, 'PR validation successful on first attempt');
+                        }
 
                     } else {
                         logger.info({
