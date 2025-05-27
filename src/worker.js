@@ -687,52 +687,6 @@ async function createLogFiles(claudeResult, issueRef) {
     return files;
 }
 
-/**
- * Extracts a user-friendly display name from Claude model identifier
- * @param {string} modelId - Full model identifier (e.g., "claude-3-5-sonnet-20241022")
- * @returns {string} User-friendly model name (e.g., "Claude 3.5 Sonnet")
- */
-function extractModelDisplayName(modelId) {
-    if (!modelId || typeof modelId !== 'string') {
-        return 'Claude (Unknown Model)';
-    }
-    
-    // Common model patterns and their display names
-    const modelMappings = {
-        'claude-3-5-sonnet': 'Claude 3.5 Sonnet',
-        'claude-3-sonnet': 'Claude 3 Sonnet',
-        'claude-3-opus': 'Claude 3 Opus',
-        'claude-3-haiku': 'Claude 3 Haiku',
-        'claude-2.1': 'Claude 2.1',
-        'claude-2.0': 'Claude 2.0',
-        'claude-instant': 'Claude Instant'
-    };
-    
-    // Try to match known patterns
-    for (const [pattern, displayName] of Object.entries(modelMappings)) {
-        if (modelId.toLowerCase().includes(pattern)) {
-            return displayName;
-        }
-    }
-    
-    // Extract version and model type if available
-    const claudeMatch = modelId.match(/claude-(\d+(?:\.\d+)?)-(\w+)/i);
-    if (claudeMatch) {
-        const version = claudeMatch[1];
-        const type = claudeMatch[2].charAt(0).toUpperCase() + claudeMatch[2].slice(1);
-        return `Claude ${version} ${type}`;
-    }
-    
-    // Fallback: clean up the model ID for display
-    const cleanedId = modelId
-        .replace(/^claude-?/i, 'Claude ')
-        .replace(/-(\d{8}|\d{4}-\d{2}-\d{2}).*$/, '') // Remove date stamps
-        .replace(/-/g, ' ')
-        .replace(/\b\w/g, l => l.toUpperCase()) // Title case
-        .trim(); // Remove any trailing/leading whitespace
-    
-    return cleanedId || 'Claude (Unknown Model)';
-}
 
 /**
  * Generates a detailed completion comment for GitHub issues
@@ -760,9 +714,8 @@ async function generateCompletionComment(claudeResult, issueRef) {
     
     // Add model information if available
     if (claudeResult?.model) {
-        // Extract just the model name (e.g., "claude-3-5-sonnet-20241022" -> "Sonnet")
-        const modelName = extractModelDisplayName(claudeResult.model);
-        comment += `- LLM Model: ${modelName}\n`;
+        // Use the raw model ID directly
+        comment += `- LLM Model: ${claudeResult.model}\n`;
     }
     
     comment += `\n`;
