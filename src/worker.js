@@ -638,6 +638,148 @@ Please check the logs and manually review any changes made to the codebase.
             await job.updateProgress(95);
             
         } finally {
+            // CRITICAL: Always validate PR creation after Claude execution, regardless of post-processing results
+            // This catches cases where Claude creates PR independently but our system doesn't detect it
+            if (claudeResult?.success && worktreeInfo?.branchName) {
+                correlatedLogger.info({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    branchName: worktreeInfo.branchName,
+                    postProcessingSuccess: !!postProcessingResult?.pr
+                }, 'Performing final PR validation after Claude execution');
+
+                const finalPRValidation = await validatePRCreation({
+                    owner: issueRef.repoOwner,
+                    repoName: issueRef.repoName,
+                    branchName: worktreeInfo.branchName,
+                    expectedPrNumber: postProcessingResult?.pr?.number,
+                    correlationId
+                });
+
+                if (finalPRValidation.isValid && !postProcessingResult?.pr) {
+                    // PR exists but post-processing didn't detect it - update our results
+                    correlatedLogger.info({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        prNumber: finalPRValidation.pr.number,
+                        prUrl: finalPRValidation.pr.url
+                    }, 'Found PR that post-processing missed - updating results and labels');
+
+                    // Update post-processing result
+                    postProcessingResult = { 
+                        pr: finalPRValidation.pr, 
+                        updatedLabels: postProcessingResult?.updatedLabels || [] 
+                    };
+
+                    // Update issue labels since post-processing missed the PR
+                    try {
+                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            issue_number: issueRef.number,
+                            name: AI_PROCESSING_TAG,
+                        });
+
+                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            issue_number: issueRef.number,
+                            labels: [AI_DONE_TAG],
+                        });
+
+                        correlatedLogger.info({
+                            jobId,
+                            issueNumber: issueRef.number
+                        }, 'Updated issue labels after finding missed PR');
+
+                    } catch (labelUpdateError) {
+                        correlatedLogger.warn({
+                            error: labelUpdateError.message
+                        }, 'Failed to update labels after finding missed PR');
+                    }
+
+                } else if (!finalPRValidation.isValid && claudeResult?.success) {
+                    // Claude succeeded but no PR exists - trigger retry
+                    correlatedLogger.warn({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        branchName: worktreeInfo.branchName,
+                        validationError: finalPRValidation.error
+                    }, 'Claude succeeded but no PR found - triggering emergency retry');
+
+                    // Validate repository information
+                    const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
+                    
+                    if (repoValidation.isValid) {
+                        // Generate enhanced prompt focused purely on PR creation
+                        const emergencyPrompt = `The code changes for GitHub issue #${issueRef.number} have already been implemented and committed to branch ${worktreeInfo.branchName}.
+
+**URGENT TASK: CREATE PULL REQUEST**
+
+**REPOSITORY INFORMATION (USE EXACTLY):**
+- Repository: ${issueRef.repoOwner}/${issueRef.repoName}
+- Branch: ${worktreeInfo.branchName}
+- Base Branch: ${repoValidation.repoData.defaultBranch}
+- Issue: #${issueRef.number}
+
+**CRITICAL INSTRUCTIONS:**
+1. You are in directory: ${worktreeInfo.worktreePath}
+2. The code changes are already committed
+3. Your ONLY task is to create a pull request
+4. Use: \`gh pr create --title "Fix issue #${issueRef.number}" --body "Resolves #${issueRef.number}"\`
+5. DO NOT make any code changes
+6. DO NOT commit anything
+7. ONLY create the pull request
+
+**VERIFICATION:**
+After creating the PR, verify it exists with: \`gh pr list\`
+
+This is an emergency retry - the main implementation is complete, you just need to create the PR.`;
+
+                        // Emergency retry focused only on PR creation
+                        const emergencyRetry = await executeClaudeCode({
+                            worktreePath: worktreeInfo.worktreePath,
+                            issueRef: issueRef,
+                            githubToken: githubToken.token,
+                            customPrompt: emergencyPrompt,
+                            isRetry: true,
+                            retryReason: 'Emergency PR creation - main implementation complete'
+                        });
+
+                        correlatedLogger.info({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            emergencyRetrySuccess: emergencyRetry.success
+                        }, 'Emergency PR creation retry completed');
+
+                        // Final validation after emergency retry
+                        if (emergencyRetry.success) {
+                            const emergencyValidation = await validatePRCreation({
+                                owner: issueRef.repoOwner,
+                                repoName: issueRef.repoName,
+                                branchName: worktreeInfo.branchName,
+                                expectedPrNumber: null,
+                                correlationId
+                            });
+
+                            if (emergencyValidation.isValid) {
+                                correlatedLogger.info({
+                                    jobId,
+                                    issueNumber: issueRef.number,
+                                    prNumber: emergencyValidation.pr.number,
+                                    prUrl: emergencyValidation.pr.url
+                                }, 'Emergency PR creation successful');
+
+                                // Update final results
+                                postProcessingResult = { 
+                                    pr: emergencyValidation.pr, 
+                                    updatedLabels: [] 
+                                };
+                            }
+                        }
+                    }
+                }
+            }
             // Cleanup: Remove worktree after processing with retention strategy
             if (worktreeInfo) {
                 try {
