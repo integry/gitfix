@@ -349,11 +349,13 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
         .replace(/[^a-z0-9_\-]/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')
-        .substring(0, 50);
+        .substring(0, 30); // Reduced from 50 to 30 to keep total length manageable
     
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-    const branchName = `ai-fix/${issueId}-${sanitizedTitle}-${timestamp}`;
-    const worktreeDirName = `issue-${issueId}-${timestamp}`;
+    // Use shorter timestamp format (YYYYMMDD-HHMM)
+    const now = new Date();
+    const shortTimestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+    const branchName = `ai-fix/${issueId}-${sanitizedTitle}-${shortTimestamp}`;
+    const worktreeDirName = `issue-${issueId}-${shortTimestamp}`;
     const worktreePath = path.join(WORKTREES_BASE_PATH, owner, repoName, worktreeDirName);
     
     try {
@@ -807,6 +809,30 @@ export async function pushBranch(worktreePath, branchName, options = {}) {
         // Set up authentication if provided
         if (repoUrl && authToken) {
             await setupAuthenticatedRemote(git, repoUrl, authToken);
+        }
+        
+        // Verify the branch exists before pushing
+        try {
+            const currentBranch = await git.revparse(['--abbrev-ref', 'HEAD']);
+            logger.debug({ 
+                worktreePath, 
+                currentBranch: currentBranch.trim(),
+                expectedBranch: branchName 
+            }, 'Current branch in worktree');
+            
+            if (currentBranch.trim() !== branchName) {
+                logger.warn({ 
+                    worktreePath, 
+                    currentBranch: currentBranch.trim(),
+                    expectedBranch: branchName 
+                }, 'Branch mismatch detected, attempting to checkout correct branch');
+                
+                await git.checkout(branchName);
+            }
+        } catch (branchCheckError) {
+            logger.warn({ 
+                error: branchCheckError.message 
+            }, 'Failed to verify current branch, proceeding with push anyway');
         }
         
         await git.push([remote, branchName, '--set-upstream']);
