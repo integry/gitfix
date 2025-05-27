@@ -154,10 +154,28 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken })
                         claudeOutput.sessionId = jsonLine.session_id;
                     }
                     
+                    // Extract conversation ID if available
+                    if (jsonLine.conversation_id) {
+                        claudeOutput.conversationId = jsonLine.conversation_id;
+                    }
+                    
+                    // Extract model information if available
+                    if (jsonLine.model) {
+                        claudeOutput.model = jsonLine.model;
+                    }
+                    
                     // Extract final result
                     if (jsonLine.type === 'result') {
                         claudeOutput.finalResult = jsonLine;
                         claudeOutput.success = !jsonLine.is_error;
+                        
+                        // Also check for model info in final result
+                        if (jsonLine.model) {
+                            claudeOutput.model = jsonLine.model;
+                        }
+                        if (jsonLine.conversation_id) {
+                            claudeOutput.conversationId = jsonLine.conversation_id;
+                        }
                     }
                 } catch (parseError) {
                     // Skip non-JSON lines (like entrypoint output)
@@ -178,6 +196,8 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken })
             // Extract conversation and session info
             conversationLog: claudeOutput.conversationLog || [],
             sessionId: claudeOutput.sessionId,
+            conversationId: claudeOutput.conversationId,
+            model: claudeOutput.model || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022', // Default to current Sonnet
             finalResult: claudeOutput.finalResult,
             
             // Extract specific fields if available in Claude's structured output
