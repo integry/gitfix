@@ -70,6 +70,18 @@ export async function ensureRepoCloned(repoUrl, owner, repoName, authToken) {
             const git = simpleGit();
             await git.clone(authenticatedUrl, localRepoPath, cloneOptions);
             
+            // Set up remote HEAD to point to the actual default branch
+            const repoGit = simpleGit(localRepoPath);
+            try {
+                await repoGit.raw(['remote', 'set-head', 'origin', '--auto']);
+                logger.debug({ repo: `${owner}/${repoName}` }, 'Set remote HEAD to auto-detect default branch');
+            } catch (headError) {
+                logger.debug({ 
+                    repo: `${owner}/${repoName}`, 
+                    error: headError.message 
+                }, 'Failed to set remote HEAD, continuing anyway');
+            }
+            
             logger.info({ 
                 repo: `${owner}/${repoName}`, 
                 path: localRepoPath,
@@ -86,16 +98,137 @@ export async function ensureRepoCloned(repoUrl, owner, repoName, authToken) {
 }
 
 /**
+ * Detects the default branch of a repository
+ * @param {Object} git - Simple-git instance
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {Object} octokit - GitHub API client (optional)
+ * @returns {Promise<string>} Default branch name
+ */
+async function detectDefaultBranch(git, owner, repoName, octokit = null) {
+    // Method 0: Try GitHub API if available (most reliable)
+    if (octokit) {
+        try {
+            const repoInfo = await octokit.request('GET /repos/{owner}/{repo}', {
+                owner,
+                repo: repoName
+            });
+            const defaultBranch = repoInfo.data.default_branch;
+            if (defaultBranch) {
+                logger.info({ 
+                    repo: `${owner}/${repoName}`, 
+                    defaultBranch 
+                }, 'Detected default branch from GitHub API');
+                return defaultBranch;
+            }
+        } catch (apiError) {
+            logger.debug({ 
+                repo: `${owner}/${repoName}`, 
+                error: apiError.message 
+            }, 'Failed to detect default branch from GitHub API');
+        }
+    }
+    try {
+        // Method 1: Try to get the default branch from remote HEAD
+        const remoteShow = await git.raw(['remote', 'show', 'origin']);
+        const headBranchMatch = remoteShow.match(/HEAD branch: (.+)/);
+        if (headBranchMatch) {
+            const defaultBranch = headBranchMatch[1].trim();
+            logger.debug({ 
+                repo: `${owner}/${repoName}`, 
+                defaultBranch 
+            }, 'Detected default branch from remote HEAD');
+            return defaultBranch;
+        }
+    } catch (error) {
+        logger.debug({ 
+            repo: `${owner}/${repoName}`, 
+            error: error.message 
+        }, 'Failed to detect default branch from remote show');
+    }
+
+    try {
+        // Method 2: Try to get default branch from symbolic-ref
+        const symbolicRef = await git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+        const branchMatch = symbolicRef.match(/refs\/remotes\/origin\/(.+)/);
+        if (branchMatch) {
+            const defaultBranch = branchMatch[1].trim();
+            logger.debug({ 
+                repo: `${owner}/${repoName}`, 
+                defaultBranch 
+            }, 'Detected default branch from symbolic-ref');
+            return defaultBranch;
+        }
+    } catch (error) {
+        logger.debug({ 
+            repo: `${owner}/${repoName}`, 
+            error: error.message 
+        }, 'Failed to detect default branch from symbolic-ref');
+    }
+
+    // Method 3: Check common branch names in order of preference
+    const commonBranches = [
+        process.env.GIT_FALLBACK_BRANCH || 'main',
+        'main', 
+        'master', 
+        'develop', 
+        'dev', 
+        'trunk'
+    ];
+    
+    for (const branch of commonBranches) {
+        try {
+            await git.revparse([`origin/${branch}`]);
+            logger.info({ 
+                repo: `${owner}/${repoName}`, 
+                defaultBranch: branch 
+            }, `Using branch '${branch}' as default (found in common branches)`);
+            return branch;
+        } catch (error) {
+            logger.debug({ 
+                repo: `${owner}/${repoName}`, 
+                branch 
+            }, `Branch '${branch}' not found`);
+        }
+    }
+
+    // Method 4: Get any available remote branch as last resort
+    try {
+        const remoteBranches = await git.branch(['-r']);
+        const firstBranch = remoteBranches.all
+            .filter(branch => branch.startsWith('origin/') && !branch.includes('HEAD'))
+            .map(branch => branch.replace('origin/', ''))
+            .find(branch => branch);
+            
+        if (firstBranch) {
+            logger.warn({ 
+                repo: `${owner}/${repoName}`, 
+                defaultBranch: firstBranch 
+            }, `Using first available remote branch '${firstBranch}' as fallback`);
+            return firstBranch;
+        }
+    } catch (error) {
+        logger.warn({ 
+            repo: `${owner}/${repoName}`, 
+            error: error.message 
+        }, 'Failed to list remote branches');
+    }
+
+    throw new Error(`Unable to detect default branch for repository ${owner}/${repoName}`);
+}
+
+/**
  * Creates a Git worktree for a specific issue
  * @param {string} localRepoPath - Path to the main repository clone
  * @param {number} issueId - GitHub issue ID
  * @param {string} issueTitle - GitHub issue title
  * @param {string} owner - Repository owner
  * @param {string} repoName - Repository name
- * @param {string} baseBranch - Base branch to create worktree from
+ * @param {string} baseBranch - Base branch to create worktree from (optional)
+ * @param {Object} octokit - GitHub API client (optional, for better default branch detection)
  * @returns {Promise<{worktreePath: string, branchName: string}>} Worktree details
  */
-export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle, owner, repoName, baseBranch = GIT_DEFAULT_BRANCH) {
+export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle, owner, repoName, baseBranch = null, octokit = null) {
     // Sanitize issue title for branch name
     const sanitizedTitle = issueTitle
         .toLowerCase()
@@ -125,20 +258,28 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
         // Ensure parent directory exists
         await fs.ensureDir(path.dirname(worktreePath));
         
-        // Check if base branch exists remotely
-        try {
-            await git.revparse([`origin/${baseBranch}`]);
-        } catch (branchError) {
-            // Try 'master' if 'main' doesn't exist
-            if (baseBranch === 'main') {
+        // Detect the actual default branch if not specified
+        if (!baseBranch) {
+            baseBranch = await detectDefaultBranch(git, owner, repoName, octokit);
+            logger.info({ 
+                repo: `${owner}/${repoName}`, 
+                detectedBranch: baseBranch 
+            }, 'Auto-detected default branch');
+        } else {
+            // Verify the specified branch exists
+            try {
+                await git.revparse([`origin/${baseBranch}`]);
+                logger.info({ 
+                    repo: `${owner}/${repoName}`, 
+                    specifiedBranch: baseBranch 
+                }, 'Using specified base branch');
+            } catch (branchError) {
                 logger.warn({ 
                     repo: `${owner}/${repoName}`, 
-                    baseBranch 
-                }, 'Main branch not found, trying master branch');
-                baseBranch = 'master';
-                await git.revparse([`origin/${baseBranch}`]);
-            } else {
-                throw branchError;
+                    specifiedBranch: baseBranch,
+                    error: branchError.message
+                }, 'Specified branch not found, detecting default branch');
+                baseBranch = await detectDefaultBranch(git, owner, repoName, octokit);
             }
         }
         

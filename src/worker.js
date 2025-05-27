@@ -204,7 +204,9 @@ async function processGitHubIssueJob(job) {
                 issueRef.number,
                 currentIssueData.data.title,
                 issueRef.repoOwner,
-                issueRef.repoName
+                issueRef.repoName,
+                null, // Use auto-detected default branch
+                octokit // Pass GitHub API client for better branch detection
             );
             
             await job.updateProgress(75);
