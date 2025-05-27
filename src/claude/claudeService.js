@@ -173,6 +173,11 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                     // Collect conversation messages
                     if (jsonLine.type === 'user' || jsonLine.type === 'assistant') {
                         claudeOutput.conversationLog.push(jsonLine);
+                        
+                        // Extract model from assistant messages
+                        if (jsonLine.type === 'assistant' && jsonLine.message?.model) {
+                            claudeOutput.model = jsonLine.message.model;
+                        }
                     }
                     
                     // Extract session ID

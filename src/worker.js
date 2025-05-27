@@ -355,15 +355,21 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                         }, 'Post-processing completed successfully');
 
                         // Step 5: Validate PR creation and retry if needed
-                        const prValidationResult = await validatePRCreation({
-                            owner: issueRef.repoOwner,
-                            repoName: issueRef.repoName,
-                            branchName: worktreeInfo.branchName,
-                            expectedPrNumber: postProcessingResult.pr?.number,
-                            correlationId
-                        });
+                        // Only validate if we expected a PR to be created (i.e., there were commits)
+                        const shouldValidatePR = !!commitResult;
+                        let prValidationResult = null;
+                        
+                        if (shouldValidatePR) {
+                            prValidationResult = await validatePRCreation({
+                                owner: issueRef.repoOwner,
+                                repoName: issueRef.repoName,
+                                branchName: worktreeInfo.branchName,
+                                expectedPrNumber: postProcessingResult.pr?.number,
+                                correlationId
+                            });
+                        }
 
-                        if (!prValidationResult.isValid) {
+                        if (shouldValidatePR && (!prValidationResult || !prValidationResult.isValid)) {
                             correlatedLogger.warn({
                                 jobId,
                                 issueNumber: issueRef.number,
@@ -479,6 +485,71 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                         issueNumber: issueRef.number,
                         error: postProcessingError.message
                     }, 'Post-processing failed');
+
+                    // If post-processing failed but there were commits, try PR validation and retry
+                    if (commitResult) {
+                        correlatedLogger.warn({
+                            jobId,
+                            issueNumber: issueRef.number,
+                            postProcessingError: postProcessingError.message
+                        }, 'Post-processing failed - attempting Claude retry for PR creation');
+
+                        // Validate repository information first
+                        const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
+                        
+                        if (repoValidation.isValid) {
+                            // Generate enhanced prompt with explicit repository metadata
+                            const enhancedPrompt = generateEnhancedClaudePrompt({
+                                issueRef,
+                                currentIssueData: currentIssueData.data,
+                                worktreePath: worktreeInfo.worktreePath,
+                                branchName: worktreeInfo.branchName,
+                                baseBranch: repoValidation.repoData.defaultBranch
+                            });
+
+                            // Retry Claude execution with enhanced prompt focused on PR creation
+                            const retryResult = await executeClaudeCode({
+                                worktreePath: worktreeInfo.worktreePath,
+                                issueRef: issueRef,
+                                githubToken: githubToken.token,
+                                customPrompt: enhancedPrompt + '\n\n**CRITICAL: Focus on creating the pull request. The code changes are already committed. Your primary task is to create a working pull request.**',
+                                isRetry: true,
+                                retryReason: `Post-processing failed: ${postProcessingError.message}`
+                            });
+
+                            correlatedLogger.info({
+                                jobId,
+                                issueNumber: issueRef.number,
+                                retrySuccess: retryResult.success
+                            }, 'Claude PR creation retry completed');
+
+                            // Try to validate PR creation after retry
+                            if (retryResult.success) {
+                                const retryValidationResult = await validatePRCreation({
+                                    owner: issueRef.repoOwner,
+                                    repoName: issueRef.repoName,
+                                    branchName: worktreeInfo.branchName,
+                                    expectedPrNumber: null, // Don't expect a specific number
+                                    correlationId
+                                });
+
+                                if (retryValidationResult.isValid) {
+                                    correlatedLogger.info({
+                                        jobId,
+                                        issueNumber: issueRef.number,
+                                        prNumber: retryValidationResult.pr.number,
+                                        prUrl: retryValidationResult.pr.url
+                                    }, 'PR creation successful after retry');
+                                    
+                                    // Update post-processing result
+                                    postProcessingResult = { pr: retryValidationResult.pr, updatedLabels: [] };
+                                    
+                                    // Skip the error handling below since we recovered
+                                    return;
+                                }
+                            }
+                        }
+                    }
 
                     // Try to update labels to indicate post-processing failure
                     try {
