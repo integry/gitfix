@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import { GITHUB_ISSUE_QUEUE_NAME, createWorker } from './queue/taskQueue.js';
-import logger from './utils/logger.js';
+import logger, { generateCorrelationId } from './utils/logger.js';
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
-import { withErrorHandling } from './utils/errorHandler.js';
+import { withErrorHandling, handleError, ErrorCategories } from './utils/errorHandler.js';
+import { withRetry, retryConfigs } from './utils/retryHandler.js';
+import { getStateManager, TaskStates } from './utils/workerStateManager.js';
 import { 
     ensureRepoCloned, 
     createWorktreeForIssue, 
@@ -27,32 +29,70 @@ const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
  */
 async function processGitHubIssueJob(job) {
     const { id: jobId, name: jobName, data: issueRef } = job;
+    const correlationId = issueRef.correlationId || generateCorrelationId();
+    const correlatedLogger = logger.withCorrelation(correlationId);
+    const stateManager = getStateManager();
     
-    logger.info({ 
+    // Create task state
+    const taskId = `${issueRef.repoOwner}-${issueRef.repoName}-${issueRef.number}`;
+    
+    try {
+        await stateManager.createTaskState(taskId, issueRef, correlationId);
+    } catch (stateError) {
+        correlatedLogger.warn({
+            taskId,
+            error: stateError.message
+        }, 'Failed to create task state, continuing anyway');
+    }
+    
+    correlatedLogger.info({ 
         jobId, 
         jobName, 
+        taskId,
         issueNumber: issueRef.number, 
         repo: `${issueRef.repoOwner}/${issueRef.repoName}` 
     }, 'Processing job started');
 
     let octokit;
     try {
-        octokit = await getAuthenticatedOctokit();
+        octokit = await withRetry(
+            () => getAuthenticatedOctokit(),
+            { ...retryConfigs.githubApi, correlationId },
+            'get_authenticated_octokit'
+        );
     } catch (authError) {
-        logger.error({ 
-            jobId, 
-            errMessage: authError.message 
-        }, 'Worker: Failed to get authenticated Octokit instance');
+        const errorDetails = handleError(authError, 'Worker: Failed to get authenticated Octokit instance', { 
+            correlationId, 
+            issueRef 
+        });
+        
+        try {
+            await stateManager.markTaskFailed(taskId, authError, { 
+                errorCategory: errorDetails.category 
+            });
+        } catch (stateError) {
+            correlatedLogger.warn({ error: stateError.message }, 'Failed to update task state to failed');
+        }
+        
         throw authError;
     }
 
     try {
-        // Get current issue state
-        const currentIssueData = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-            owner: issueRef.repoOwner,
-            repo: issueRef.repoName,
-            issue_number: issueRef.number,
+        // Update state to processing
+        await stateManager.updateTaskState(taskId, TaskStates.PROCESSING, {
+            reason: 'Starting issue processing'
         });
+        
+        // Get current issue state with retry
+        const currentIssueData = await withRetry(
+            () => octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+                owner: issueRef.repoOwner,
+                repo: issueRef.repoName,
+                issue_number: issueRef.number,
+            }),
+            { ...retryConfigs.githubApi, correlationId },
+            `get_issue_${issueRef.number}`
+        );
 
         const currentLabels = currentIssueData.data.labels.map(label => label.name);
         const hasProcessingTag = currentLabels.includes(AI_PROCESSING_TAG);
@@ -164,7 +204,9 @@ async function processGitHubIssueJob(job) {
                 issueRef.number,
                 currentIssueData.data.title,
                 issueRef.repoOwner,
-                issueRef.repoName
+                issueRef.repoName,
+                null, // Use auto-detected default branch
+                octokit // Pass GitHub API client for better branch detection
             );
             
             await job.updateProgress(75);

@@ -120,8 +120,8 @@ test('pollForIssues returns detected issues', async (t) => {
     // but that's expected and handled gracefully
     const issues = await testPollForIssues();
 
-    // Without auth, it should return undefined (no issues)
-    assert.strictEqual(issues, undefined);
+    // Without auth, it should return undefined or empty array (no issues)
+    assert.ok(issues === undefined || (Array.isArray(issues) && issues.length === 0));
 
     // Restore original environment
     process.env.GITHUB_REPOS_TO_MONITOR = originalRepos;

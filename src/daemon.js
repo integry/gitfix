@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
-import logger from './utils/logger.js';
+import logger, { generateCorrelationId } from './utils/logger.js';
 import { withErrorHandling, handleError } from './utils/errorHandler.js';
+import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 
@@ -24,12 +25,15 @@ const getRepos = () => {
  * Fetches issues for a specific repository based on configured criteria
  * @param {import('@octokit/core').Octokit} octokit - Authenticated Octokit instance
  * @param {string} repoFullName - Repository in format "owner/repo"
+ * @param {string} correlationId - Correlation ID for tracking
  * @returns {Promise<Array>} Array of filtered issues
  */
-async function fetchIssuesForRepo(octokit, repoFullName) {
+async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
+    const correlatedLogger = logger.withCorrelation(correlationId);
     const [owner, repo] = repoFullName.split('/');
+    
     if (!owner || !repo) {
-        logger.warn({ repo: repoFullName }, 'Invalid repository format. Skipping.');
+        correlatedLogger.warn({ repo: repoFullName }, 'Invalid repository format. Skipping.');
         return [];
     }
 
@@ -40,17 +44,27 @@ async function fetchIssuesForRepo(octokit, repoFullName) {
 
     // Construct GitHub search query
     const query = `repo:${owner}/${repo} is:issue is:open label:"${AI_PRIMARY_TAG}" ${excludeLabelsQuery}`;
-    logger.debug({ repo: repoFullName, query }, 'Constructed search query');
+    correlatedLogger.debug({ repo: repoFullName, query }, 'Constructed search query');
+
+    // Use retry wrapper for GitHub API calls
+    const fetchWithRetry = () => withRetry(
+        async () => {
+            const response = await octokit.request('GET /search/issues', {
+                q: query,
+                per_page: 100, // Get up to 100 issues per request
+                sort: 'created',
+                order: 'desc'
+            });
+            return response;
+        },
+        { ...retryConfigs.githubApi, correlationId },
+        `fetch_issues_${repoFullName}`
+    );
 
     try {
-        const response = await octokit.request('GET /search/issues', {
-            q: query,
-            per_page: 100, // Get up to 100 issues per request
-            sort: 'created',
-            order: 'desc'
-        });
+        const response = await fetchWithRetry();
 
-        logger.info({ 
+        correlatedLogger.info({ 
             repo: repoFullName, 
             count: response.data.total_count 
         }, `Found ${response.data.total_count} matching issues.`);
@@ -68,15 +82,11 @@ async function fetchIssuesForRepo(octokit, repoFullName) {
             updatedAt: issue.updated_at
         }));
     } catch (error) {
-        logger.error({ 
-            repo: repoFullName, 
-            errMessage: error.message, 
-            status: error.status 
-        }, 'Error fetching issues');
+        handleError(error, `fetch_issues_${repoFullName}`, { correlationId });
 
         // Check for rate limit errors
         if (error.status === 403 && error.message && error.message.includes('rate limit')) {
-            logger.warn('GitHub API rate limit likely exceeded. Consider increasing polling interval.');
+            correlatedLogger.warn('GitHub API rate limit likely exceeded. Consider increasing polling interval.');
         }
         
         return [];
@@ -87,13 +97,20 @@ async function fetchIssuesForRepo(octokit, repoFullName) {
  * Main polling function that checks all configured repositories for issues
  */
 async function pollForIssues() {
-    logger.info('Starting GitHub issue polling cycle...');
+    const correlationId = generateCorrelationId();
+    const correlatedLogger = logger.withCorrelation(correlationId);
+    
+    correlatedLogger.info('Starting GitHub issue polling cycle...');
     
     let octokit;
     try {
-        octokit = await getAuthenticatedOctokit();
+        octokit = await withRetry(
+            () => getAuthenticatedOctokit(),
+            { ...retryConfigs.githubApi, correlationId },
+            'get_authenticated_octokit'
+        );
     } catch (authError) {
-        handleError(authError, 'Failed to get authenticated Octokit instance');
+        handleError(authError, 'Failed to get authenticated Octokit instance', { correlationId });
         return;
     }
 
@@ -102,14 +119,14 @@ async function pollForIssues() {
     
     // Poll each configured repository
     for (const repoFullName of repos) {
-        logger.debug({ repository: repoFullName }, 'Polling repository');
+        correlatedLogger.debug({ repository: repoFullName }, 'Polling repository');
         
         try {
-            const issues = await fetchIssuesForRepo(octokit, repoFullName);
+            const issues = await fetchIssuesForRepo(octokit, repoFullName, correlationId);
             
             if (issues.length > 0) {
                 for (const issue of issues) {
-                    logger.info({ 
+                    correlatedLogger.info({ 
                         issueId: issue.id, 
                         issueNumber: issue.number, 
                         issueTitle: issue.title, 
@@ -123,43 +140,54 @@ async function pollForIssues() {
                         const issueJob = {
                             repoOwner: issue.repoOwner,
                             repoName: issue.repoName,
-                            number: issue.number
+                            number: issue.number,
+                            correlationId: generateCorrelationId() // Each issue gets its own correlation ID
                         };
-                        await issueQueue.add('processGitHubIssue', issueJob, {
-                            jobId,
-                            // Prevent duplicate jobs for the same issue
-                            attempts: 3,
-                            backoff: {
-                                type: 'exponential',
-                                delay: 2000,
-                            },
-                        });
                         
-                        logger.info({ 
+                        const addToQueueWithRetry = () => withRetry(
+                            () => issueQueue.add('processGitHubIssue', issueJob, {
+                                jobId,
+                                // Prevent duplicate jobs for the same issue
+                                attempts: 3,
+                                backoff: {
+                                    type: 'exponential',
+                                    delay: 2000,
+                                },
+                            }),
+                            { ...retryConfigs.redis, correlationId },
+                            `add_issue_to_queue_${issue.number}`
+                        );
+                        
+                        await addToQueueWithRetry();
+                        
+                        correlatedLogger.info({ 
                             jobId,
                             issueNumber: issue.number,
-                            repository: repoFullName
+                            repository: repoFullName,
+                            issueCorrelationId: issueJob.correlationId
                         }, 'Successfully added issue to processing queue');
                         
                         allDetectedIssues.push(issue);
                     } catch (error) {
                         if (error.message?.includes('Job already exists')) {
-                            logger.debug({ 
+                            correlatedLogger.debug({ 
                                 issueNumber: issue.number,
                                 repository: repoFullName 
                             }, 'Issue already in queue, skipping');
                         } else {
-                            handleError(error, `Failed to add issue ${issue.number} to queue`);
+                            handleError(error, `Failed to add issue ${issue.number} to queue`, { 
+                                correlationId 
+                            });
                         }
                     }
                 }
             }
         } catch (error) {
-            handleError(error, `Error polling repository ${repoFullName}`);
+            handleError(error, `Error polling repository ${repoFullName}`, { correlationId });
         }
     }
     
-    logger.info({ 
+    correlatedLogger.info({ 
         totalIssues: allDetectedIssues.length,
         repositories: repos.length 
     }, 'Polling cycle completed');
