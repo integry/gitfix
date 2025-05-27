@@ -602,6 +602,56 @@ Please check the logs and manually review any changes made to the codebase.
             (postProcessingResult?.pr ? 'complete_with_pr' : 'claude_success_no_changes') : 
             'claude_processing_failed';
 
+        // Enhanced metrics logging for QA framework
+        const jobStartTime = Date.now(); // TODO: Extract actual start time from job metadata
+        const timeToPR = postProcessingResult?.pr ? (Date.now() - jobStartTime) : null;
+        
+        // Log comprehensive metrics for system improvement tracking
+        correlatedLogger.info({
+            // Core identification
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+            correlationId,
+            taskId,
+            
+            // Success metrics
+            status: finalStatus,
+            resolution: claudeResult?.success ? 
+                (postProcessingResult?.pr ? 'resolved' : 'no_changes_needed') : 'failed',
+            
+            // Time-to-PR metrics
+            timeToPRMs: timeToPR,
+            timeToPRMinutes: timeToPR ? Math.round(timeToPR / 60000) : null,
+            
+            // Claude performance metrics
+            claudeSuccess: claudeResult?.success || false,
+            claudeExecutionTimeMs: claudeResult?.executionTime || 0,
+            claudeExecutionTimeMinutes: claudeResult?.executionTime ? 
+                Math.round(claudeResult.executionTime / 60000) : 0,
+            claudeNumTurns: claudeResult?.finalResult?.num_turns || null,
+            claudeCostUsd: claudeResult?.finalResult?.cost_usd || null,
+            claudeModel: claudeResult?.model || null,
+            
+            // Processing results
+            prCreated: !!postProcessingResult?.pr,
+            prNumber: postProcessingResult?.pr?.number || null,
+            prUrl: postProcessingResult?.pr?.url || null,
+            modifiedFilesCount: claudeResult?.modifiedFiles?.length || 0,
+            
+            // Failure categorization (if failed)
+            failureCategory: !claudeResult?.success ? 
+                (claudeResult?.error?.includes('timeout') ? 'timeout' :
+                 claudeResult?.error?.includes('API') ? 'api_error' :
+                 claudeResult?.error?.includes('git') ? 'git_error' : 'claude_error') : null,
+                 
+            // System health indicators
+            worktreeCreated: !!worktreeInfo,
+            branchName: worktreeInfo?.branchName,
+            
+            // Metadata for analysis
+            timestamp: new Date().toISOString(),
+            systemVersion: process.env.npm_package_version || 'unknown'
+        }, 'Issue processing completed - comprehensive metrics logged');
         return { 
             status: finalStatus,
             issueNumber: issueRef.number,
@@ -626,15 +676,50 @@ Please check the logs and manually review any changes made to the codebase.
         };
 
     } catch (error) {
-        logger.error({ 
-            jobId, 
-            issueNumber: issueRef.number, 
-            errMessage: error.message, 
-            stack: error.stack 
-        }, 'Error processing GitHub issue job');
+        // Enhanced error metrics logging for QA framework
+        const errorCategory = error.message?.includes('authentication') ? 'auth_error' :
+                             error.message?.includes('network') ? 'network_error' :
+                             error.message?.includes('git') ? 'git_error' :
+                             error.message?.includes('GitHub') ? 'github_api_error' :
+                             error.message?.includes('timeout') ? 'timeout_error' :
+                             'unknown_error';
         
-        // If we added the processing tag but failed, we might want to remove it
-        // This could be done in a future enhancement with proper state management
+        correlatedLogger.error({ 
+            // Core identification
+            jobId, 
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+            correlationId,
+            taskId,
+            
+            // Error details
+            errMessage: error.message, 
+            stack: error.stack,
+            
+            // Failure metrics
+            status: 'system_error',
+            resolution: 'failed',
+            failureCategory: errorCategory,
+            
+            // Processing state when error occurred
+            claudeAttempted: !!claudeResult,
+            claudeSuccess: claudeResult?.success || false,
+            worktreeCreated: !!worktreeInfo,
+            
+            // Metadata for analysis
+            timestamp: new Date().toISOString(),
+            systemVersion: process.env.npm_package_version || 'unknown'
+        }, 'Error processing GitHub issue job - enhanced error metrics logged');
+        
+        // Update task state to failed for tracking
+        try {
+            await stateManager.markTaskFailed(taskId, error, { 
+                errorCategory,
+                processingStage: claudeResult ? 'post_processing' : 'pre_processing'
+            });
+        } catch (stateError) {
+            correlatedLogger.warn({ error: stateError.message }, 'Failed to update task state to failed');
+        }
         
         throw error;
     }
