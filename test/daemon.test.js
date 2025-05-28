@@ -78,7 +78,7 @@ test('fetchIssuesForRepo transforms issues correctly', async () => {
         repoOwner: 'owner',
         repoName: 'repo',
         labels: ['AI', 'bug'],
-        targetModels: ['claude-3-5-sonnet-20240620'],
+        targetModels: ['sonnet'],
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-02T00:00:00Z'
     });
@@ -230,7 +230,7 @@ test('fetchIssuesForRepo ignores non-matching model labels', async () => {
     
     assert.strictEqual(issues.length, 1);
     // Should fall back to default model since no matching labels
-    assert.deepStrictEqual(issues[0].targetModels, ['claude-3-5-sonnet-20240620']);
+    assert.deepStrictEqual(issues[0].targetModels, ['sonnet']);
 });
 test('daemon exports required functions', () => {
     assert.strictEqual(typeof fetchIssuesForRepo, 'function');

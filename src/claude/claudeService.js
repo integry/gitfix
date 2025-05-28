@@ -16,15 +16,20 @@ const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10
  * @param {string} issueRef.number - Issue number
  * @param {string} issueRef.repoOwner - Repository owner
  * @param {string} issueRef.repoName - Repository name
+ * @param {string} branchName - The specific branch name to use (optional)
+ * @param {string} modelName - The AI model being used (optional)
  * @returns {string} Formatted prompt for Claude
  */
-function generateClaudePrompt(issueRef) {
+function generateClaudePrompt(issueRef, branchName = null, modelName = null) {
+    const branchInfo = branchName ? `\n- **IMPORTANT**: You are working on branch \`${branchName}\`. Use this exact branch name for all git operations.` : '';
+    const modelInfo = modelName ? `\n- **Model**: This task is being processed by the \`${modelName}\` model.` : '';
+    
     return `Please analyze and fix the GitHub issue: #${issueRef.number}.
 
 **REPOSITORY INFORMATION (CRITICAL - DO NOT HALLUCINATE):**
 - Repository Owner: ${issueRef.repoOwner}
 - Repository Name: ${issueRef.repoName}
-- Full Repository: ${issueRef.repoOwner}/${issueRef.repoName}
+- Full Repository: ${issueRef.repoOwner}/${issueRef.repoName}${branchInfo}${modelInfo}
 
 Follow these steps systematically:
 1. Use \`gh issue view ${issueRef.number}\` to get the issue details
@@ -49,14 +54,14 @@ Important notes:
 - You are working in a git worktree environment
 - Use the GitHub CLI (\`gh\`) for all GitHub-related tasks
 - Always commit and push your changes before creating the PR
-- For push operations, you may need to set up the remote URL with authentication
-- If \`git push\` fails, try: \`git push --set-upstream origin <branch-name>\`
-- For PR creation, use: \`gh pr create --title "Title" --body "Description"\`
+- For push operations, you may need to set up the remote URL with authentication${branchName ? `\n- **CRITICAL**: You are already on the correct branch \`${branchName}\`. Do NOT create, checkout, or switch to any other branch. Stay on the current branch for all operations.` : ''}
+- Use SIMPLE git operations: \`git add .\`, \`git commit -m "message"\`, \`git push --set-upstream origin ${branchName || '<branch-name>'}\`
+- For PR creation, use: \`gh pr create --title "Title" --body "Description"\`${modelName ? `\n- Include the model name (\`${modelName}\`) in your PR description` : ''}
 - If authentication fails, try: \`gh auth status\` to verify setup
 - Focus on completing the core functionality first, then handle git operations
-- Make sure to create a meaningful branch name and PR description
+- DO NOT try complex git operations, API calls, or workarounds - stick to the basic workflow
 
-CRITICAL: The main goal is to create a working pull request for repository ${issueRef.repoOwner}/${issueRef.repoName}. If git operations fail, try alternative approaches and document the exact error messages.`;
+CRITICAL: The main goal is to create a working pull request for repository ${issueRef.repoOwner}/${issueRef.repoName}. Use the straightforward approach: code changes → commit → push → create PR.`;
 }
 
 /**
@@ -68,9 +73,11 @@ CRITICAL: The main goal is to create a working pull request for repository ${iss
  * @param {string} options.customPrompt - Custom prompt to use instead of default (optional)
  * @param {boolean} options.isRetry - Whether this is a retry attempt (optional)
  * @param {string} options.retryReason - Reason for retry (optional)
+ * @param {string} options.branchName - The specific branch name to use (optional)
+ * @param {string} options.modelName - The AI model being used (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
     const startTime = Date.now();
     
     logger.info({
@@ -84,7 +91,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 
     try {
         // Generate the prompt for Claude
-        const prompt = customPrompt || generateClaudePrompt(issueRef);
+        const prompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
         
         if (isRetry) {
             logger.info({
@@ -126,6 +133,19 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             '--verbose',
             '--dangerously-skip-permissions'
         ];
+        
+        // Add model specification if provided
+        if (modelName) {
+            dockerArgs.splice(-6, 0, '--model', modelName);
+            logger.info({
+                issueNumber: issueRef.number,
+                requestedModel: modelName
+            }, 'Using specific model for Claude Code execution');
+        } else {
+            logger.debug({
+                issueNumber: issueRef.number
+            }, 'No model specified, Claude Code will use default');
+        }
 
         logger.debug({
             issueNumber: issueRef.number,

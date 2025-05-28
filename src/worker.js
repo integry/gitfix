@@ -28,6 +28,144 @@ const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 
 /**
+ * Adds a small random delay to prevent concurrent execution conflicts
+ * @param {string} modelName - Model name to create consistent but different delays
+ * @returns {Promise<void>}
+ */
+function addModelSpecificDelay(modelName) {
+    // Create a consistent but different delay for each model (500-2000ms)
+    const baseDelay = 500;
+    const modelHash = modelName.split('').reduce((hash, char) => {
+        return ((hash << 5) - hash + char.charCodeAt(0)) & 0xffffffff;
+    }, 0);
+    const modelDelay = Math.abs(modelHash % 1500); // 0-1499ms additional delay
+    const totalDelay = baseDelay + modelDelay;
+    
+    return new Promise(resolve => setTimeout(resolve, totalDelay));
+}
+
+/**
+ * Safely removes a label from an issue, ignoring errors if label doesn't exist
+ * @param {Object} octokit - GitHub API client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - Issue number
+ * @param {string} labelName - Label to remove
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<boolean>} - True if removed or didn't exist, false if other error
+ */
+async function safeRemoveLabel(octokit, owner, repo, issueNumber, labelName, logger) {
+    try {
+        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+            owner,
+            repo,
+            issue_number: issueNumber,
+            name: labelName
+        });
+        logger.debug(`Successfully removed label '${labelName}' from issue #${issueNumber}`);
+        return true;
+    } catch (error) {
+        if (error.status === 404) {
+            logger.debug(`Label '${labelName}' not found on issue #${issueNumber}, skipping removal`);
+            return true; // Label doesn't exist, which is fine
+        }
+        logger.warn({ 
+            error: error.message, 
+            labelName, 
+            issueNumber,
+            status: error.status 
+        }, `Failed to remove label '${labelName}' from issue #${issueNumber}`);
+        return false;
+    }
+}
+
+/**
+ * Safely adds a label to an issue, ignoring errors if label already exists
+ * @param {Object} octokit - GitHub API client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - Issue number
+ * @param {string} labelName - Label to add
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<boolean>} - True if added or already exists, false if other error
+ */
+async function safeAddLabel(octokit, owner, repo, issueNumber, labelName, logger) {
+    try {
+        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+            owner,
+            repo,
+            issue_number: issueNumber,
+            labels: [labelName]
+        });
+        logger.debug(`Successfully added label '${labelName}' to issue #${issueNumber}`);
+        return true;
+    } catch (error) {
+        if (error.status === 422 && error.message?.includes('already exists')) {
+            logger.debug(`Label '${labelName}' already exists on issue #${issueNumber}`);
+            return true; // Label already exists, which is fine
+        }
+        logger.warn({ 
+            error: error.message, 
+            labelName, 
+            issueNumber,
+            status: error.status 
+        }, `Failed to add label '${labelName}' to issue #${issueNumber}`);
+        return false;
+    }
+}
+
+/**
+ * Safely updates issue labels with robust error handling
+ * @param {Object} octokit - GitHub API client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - Issue number
+ * @param {Array<string>} labelsToRemove - Labels to remove
+ * @param {Array<string>} labelsToAdd - Labels to add
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<Object>} - Result with success status and any errors
+ */
+async function safeUpdateLabels(octokit, owner, repo, issueNumber, labelsToRemove = [], labelsToAdd = [], logger) {
+    const results = {
+        success: true,
+        removed: [],
+        added: [],
+        errors: []
+    };
+
+    // Remove labels
+    for (const labelName of labelsToRemove) {
+        const removed = await safeRemoveLabel(octokit, owner, repo, issueNumber, labelName, logger);
+        if (removed) {
+            results.removed.push(labelName);
+        } else {
+            results.success = false;
+            results.errors.push(`Failed to remove '${labelName}'`);
+        }
+    }
+
+    // Add labels
+    for (const labelName of labelsToAdd) {
+        const added = await safeAddLabel(octokit, owner, repo, issueNumber, labelName, logger);
+        if (added) {
+            results.added.push(labelName);
+        } else {
+            results.success = false;
+            results.errors.push(`Failed to add '${labelName}'`);
+        }
+    }
+
+    logger.info({
+        issueNumber,
+        removed: results.removed,
+        added: results.added,
+        errors: results.errors.length > 0 ? results.errors : undefined
+    }, 'Label update completed');
+
+    return results;
+}
+
+/**
  * Processes a GitHub issue job from the queue
  * @param {import('bullmq').Job} job - The job to process
  * @returns {Promise<Object>} Processing result
@@ -37,6 +175,16 @@ async function processGitHubIssueJob(job) {
     const correlationId = issueRef.correlationId || generateCorrelationId();
     const correlatedLogger = logger.withCorrelation(correlationId);
     const stateManager = getStateManager();
+    
+    // Add delay to prevent concurrent worker conflicts
+    const modelName = issueRef.modelName || 'default';
+    await addModelSpecificDelay(modelName);
+    
+    correlatedLogger.debug({ 
+        jobId, 
+        modelName,
+        delayApplied: true
+    }, 'Applied model-specific delay to prevent conflicts');
     
     // Create task state
     const taskId = `${issueRef.repoOwner}-${issueRef.repoName}-${issueRef.number}`;
@@ -81,6 +229,13 @@ async function processGitHubIssueJob(job) {
         
         throw authError;
     }
+
+    // Initialize variables that need to be accessible in catch block
+    let localRepoPath;
+    let worktreeInfo;
+    let claudeResult = null;
+    let postProcessingResult = null;
+    let commitResult = null;
 
     try {
         // Update state to processing
@@ -136,12 +291,7 @@ async function processGitHubIssueJob(job) {
                 issueNumber: issueRef.number 
             }, `Adding '${AI_PROCESSING_TAG}' tag to issue`);
             
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                owner: issueRef.repoOwner,
-                repo: issueRef.repoName,
-                issue_number: issueRef.number,
-                labels: [AI_PROCESSING_TAG],
-            });
+            await safeAddLabel(octokit, issueRef.repoOwner, issueRef.repoName, issueRef.number, AI_PROCESSING_TAG, correlatedLogger);
             
             logger.info({ 
                 jobId, 
@@ -154,13 +304,7 @@ async function processGitHubIssueJob(job) {
             }, `Issue already has '${AI_PROCESSING_TAG}' tag, continuing with processing`);
         }
 
-        // Add a comment to the issue indicating processing has started
-        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-            owner: issueRef.repoOwner,
-            repo: issueRef.repoName,
-            issue_number: issueRef.number,
-            body: `🤖 AI processing has started for this issue.\n\nI'll analyze the problem and work on a solution. This may take a few minutes.`,
-        });
+        // Initial comment will be added after worktree creation to include branch info
 
         logger.info({ 
             jobId, 
@@ -170,14 +314,18 @@ async function processGitHubIssueJob(job) {
         // Update progress: Git setup phase
         await job.updateProgress(25);
         
+        // Validate repository and get configuration early for use in comments
+        logger.info({ 
+            jobId, 
+            owner: issueRef.repoOwner, 
+            repo: issueRef.repoName 
+        }, 'Validating repository access...');
+        
+        const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
+        
         // Get GitHub token for cloning
         const githubToken = await octokit.auth();
         const repoUrl = getRepoUrl(issueRef);
-        
-        let localRepoPath;
-        let worktreeInfo;
-        let claudeResult = null;
-        let postProcessingResult = null;
         
         try {
             // Step 1: Ensure repository is cloned/updated
@@ -201,7 +349,8 @@ async function processGitHubIssueJob(job) {
                 jobId, 
                 issueNumber: issueRef.number,
                 issueTitle: currentIssueData.data.title,
-                localRepoPath
+                localRepoPath,
+                modelName
             }, 'Creating Git worktree for issue...');
             
             worktreeInfo = await createWorktreeForIssue(
@@ -211,7 +360,8 @@ async function processGitHubIssueJob(job) {
                 issueRef.repoOwner,
                 issueRef.repoName,
                 null, // Use auto-detected default branch
-                octokit // Pass GitHub API client for better branch detection
+                octokit, // Pass GitHub API client for better branch detection
+                modelName // Pass model name for unique branch/worktree naming
             );
             
             await job.updateProgress(75);
@@ -222,6 +372,14 @@ async function processGitHubIssueJob(job) {
                 worktreePath: worktreeInfo.worktreePath,
                 branchName: worktreeInfo.branchName
             }, 'Git environment setup complete');
+            
+            // Add a comment to the issue indicating processing has started with model and branch info
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner: issueRef.repoOwner,
+                repo: issueRef.repoName,
+                issue_number: issueRef.number,
+                body: `🤖 AI processing has started for this issue using **${modelName}** model.\n\nI'll analyze the problem and work on a solution. This may take a few minutes.\n\n**Processing Details:**\n- Model: \`${modelName}\`\n- Branch: \`${worktreeInfo.branchName}\`\n- Base Branch: \`${repoValidation.repoData.defaultBranch}\`\n- Worktree: \`${worktreeInfo.worktreePath.split('/').pop()}\``,
+            });
             
             // Step 3: Execute Claude Code to analyze and fix the issue
             logger.info({ 
@@ -241,7 +399,9 @@ async function processGitHubIssueJob(job) {
             claudeResult = await executeClaudeCode({
                 worktreePath: worktreeInfo.worktreePath,
                 issueRef: issueRef,
-                githubToken: githubToken.token
+                githubToken: githubToken.token,
+                branchName: worktreeInfo.branchName,
+                modelName: modelName
             });
             
             correlatedLogger.info({
@@ -341,7 +501,7 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                     }
 
                     // Commit changes
-                    const commitResult = await commitChanges(
+                    commitResult = await commitChanges(
                         worktreeInfo.worktreePath,
                         commitMessage,
                         {
@@ -383,12 +543,16 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                             owner: issueRef.repoOwner,
                             repoName: issueRef.repoName,
                             branchName: worktreeInfo.branchName,
+                            baseBranch: repoValidation.repoData.defaultBranch,
                             issueNumber: issueRef.number,
                             issueTitle: currentIssueData.data.title,
                             commitMessage: commitResult.commitMessage,
                             claudeResult,
                             processingTags: [AI_PROCESSING_TAG],
-                            completionTags: [AI_DONE_TAG]
+                            completionTags: [AI_DONE_TAG],
+                            worktreePath: worktreeInfo.worktreePath,
+                            repoUrl: repoUrl,
+                            authToken: githubToken.token
                         });
 
                         correlatedLogger.info({
@@ -450,7 +614,9 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                                     githubToken: githubToken.token,
                                     customPrompt: enhancedPrompt,
                                     isRetry: true,
-                                    retryReason: `PR validation failed: ${prValidationResult.error}`
+                                    retryReason: `PR validation failed: ${prValidationResult.error}`,
+                                    branchName: worktreeInfo.branchName,
+                                    modelName: modelName
                                 });
 
                                 correlatedLogger.info({
@@ -509,19 +675,15 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                         }, 'No changes to commit, posting completion comment only');
 
                         // Just update labels if no changes were made
-                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            name: AI_PROCESSING_TAG,
-                        });
-
-                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            labels: [AI_DONE_TAG],
-                        });
+                        await safeUpdateLabels(
+                            octokit, 
+                            issueRef.repoOwner, 
+                            issueRef.repoName, 
+                            issueRef.number,
+                            [AI_PROCESSING_TAG], 
+                            [AI_DONE_TAG], 
+                            correlatedLogger
+                        );
 
                         const completionComment = await generateCompletionComment(claudeResult, issueRef);
                         await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
@@ -575,7 +737,9 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                                 githubToken: githubToken.token,
                                 customPrompt: enhancedPrompt + '\n\n**CRITICAL: Focus on creating the pull request. The code changes are already committed. Your primary task is to create a working pull request.**',
                                 isRetry: true,
-                                retryReason: `Post-processing failed: ${postProcessingError.message}`
+                                retryReason: `Post-processing failed: ${postProcessingError.message}`,
+                                branchName: worktreeInfo.branchName,
+                                modelName: modelName
                             });
 
                             correlatedLogger.info({
@@ -613,27 +777,15 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
                     }
 
                     // Try to update labels to indicate post-processing failure
-                    try {
-                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            name: AI_PROCESSING_TAG,
-                        });
-
-                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            labels: ['AI-failed-post-processing'],
-                        });
-                    } catch (labelError) {
-                        logger.warn({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            error: labelError.message
-                        }, 'Failed to update labels after post-processing failure');
-                    }
+                    await safeUpdateLabels(
+                        octokit, 
+                        issueRef.repoOwner, 
+                        issueRef.repoName, 
+                        issueRef.number,
+                        [AI_PROCESSING_TAG], 
+                        ['AI-failed-post-processing'], 
+                        correlatedLogger
+                    );
 
                     // Still post a completion comment with error details
                     const errorComment = `🤖 **AI Processing Completed with Post-Processing Errors**
@@ -669,27 +821,15 @@ Please check the logs and manually review any changes made to the codebase.
                     issueNumber: issueRef.number
                 }, 'Claude processing failed, updating labels only');
 
-                try {
-                    await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                        owner: issueRef.repoOwner,
-                        repo: issueRef.repoName,
-                        issue_number: issueRef.number,
-                        name: AI_PROCESSING_TAG,
-                    });
-
-                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                        owner: issueRef.repoOwner,
-                        repo: issueRef.repoName,
-                        issue_number: issueRef.number,
-                        labels: ['AI-failed-claude'],
-                    });
-                } catch (labelError) {
-                    logger.warn({
-                        jobId,
-                        issueNumber: issueRef.number,
-                        error: labelError.message
-                    }, 'Failed to update labels after Claude failure');
-                }
+                await safeUpdateLabels(
+                    octokit, 
+                    issueRef.repoOwner, 
+                    issueRef.repoName, 
+                    issueRef.number,
+                    [AI_PROCESSING_TAG], 
+                    ['AI-failed-claude'], 
+                    correlatedLogger
+                );
 
                 const failureComment = await generateCompletionComment(claudeResult, issueRef);
                 await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
@@ -770,31 +910,15 @@ Please check the logs and manually review any changes made to the codebase.
                         };
 
                         // Update issue labels since post-processing missed the PR
-                        try {
-                            await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                                owner: issueRef.repoOwner,
-                                repo: issueRef.repoName,
-                                issue_number: issueRef.number,
-                                name: AI_PROCESSING_TAG,
-                            });
-
-                            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                                owner: issueRef.repoOwner,
-                                repo: issueRef.repoName,
-                                issue_number: issueRef.number,
-                                labels: [AI_DONE_TAG],
-                            });
-
-                            correlatedLogger.info({
-                                jobId,
-                                issueNumber: issueRef.number
-                            }, 'Updated issue labels after finding missed PR');
-
-                        } catch (labelUpdateError) {
-                            correlatedLogger.warn({
-                                error: labelUpdateError.message
-                            }, 'Failed to update labels after finding missed PR');
-                        }
+                        await safeUpdateLabels(
+                            octokit, 
+                            issueRef.repoOwner, 
+                            issueRef.repoName, 
+                            issueRef.number,
+                            [AI_PROCESSING_TAG], 
+                            [AI_DONE_TAG], 
+                            correlatedLogger
+                        );
 
                     } else if (!finalPRValidation.isValid && claudeResult?.success) {
                         // Claude succeeded but no PR exists - trigger retry
@@ -841,7 +965,9 @@ This is an emergency retry - the main implementation is complete, you just need 
                                 githubToken: githubToken.token,
                                 customPrompt: emergencyPrompt,
                                 isRetry: true,
-                                retryReason: 'Emergency PR creation - main implementation complete'
+                                retryReason: 'Emergency PR creation - main implementation complete',
+                                branchName: worktreeInfo.branchName,
+                                modelName: modelName
                             });
 
                             correlatedLogger.info({

@@ -1,10 +1,118 @@
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
 import logger from './utils/logger.js';
 import { handleError } from './utils/errorHandler.js';
+import { ensureBranchAndPush } from './git/repoManager.js';
 
 // Configuration
 const DEFAULT_BASE_BRANCH = process.env.GIT_DEFAULT_BRANCH || 'main';
 const MAX_COMMENT_LENGTH = 65000; // GitHub's comment length limit
+
+/**
+ * Creates a Pull Request with robust git operations ensuring proper branch history
+ * @param {Object} params - PR creation parameters
+ * @param {string} params.owner - Repository owner
+ * @param {string} params.repoName - Repository name
+ * @param {string} params.branchName - Feature branch name
+ * @param {string} params.baseBranch - Base branch name
+ * @param {number} params.issueNumber - Issue number
+ * @param {string} params.prTitle - PR title
+ * @param {string} params.prBody - PR body
+ * @param {string} params.worktreePath - Path to the worktree
+ * @param {string} params.repoUrl - Repository URL
+ * @param {string} params.authToken - GitHub auth token
+ * @returns {Promise<Object>} Created PR data
+ */
+export async function createPullRequestRobust(params) {
+    const { 
+        owner, 
+        repoName, 
+        branchName, 
+        baseBranch, 
+        issueNumber, 
+        prTitle, 
+        prBody,
+        worktreePath,
+        repoUrl,
+        authToken
+    } = params;
+    
+    const octokit = await getAuthenticatedOctokit();
+    
+    try {
+        logger.info({
+            owner,
+            repoName,
+            branchName,
+            baseBranch,
+            issueNumber,
+            prTitle
+        }, 'Creating pull request with robust git operations...');
+        
+        // Step 1: Ensure branch is properly pushed to remote
+        await ensureBranchAndPush(worktreePath, branchName, baseBranch, {
+            repoUrl,
+            authToken
+        });
+        
+        // Step 2: Verify branch exists on remote before creating PR
+        try {
+            await octokit.request('GET /repos/{owner}/{repo}/branches/{branch}', {
+                owner,
+                repo: repoName,
+                branch: branchName
+            });
+            logger.debug({ branchName }, 'Confirmed branch exists on remote');
+        } catch (branchCheckError) {
+            throw new Error(`Branch '${branchName}' does not exist on remote: ${branchCheckError.message}`);
+        }
+        
+        // Step 3: Create the pull request
+        const response = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
+            owner,
+            repo: repoName,
+            title: prTitle,
+            head: branchName,
+            base: baseBranch,
+            body: prBody,
+            draft: false
+        });
+        
+        const prData = response.data;
+        
+        logger.info({
+            owner,
+            repoName,
+            issueNumber,
+            prNumber: prData.number,
+            prUrl: prData.html_url,
+            branchName,
+            baseBranch
+        }, 'Pull request created successfully');
+        
+        return {
+            success: true,
+            pr: {
+                number: prData.number,
+                url: prData.html_url,
+                title: prData.title,
+                state: prData.state
+            }
+        };
+        
+    } catch (error) {
+        logger.error({
+            owner,
+            repoName,
+            branchName,
+            baseBranch,
+            issueNumber,
+            error: error.message
+        }, 'Failed to create pull request');
+        
+        handleError(error, `Failed to create pull request for ${owner}/${repoName}#${issueNumber}`);
+        throw error;
+    }
+}
 
 /**
  * Creates a Pull Request for the given branch and issue
@@ -367,12 +475,16 @@ export async function completePostProcessing(options) {
         owner,
         repoName,
         branchName,
+        baseBranch,
         issueNumber,
         issueTitle,
         commitMessage,
         claudeResult,
         processingTags = ['AI-processing'],
-        completionTags = ['AI-done']
+        completionTags = ['AI-done'],
+        worktreePath,
+        repoUrl,
+        authToken
     } = options;
 
     let prInfo = null;
@@ -386,16 +498,33 @@ export async function completePostProcessing(options) {
             branchName
         }, 'Starting post-processing workflow...');
 
-        // Step 1: Create Pull Request
-        prInfo = await createPullRequest({
-            owner,
-            repoName,
-            branchName,
-            issueNumber,
-            issueTitle,
-            commitMessage,
-            claudeResult
-        });
+        // Step 1: Create Pull Request with robust git operations
+        if (worktreePath && baseBranch && repoUrl && authToken) {
+            // Use robust PR creation with git operations
+            prInfo = await createPullRequestRobust({
+                owner,
+                repoName,
+                branchName,
+                baseBranch,
+                issueNumber,
+                prTitle: `AI Fix for Issue #${issueNumber}: ${issueTitle}`,
+                prBody: generatePRBody(issueNumber, issueTitle, commitMessage, claudeResult),
+                worktreePath,
+                repoUrl,
+                authToken
+            });
+        } else {
+            // Fallback to basic PR creation
+            prInfo = await createPullRequest({
+                owner,
+                repoName,
+                branchName,
+                issueNumber,
+                issueTitle,
+                commitMessage,
+                claudeResult
+            });
+        }
 
         // Step 2: Add Claude logs as PR comment
         await addClaudeLogsComment({
