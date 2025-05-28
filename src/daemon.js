@@ -292,8 +292,8 @@ async function resetIssueLabels() {
             logger.info({ repository: repoFullName }, 'Checking for issues with processing labels...');
 
             try {
-                // Search for issues with processing or done labels
-                const searchQuery = `repo:${repoFullName} is:issue is:open (label:"${AI_EXCLUDE_TAGS_PROCESSING}" OR label:"${AI_DONE_TAG}")`;
+                // Search for issues with ONLY processing labels (never remove AI-done labels!)
+                const searchQuery = `repo:${repoFullName} is:issue is:open label:"${AI_EXCLUDE_TAGS_PROCESSING}"`;
                 
                 const searchResponse = await octokit.request('GET /search/issues', {
                     q: searchQuery,
@@ -304,19 +304,18 @@ async function resetIssueLabels() {
                     const labelsToRemove = [];
                     const currentLabels = issue.labels.map(label => label.name);
                     
+                    // ONLY remove AI-processing labels, NEVER remove AI-done labels
                     if (currentLabels.includes(AI_EXCLUDE_TAGS_PROCESSING)) {
                         labelsToRemove.push(AI_EXCLUDE_TAGS_PROCESSING);
                     }
-                    if (currentLabels.includes(AI_DONE_TAG)) {
-                        labelsToRemove.push(AI_DONE_TAG);
-                    }
+                    // Removed AI_DONE_TAG removal - completed issues should keep their AI-done labels
 
                     if (labelsToRemove.length > 0) {
                         logger.info({
                             repository: repoFullName,
                             issueNumber: issue.number,
                             labelsToRemove
-                        }, 'Removing processing labels from issue');
+                        }, 'Removing AI-processing labels from issue (preserving AI-done labels)');
 
                         for (const label of labelsToRemove) {
                             await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
