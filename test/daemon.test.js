@@ -7,6 +7,8 @@ process.env.GITHUB_REPOS_TO_MONITOR = 'test-owner/test-repo';
 process.env.AI_PRIMARY_TAG = 'AI';
 process.env.AI_EXCLUDE_TAGS_PROCESSING = 'AI-processing';
 process.env.AI_DONE_TAG = 'AI-done';
+process.env.MODEL_LABEL_PATTERN = '^llm-claude-(.+)$';
+process.env.DEFAULT_CLAUDE_MODEL = 'claude-3-5-sonnet-20240620';
 
 test('fetchIssuesForRepo handles invalid repository format', async () => {
     const mockOctokit = {};
@@ -76,6 +78,7 @@ test('fetchIssuesForRepo transforms issues correctly', async () => {
         repoOwner: 'owner',
         repoName: 'repo',
         labels: ['AI', 'bug'],
+        targetModels: ['claude-3-5-sonnet-20240620'],
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-02T00:00:00Z'
     });
@@ -127,6 +130,108 @@ test('pollForIssues returns detected issues', async (t) => {
     process.env.GITHUB_REPOS_TO_MONITOR = originalRepos;
 });
 
+test('fetchIssuesForRepo identifies model labels correctly', async () => {
+    const mockIssue = {
+        id: 124,
+        number: 2,
+        title: 'Test Issue with Model Labels',
+        html_url: 'https://github.com/owner/repo/issues/2',
+        labels: [
+            { name: 'AI' },
+            { name: 'llm-claude-3-opus-20240229' },
+            { name: 'llm-claude-3-5-sonnet-20240620' },
+            { name: 'enhancement' }
+        ],
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z'
+    };
+
+    const mockOctokit = {
+        request: mock.fn(async () => ({
+            data: {
+                total_count: 1,
+                items: [mockIssue]
+            }
+        }))
+    };
+
+    const issues = await fetchIssuesForRepo(mockOctokit, 'owner/repo');
+    
+    assert.strictEqual(issues.length, 1);
+    assert.deepStrictEqual(issues[0].targetModels, [
+        '3-opus-20240229',
+        '3-5-sonnet-20240620'
+    ]);
+    assert.deepStrictEqual(issues[0].labels, [
+        'AI',
+        'llm-claude-3-opus-20240229',
+        'llm-claude-3-5-sonnet-20240620',
+        'enhancement'
+    ]);
+});
+
+test('fetchIssuesForRepo handles single model label', async () => {
+    const mockIssue = {
+        id: 125,
+        number: 3,
+        title: 'Test Issue with Single Model',
+        html_url: 'https://github.com/owner/repo/issues/3',
+        labels: [
+            { name: 'AI' },
+            { name: 'llm-claude-3-opus-20240229' },
+            { name: 'bug' }
+        ],
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z'
+    };
+
+    const mockOctokit = {
+        request: mock.fn(async () => ({
+            data: {
+                total_count: 1,
+                items: [mockIssue]
+            }
+        }))
+    };
+
+    const issues = await fetchIssuesForRepo(mockOctokit, 'owner/repo');
+    
+    assert.strictEqual(issues.length, 1);
+    assert.deepStrictEqual(issues[0].targetModels, ['3-opus-20240229']);
+});
+
+test('fetchIssuesForRepo ignores non-matching model labels', async () => {
+    const mockIssue = {
+        id: 126,
+        number: 4,
+        title: 'Test Issue with Non-Model Labels',
+        html_url: 'https://github.com/owner/repo/issues/4',
+        labels: [
+            { name: 'AI' },
+            { name: 'gpt-4' }, // Should not match pattern
+            { name: 'openai-claude' }, // Should not match pattern
+            { name: 'llm-other-model' }, // Should not match claude pattern
+            { name: 'documentation' }
+        ],
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-02T00:00:00Z'
+    };
+
+    const mockOctokit = {
+        request: mock.fn(async () => ({
+            data: {
+                total_count: 1,
+                items: [mockIssue]
+            }
+        }))
+    };
+
+    const issues = await fetchIssuesForRepo(mockOctokit, 'owner/repo');
+    
+    assert.strictEqual(issues.length, 1);
+    // Should fall back to default model since no matching labels
+    assert.deepStrictEqual(issues[0].targetModels, ['claude-3-5-sonnet-20240620']);
+});
 test('daemon exports required functions', () => {
     assert.strictEqual(typeof fetchIssuesForRepo, 'function');
     assert.strictEqual(typeof pollForIssues, 'function');

@@ -12,6 +12,8 @@ const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000',
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
+const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
+const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || 'claude-3-5-sonnet-20240620';
 
 // Parse repositories list
 const getRepos = () => {
@@ -70,17 +72,30 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
         }, `Found ${response.data.total_count} matching issues.`);
 
         // Transform issues to a simplified format
-        return response.data.items.map(issue => ({
-            id: issue.id,
-            number: issue.number,
-            title: issue.title,
-            url: issue.html_url,
-            repoOwner: owner,
-            repoName: repo,
-            labels: issue.labels.map(l => l.name),
-            createdAt: issue.created_at,
-            updatedAt: issue.updated_at
-        }));
+        return response.data.items.map(issue => {
+            const identifiedModels = [];
+            const modelLabelRegex = new RegExp(MODEL_LABEL_PATTERN);
+            
+            for (const label of issue.labels) {
+                const match = label.name.match(modelLabelRegex);
+                if (match && match[1]) {
+                    identifiedModels.push(match[1]);
+                }
+            }
+            
+            return {
+                id: issue.id,
+                number: issue.number,
+                title: issue.title,
+                url: issue.html_url,
+                repoOwner: owner,
+                repoName: repo,
+                labels: issue.labels.map(l => l.name),
+                targetModels: identifiedModels.length > 0 ? identifiedModels : [DEFAULT_MODEL_NAME],
+                createdAt: issue.created_at,
+                updatedAt: issue.updated_at
+            };
+        });
     } catch (error) {
         handleError(error, `fetch_issues_${repoFullName}`, { correlationId });
 
@@ -131,55 +146,69 @@ async function pollForIssues() {
                         issueNumber: issue.number, 
                         issueTitle: issue.title, 
                         issueUrl: issue.url,
-                        repository: repoFullName
+                        repository: repoFullName,
+                        targetModels: issue.targetModels
                     }, 'Detected eligible issue');
                     
-                    // Add issue to the queue (minimal data - worker will fetch details from GitHub)
-                    try {
-                        const jobId = `issue-${issue.repoOwner}-${issue.repoName}-${issue.number}`;
-                        const issueJob = {
-                            repoOwner: issue.repoOwner,
-                            repoName: issue.repoName,
-                            number: issue.number,
-                            correlationId: generateCorrelationId() // Each issue gets its own correlation ID
-                        };
-                        
-                        const addToQueueWithRetry = () => withRetry(
-                            () => issueQueue.add('processGitHubIssue', issueJob, {
-                                jobId,
-                                // Prevent duplicate jobs for the same issue
-                                attempts: 3,
-                                backoff: {
-                                    type: 'exponential',
-                                    delay: 2000,
-                                },
-                            }),
-                            { ...retryConfigs.redis, correlationId },
-                            `add_issue_to_queue_${issue.number}`
-                        );
-                        
-                        await addToQueueWithRetry();
-                        
+                    // Create separate jobs for each target model
+                    for (const modelName of issue.targetModels) {
                         correlatedLogger.info({ 
-                            jobId,
-                            issueNumber: issue.number,
+                            issueId: issue.id, 
+                            issueNumber: issue.number, 
                             repository: repoFullName,
-                            issueCorrelationId: issueJob.correlationId
-                        }, 'Successfully added issue to processing queue');
+                            modelName: modelName
+                        }, `Enqueueing job for model: ${modelName}`);
                         
-                        allDetectedIssues.push(issue);
-                    } catch (error) {
-                        if (error.message?.includes('Job already exists')) {
-                            correlatedLogger.debug({ 
+                        try {
+                            const jobId = `issue-${issue.repoOwner}-${issue.repoName}-${issue.number}-${modelName}`;
+                            const issueJob = {
+                                repoOwner: issue.repoOwner,
+                                repoName: issue.repoName,
+                                number: issue.number,
+                                modelName: modelName,
+                                correlationId: generateCorrelationId() // Each job gets its own correlation ID
+                            };
+                            
+                            const addToQueueWithRetry = () => withRetry(
+                                () => issueQueue.add('processGitHubIssue', issueJob, {
+                                    jobId,
+                                    // Prevent duplicate jobs for the same issue-model combination
+                                    attempts: 3,
+                                    backoff: {
+                                        type: 'exponential',
+                                        delay: 2000,
+                                    },
+                                }),
+                                { ...retryConfigs.redis, correlationId },
+                                `add_issue_to_queue_${issue.number}_${modelName}`
+                            );
+                            
+                            await addToQueueWithRetry();
+                            
+                            correlatedLogger.info({ 
+                                jobId,
                                 issueNumber: issue.number,
-                                repository: repoFullName 
-                            }, 'Issue already in queue, skipping');
-                        } else {
-                            handleError(error, `Failed to add issue ${issue.number} to queue`, { 
-                                correlationId 
-                            });
+                                repository: repoFullName,
+                                modelName: modelName,
+                                issueCorrelationId: issueJob.correlationId
+                            }, 'Successfully added issue-model job to processing queue');
+                            
+                        } catch (error) {
+                            if (error.message?.includes('Job already exists')) {
+                                correlatedLogger.debug({ 
+                                    issueNumber: issue.number,
+                                    repository: repoFullName,
+                                    modelName: modelName
+                                }, 'Issue-model job already in queue, skipping');
+                            } else {
+                                handleError(error, `Failed to add issue ${issue.number} with model ${modelName} to queue`, { 
+                                    correlationId 
+                                });
+                            }
                         }
                     }
+                    
+                    allDetectedIssues.push(issue);
                 }
             }
         } catch (error) {
@@ -357,6 +386,8 @@ async function startDaemon(options = {}) {
         primaryTag: AI_PRIMARY_TAG,
         excludeProcessingTag: AI_EXCLUDE_TAGS_PROCESSING,
         excludeDoneTag: AI_DONE_TAG,
+        modelLabelPattern: MODEL_LABEL_PATTERN,
+        defaultModelName: DEFAULT_MODEL_NAME,
         resetPerformed: !!options.reset
     }, 'GitHub Issue Detection Daemon starting...');
 
@@ -414,6 +445,8 @@ Environment Variables:
   AI_PRIMARY_TAG             Primary tag to look for (default: AI)
   AI_EXCLUDE_TAGS_PROCESSING Processing tag to exclude (default: AI-processing)
   AI_DONE_TAG                Done tag to exclude (default: AI-done)
+  MODEL_LABEL_PATTERN        Regex pattern for model labels (default: ^llm-claude-(.+)$)
+  DEFAULT_CLAUDE_MODEL       Default model when no model labels found (default: claude-3-5-sonnet-20240620)
 
 Examples:
   node src/daemon.js                Start the daemon normally
