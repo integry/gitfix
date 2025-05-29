@@ -1,39 +1,49 @@
 # GitFix - Automated GitHub Issue Processor
 
-An automated system that monitors GitHub issues, uses Anthropic's Claude Code to generate solutions, and automates the Git workflow including PR creation.
+A production-ready automated system that monitors GitHub issues, uses Anthropic's Claude Code to generate solutions, and provides a complete end-to-end workflow from issue detection to pull request creation.
 
-## Current Implementation
+## Features
 
-### Stage 1: Authentication, Logging & Project Setup
-✅ Foundational components for the automated GitHub issue processor
+### ✅ Complete End-to-End Automation
+- **Issue Detection**: Automatic monitoring of GitHub repositories for AI-eligible issues
+- **Model-Specific Processing**: Support for multiple Claude models (sonnet, opus) with dedicated job queues
+- **Deterministic Git Workflow**: Reliable 3-phase workflow separating AI implementation from git operations
+- **Automatic PR Creation**: Direct GitHub API integration with proper issue linking
+- **Quality Assurance**: Comprehensive validation and retry mechanisms
 
-### Stage 2: GitHub Issue Detection Daemon
-✅ Daemon that polls GitHub repositories for AI-eligible issues
+### ✅ Advanced Multi-Model Support
+- **Model-Specific Enqueueing**: Separate job queues for different Claude models based on issue labels
+- **Concurrent Processing**: Multiple workers can process different models simultaneously
+- **Model-Specific Branch Naming**: Unique branch names include model identifier for traceability
+- **Model Selection**: Automatic model detection from issue labels (`llm-claude-sonnet`, `llm-claude-opus`)
 
-### Stage 3: Task Queue and Worker Infrastructure
-✅ BullMQ-based task queue with Redis for managing detected issues
-✅ Worker processes that tag issues and prepare for AI processing
+### ✅ Robust Git Management
+- **Isolated Worktrees**: Each issue processed in separate git worktree for conflict prevention
+- **Repository-Specific Configuration**: Support for different default branches per repository
+- **Authentication Handling**: Seamless private repository access with token-based authentication
+- **Branch Management**: Automatic creation, pushing, and cleanup of feature branches
 
-### Stage 4: Git Environment Management
-✅ Repository cloning and updating with authentication
-✅ Git worktree creation for isolated issue processing
-✅ Branch management and cleanup automation
+### ✅ Intelligent Claude Integration
+- **Implementation-Focused Prompts**: Claude focuses solely on code implementation, not git operations
+- **Context-Aware Processing**: Reads both issue descriptions and all comments for complete context
+- **Docker Isolation**: Secure containerized execution environment with network restrictions
+- **Output Parsing**: Intelligent extraction of implementation details and commit messages
 
-### Stage 5: Claude Code Integration & Execution
-✅ Docker-based Claude Code CLI execution environment
-✅ Secure containerization with network restrictions
-✅ Automated prompt engineering and context provisioning
-✅ Claude output parsing and error handling
-✅ Integration with worker process pipeline
+### ✅ Production-Ready Reliability
+- **Deterministic 3-Phase Workflow**: Pre-Claude setup → AI implementation → Post-Claude finalization
+- **Error Recovery**: Comprehensive retry mechanisms with exponential backoff
+- **GitHub API Integration**: Direct API calls with timing fixes and proper error handling
+- **State Management**: Redis-based job state tracking with correlation IDs for debugging
 
 ## Prerequisites
 
-- Node.js 18+ installed
-- GitHub App created with appropriate permissions
-- Claude Max plan subscription
-- Redis server running (for task queue)
-- Git installed (version 2.25+ recommended for worktree support)
-- Sufficient disk space for repository clones and worktrees
+- **Node.js 18+** - Runtime environment
+- **GitHub App** - Created with appropriate permissions (see setup below)
+- **Claude Subscription** - Anthropic Claude account with API access
+- **Redis Server** - For task queue management (v6.0+ recommended)
+- **Git 2.25+** - For worktree support and modern git operations
+- **Docker** - For secure Claude Code execution environment
+- **Disk Space** - Sufficient space for repository clones and worktrees (minimum 10GB recommended)
 
 ## Setup
 
@@ -42,10 +52,11 @@ An automated system that monitors GitHub issues, uses Anthropic's Claude Code to
 Create a GitHub App with the following permissions:
 
 **Repository Permissions:**
-- Contents: Read & Write
-- Metadata: Read
-- Issues: Read & Write
-- Pull requests: Read & Write
+- **Contents**: Read & Write (for code changes and file operations)
+- **Metadata**: Read (for repository information)
+- **Issues**: Read & Write (for issue management and comments)
+- **Pull Requests**: Read & Write (for PR creation and management)
+- **Actions**: Read (optional, for workflow integration)
 
 **Installation:**
 1. Create a new GitHub App in your account/organization settings
@@ -76,11 +87,18 @@ Create a GitHub App with the following permissions:
    AI_EXCLUDE_TAGS_PROCESSING=AI-processing
    AI_EXCLUDE_TAGS_DONE=AI-done
    
+   # Model-Specific Configuration
+   MODEL_LABELS_SONNET=llm-claude-sonnet
+   MODEL_LABELS_OPUS=llm-claude-opus
+   
    # Git Configuration
    GIT_CLONES_BASE_PATH=/tmp/git-processor/clones
    GIT_WORKTREES_BASE_PATH=/tmp/git-processor/worktrees
    GIT_DEFAULT_BRANCH=main
    GIT_SHALLOW_CLONE_DEPTH=
+   
+   # Repository-Specific Branch Configuration (optional)
+   GIT_DEFAULT_BRANCH_OWNER_REPO=dev
    ```
 
 3. Place your GitHub App private key file in the project root
@@ -135,8 +153,15 @@ For Claude Code CLI integration:
    # Claude Code Configuration
    CLAUDE_DOCKER_IMAGE=claude-code-processor:latest
    CLAUDE_CONFIG_PATH=~/.config/claude-code
-   CLAUDE_MAX_TURNS=10
+   CLAUDE_MAX_TURNS=1000
    CLAUDE_TIMEOUT_MS=300000
+   
+   # Worker Configuration
+   WORKER_CONCURRENCY=5
+   
+   # Retry Configuration
+   GITHUB_API_MAX_RETRIES=3
+   GIT_OPERATION_MAX_RETRIES=3
    ```
 
 ### 5. Installation
@@ -151,26 +176,40 @@ npm install
 gitfix/
 ├── src/
 │   ├── auth/
-│   │   └── githubAuth.js    # GitHub App authentication
+│   │   └── githubAuth.js        # GitHub App authentication
 │   ├── claude/
-│   │   └── claudeService.js # Claude Code CLI integration
+│   │   └── claudeService.js     # Claude Code CLI integration & Docker execution
 │   ├── git/
-│   │   └── repoManager.js   # Git operations and worktree management
+│   │   └── repoManager.js       # Git operations, worktree management, branch handling
 │   ├── queue/
-│   │   └── taskQueue.js     # BullMQ task queue setup
+│   │   └── taskQueue.js         # BullMQ task queue with Redis
 │   ├── utils/
-│   │   ├── errorHandler.js  # Error handling utilities
-│   │   └── logger.js        # Structured logging utility
-│   ├── daemon.js            # Issue detection daemon
-│   └── worker.js            # Job processing worker
+│   │   ├── errorHandler.js      # Comprehensive error handling utilities
+│   │   ├── logger.js            # Structured logging with correlation IDs
+│   │   ├── prValidation.js      # PR validation and retry mechanisms
+│   │   ├── retryHandler.js      # Configurable retry logic with exponential backoff
+│   │   ├── workerStateManager.js # Job state management and tracking
+│   │   └── idempotentOps.js     # Idempotent operation utilities
+│   ├── daemon.js                # Multi-model issue detection daemon
+│   ├── worker.js                # 3-phase deterministic job processor
+│   ├── githubService.js         # GitHub API operations and PR management
+│   └── index.js                 # Application entry point
 ├── scripts/
-│   ├── claude-entrypoint.sh # Docker entrypoint for Claude execution
-│   └── init-firewall.sh     # Security firewall setup
-├── test/                    # Test files
-├── Dockerfile.claude        # Docker image for Claude Code execution
-├── .env.example            # Example environment variables
-├── .gitignore             # Git ignore patterns
-└── package.json           # Project dependencies
+│   ├── claude-entrypoint.sh     # Docker entrypoint for secure Claude execution
+│   ├── init-firewall.sh         # Security and firewall setup
+│   ├── fix-issue-labels.js      # Manual issue label management utility
+│   └── list-repo-configs.js     # Repository configuration display utility
+├── docs/
+│   ├── AI_PR_REVIEW_GUIDELINES.md    # Guidelines for AI-generated code review
+│   ├── REPOSITORY_BRANCH_CONFIG.md   # Repository configuration documentation
+│   └── SYSTEM_METRICS.md             # System metrics and monitoring guide
+├── test/                             # Comprehensive test suite
+│   ├── *.test.js                     # Unit and integration tests
+│   ├── worker.modelSpecific.test.js  # Multi-model processing tests
+│   └── repoManager.modelSpecific.test.js # Git worktree isolation tests
+├── Dockerfile.claude                 # Secure Docker image for Claude execution
+├── .env.example                      # Complete environment configuration template
+└── package.json                      # Dependencies and npm scripts
 ```
 
 ## Usage
@@ -229,12 +268,11 @@ npm run worker & npm run worker
 ```
 
 The worker will:
-- Pull jobs from the Redis-backed task queue
-- Add "AI-processing" tag to issues being worked on
-- Post a comment indicating processing has started
-- Set up isolated Git worktree for the issue
-- Execute Claude Code in secure Docker environment
-- Parse and handle Claude's analysis and code changes
+- **Phase 1 (Pre-Claude Setup)**: Pull jobs from queue, update base branch, create isolated git worktree, push initial branch to GitHub
+- **Phase 2 (AI Implementation)**: Execute Claude Code with implementation-focused prompts in secure Docker environment
+- **Phase 3 (Post-Claude Finalization)**: Commit any changes, push to GitHub, create pull request with automatic issue linking
+- Handle multiple models concurrently with model-specific delays to prevent conflicts
+- Provide comprehensive error handling and retry mechanisms
 
 ### GitHub Authentication
 
@@ -305,16 +343,57 @@ Run tests with:
 npm test
 ```
 
-## Next Steps
+## Workflow Overview
 
-Implementation status across stages:
-- ✅ Issue detection and monitoring (Stage 2)
-- ✅ Task queuing system (Stage 3)
-- ✅ Git environment management (Stage 4)
-- ✅ Claude Code integration (Stage 5)
-- 🚧 Automated commit and PR creation (Stage 6)
-- 🚧 Pre-PR checks and validation (Stage 7)
-- 🚧 Advanced features and cleanup (Stage 8)
+### Issue Labels for Model Selection
+Add labels to GitHub issues to specify which Claude model(s) should process them:
+- `llm-claude-sonnet` - Use Claude Sonnet model
+- `llm-claude-opus` - Use Claude Opus model
+- Both labels can be used together for multi-model processing
+
+### Deterministic 3-Phase Processing
+1. **Pre-Claude Setup** (Deterministic)
+   - Repository cloning/updating with latest changes
+   - Isolated git worktree creation with unique model-specific branch names
+   - Initial branch push to GitHub (eliminates timing issues)
+
+2. **AI Implementation** (Claude Focus)
+   - Implementation-only prompts (no git operations)
+   - Complete issue and comment context analysis
+   - Code implementation in isolated environment
+
+3. **Post-Claude Finalization** (Deterministic)
+   - Automatic commit of any changes Claude made
+   - Branch push and PR creation via GitHub API
+   - Proper issue linking with keywords (`Closes #123` or `Addresses #123`)
+   - Label management and cleanup
+
+### Branch Naming Convention
+`ai-fix/{issueId}-{title}-{timestamp}-{model}-{random}`
+
+Example: `ai-fix/349-feat-implement-onboarding-20250529-1506-sonnet-3he`
+
+## Advanced Features
+
+### Multi-Model Processing
+- Issues with multiple model labels create separate jobs for each model
+- Each model gets its own branch and processes the issue independently
+- Concurrent execution with conflict prevention mechanisms
+
+### Quality Assurance
+- Comprehensive PR validation and retry mechanisms
+- Anti-hallucination prompts and repository validation
+- Automatic detection and handling of edge cases
+
+### Error Recovery
+- Exponential backoff retry for API operations
+- Graceful handling of git conflicts and timing issues
+- State management with correlation IDs for debugging
+
+### Repository Configuration
+- Per-repository default branch configuration
+- Custom branch naming and processing rules
+- Flexible label-based model selection
 
 ## Contributing
 
