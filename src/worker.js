@@ -548,6 +548,8 @@ ${claudeResult?.success ? 'Implementation completed successfully.' : 'Implementa
                 const completionComment = await generateCompletionComment(claudeResult, issueRef);
                 const prBody = `## AI Implementation Summary
 
+${commitResult ? `Closes #${issueRef.number}` : `Addresses #${issueRef.number}`}
+
 **Model Used:** ${modelName}
 **Status:** ${claudeResult?.success ? '✅ Implementation Completed' : '⚠️ Analysis Completed'}
 **Branch:** \`${worktreeInfo.branchName}\`
@@ -590,28 +592,12 @@ ${completionComment}
                         updatedLabels: []
                     };
 
-                    // Link the PR to the original issue
-                    try {
-                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            body: `🔗 **Pull Request Created:** #${prResponse.data.number}\n\nThe AI implementation has been submitted for review: ${prResponse.data.html_url}`
-                        });
-
-                        logger.info({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            prNumber: prResponse.data.number
-                        }, 'Successfully linked PR to original issue');
-                    } catch (linkError) {
-                        logger.warn({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            prNumber: prResponse.data.number,
-                            error: linkError.message
-                        }, 'Failed to link PR to issue (non-critical)');
-                    }
+                    logger.info({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        prNumber: prResponse.data.number,
+                        linkedViaKeyword: commitResult ? 'Closes' : 'Addresses'
+                    }, 'PR linked to issue via GitHub keyword in description');
 
                 } catch (prError) {
                     logger.warn({
@@ -649,28 +635,11 @@ ${completionComment}
                                 updatedLabels: []
                             };
 
-                            // Link the existing PR to the original issue (if not already linked)
-                            try {
-                                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                                    owner: issueRef.repoOwner,
-                                    repo: issueRef.repoName,
-                                    issue_number: issueRef.number,
-                                    body: `🔗 **Pull Request Found:** #${existingPR.number}\n\nThe AI implementation is available for review: ${existingPR.html_url}`
-                                });
-
-                                logger.info({
-                                    jobId,
-                                    issueNumber: issueRef.number,
-                                    prNumber: existingPR.number
-                                }, 'Successfully linked existing PR to original issue');
-                            } catch (linkError) {
-                                logger.warn({
-                                    jobId,
-                                    issueNumber: issueRef.number,
-                                    prNumber: existingPR.number,
-                                    error: linkError.message
-                                }, 'Failed to link existing PR to issue (non-critical)');
-                            }
+                            logger.info({
+                                jobId,
+                                issueNumber: issueRef.number,
+                                prNumber: existingPR.number
+                            }, 'Found existing PR (linking depends on PR description keywords)');
                         } else {
                             throw prError; // Re-throw if no existing PR found
                         }
