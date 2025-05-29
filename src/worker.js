@@ -28,6 +28,144 @@ const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 
 /**
+ * Adds a small random delay to prevent concurrent execution conflicts
+ * @param {string} modelName - Model name to create consistent but different delays
+ * @returns {Promise<void>}
+ */
+function addModelSpecificDelay(modelName) {
+    // Create a consistent but different delay for each model (500-2000ms)
+    const baseDelay = 500;
+    const modelHash = modelName.split('').reduce((hash, char) => {
+        return ((hash << 5) - hash + char.charCodeAt(0)) & 0xffffffff;
+    }, 0);
+    const modelDelay = Math.abs(modelHash % 1500); // 0-1499ms additional delay
+    const totalDelay = baseDelay + modelDelay;
+    
+    return new Promise(resolve => setTimeout(resolve, totalDelay));
+}
+
+/**
+ * Safely removes a label from an issue, ignoring errors if label doesn't exist
+ * @param {Object} octokit - GitHub API client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - Issue number
+ * @param {string} labelName - Label to remove
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<boolean>} - True if removed or didn't exist, false if other error
+ */
+async function safeRemoveLabel(octokit, owner, repo, issueNumber, labelName, logger) {
+    try {
+        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+            owner,
+            repo,
+            issue_number: issueNumber,
+            name: labelName
+        });
+        logger.debug(`Successfully removed label '${labelName}' from issue #${issueNumber}`);
+        return true;
+    } catch (error) {
+        if (error.status === 404) {
+            logger.debug(`Label '${labelName}' not found on issue #${issueNumber}, skipping removal`);
+            return true; // Label doesn't exist, which is fine
+        }
+        logger.warn({ 
+            error: error.message, 
+            labelName, 
+            issueNumber,
+            status: error.status 
+        }, `Failed to remove label '${labelName}' from issue #${issueNumber}`);
+        return false;
+    }
+}
+
+/**
+ * Safely adds a label to an issue, ignoring errors if label already exists
+ * @param {Object} octokit - GitHub API client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - Issue number
+ * @param {string} labelName - Label to add
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<boolean>} - True if added or already exists, false if other error
+ */
+async function safeAddLabel(octokit, owner, repo, issueNumber, labelName, logger) {
+    try {
+        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+            owner,
+            repo,
+            issue_number: issueNumber,
+            labels: [labelName]
+        });
+        logger.debug(`Successfully added label '${labelName}' to issue #${issueNumber}`);
+        return true;
+    } catch (error) {
+        if (error.status === 422 && error.message?.includes('already exists')) {
+            logger.debug(`Label '${labelName}' already exists on issue #${issueNumber}`);
+            return true; // Label already exists, which is fine
+        }
+        logger.warn({ 
+            error: error.message, 
+            labelName, 
+            issueNumber,
+            status: error.status 
+        }, `Failed to add label '${labelName}' to issue #${issueNumber}`);
+        return false;
+    }
+}
+
+/**
+ * Safely updates issue labels with robust error handling
+ * @param {Object} octokit - GitHub API client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - Issue number
+ * @param {Array<string>} labelsToRemove - Labels to remove
+ * @param {Array<string>} labelsToAdd - Labels to add
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<Object>} - Result with success status and any errors
+ */
+async function safeUpdateLabels(octokit, owner, repo, issueNumber, labelsToRemove = [], labelsToAdd = [], logger) {
+    const results = {
+        success: true,
+        removed: [],
+        added: [],
+        errors: []
+    };
+
+    // Remove labels
+    for (const labelName of labelsToRemove) {
+        const removed = await safeRemoveLabel(octokit, owner, repo, issueNumber, labelName, logger);
+        if (removed) {
+            results.removed.push(labelName);
+        } else {
+            results.success = false;
+            results.errors.push(`Failed to remove '${labelName}'`);
+        }
+    }
+
+    // Add labels
+    for (const labelName of labelsToAdd) {
+        const added = await safeAddLabel(octokit, owner, repo, issueNumber, labelName, logger);
+        if (added) {
+            results.added.push(labelName);
+        } else {
+            results.success = false;
+            results.errors.push(`Failed to add '${labelName}'`);
+        }
+    }
+
+    logger.info({
+        issueNumber,
+        removed: results.removed,
+        added: results.added,
+        errors: results.errors.length > 0 ? results.errors : undefined
+    }, 'Label update completed');
+
+    return results;
+}
+
+/**
  * Processes a GitHub issue job from the queue
  * @param {import('bullmq').Job} job - The job to process
  * @returns {Promise<Object>} Processing result
@@ -37,6 +175,16 @@ async function processGitHubIssueJob(job) {
     const correlationId = issueRef.correlationId || generateCorrelationId();
     const correlatedLogger = logger.withCorrelation(correlationId);
     const stateManager = getStateManager();
+    
+    // Add delay to prevent concurrent worker conflicts
+    const modelName = issueRef.modelName || 'default';
+    await addModelSpecificDelay(modelName);
+    
+    correlatedLogger.debug({ 
+        jobId, 
+        modelName,
+        delayApplied: true
+    }, 'Applied model-specific delay to prevent conflicts');
     
     // Create task state
     const taskId = `${issueRef.repoOwner}-${issueRef.repoName}-${issueRef.number}`;
@@ -81,6 +229,13 @@ async function processGitHubIssueJob(job) {
         
         throw authError;
     }
+
+    // Initialize variables that need to be accessible in catch block
+    let localRepoPath;
+    let worktreeInfo;
+    let claudeResult = null;
+    let postProcessingResult = null;
+    let commitResult = null;
 
     try {
         // Update state to processing
@@ -136,12 +291,7 @@ async function processGitHubIssueJob(job) {
                 issueNumber: issueRef.number 
             }, `Adding '${AI_PROCESSING_TAG}' tag to issue`);
             
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                owner: issueRef.repoOwner,
-                repo: issueRef.repoName,
-                issue_number: issueRef.number,
-                labels: [AI_PROCESSING_TAG],
-            });
+            await safeAddLabel(octokit, issueRef.repoOwner, issueRef.repoName, issueRef.number, AI_PROCESSING_TAG, correlatedLogger);
             
             logger.info({ 
                 jobId, 
@@ -154,13 +304,7 @@ async function processGitHubIssueJob(job) {
             }, `Issue already has '${AI_PROCESSING_TAG}' tag, continuing with processing`);
         }
 
-        // Add a comment to the issue indicating processing has started
-        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-            owner: issueRef.repoOwner,
-            repo: issueRef.repoName,
-            issue_number: issueRef.number,
-            body: `🤖 AI processing has started for this issue.\n\nI'll analyze the problem and work on a solution. This may take a few minutes.`,
-        });
+        // Initial comment will be added after worktree creation to include branch info
 
         logger.info({ 
             jobId, 
@@ -170,14 +314,18 @@ async function processGitHubIssueJob(job) {
         // Update progress: Git setup phase
         await job.updateProgress(25);
         
+        // Validate repository and get configuration early for use in comments
+        logger.info({ 
+            jobId, 
+            owner: issueRef.repoOwner, 
+            repo: issueRef.repoName 
+        }, 'Validating repository access...');
+        
+        const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
+        
         // Get GitHub token for cloning
         const githubToken = await octokit.auth();
         const repoUrl = getRepoUrl(issueRef);
-        
-        let localRepoPath;
-        let worktreeInfo;
-        let claudeResult = null;
-        let postProcessingResult = null;
         
         try {
             // Step 1: Ensure repository is cloned/updated
@@ -201,7 +349,8 @@ async function processGitHubIssueJob(job) {
                 jobId, 
                 issueNumber: issueRef.number,
                 issueTitle: currentIssueData.data.title,
-                localRepoPath
+                localRepoPath,
+                modelName
             }, 'Creating Git worktree for issue...');
             
             worktreeInfo = await createWorktreeForIssue(
@@ -211,7 +360,8 @@ async function processGitHubIssueJob(job) {
                 issueRef.repoOwner,
                 issueRef.repoName,
                 null, // Use auto-detected default branch
-                octokit // Pass GitHub API client for better branch detection
+                octokit, // Pass GitHub API client for better branch detection
+                modelName // Pass model name for unique branch/worktree naming
             );
             
             await job.updateProgress(75);
@@ -223,7 +373,33 @@ async function processGitHubIssueJob(job) {
                 branchName: worktreeInfo.branchName
             }, 'Git environment setup complete');
             
-            // Step 3: Execute Claude Code to analyze and fix the issue
+            // Add a comment to the issue indicating processing has started with model and branch info
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner: issueRef.repoOwner,
+                repo: issueRef.repoName,
+                issue_number: issueRef.number,
+                body: `🤖 AI processing has started for this issue using **${modelName}** model.\n\nI'll analyze the problem and work on a solution. This may take a few minutes.\n\n**Processing Details:**\n- Model: \`${modelName}\`\n- Branch: \`${worktreeInfo.branchName}\`\n- Base Branch: \`${repoValidation.repoData.defaultBranch}\`\n- Worktree: \`${worktreeInfo.worktreePath.split('/').pop()}\``,
+            });
+            
+            // Step 3: Push empty branch to GitHub (deterministic setup)
+            logger.info({ 
+                jobId, 
+                issueNumber: issueRef.number,
+                branchName: worktreeInfo.branchName
+            }, 'Pushing initial branch to GitHub...');
+            
+            await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                repoUrl,
+                authToken: githubToken.token
+            });
+            
+            logger.info({ 
+                jobId, 
+                issueNumber: issueRef.number,
+                branchName: worktreeInfo.branchName
+            }, 'Initial branch pushed successfully');
+            
+            // Step 4: Execute Claude Code to analyze and fix the issue (AI phase)
             logger.info({ 
                 jobId, 
                 issueNumber: issueRef.number,
@@ -241,7 +417,9 @@ async function processGitHubIssueJob(job) {
             claudeResult = await executeClaudeCode({
                 worktreePath: worktreeInfo.worktreePath,
                 issueRef: issueRef,
-                githubToken: githubToken.token
+                githubToken: githubToken.token,
+                branchName: worktreeInfo.branchName,
+                modelName: modelName
             });
             
             correlatedLogger.info({
@@ -308,396 +486,219 @@ async function processGitHubIssueJob(job) {
                 }, 'Failed to list files in worktree');
             }
             
-            // Step 4: Post-processing (commit, push, create PR, update labels)
-            correlatedLogger.info({
-                jobId,
+            // Step 5: Post-processing (deterministic commit, push, and PR creation)
+            logger.info({ 
+                jobId, 
                 issueNumber: issueRef.number,
-                claudeSuccess: claudeResult?.success,
-                beforePostProcessingCondition: 'CHECKING_CLAUDE_SUCCESS'
-            }, 'POST-PROCESSING DEBUG: Checking if should start post-processing');
+                worktreePath: worktreeInfo.worktreePath,
+                claudeSuccess: claudeResult?.success
+            }, 'Starting deterministic post-processing...');
 
-            if (claudeResult?.success) {
-                correlatedLogger.info({
+            try {
+                // Always attempt to commit any changes Claude may have made
+                let commitMessage = `fix(ai): Resolve issue #${issueRef.number} - ${currentIssueData.data.title.substring(0, 50)}
+
+Implemented by Claude Code using ${modelName} model.
+
+${claudeResult?.success ? 'Implementation completed successfully.' : 'Implementation attempted - see PR comments for details.'}`;
+                
+                if (claudeResult?.suggestedCommitMessage) {
+                    commitMessage = claudeResult.suggestedCommitMessage;
+                }
+
+                // Deterministic commit - always attempt regardless of Claude success
+                commitResult = await commitChanges(
+                    worktreeInfo.worktreePath,
+                    commitMessage,
+                    {
+                        name: 'Claude Code',
+                        email: 'claude-code@anthropic.com'
+                    },
+                    issueRef.number,
+                    currentIssueData.data.title
+                );
+
+                // Deterministic push and PR creation regardless of commit result
+                logger.info({
                     jobId,
                     issueNumber: issueRef.number,
-                    worktreePath: worktreeInfo.worktreePath,
-                    postProcessingCondition: 'CLAUDE_SUCCESS_TRUE'
-                }, 'POST-PROCESSING DEBUG: Claude succeeded, starting post-processing');
+                    branchName: worktreeInfo.branchName,
+                    hasCommits: !!commitResult
+                }, 'Pushing changes and creating PR...');
 
-                try {
-                    logger.info({ 
-                        jobId, 
-                        issueNumber: issueRef.number,
-                        worktreePath: worktreeInfo.worktreePath
-                    }, 'Starting post-processing: commit, push, and PR creation...');
+                // Push any changes to remote
+                await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                    repoUrl,
+                    authToken: githubToken.token
+                });
+                
+                logger.info({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    branchName: worktreeInfo.branchName
+                }, 'Branch pushed to remote successfully');
 
-                    // Extract commit message from Claude result if available
-                    let commitMessage = `fix(ai): Resolve issue #${issueRef.number} - ${currentIssueData.data.title.substring(0, 50)}
+                // Create PR with completion comment (deterministic)
+                let prTitle = `AI Analysis for Issue #${issueRef.number}: ${currentIssueData.data.title}`;
+                if (commitResult) {
+                    prTitle = `AI Fix for Issue #${issueRef.number}: ${currentIssueData.data.title}`;
+                }
 
-Implemented by Claude Code. Full conversation log in PR comment.`;
-                    
-                    if (claudeResult.suggestedCommitMessage) {
-                        commitMessage = claudeResult.suggestedCommitMessage;
-                    }
+                // Generate PR body using the completion comment as content
+                const completionComment = await generateCompletionComment(claudeResult, issueRef);
+                const prBody = `## AI Implementation Summary
 
-                    // Commit changes
-                    const commitResult = await commitChanges(
-                        worktreeInfo.worktreePath,
-                        commitMessage,
-                        {
-                            name: 'Claude Code',
-                            email: 'claude-code@anthropic.com'
-                        },
-                        issueRef.number,
-                        currentIssueData.data.title
-                    );
-
-                    if (commitResult) {
-                        logger.info({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            commitHash: commitResult.commitHash
-                        }, 'Changes committed successfully');
-
-                        // Push branch to remote
-                        await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
-                            repoUrl,
-                            authToken: githubToken.token
-                        });
-                        
-                        logger.info({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            branchName: worktreeInfo.branchName
-                        }, 'Branch pushed to remote successfully');
-
-                        // Complete post-processing (PR creation, comments, labels)
-                        correlatedLogger.info({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            branchName: worktreeInfo.branchName,
-                            aboutToCallCompletePostProcessing: 'TRUE'
-                        }, 'POST-PROCESSING DEBUG: About to call completePostProcessing');
-
-                        postProcessingResult = await completePostProcessing({
-                            owner: issueRef.repoOwner,
-                            repoName: issueRef.repoName,
-                            branchName: worktreeInfo.branchName,
-                            issueNumber: issueRef.number,
-                            issueTitle: currentIssueData.data.title,
-                            commitMessage: commitResult.commitMessage,
-                            claudeResult,
-                            processingTags: [AI_PROCESSING_TAG],
-                            completionTags: [AI_DONE_TAG]
-                        });
-
-                        correlatedLogger.info({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            postProcessingSuccess: !!postProcessingResult.pr,
-                            prNumber: postProcessingResult.pr?.number,
-                            prUrl: postProcessingResult.pr?.url,
-                            postProcessingResultKeys: Object.keys(postProcessingResult || {})
-                        }, 'POST-PROCESSING DEBUG: completePostProcessing returned');
-
-                        logger.info({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            prNumber: postProcessingResult.pr?.number,
-                            prUrl: postProcessingResult.pr?.url
-                        }, 'Post-processing completed successfully');
-
-                        // Step 5: Validate PR creation and retry if needed
-                        // Only validate if we expected a PR to be created (i.e., there were commits)
-                        const shouldValidatePR = !!commitResult;
-                        let prValidationResult = null;
-                        
-                        if (shouldValidatePR) {
-                            prValidationResult = await validatePRCreation({
-                                owner: issueRef.repoOwner,
-                                repoName: issueRef.repoName,
-                                branchName: worktreeInfo.branchName,
-                                expectedPrNumber: postProcessingResult.pr?.number,
-                                correlationId
-                            });
-                        }
-
-                        if (shouldValidatePR && (!prValidationResult || !prValidationResult.isValid)) {
-                            correlatedLogger.warn({
-                                jobId,
-                                issueNumber: issueRef.number,
-                                branchName: worktreeInfo.branchName,
-                                validationError: prValidationResult.error
-                            }, 'PR validation failed - attempting Claude retry with enhanced prompt');
-
-                            // Validate repository information first
-                            const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
-                            
-                            if (repoValidation.isValid) {
-                                // Generate enhanced prompt with explicit repository metadata
-                                const enhancedPrompt = generateEnhancedClaudePrompt({
-                                    issueRef,
-                                    currentIssueData: currentIssueData.data,
-                                    worktreePath: worktreeInfo.worktreePath,
-                                    branchName: worktreeInfo.branchName,
-                                    baseBranch: repoValidation.repoData.defaultBranch
-                                });
-
-                                // Retry Claude execution with enhanced prompt
-                                const retryResult = await executeClaudeCode({
-                                    worktreePath: worktreeInfo.worktreePath,
-                                    issueRef: issueRef,
-                                    githubToken: githubToken.token,
-                                    customPrompt: enhancedPrompt,
-                                    isRetry: true,
-                                    retryReason: `PR validation failed: ${prValidationResult.error}`
-                                });
-
-                                correlatedLogger.info({
-                                    jobId,
-                                    issueNumber: issueRef.number,
-                                    retrySuccess: retryResult.success,
-                                    originalClaudeSuccess: claudeResult.success
-                                }, 'Claude retry execution completed');
-
-                                // Validate PR creation again after retry
-                                const retryValidationResult = await validatePRCreation({
-                                    owner: issueRef.repoOwner,
-                                    repoName: issueRef.repoName,
-                                    branchName: worktreeInfo.branchName,
-                                    expectedPrNumber: postProcessingResult.pr?.number,
-                                    correlationId
-                                });
-
-                                if (retryValidationResult.isValid) {
-                                    correlatedLogger.info({
-                                        jobId,
-                                        issueNumber: issueRef.number,
-                                        prNumber: retryValidationResult.pr.number,
-                                        prUrl: retryValidationResult.pr.url
-                                    }, 'PR validation successful after retry');
-                                    
-                                    // Update post-processing result with validated PR info
-                                    postProcessingResult.pr = retryValidationResult.pr;
-                                } else {
-                                    correlatedLogger.error({
-                                        jobId,
-                                        issueNumber: issueRef.number,
-                                        retryValidationError: retryValidationResult.error
-                                    }, 'PR validation still failed after retry');
-                                }
-                            } else {
-                                correlatedLogger.error({
-                                    jobId,
-                                    issueNumber: issueRef.number,
-                                    repoValidationError: repoValidation.error
-                                }, 'Repository validation failed - cannot retry Claude execution');
-                            }
-                        } else {
-                            correlatedLogger.info({
-                                jobId,
-                                issueNumber: issueRef.number,
-                                prNumber: prValidationResult.pr.number,
-                                prUrl: prValidationResult.pr.url
-                            }, 'PR validation successful on first attempt');
-                        }
-
-                    } else {
-                        logger.info({
-                            jobId,
-                            issueNumber: issueRef.number
-                        }, 'No changes to commit, posting completion comment only');
-
-                        // Just update labels if no changes were made
-                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            name: AI_PROCESSING_TAG,
-                        });
-
-                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            labels: [AI_DONE_TAG],
-                        });
-
-                        const completionComment = await generateCompletionComment(claudeResult, issueRef);
-                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            body: completionComment,
-                        });
-                    }
-
-                } catch (postProcessingError) {
-                    correlatedLogger.error({
-                        jobId,
-                        issueNumber: issueRef.number,
-                        error: postProcessingError.message,
-                        errorStack: postProcessingError.stack,
-                        postProcessingErrorCaught: 'TRUE'
-                    }, 'POST-PROCESSING DEBUG: Caught error in post-processing');
-
-                    logger.error({
-                        jobId,
-                        issueNumber: issueRef.number,
-                        error: postProcessingError.message
-                    }, 'Post-processing failed');
-
-                    // If post-processing failed but there were commits, try PR validation and retry
-                    if (commitResult) {
-                        correlatedLogger.warn({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            postProcessingError: postProcessingError.message
-                        }, 'Post-processing failed - attempting Claude retry for PR creation');
-
-                        // Validate repository information first
-                        const repoValidation = await validateRepositoryInfo(issueRef, octokit, correlationId);
-                        
-                        if (repoValidation.isValid) {
-                            // Generate enhanced prompt with explicit repository metadata
-                            const enhancedPrompt = generateEnhancedClaudePrompt({
-                                issueRef,
-                                currentIssueData: currentIssueData.data,
-                                worktreePath: worktreeInfo.worktreePath,
-                                branchName: worktreeInfo.branchName,
-                                baseBranch: repoValidation.repoData.defaultBranch
-                            });
-
-                            // Retry Claude execution with enhanced prompt focused on PR creation
-                            const retryResult = await executeClaudeCode({
-                                worktreePath: worktreeInfo.worktreePath,
-                                issueRef: issueRef,
-                                githubToken: githubToken.token,
-                                customPrompt: enhancedPrompt + '\n\n**CRITICAL: Focus on creating the pull request. The code changes are already committed. Your primary task is to create a working pull request.**',
-                                isRetry: true,
-                                retryReason: `Post-processing failed: ${postProcessingError.message}`
-                            });
-
-                            correlatedLogger.info({
-                                jobId,
-                                issueNumber: issueRef.number,
-                                retrySuccess: retryResult.success
-                            }, 'Claude PR creation retry completed');
-
-                            // Try to validate PR creation after retry
-                            if (retryResult.success) {
-                                const retryValidationResult = await validatePRCreation({
-                                    owner: issueRef.repoOwner,
-                                    repoName: issueRef.repoName,
-                                    branchName: worktreeInfo.branchName,
-                                    expectedPrNumber: null, // Don't expect a specific number
-                                    correlationId
-                                });
-
-                                if (retryValidationResult.isValid) {
-                                    correlatedLogger.info({
-                                        jobId,
-                                        issueNumber: issueRef.number,
-                                        prNumber: retryValidationResult.pr.number,
-                                        prUrl: retryValidationResult.pr.url
-                                    }, 'PR creation successful after retry');
-                                    
-                                    // Update post-processing result
-                                    postProcessingResult = { pr: retryValidationResult.pr, updatedLabels: [] };
-                                    
-                                    // Skip the error handling below since we recovered
-                                    return;
-                                }
-                            }
-                        }
-                    }
-
-                    // Try to update labels to indicate post-processing failure
-                    try {
-                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            name: AI_PROCESSING_TAG,
-                        });
-
-                        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                            owner: issueRef.repoOwner,
-                            repo: issueRef.repoName,
-                            issue_number: issueRef.number,
-                            labels: ['AI-failed-post-processing'],
-                        });
-                    } catch (labelError) {
-                        logger.warn({
-                            jobId,
-                            issueNumber: issueRef.number,
-                            error: labelError.message
-                        }, 'Failed to update labels after post-processing failure');
-                    }
-
-                    // Still post a completion comment with error details
-                    const errorComment = `🤖 **AI Processing Completed with Post-Processing Errors**
-
-Claude Code successfully analyzed and potentially fixed the issue, but encountered errors during post-processing (commit/PR creation).
-
-**Error Details:**
-- Post-processing Error: ${postProcessingError.message}
-
-Please check the logs and manually review any changes made to the codebase.
+**Model Used:** ${modelName}
+**Status:** ${claudeResult?.success ? '✅ Implementation Completed' : '⚠️ Analysis Completed'}
+**Branch:** \`${worktreeInfo.branchName}\`
+**Commits:** ${commitResult ? `✅ Changes committed (${commitResult.commitHash.substring(0, 7)})` : '❌ No changes made'}
 
 ---
-*Powered by Claude Code*`;
-                    
+
+${completionComment}
+
+---
+
+*This PR was created automatically by Claude Code after processing issue #${issueRef.number}.*`;
+
+                // Create PR using GitHub API directly (more reliable than completePostProcessing)
+                try {
+                    const prResponse = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        title: prTitle,
+                        head: worktreeInfo.branchName,
+                        base: repoValidation.repoData.defaultBranch,
+                        body: prBody,
+                        draft: false
+                    });
+
+                    logger.info({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        prNumber: prResponse.data.number,
+                        prUrl: prResponse.data.html_url
+                    }, 'PR created successfully');
+
+                    postProcessingResult = {
+                        success: true,
+                        pr: {
+                            number: prResponse.data.number,
+                            url: prResponse.data.html_url,
+                            title: prResponse.data.title
+                        },
+                        updatedLabels: []
+                    };
+
+                } catch (prError) {
+                    logger.warn({
+                        jobId,
+                        issueNumber: issueRef.number,
+                        branchName: worktreeInfo.branchName,
+                        error: prError.message
+                    }, 'Direct PR creation failed, checking if PR already exists...');
+
+                    // Check if PR already exists
+                    try {
+                        const existingPRs = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
+                            owner: issueRef.repoOwner,
+                            repo: issueRef.repoName,
+                            head: `${issueRef.repoOwner}:${worktreeInfo.branchName}`,
+                            state: 'open'
+                        });
+
+                        if (existingPRs.data.length > 0) {
+                            const existingPR = existingPRs.data[0];
+                            logger.info({
+                                jobId,
+                                issueNumber: issueRef.number,
+                                prNumber: existingPR.number,
+                                prUrl: existingPR.html_url
+                            }, 'Found existing PR for branch');
+
+                            postProcessingResult = {
+                                success: true,
+                                pr: {
+                                    number: existingPR.number,
+                                    url: existingPR.html_url,
+                                    title: existingPR.title
+                                },
+                                updatedLabels: []
+                            };
+                        } else {
+                            throw prError; // Re-throw if no existing PR found
+                        }
+                    } catch (checkError) {
+                        throw prError; // Re-throw original error
+                    }
+                }
+
+                // Update labels after successful processing
+                await safeUpdateLabels(
+                    octokit, 
+                    issueRef.repoOwner, 
+                    issueRef.repoName, 
+                    issueRef.number,
+                    [AI_PROCESSING_TAG], // Remove processing tag
+                    [AI_DONE_TAG], // Add done tag
+                    correlatedLogger
+                );
+
+                logger.info({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    prNumber: postProcessingResult.pr?.number,
+                    prUrl: postProcessingResult.pr?.url
+                }, 'Deterministic post-processing completed successfully');
+
+            } catch (postProcessingError) {
+                logger.error({
+                    jobId,
+                    issueNumber: issueRef.number,
+                    error: postProcessingError.message,
+                    stack: postProcessingError.stack
+                }, 'Deterministic post-processing failed');
+
+                // Fallback: at least update labels and add completion comment
+                try {
+                    await safeUpdateLabels(
+                        octokit, 
+                        issueRef.repoOwner, 
+                        issueRef.repoName, 
+                        issueRef.number,
+                        [AI_PROCESSING_TAG], // Remove processing tag
+                        [AI_DONE_TAG], // Add done tag
+                        correlatedLogger
+                    );
+
+                    const completionComment = await generateCompletionComment(claudeResult, issueRef);
                     await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                         owner: issueRef.repoOwner,
                         repo: issueRef.repoName,
                         issue_number: issueRef.number,
-                        body: errorComment,
-                    });
-                }
-            } else {
-                // Claude failed, just update labels
-                correlatedLogger.warn({
-                    jobId,
-                    issueNumber: issueRef.number,
-                    claudeSuccess: claudeResult?.success,
-                    claudeFailureHandling: 'TRUE'
-                }, 'EXECUTION DEBUG: Claude processing failed, updating labels only');
-
-                logger.warn({
-                    jobId,
-                    issueNumber: issueRef.number
-                }, 'Claude processing failed, updating labels only');
-
-                try {
-                    await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                        owner: issueRef.repoOwner,
-                        repo: issueRef.repoName,
-                        issue_number: issueRef.number,
-                        name: AI_PROCESSING_TAG,
+                        body: `⚠️ **Post-processing encountered an error, but Claude analysis was completed.**\n\n${completionComment}`,
                     });
 
-                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                        owner: issueRef.repoOwner,
-                        repo: issueRef.repoName,
-                        issue_number: issueRef.number,
-                        labels: ['AI-failed-claude'],
-                    });
-                } catch (labelError) {
-                    logger.warn({
+                    postProcessingResult = {
+                        success: false,
+                        pr: null,
+                        updatedLabels: [AI_DONE_TAG],
+                        error: postProcessingError.message
+                    };
+                } catch (fallbackError) {
+                    logger.error({
                         jobId,
                         issueNumber: issueRef.number,
-                        error: labelError.message
-                    }, 'Failed to update labels after Claude failure');
+                        error: fallbackError.message
+                    }, 'Fallback post-processing also failed');
+                    
+                    postProcessingResult = {
+                        success: false,
+                        pr: null,
+                        updatedLabels: [],
+                        error: postProcessingError.message
+                    };
                 }
-
-                const failureComment = await generateCompletionComment(claudeResult, issueRef);
-                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                    owner: issueRef.repoOwner,
-                    repo: issueRef.repoName,
-                    issue_number: issueRef.number,
-                    body: failureComment,
-                });
             }
             
             await job.updateProgress(95);
@@ -770,31 +771,15 @@ Please check the logs and manually review any changes made to the codebase.
                         };
 
                         // Update issue labels since post-processing missed the PR
-                        try {
-                            await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
-                                owner: issueRef.repoOwner,
-                                repo: issueRef.repoName,
-                                issue_number: issueRef.number,
-                                name: AI_PROCESSING_TAG,
-                            });
-
-                            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-                                owner: issueRef.repoOwner,
-                                repo: issueRef.repoName,
-                                issue_number: issueRef.number,
-                                labels: [AI_DONE_TAG],
-                            });
-
-                            correlatedLogger.info({
-                                jobId,
-                                issueNumber: issueRef.number
-                            }, 'Updated issue labels after finding missed PR');
-
-                        } catch (labelUpdateError) {
-                            correlatedLogger.warn({
-                                error: labelUpdateError.message
-                            }, 'Failed to update labels after finding missed PR');
-                        }
+                        await safeUpdateLabels(
+                            octokit, 
+                            issueRef.repoOwner, 
+                            issueRef.repoName, 
+                            issueRef.number,
+                            [AI_PROCESSING_TAG], 
+                            [AI_DONE_TAG], 
+                            correlatedLogger
+                        );
 
                     } else if (!finalPRValidation.isValid && claudeResult?.success) {
                         // Claude succeeded but no PR exists - trigger retry
@@ -841,7 +826,9 @@ This is an emergency retry - the main implementation is complete, you just need 
                                 githubToken: githubToken.token,
                                 customPrompt: emergencyPrompt,
                                 isRetry: true,
-                                retryReason: 'Emergency PR creation - main implementation complete'
+                                retryReason: 'Emergency PR creation - main implementation complete',
+                                branchName: worktreeInfo.branchName,
+                                modelName: modelName
                             });
 
                             correlatedLogger.info({

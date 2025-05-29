@@ -376,22 +376,29 @@ export function listRepositoryBranchConfigurations() {
  * @param {string} repoName - Repository name
  * @param {string} baseBranch - Base branch to create worktree from (optional)
  * @param {Object} octokit - GitHub API client (optional, for better default branch detection)
+ * @param {string} modelName - AI model name for unique branch naming (optional)
  * @returns {Promise<{worktreePath: string, branchName: string}>} Worktree details
  */
-export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle, owner, repoName, baseBranch = null, octokit = null) {
+export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle, owner, repoName, baseBranch = null, octokit = null, modelName = null) {
     // Sanitize issue title for branch name
     const sanitizedTitle = issueTitle
         .toLowerCase()
         .replace(/[^a-z0-9_\-]/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')
-        .substring(0, 30); // Reduced from 50 to 30 to keep total length manageable
+        .substring(0, 25); // Reduced to make room for modelName and random string
+    
+    // Generate a 3-character random string for uniqueness
+    const randomString = Math.random().toString(36).substring(2, 5);
     
     // Use shorter timestamp format (YYYYMMDD-HHMM)
     const now = new Date();
     const shortTimestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-    const branchName = `ai-fix/${issueId}-${sanitizedTitle}-${shortTimestamp}`;
-    const worktreeDirName = `issue-${issueId}-${shortTimestamp}`;
+    
+    // Include modelName and random string in branch and worktree names
+    const modelSuffix = modelName ? `-${modelName}` : '';
+    const branchName = `ai-fix/${issueId}-${sanitizedTitle}-${shortTimestamp}${modelSuffix}-${randomString}`;
+    const worktreeDirName = `issue-${issueId}-${shortTimestamp}${modelSuffix}-${randomString}`;
     const worktreePath = path.join(WORKTREES_BASE_PATH, owner, repoName, worktreeDirName);
     
     try {
@@ -499,6 +506,10 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
             // Branch doesn't exist, which is what we want
             logger.debug({ branchName }, 'Branch does not exist, will create new one');
         }
+        
+        // Ensure we have the latest refs from remote
+        await git.fetch('origin', baseBranch);
+        logger.debug({ baseBranch }, 'Fetched latest changes for base branch');
         
         // Create the worktree with new branch
         await git.raw([
@@ -823,6 +834,77 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
         
     } catch (error) {
         handleError(error, `Failed to commit changes in worktree ${worktreePath}`);
+        throw error;
+    }
+}
+
+/**
+ * Ensures branch is properly set up with origin and pushes to remote
+ * @param {string} worktreePath - Path to the worktree
+ * @param {string} branchName - Branch name
+ * @param {string} baseBranch - Base branch name
+ * @param {Object} options - Setup options
+ * @param {string} options.repoUrl - Repository URL for authentication
+ * @param {string} options.authToken - GitHub authentication token
+ * @returns {Promise<void>}
+ */
+export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, options = {}) {
+    const { repoUrl, authToken } = options;
+    const git = simpleGit(worktreePath);
+    
+    try {
+        // Set up authentication if provided
+        if (repoUrl && authToken) {
+            await setupAuthenticatedRemote(git, repoUrl, authToken);
+        }
+        
+        logger.info({ 
+            worktreePath, 
+            branchName, 
+            baseBranch 
+        }, 'Ensuring branch is properly set up and pushed...');
+        
+        // Verify we're on the correct branch
+        const currentBranch = await git.revparse(['--abbrev-ref', 'HEAD']);
+        const actualBranch = currentBranch.trim();
+        
+        if (actualBranch !== branchName) {
+            throw new Error(`Expected to be on branch '${branchName}' but currently on '${actualBranch}'`);
+        }
+        
+        // Ensure we have commits (check if there are any changes compared to base)
+        try {
+            const diffResult = await git.raw(['diff', '--name-only', `origin/${baseBranch}...HEAD`]);
+            if (!diffResult.trim()) {
+                logger.warn({ branchName, baseBranch }, 'No changes detected between branch and base');
+            } else {
+                const changedFiles = diffResult.trim().split('\n').filter(f => f);
+                logger.info({ 
+                    branchName, 
+                    baseBranch, 
+                    changedFiles: changedFiles.length 
+                }, 'Changes detected, proceeding with push');
+            }
+        } catch (diffError) {
+            logger.debug({ error: diffError.message }, 'Could not check diff, proceeding anyway');
+        }
+        
+        // Set upstream and push
+        await git.push(['--set-upstream', 'origin', branchName]);
+        
+        logger.info({ 
+            branchName, 
+            baseBranch,
+            worktreePath 
+        }, 'Branch successfully pushed to remote');
+        
+    } catch (error) {
+        logger.error({ 
+            error: error.message, 
+            branchName, 
+            baseBranch,
+            worktreePath 
+        }, 'Failed to ensure branch and push');
         throw error;
     }
 }

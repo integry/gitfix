@@ -16,47 +16,45 @@ const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10
  * @param {string} issueRef.number - Issue number
  * @param {string} issueRef.repoOwner - Repository owner
  * @param {string} issueRef.repoName - Repository name
+ * @param {string} branchName - The specific branch name to use (optional)
+ * @param {string} modelName - The AI model being used (optional)
  * @returns {string} Formatted prompt for Claude
  */
-function generateClaudePrompt(issueRef) {
-    return `Please analyze and fix the GitHub issue: #${issueRef.number}.
+function generateClaudePrompt(issueRef, branchName = null, modelName = null) {
+    const branchInfo = branchName ? `\n- **BRANCH**: You are working on branch \`${branchName}\`.` : '';
+    const modelInfo = modelName ? `\n- **MODEL**: This task is being processed by the \`${modelName}\` model.` : '';
+    
+    return `Please analyze and implement a solution for GitHub issue #${issueRef.number}.
 
-**REPOSITORY INFORMATION (CRITICAL - DO NOT HALLUCINATE):**
+**REPOSITORY INFORMATION:**
 - Repository Owner: ${issueRef.repoOwner}
 - Repository Name: ${issueRef.repoName}
-- Full Repository: ${issueRef.repoOwner}/${issueRef.repoName}
+- Full Repository: ${issueRef.repoOwner}/${issueRef.repoName}${branchInfo}${modelInfo}
+
+**YOUR FOCUS: IMPLEMENTATION ONLY**
+
+The git workflow (branching, committing, pushing, PR creation) is handled automatically by the system. Your job is to focus solely on implementing the solution.
 
 Follow these steps systematically:
 1. Use \`gh issue view ${issueRef.number}\` to get the issue details
 2. Use \`gh issue view ${issueRef.number} --comments\` to read all issue comments for additional context
 3. Understand the complete problem described in the issue and comments
-4. Search the codebase for relevant files
-5. Implement the necessary changes to fix the issue
-6. Write and run tests to verify the fix (if applicable)
-7. Ensure code passes linting and type checking (if applicable)
-8. Create a descriptive commit message and commit your changes
-9. Push your branch to the remote repository
-10. Create a pull request using \`gh pr create\`
+4. Search the codebase to understand the current implementation
+5. Implement the necessary changes to solve the issue
+6. Test your implementation (if applicable and possible)
+7. Ensure code follows existing patterns and conventions
 
-**CRITICAL INSTRUCTIONS FOR PR CREATION:**
-- Repository is EXACTLY: ${issueRef.repoOwner}/${issueRef.repoName}
-- DO NOT guess or hallucinate repository names
-- When using \`gh pr create\`, ensure you're in the correct repository directory
-- Verify with \`gh repo view\` that you're working with the right repository
-- Double-check all git remotes with \`git remote -v\`
+**IMPORTANT NOTES:**
+- **DO NOT** worry about git operations (add, commit, push, PR creation)
+- **DO NOT** use git commands or GitHub CLI for workflow operations
+- **FOCUS ONLY** on implementing the solution to the problem
+- You are working in a git worktree environment with the codebase ready
+- Make your changes directly to the files that need modification
+- The system will automatically handle committing, pushing, and creating a PR
+- Include a brief summary of what you implemented when you're done
 
-Important notes:
-- You are working in a git worktree environment
-- Use the GitHub CLI (\`gh\`) for all GitHub-related tasks
-- Always commit and push your changes before creating the PR
-- For push operations, you may need to set up the remote URL with authentication
-- If \`git push\` fails, try: \`git push --set-upstream origin <branch-name>\`
-- For PR creation, use: \`gh pr create --title "Title" --body "Description"\`
-- If authentication fails, try: \`gh auth status\` to verify setup
-- Focus on completing the core functionality first, then handle git operations
-- Make sure to create a meaningful branch name and PR description
-
-CRITICAL: The main goal is to create a working pull request for repository ${issueRef.repoOwner}/${issueRef.repoName}. If git operations fail, try alternative approaches and document the exact error messages.`;
+**SUCCESS CRITERIA:**
+Your task is complete when you have implemented a working solution to the issue. The git workflow and PR creation will be handled automatically by the system after your implementation.`;
 }
 
 /**
@@ -68,9 +66,11 @@ CRITICAL: The main goal is to create a working pull request for repository ${iss
  * @param {string} options.customPrompt - Custom prompt to use instead of default (optional)
  * @param {boolean} options.isRetry - Whether this is a retry attempt (optional)
  * @param {string} options.retryReason - Reason for retry (optional)
+ * @param {string} options.branchName - The specific branch name to use (optional)
+ * @param {string} options.modelName - The AI model being used (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
     const startTime = Date.now();
     
     logger.info({
@@ -84,7 +84,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 
     try {
         // Generate the prompt for Claude
-        const prompt = customPrompt || generateClaudePrompt(issueRef);
+        const prompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
         
         if (isRetry) {
             logger.info({
@@ -104,6 +104,9 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             
             // Mount the worktree as the workspace
             '-v', `${worktreePath}:/home/node/workspace:rw`,
+            
+            // Mount the main git repository to fix worktree references
+            '-v', `${path.dirname(path.dirname(worktreePath))}:/tmp/git-processor:rw`,
             
             // Mount Claude config directory and main config file
             '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:rw`,
@@ -126,6 +129,19 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             '--verbose',
             '--dangerously-skip-permissions'
         ];
+        
+        // Add model specification if provided
+        if (modelName) {
+            dockerArgs.splice(-6, 0, '--model', modelName);
+            logger.info({
+                issueNumber: issueRef.number,
+                requestedModel: modelName
+            }, 'Using specific model for Claude Code execution');
+        } else {
+            logger.debug({
+                issueNumber: issueRef.number
+            }, 'No model specified, Claude Code will use default');
+        }
 
         logger.debug({
             issueNumber: issueRef.number,
