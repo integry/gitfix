@@ -38,11 +38,12 @@ The git workflow (branching, committing, pushing, PR creation) is handled automa
 Follow these steps systematically:
 1. Use \`gh issue view ${issueRef.number}\` to get the issue details
 2. Use \`gh issue view ${issueRef.number} --comments\` to read all issue comments for additional context
-3. Understand the complete problem described in the issue and comments
-4. Search the codebase to understand the current implementation
-5. Implement the necessary changes to solve the issue
-6. Test your implementation (if applicable and possible)
-7. Ensure code follows existing patterns and conventions
+3. **Pay attention to any images, screenshots, or attachments** in the issue description and comments - these often contain crucial visual information like UI mockups, error screenshots, or design specifications
+4. Understand the complete problem described in the issue, comments, and any visual materials
+5. Search the codebase to understand the current implementation
+6. Implement the necessary changes to solve the issue
+7. Test your implementation (if applicable and possible)
+8. Ensure code follows existing patterns and conventions
 
 **IMPORTANT NOTES:**
 - **DO NOT** worry about git operations (add, commit, push, PR creation)
