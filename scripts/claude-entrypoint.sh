@@ -25,13 +25,30 @@ else
     echo "Claude authentication configuration found"
 fi
 
+# Configure Git to trust all directories (security: container environment)
+git config --global --add safe.directory '*' 2>/dev/null || echo "Git safe directory config already set"
+
 # Set proper permissions for workspace
 if [ -d "/home/node/workspace" ]; then
-    # Try to ensure the user owns the workspace (skip if sudo fails in restricted container)
-    if sudo chown -R node:node /home/node/workspace 2>/dev/null; then
-        echo "Workspace permissions set"
+    # Check if we're running as the correct user (should be UID 1000)
+    current_uid=$(id -u)
+    if [ "$current_uid" = "1000" ]; then
+        echo "Running as correct user (UID 1000)"
+        # Check if files are already owned by us
+        if [ -O "/home/node/workspace" ]; then
+            echo "Workspace ownership is correct"
+        else
+            echo "Warning: Workspace files not owned by container user"
+            echo "This may cause permission issues during execution"
+        fi
     else
-        echo "Workspace permissions already set (sudo not available in restricted container)"
+        echo "Warning: Running as UID $current_uid instead of expected 1000"
+        # Try to ensure the user owns the workspace (skip if sudo fails in restricted container)
+        if sudo chown -R node:node /home/node/workspace 2>/dev/null; then
+            echo "Workspace permissions set"
+        else
+            echo "Workspace permissions already set (sudo not available in restricted container)"
+        fi
     fi
 fi
 

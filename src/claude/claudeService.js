@@ -94,6 +94,23 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             }, 'Using enhanced prompt for retry execution');
         }
         
+        // Ensure worktree files are owned by UID 1000 (node user in container)
+        try {
+            await executeDockerCommand('sudo', ['chown', '-R', '1000:1000', worktreePath], {
+                timeout: 10000 // 10 seconds should be enough
+            });
+            logger.debug({
+                issueNumber: issueRef.number,
+                worktreePath
+            }, 'Set worktree ownership to UID 1000 for container compatibility');
+        } catch (chownError) {
+            logger.warn({
+                issueNumber: issueRef.number,
+                worktreePath,
+                error: chownError.message
+            }, 'Failed to set worktree ownership - container may have permission issues');
+        }
+        
         // Construct Docker run command
         const dockerArgs = [
             'run',
@@ -102,7 +119,10 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             '--cap-drop', 'ALL',
             '--network', 'bridge', // Restrict network access
             
-            // Mount the worktree as the workspace
+            // Ensure container runs as node user (UID 1000)
+            '--user', '1000:1000',
+            
+            // Mount the worktree as the workspace with proper ownership
             '-v', `${worktreePath}:/home/node/workspace:rw`,
             
             // Mount the main git repository to fix worktree references
