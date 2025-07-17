@@ -28,6 +28,16 @@ fi
 # Configure Git to trust all directories (security: container environment)
 git config --global --add safe.directory '*' 2>/dev/null || echo "Git safe directory config already set"
 
+# Set up gh wrapper to filter gitfixio comments
+# This ensures Claude doesn't see operational bot comments when analyzing issues
+if [ -x "/usr/local/bin/gh-wrapper" ]; then
+    echo "Setting up GitHub CLI wrapper to filter operational comments"
+    # Create a directory for our wrapper in PATH
+    mkdir -p /home/node/bin
+    ln -sf /usr/local/bin/gh-wrapper /home/node/bin/gh
+    export PATH="/home/node/bin:$PATH"
+fi
+
 # Set proper permissions for workspace
 if [ -d "/home/node/workspace" ]; then
     # Check if we're running as the correct user (should be UID 1000)
