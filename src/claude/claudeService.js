@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 
@@ -124,7 +125,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             
             // Copy .claude.json if it exists
             const claudeJsonPath = path.join(os.homedir(), '.claude.json');
-            if (require('fs').existsSync(claudeJsonPath)) {
+            if (fs.existsSync(claudeJsonPath)) {
                 await executeDockerCommand('cp', [claudeJsonPath, path.join(tempClaudeConfigDir, '.claude.json')], { timeout: 5000 });
             }
             
@@ -133,7 +134,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             
             // Ensure credentials file is readable by container user
             const tempCredentialsPath = path.join(tempClaudeConfigDir, '.credentials.json');
-            if (require('fs').existsSync(tempCredentialsPath)) {
+            if (fs.existsSync(tempCredentialsPath)) {
                 await executeDockerCommand('sudo', ['chmod', '644', tempCredentialsPath], { timeout: 5000 });
             }
             
@@ -169,7 +170,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             // Mount temporary Claude config directory with proper permissions
             '-v', `${tempClaudeConfigDir}:/home/node/.claude:rw`,
             // Mount .claude.json if it exists in temp directory
-            ...(require('fs').existsSync(path.join(tempClaudeConfigDir, '.claude.json')) ? 
+            ...(fs.existsSync(path.join(tempClaudeConfigDir, '.claude.json')) ? 
                 ['-v', `${path.join(tempClaudeConfigDir, '.claude.json')}:/home/node/.claude.json:rw`] : []),
             
             // Pass GitHub token as environment variable
