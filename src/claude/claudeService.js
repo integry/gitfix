@@ -82,6 +82,8 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
         retryReason
     }, isRetry ? 'Starting Claude Code execution (RETRY)...' : 'Starting Claude Code execution...');
 
+    let tempClaudeConfigDir = null;
+    
     try {
         // Generate the prompt for Claude
         const prompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
@@ -111,6 +113,42 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             }, 'Failed to set worktree ownership - container may have permission issues');
         }
         
+        // Create temporary directory for Claude config with proper permissions
+        tempClaudeConfigDir = path.join('/tmp', `claude-config-${issueRef.number}-${Date.now()}`);
+        try {
+            // Create temp directory
+            await executeDockerCommand('mkdir', ['-p', tempClaudeConfigDir], { timeout: 5000 });
+            
+            // Copy Claude config files
+            await executeDockerCommand('cp', ['-r', `${CLAUDE_CONFIG_PATH}/.`, tempClaudeConfigDir], { timeout: 5000 });
+            
+            // Copy .claude.json if it exists
+            const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+            if (require('fs').existsSync(claudeJsonPath)) {
+                await executeDockerCommand('cp', [claudeJsonPath, path.join(tempClaudeConfigDir, '.claude.json')], { timeout: 5000 });
+            }
+            
+            // Set proper ownership for container user (UID 1000)
+            await executeDockerCommand('sudo', ['chown', '-R', '1000:1000', tempClaudeConfigDir], { timeout: 5000 });
+            
+            // Ensure credentials file is readable by container user
+            const tempCredentialsPath = path.join(tempClaudeConfigDir, '.credentials.json');
+            if (require('fs').existsSync(tempCredentialsPath)) {
+                await executeDockerCommand('sudo', ['chmod', '644', tempCredentialsPath], { timeout: 5000 });
+            }
+            
+            logger.debug({
+                issueNumber: issueRef.number,
+                tempClaudeConfigDir
+            }, 'Created temporary Claude config directory with proper permissions');
+        } catch (configError) {
+            logger.error({
+                issueNumber: issueRef.number,
+                error: configError.message
+            }, 'Failed to prepare Claude config for container');
+            throw new Error(`Failed to prepare Claude configuration: ${configError.message}`);
+        }
+        
         // Construct Docker run command
         const dockerArgs = [
             'run',
@@ -128,9 +166,11 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             // Mount the main git repository to fix worktree references
             '-v', `${path.dirname(path.dirname(worktreePath))}:/tmp/git-processor:rw`,
             
-            // Mount Claude config directory and main config file
-            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:rw`,
-            '-v', `${path.join(os.homedir(), '.claude.json')}:/home/node/.claude.json:rw`,
+            // Mount temporary Claude config directory with proper permissions
+            '-v', `${tempClaudeConfigDir}:/home/node/.claude:rw`,
+            // Mount .claude.json if it exists in temp directory
+            ...(require('fs').existsSync(path.join(tempClaudeConfigDir, '.claude.json')) ? 
+                ['-v', `${path.join(tempClaudeConfigDir, '.claude.json')}:/home/node/.claude.json:rw`] : []),
             
             // Pass GitHub token as environment variable
             '-e', `GH_TOKEN=${githubToken}`,
@@ -309,6 +349,23 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             output: null,
             logs: error.stderr || error.message
         };
+    } finally {
+        // Clean up temporary Claude config directory
+        if (tempClaudeConfigDir) {
+            try {
+                await executeDockerCommand('rm', ['-rf', tempClaudeConfigDir], { timeout: 5000 });
+                logger.debug({
+                    issueNumber: issueRef.number,
+                    tempClaudeConfigDir
+                }, 'Cleaned up temporary Claude config directory');
+            } catch (cleanupError) {
+                logger.warn({
+                    issueNumber: issueRef.number,
+                    tempClaudeConfigDir,
+                    error: cleanupError.message
+                }, 'Failed to clean up temporary Claude config directory');
+            }
+        }
     }
 }
 
