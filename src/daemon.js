@@ -160,7 +160,9 @@ async function pollForIssues() {
                         }, `Enqueueing job for model: ${modelName}`);
                         
                         try {
-                            const jobId = `issue-${issue.repoOwner}-${issue.repoName}-${issue.number}-${modelName}`;
+                            // Include timestamp in jobId to allow reprocessing after AI-done label removal
+                            const timestamp = Date.now();
+                            const jobId = `issue-${issue.repoOwner}-${issue.repoName}-${issue.number}-${modelName}-${timestamp}`;
                             const issueJob = {
                                 repoOwner: issue.repoOwner,
                                 repoName: issue.repoName,
@@ -172,7 +174,7 @@ async function pollForIssues() {
                             const addToQueueWithRetry = () => withRetry(
                                 () => issueQueue.add('processGitHubIssue', issueJob, {
                                     jobId,
-                                    // Prevent duplicate jobs for the same issue-model combination
+                                    // Allow reprocessing by using unique jobId with timestamp
                                     attempts: 3,
                                     backoff: {
                                         type: 'exponential',
@@ -194,17 +196,11 @@ async function pollForIssues() {
                             }, 'Successfully added issue-model job to processing queue');
                             
                         } catch (error) {
-                            if (error.message?.includes('Job already exists')) {
-                                correlatedLogger.debug({ 
-                                    issueNumber: issue.number,
-                                    repository: repoFullName,
-                                    modelName: modelName
-                                }, 'Issue-model job already in queue, skipping');
-                            } else {
-                                handleError(error, `Failed to add issue ${issue.number} with model ${modelName} to queue`, { 
-                                    correlationId 
-                                });
-                            }
+                            // Since we now use unique jobIds with timestamps, this error should not occur
+                            // Log any queue errors that do occur
+                            handleError(error, `Failed to add issue ${issue.number} with model ${modelName} to queue`, { 
+                                correlationId 
+                            });
                         }
                     }
                     
