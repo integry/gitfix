@@ -1114,6 +1114,31 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
             }, 'Failed to add directories to Git safe directories - may encounter ownership warnings');
         }
         
+        // Set up remote in the worktree
+        // Worktrees don't automatically inherit remotes from the parent repository
+        const worktreeGit = simpleGit({ baseDir: worktreePath });
+        try {
+            // Check if origin remote exists
+            const remotes = await worktreeGit.getRemotes();
+            if (!remotes.find(r => r.name === 'origin')) {
+                // Get the remote URL from the parent repository
+                const parentRemotes = await git.getRemotes(true);
+                const originRemote = parentRemotes.find(r => r.name === 'origin');
+                if (originRemote && originRemote.refs.fetch) {
+                    await worktreeGit.addRemote('origin', originRemote.refs.fetch);
+                    logger.debug({ 
+                        worktreePath, 
+                        remoteUrl: originRemote.refs.fetch
+                    }, 'Added origin remote to worktree');
+                }
+            }
+        } catch (remoteError) {
+            logger.warn({ 
+                worktreePath, 
+                error: remoteError.message 
+            }, 'Failed to set up remote in worktree - push operations may fail');
+        }
+        
         logger.info({ 
             worktreePath, 
             branchName
