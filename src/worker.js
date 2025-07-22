@@ -263,12 +263,38 @@ async function processPullRequestCommentJob(job) {
         }
 
         // Step 5: Commit and push changes
+        // Extract a summary from Claude's result
+        let changesSummary = '';
+        if (claudeResult.summary) {
+            changesSummary = claudeResult.summary;
+        } else if (claudeResult.finalResult?.result) {
+            changesSummary = claudeResult.finalResult.result;
+        }
+
+        // Parse the summary to extract key changes
+        let commitDetails = '';
+        if (changesSummary) {
+            // Try to extract bullet points or key changes
+            const lines = changesSummary.split('\n');
+            const changeLines = lines.filter(line => 
+                line.trim().startsWith('-') || 
+                line.trim().startsWith('*') || 
+                line.trim().startsWith('•') ||
+                line.match(/^\d+\./)
+            ).slice(0, 10); // Limit to 10 key points
+            
+            if (changeLines.length > 0) {
+                commitDetails = '\n\nKey changes:\n' + changeLines.join('\n');
+            }
+        }
+
         const commitMessage = `feat(ai): Apply follow-up changes from PR comment
 
-Implemented changes requested by @${commentAuthor} in PR #${pullRequestNumber}.
-Comment ID: ${commentId}
+${changesSummary ? changesSummary.split('\n')[0] : `Implemented changes requested by @${commentAuthor}`}${commitDetails}
 
-Implemented by Claude Code using ${llm || DEFAULT_MODEL_NAME} model.`;
+PR: #${pullRequestNumber}
+Comment by: @${commentAuthor} (ID: ${commentId})
+Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
 
         const commitResult = await commitChanges(
             worktreeInfo.worktreePath,
@@ -285,15 +311,53 @@ Implemented by Claude Code using ${llm || DEFAULT_MODEL_NAME} model.`;
             });
 
             // Step 6: Add confirmation comment to the PR
+            let prCommentBody = `✅ **Applied the requested follow-up changes** in commit ${commitResult.commitHash.substring(0, 7)}\n\n`;
+            
+            // Add the actual changes summary
+            if (changesSummary) {
+                prCommentBody += `## Summary of Changes\n\n`;
+                
+                // Extract the most relevant parts of the summary
+                const summaryLines = changesSummary.split('\n');
+                let includedSummary = false;
+                
+                // Look for sections that describe what was done
+                for (let i = 0; i < summaryLines.length; i++) {
+                    const line = summaryLines[i];
+                    
+                    // Include headers and bullet points
+                    if (line.match(/^#+\s/) || line.trim().startsWith('-') || 
+                        line.trim().startsWith('*') || line.trim().startsWith('•') ||
+                        line.match(/^\d+\./)) {
+                        prCommentBody += line + '\n';
+                        includedSummary = true;
+                    } else if (includedSummary && line.trim() === '') {
+                        prCommentBody += '\n';
+                    } else if (includedSummary && !line.match(/^#+\s/) && i < 50) {
+                        // Include descriptive text after headers/bullets (limit lines)
+                        prCommentBody += line + '\n';
+                    }
+                }
+                
+                prCommentBody += '\n';
+            }
+            
+            prCommentBody += `---\n`;
+            prCommentBody += `🤖 **Implemented by Claude Code**\n`;
+            prCommentBody += `- Requested by: @${commentAuthor}\n`;
+            prCommentBody += `- Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}\n`;
+            if (claudeResult.finalResult?.num_turns) {
+                prCommentBody += `- Turns: ${claudeResult.finalResult.num_turns}\n`;
+            }
+            if (claudeResult.executionTime) {
+                prCommentBody += `- Execution time: ${Math.round(claudeResult.executionTime / 1000)}s\n`;
+            }
+
             await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner,
                 repo: repoName,
                 issue_number: pullRequestNumber,
-                body: `✅ Applied the requested follow-up changes in commit ${commitResult.commitHash}.
-
-**Changes implemented based on comment by @${commentAuthor}.**
-
-Model used: ${llm || DEFAULT_MODEL_NAME}`,
+                body: prCommentBody,
             });
 
             correlatedLogger.info({
@@ -302,11 +366,25 @@ Model used: ${llm || DEFAULT_MODEL_NAME}`,
             }, 'Successfully applied follow-up changes');
         } else {
             // No changes were necessary
+            let noChangesBody = `ℹ️ **Analyzed the follow-up request** by @${commentAuthor}\n\n`;
+            
+            if (changesSummary) {
+                noChangesBody += `## Analysis Summary\n\n${changesSummary}\n\n`;
+            }
+            
+            noChangesBody += `No code changes were necessary based on the current state of the branch.\n\n`;
+            noChangesBody += `---\n`;
+            noChangesBody += `🤖 **Analysis by Claude Code**\n`;
+            noChangesBody += `- Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}\n`;
+            if (claudeResult.executionTime) {
+                noChangesBody += `- Analysis time: ${Math.round(claudeResult.executionTime / 1000)}s\n`;
+            }
+            
             await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner,
                 repo: repoName,
                 issue_number: pullRequestNumber,
-                body: `ℹ️ I analyzed the follow-up request by @${commentAuthor}, but no code changes were necessary based on the current state of the branch.`,
+                body: noChangesBody,
             });
         }
 
