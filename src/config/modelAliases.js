@@ -1,0 +1,43 @@
+const MODEL_ALIASES = {
+    // Aliases to full model IDs
+    'opus': 'claude-opus-4-0',
+    'sonnet': 'claude-sonnet-4-0',
+    'sonnet37': 'claude-3-7-sonnet-latest',
+    'sonnet35': 'claude-3-5-sonnet-latest',
+    'haiku': 'claude-3-5-haiku-latest',
+    
+    // Legacy aliases for backward compatibility
+    'claude-3-opus': 'claude-3-opus-20240229',
+    'claude-3-5-sonnet': 'claude-3-5-sonnet-20241022',
+    'claude-3-haiku': 'claude-3-haiku-20240307',
+    'claude-3-sonnet': 'claude-3-sonnet-20240229'
+};
+
+// Default model to use when none specified
+const DEFAULT_MODEL_ALIAS = 'sonnet';
+
+function resolveModelAlias(modelNameOrAlias) {
+    if (!modelNameOrAlias) {
+        return MODEL_ALIASES[DEFAULT_MODEL_ALIAS];
+    }
+    
+    // Check if it's an alias
+    const lowerCaseModel = modelNameOrAlias.toLowerCase();
+    if (MODEL_ALIASES[lowerCaseModel]) {
+        return MODEL_ALIASES[lowerCaseModel];
+    }
+    
+    // If it's not an alias, return as-is (might be a full model ID)
+    return modelNameOrAlias;
+}
+
+function getDefaultModel() {
+    return MODEL_ALIASES[DEFAULT_MODEL_ALIAS];
+}
+
+export {
+    MODEL_ALIASES,
+    DEFAULT_MODEL_ALIAS,
+    resolveModelAlias,
+    getDefaultModel
+};

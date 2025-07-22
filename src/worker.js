@@ -21,12 +21,13 @@ import {
     validateRepositoryInfo 
 } from './utils/prValidation.js';
 import Redis from 'ioredis';
+import { getDefaultModel } from './config/modelAliases.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
-const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || 'claude-3-5-sonnet-20240620';
+const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
 /**
  * Adds a small random delay to prevent concurrent execution conflicts

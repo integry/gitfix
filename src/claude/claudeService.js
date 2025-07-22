@@ -4,6 +4,7 @@ import os from 'os';
 import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
+import { getDefaultModel } from '../config/modelAliases.js';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
@@ -305,7 +306,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             conversationLog: claudeOutput.conversationLog || [],
             sessionId: claudeOutput.sessionId,
             conversationId: claudeOutput.conversationId,
-            model: claudeOutput.model || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022', // Default to current Sonnet
+            model: claudeOutput.model || process.env.CLAUDE_MODEL || getDefaultModel(), // Default to current Sonnet
             finalResult: claudeOutput.finalResult,
             
             // Extract specific fields if available in Claude's structured output
