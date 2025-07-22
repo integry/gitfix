@@ -23,7 +23,6 @@ import {
 } from './utils/prValidation.js';
 import Redis from 'ioredis';
 import { getDefaultModel } from './config/modelAliases.js';
-import simpleGit from 'simple-git';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
@@ -353,86 +352,14 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             'Follow-up changes'
         );
 
-        // Check if there are unpushed commits even if no new changes were made
-        let unpushedCommits = 0;
-        let lastCommitHash = null;
-        let hasUnpushedChanges = false;
-        
-        // Always check git status to handle various scenarios
-        const worktreeGit = simpleGit({ baseDir: worktreeInfo.worktreePath });
-        try {
-            // First check if we can fetch to compare with remote
-            try {
-                await worktreeGit.fetch('origin', worktreeInfo.branchName);
-            } catch (fetchError) {
-                correlatedLogger.warn({
-                    error: fetchError.message,
-                    branchName: worktreeInfo.branchName
-                }, 'Failed to fetch remote branch - may be a new branch or remote issue');
-            }
-            
-            // Get the current status
-            const status = await worktreeGit.status();
-            
-            // Check different scenarios:
-            // 1. Unpushed commits (ahead > 0)
-            // 2. Branch doesn't exist on remote yet (ahead will be 0 but we have commits)
-            // 3. Remote doesn't exist (will get error on fetch)
-            
-            if (status.ahead > 0) {
-                unpushedCommits = status.ahead;
-                hasUnpushedChanges = true;
-            } else {
-                // Check if branch exists on remote
-                try {
-                    await worktreeGit.raw(['rev-parse', `origin/${worktreeInfo.branchName}`]);
-                } catch (e) {
-                    // Branch doesn't exist on remote, check if we have any commits
-                    try {
-                        const log = await worktreeGit.log(['-1']);
-                        if (log.latest) {
-                            hasUnpushedChanges = true;
-                            unpushedCommits = 1; // At least one
-                            correlatedLogger.info({
-                                branchName: worktreeInfo.branchName
-                            }, 'Branch does not exist on remote, will push all commits');
-                        }
-                    } catch (logError) {
-                        correlatedLogger.debug('No commits found in worktree');
-                    }
-                }
-            }
-            
-            if (hasUnpushedChanges || unpushedCommits > 0) {
-                // Get the hash of the latest commit
-                const log = await worktreeGit.log(['-1']);
-                lastCommitHash = log.latest?.hash;
-                correlatedLogger.info({
-                    unpushedCommits,
-                    lastCommitHash,
-                    branchName: worktreeInfo.branchName,
-                    hasUnpushedChanges
-                }, 'Found commits to push');
-            }
-        } catch (statusError) {
-            correlatedLogger.warn({
-                error: statusError.message
-            }, 'Failed to check git status - will attempt push anyway');
-            // Set flag to try push anyway
-            hasUnpushedChanges = true;
-        }
-
-        if (commitResult || hasUnpushedChanges) {
+        if (commitResult) {
             await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
                 repoUrl,
                 authToken: githubToken.token
             });
 
-            const commitHash = commitResult ? commitResult.commitHash : lastCommitHash;
-            const commitShort = commitHash ? commitHash.substring(0, 7) : 'unknown';
-
             // Step 6: Add confirmation comment to the PR
-            let prCommentBody = `✅ **Applied the requested follow-up changes** in commit ${commitShort}\n\n`;
+            let prCommentBody = `✅ **Applied the requested follow-up changes** in commit ${commitResult.commitHash.substring(0, 7)}\n\n`;
             
             // Add the actual changes summary
             if (changesSummary) {

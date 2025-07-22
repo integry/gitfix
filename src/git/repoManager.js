@@ -1050,32 +1050,23 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
         await git.fetch('origin', branchName);
         logger.debug({ branchName }, 'Fetched latest changes for branch');
         
-        // Check if the branch exists locally
-        let branchExistsLocally = false;
+        // Always create worktree from remote branch to ensure fresh start
+        // This avoids complexity of tracking unpushed commits across failed attempts
         try {
-            await git.revparse([branchName]);
-            branchExistsLocally = true;
-            logger.debug({ branchName }, 'Branch exists locally');
-        } catch (e) {
-            logger.debug({ branchName }, 'Branch does not exist locally');
-        }
-        
-        // Create worktree from existing branch
-        if (branchExistsLocally) {
-            // If branch exists locally, use it directly
             await git.raw([
                 'worktree', 'add',
-                worktreePath,
-                branchName
-            ]);
-        } else {
-            // If branch doesn't exist locally, create from remote
-            await git.raw([
-                'worktree', 'add',
-                '-b', branchName,
                 worktreePath,
                 `origin/${branchName}`
             ]);
+            logger.info({ branchName }, 'Created worktree from remote branch');
+        } catch (error) {
+            // If creating from remote fails, the branch might not exist on remote
+            // In this case, we should fail rather than use potentially stale local branch
+            logger.error({ 
+                branchName,
+                error: error.message 
+            }, 'Failed to create worktree from remote branch');
+            throw new Error(`Cannot create worktree: branch '${branchName}' not found on remote`);
         }
         
         // Ensure worktree files are owned by UID 1000 for Docker container compatibility
