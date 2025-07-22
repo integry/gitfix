@@ -141,7 +141,13 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                 issue_number: pr.number,
             });
 
-            for (const comment of comments.data) {
+            // Check if any bot comments exist after this comment that indicate processing
+            const botUsername = GITHUB_BOT_USERNAME || 'github-actions[bot]';
+            const commentsByTime = comments.data.sort((a, b) => 
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+
+            for (const comment of commentsByTime) {
                 const commentAuthor = comment.user.login;
                 if (comment.body && comment.body.includes('!gitfix')) {
                     // 1. Check if author is the bot
@@ -156,6 +162,35 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
 
                     // 3. Check whitelist
                     if (GITHUB_USER_WHITELIST.length > 0 && !GITHUB_USER_WHITELIST.includes(commentAuthor)) {
+                        continue;
+                    }
+
+                    // 4. Check if this comment has already been processed
+                    const commentIndex = commentsByTime.indexOf(comment);
+                    const subsequentComments = commentsByTime.slice(commentIndex + 1);
+                    const alreadyProcessed = subsequentComments.some(laterComment => {
+                        const isBotComment = laterComment.user.login === botUsername || 
+                                           laterComment.user.type === 'Bot' ||
+                                           laterComment.user.login.includes('[bot]');
+                        
+                        if (!isBotComment) return false;
+                        
+                        // Check if bot comment references this specific comment
+                        return laterComment.body.includes(`Comment ID: ${comment.id}`) ||
+                               laterComment.body.includes(`@${commentAuthor}`) && (
+                                   laterComment.body.includes('Starting work on follow-up changes') ||
+                                   laterComment.body.includes('Applied the requested follow-up changes') ||
+                                   laterComment.body.includes('Failed to apply follow-up changes') ||
+                                   laterComment.body.includes('Analyzed the follow-up request')
+                               );
+                    });
+
+                    if (alreadyProcessed) {
+                        correlatedLogger.debug({
+                            pullRequestNumber: pr.number,
+                            commentId: comment.id,
+                            commentAuthor
+                        }, 'PR comment already processed, skipping');
                         continue;
                     }
 
