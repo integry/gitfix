@@ -352,6 +352,10 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             if (claudeResult.executionTime) {
                 prCommentBody += `- Execution time: ${Math.round(claudeResult.executionTime / 1000)}s\n`;
             }
+            const cost = claudeResult.finalResult?.total_cost_usd || claudeResult.finalResult?.cost_usd;
+            if (cost) {
+                prCommentBody += `- Cost: $${cost.toFixed(2)}\n`;
+            }
 
             await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner,
@@ -378,6 +382,10 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             noChangesBody += `- Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}\n`;
             if (claudeResult.executionTime) {
                 noChangesBody += `- Analysis time: ${Math.round(claudeResult.executionTime / 1000)}s\n`;
+            }
+            const analysisCost = claudeResult.finalResult?.total_cost_usd || claudeResult.finalResult?.cost_usd;
+            if (analysisCost) {
+                noChangesBody += `- Cost: $${analysisCost.toFixed(2)}\n`;
             }
             
             await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
