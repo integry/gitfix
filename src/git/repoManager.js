@@ -823,7 +823,13 @@ export function getRepoUrl(issue) {
  * @returns {Promise<{commitHash: string, commitMessage: string}|null>} Commit result
  */
 export async function commitChanges(worktreePath, commitMessage, author, issueNumber, issueTitle) {
-    const git = simpleGit(worktreePath);
+    // Initialize simple-git with proper baseDir option
+    const git = simpleGit({ baseDir: worktreePath });
+    
+    logger.debug({ 
+        worktreePath,
+        issueNumber 
+    }, 'Initializing git operations in worktree');
     
     try {
         // Configure author if provided
@@ -891,7 +897,7 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
  */
 export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, options = {}) {
     const { repoUrl, authToken } = options;
-    const git = simpleGit(worktreePath);
+    const git = simpleGit({ baseDir: worktreePath });
     
     try {
         // Set up authentication if provided
@@ -962,7 +968,7 @@ export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, 
  */
 export async function pushBranch(worktreePath, branchName, options = {}) {
     const { repoUrl, authToken, remote = 'origin' } = options;
-    const git = simpleGit(worktreePath);
+    const git = simpleGit({ baseDir: worktreePath });
     
     try {
         // Set up authentication if provided
