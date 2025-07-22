@@ -7,7 +7,8 @@ import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { getStateManager, TaskStates } from './utils/workerStateManager.js';
 import { 
     ensureRepoCloned, 
-    createWorktreeForIssue, 
+    createWorktreeForIssue,
+    createWorktreeFromExistingBranch,
     cleanupWorktree,
     getRepoUrl,
     commitChanges,
@@ -209,32 +210,20 @@ async function processPullRequestCommentJob(job) {
         // Generate unique worktree name for this follow-up task
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
         const worktreeDirName = `pr-${pullRequestNumber}-followup-${timestamp}`;
-        const worktreePath = `/tmp/gitfix-worktrees/${repoOwner}/${repoName}/${worktreeDirName}`;
 
-        // Ensure worktree directory exists
-        const fs = await import('fs');
-        await fs.promises.mkdir(worktreePath, { recursive: true });
+        // Use the proper function to create worktree from existing branch
+        worktreeInfo = await createWorktreeFromExistingBranch(
+            localRepoPath,
+            branchName,
+            worktreeDirName,
+            repoOwner,
+            repoName
+        );
 
-        // Create worktree from the existing branch
-        const git = (await import('simple-git')).default(localRepoPath);
-        
-        // Fetch the latest changes for the PR branch
-        await git.fetch('origin', branchName);
-        correlatedLogger.info({ branchName }, 'Fetched latest changes for PR branch');
-
-        // Create worktree from existing branch (without -b flag)
-        await git.raw([
-            'worktree', 'add',
-            worktreePath,
-            branchName
-        ]);
-
-        correlatedLogger.info({ worktreePath, branchName }, 'Created worktree from existing PR branch');
-
-        worktreeInfo = {
-            worktreePath,
-            branchName
-        };
+        correlatedLogger.info({ 
+            worktreePath: worktreeInfo.worktreePath, 
+            branchName: worktreeInfo.branchName 
+        }, 'Created worktree from existing PR branch');
 
         // Step 3: Generate prompt for follow-up changes
         const prompt = `You are working on an existing pull request branch. A user has requested the following follow-up change:
@@ -242,7 +231,7 @@ async function processPullRequestCommentJob(job) {
 "${commentBody}"
 
 **CRITICAL INSTRUCTIONS:**
-- You are in directory: ${worktreePath}
+- You are in directory: ${worktreeInfo.worktreePath}
 - The current branch already contains changes for pull request #${pullRequestNumber}
 - Analyze the existing code on this branch
 - Implement ONLY the changes requested in the comment above
