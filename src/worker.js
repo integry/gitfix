@@ -26,6 +26,7 @@ import Redis from 'ioredis';
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
+const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || 'claude-3-5-sonnet-20240620';
 
 /**
  * Adds a small random delay to prevent concurrent execution conflicts
@@ -170,6 +171,200 @@ async function safeUpdateLabels(octokit, owner, repo, issueNumber, labelsToRemov
  * @param {import('bullmq').Job} job - The job to process
  * @returns {Promise<Object>} Processing result
  */
+async function processPullRequestCommentJob(job) {
+    const {
+        pullRequestNumber,
+        commentId,
+        commentBody,
+        commentAuthor,
+        branchName,
+        repoOwner,
+        repoName,
+        llm,
+        correlationId
+    } = job.data;
+    const correlatedLogger = logger.withCorrelation(correlationId);
+    correlatedLogger.info({ pullRequestNumber, branchName, llm }, 'Processing PR comment job...');
+
+    let octokit;
+    let localRepoPath;
+    let worktreeInfo;
+
+    try {
+        // Get authenticated Octokit instance
+        octokit = await withRetry(
+            () => getAuthenticatedOctokit(),
+            { ...retryConfigs.githubApi, correlationId },
+            'get_authenticated_octokit'
+        );
+
+        const githubToken = await octokit.auth();
+        const repoUrl = getRepoUrl({ repoOwner, repoName });
+
+        // Step 1: Ensure repository is cloned
+        localRepoPath = await ensureRepoCloned(repoUrl, repoOwner, repoName, githubToken.token);
+
+        // Step 2: Create a worktree from the existing PR branch
+        // Generate unique worktree name for this follow-up task
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+        const worktreeDirName = `pr-${pullRequestNumber}-followup-${timestamp}`;
+        const worktreePath = `/tmp/gitfix-worktrees/${repoOwner}/${repoName}/${worktreeDirName}`;
+
+        // Ensure worktree directory exists
+        const fs = await import('fs');
+        await fs.promises.mkdir(worktreePath, { recursive: true });
+
+        // Create worktree from the existing branch
+        const git = (await import('simple-git')).default(localRepoPath);
+        
+        // Fetch the latest changes for the PR branch
+        await git.fetch('origin', branchName);
+        correlatedLogger.info({ branchName }, 'Fetched latest changes for PR branch');
+
+        // Create worktree from existing branch (without -b flag)
+        await git.raw([
+            'worktree', 'add',
+            worktreePath,
+            branchName
+        ]);
+
+        correlatedLogger.info({ worktreePath, branchName }, 'Created worktree from existing PR branch');
+
+        worktreeInfo = {
+            worktreePath,
+            branchName
+        };
+
+        // Step 3: Generate prompt for follow-up changes
+        const prompt = `You are working on an existing pull request branch. A user has requested the following follow-up change:
+
+"${commentBody}"
+
+**CRITICAL INSTRUCTIONS:**
+- You are in directory: ${worktreePath}
+- The current branch already contains changes for pull request #${pullRequestNumber}
+- Analyze the existing code on this branch
+- Implement ONLY the changes requested in the comment above
+- Commit your changes to the current branch
+- DO NOT create a new pull request
+- The repository is ${repoOwner}/${repoName}
+
+**Context:**
+- This is a follow-up to an existing PR
+- Make sure your changes are compatible with the existing modifications on this branch
+- Use appropriate commit messages that reference the follow-up nature of the changes`;
+
+        // Step 4: Execute Claude Code with the follow-up prompt
+        const claudeResult = await executeClaudeCode({
+            worktreePath: worktreeInfo.worktreePath,
+            issueRef: { 
+                number: pullRequestNumber, 
+                repoOwner, 
+                repoName 
+            },
+            githubToken: githubToken.token,
+            customPrompt: prompt,
+            branchName: worktreeInfo.branchName,
+            modelName: llm || DEFAULT_MODEL_NAME
+        });
+
+        if (!claudeResult.success) {
+            throw new Error(`Claude execution failed: ${claudeResult.error || 'Unknown error'}`);
+        }
+
+        // Step 5: Commit and push changes
+        const commitMessage = `feat(ai): Apply follow-up changes from PR comment
+
+Implemented changes requested by @${commentAuthor} in PR #${pullRequestNumber}.
+Comment ID: ${commentId}
+
+Implemented by Claude Code using ${llm || DEFAULT_MODEL_NAME} model.`;
+
+        const commitResult = await commitChanges(
+            worktreeInfo.worktreePath,
+            commitMessage,
+            { name: 'Claude Code', email: 'claude-code@anthropic.com' },
+            pullRequestNumber,
+            'Follow-up changes'
+        );
+
+        if (commitResult) {
+            await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                repoUrl,
+                authToken: githubToken.token
+            });
+
+            // Step 6: Add confirmation comment to the PR
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner: repoOwner,
+                repo: repoName,
+                issue_number: pullRequestNumber,
+                body: `✅ Applied the requested follow-up changes in commit ${commitResult.commitHash}.
+
+**Changes implemented based on comment by @${commentAuthor}.**
+
+Model used: ${llm || DEFAULT_MODEL_NAME}`,
+            });
+
+            correlatedLogger.info({
+                pullRequestNumber,
+                commitHash: commitResult.commitHash
+            }, 'Successfully applied follow-up changes');
+        } else {
+            // No changes were necessary
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner: repoOwner,
+                repo: repoName,
+                issue_number: pullRequestNumber,
+                body: `ℹ️ I analyzed the follow-up request by @${commentAuthor}, but no code changes were necessary based on the current state of the branch.`,
+            });
+        }
+
+        return { 
+            status: 'complete', 
+            commit: commitResult?.commitHash,
+            pullRequestNumber 
+        };
+
+    } catch (error) {
+        handleError(error, 'Failed to process PR comment job', { correlationId });
+        
+        // Add error comment to the PR
+        if (octokit) {
+            try {
+                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                    owner: repoOwner,
+                    repo: repoName,
+                    issue_number: pullRequestNumber,
+                    body: `❌ I tried to apply the requested follow-up changes by @${commentAuthor}, but an error occurred:
+
+\`\`\`
+${error.message}
+\`\`\`
+
+Please check the logs for more details.`,
+                });
+            } catch (commentError) {
+                correlatedLogger.error({ error: commentError.message }, 'Failed to post error comment');
+            }
+        }
+        
+        throw error;
+    } finally {
+        // Cleanup worktree
+        if (localRepoPath && worktreeInfo) {
+            try {
+                await cleanupWorktree(localRepoPath, worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                    deleteBranch: false, // Never delete the branch for PR follow-ups
+                    success: true
+                });
+            } catch (cleanupError) {
+                correlatedLogger.warn({ error: cleanupError.message }, 'Failed to cleanup worktree');
+            }
+        }
+    }
+}
+
 async function processGitHubIssueJob(job) {
     const { id: jobId, name: jobName, data: issueRef } = job;
     const correlationId = issueRef.correlationId || generateCorrelationId();
@@ -1321,7 +1516,15 @@ async function startWorker(options = {}) {
         logger.info('Claude Code Docker image is ready');
     }
     
-    const worker = createWorker(GITHUB_ISSUE_QUEUE_NAME, processGitHubIssueJob);
+    const worker = createWorker(GITHUB_ISSUE_QUEUE_NAME, async (job) => {
+        if (job.name === 'processGitHubIssue') {
+            return processGitHubIssueJob(job);
+        } else if (job.name === 'processPullRequestComment') {
+            return processPullRequestCommentJob(job);
+        } else {
+            throw new Error(`Unknown job type: ${job.name}`);
+        }
+    });
 
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
@@ -1340,7 +1543,7 @@ async function startWorker(options = {}) {
 }
 
 // Export for testing
-export { processGitHubIssueJob, startWorker };
+export { processGitHubIssueJob, processPullRequestCommentJob, startWorker };
 
 // Start worker if this is the main module
 if (import.meta.url === `file://${process.argv[1]}`) {
