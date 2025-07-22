@@ -218,19 +218,12 @@ async function processPullRequestCommentJob(job) {
             
             if (!isBotComment) return false;
             
-            // Check if the bot comment references this comment ID or is a recent response to the user
+            // Check if the bot comment references this specific comment ID
             const referencesThisComment = comment.body.includes(`Comment ID: ${commentId}`) ||
                                         comment.body.includes(`comment #${commentId}`) ||
-                                        (comment.body.includes(`@${commentAuthor}`) && 
-                                         comment.body.includes('Applied the requested follow-up changes')) ||
-                                        (comment.body.includes(`@${commentAuthor}`) && 
-                                         comment.body.includes('Analyzed the follow-up request'));
+                                        comment.body.includes(`Processing comment ID: ${commentId}`);
             
-            // Also check if it's a "starting work" comment for this specific comment
-            const isStartingWork = comment.body.includes('Starting work on follow-up changes') &&
-                                 comment.body.includes(`@${commentAuthor}`);
-            
-            return referencesThisComment || isStartingWork;
+            return referencesThisComment;
         });
 
         if (alreadyProcessed) {
@@ -247,12 +240,12 @@ async function processPullRequestCommentJob(job) {
             };
         }
 
-        // Post a "starting work" comment
+        // Post a "starting work" comment with specific comment ID reference
         await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
             owner: repoOwner,
             repo: repoName,
             issue_number: pullRequestNumber,
-            body: `🔄 **Starting work on follow-up changes** requested by @${commentAuthor}\n\nI'll analyze the request and implement the necessary changes.`,
+            body: `🔄 **Starting work on follow-up changes** requested by @${commentAuthor}\n\nI'll analyze the request and implement the necessary changes.\n\n---\n_Processing comment ID: ${commentId}_`,
         });
 
         const githubToken = await octokit.auth();
