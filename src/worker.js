@@ -200,6 +200,61 @@ async function processPullRequestCommentJob(job) {
             'get_authenticated_octokit'
         );
 
+        // Check if this comment has already been processed
+        const botUsername = process.env.GITHUB_BOT_USERNAME || 'github-actions[bot]';
+        const prComments = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            owner: repoOwner,
+            repo: repoName,
+            issue_number: pullRequestNumber,
+            per_page: 100,
+            page: 1
+        });
+
+        // Look for bot comments that reference this specific comment ID
+        const alreadyProcessed = prComments.data.some(comment => {
+            const isBotComment = comment.user.login === botUsername || 
+                                comment.user.type === 'Bot' ||
+                                comment.user.login.includes('[bot]');
+            
+            if (!isBotComment) return false;
+            
+            // Check if the bot comment references this comment ID or is a recent response to the user
+            const referencesThisComment = comment.body.includes(`Comment ID: ${commentId}`) ||
+                                        comment.body.includes(`comment #${commentId}`) ||
+                                        (comment.body.includes(`@${commentAuthor}`) && 
+                                         comment.body.includes('Applied the requested follow-up changes')) ||
+                                        (comment.body.includes(`@${commentAuthor}`) && 
+                                         comment.body.includes('Analyzed the follow-up request'));
+            
+            // Also check if it's a "starting work" comment for this specific comment
+            const isStartingWork = comment.body.includes('Starting work on follow-up changes') &&
+                                 comment.body.includes(`@${commentAuthor}`);
+            
+            return referencesThisComment || isStartingWork;
+        });
+
+        if (alreadyProcessed) {
+            correlatedLogger.info({
+                pullRequestNumber,
+                commentId,
+                commentAuthor
+            }, 'PR comment has already been processed, skipping');
+            
+            return { 
+                status: 'skipped', 
+                reason: 'already_processed',
+                pullRequestNumber 
+            };
+        }
+
+        // Post a "starting work" comment
+        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            owner: repoOwner,
+            repo: repoName,
+            issue_number: pullRequestNumber,
+            body: `🔄 **Starting work on follow-up changes** requested by @${commentAuthor}\n\nI'll analyze the request and implement the necessary changes.`,
+        });
+
         const githubToken = await octokit.auth();
         const repoUrl = getRepoUrl({ repoOwner, repoName });
 
@@ -412,12 +467,16 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                     owner: repoOwner,
                     repo: repoName,
                     issue_number: pullRequestNumber,
-                    body: `❌ I tried to apply the requested follow-up changes by @${commentAuthor}, but an error occurred:
+                    body: `❌ **Failed to apply follow-up changes** requested by @${commentAuthor}
+
+An error occurred while processing your request:
 
 \`\`\`
 ${error.message}
 \`\`\`
 
+---
+Comment ID: ${commentId}
 Please check the logs for more details.`,
                 });
             } catch (commentError) {
