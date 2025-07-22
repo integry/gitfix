@@ -91,6 +91,11 @@ Create a GitHub App with the following permissions:
    MODEL_LABELS_SONNET=llm-claude-sonnet
    MODEL_LABELS_OPUS=llm-claude-opus
    
+   # PR Comment Monitoring Configuration
+   GITHUB_BOT_USERNAME=your_bot_username
+   GITHUB_USER_WHITELIST=
+   GITHUB_USER_BLACKLIST=
+   
    # Git Configuration
    GIT_CLONES_BASE_PATH=/tmp/git-processor/clones
    GIT_WORKTREES_BASE_PATH=/tmp/git-processor/worktrees

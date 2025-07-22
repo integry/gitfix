@@ -15,6 +15,11 @@ const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || 'claude-3-5-sonnet-20240620';
 
+// New environment variables for PR comment monitoring
+const GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
+const GITHUB_USER_WHITELIST = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
+const GITHUB_USER_BLACKLIST = (process.env.GITHUB_USER_BLACKLIST || '').split(',').filter(u => u);
+
 // Parse repositories list
 const getRepos = () => {
     if (!GITHUB_REPOS_TO_MONITOR) {
@@ -105,6 +110,91 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
         }
         
         return [];
+    }
+}
+
+/**
+ * Fetches and processes comments on open pull requests for a repository
+ * @param {import('@octokit/core').Octokit} octokit - Authenticated Octokit instance
+ * @param {string} repoFullName - Repository in format "owner/repo"
+ * @param {string} correlationId - Correlation ID for tracking
+ */
+async function pollForPullRequestComments(octokit, repoFullName, correlationId) {
+    const correlatedLogger = logger.withCorrelation(correlationId);
+    const [owner, repo] = repoFullName.split('/');
+
+    try {
+        const prs = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
+            owner,
+            repo,
+            state: 'open',
+            per_page: 100,
+        });
+
+        for (const pr of prs.data) {
+            const comments = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner,
+                repo,
+                issue_number: pr.number,
+            });
+
+            for (const comment of comments.data) {
+                const commentAuthor = comment.user.login;
+                if (comment.body && comment.body.includes('!gitfix')) {
+                    // 1. Check if author is the bot
+                    if (GITHUB_BOT_USERNAME && commentAuthor === GITHUB_BOT_USERNAME) {
+                        continue;
+                    }
+
+                    // 2. Check blacklist
+                    if (GITHUB_USER_BLACKLIST.length > 0 && GITHUB_USER_BLACKLIST.includes(commentAuthor)) {
+                        continue;
+                    }
+
+                    // 3. Check whitelist
+                    if (GITHUB_USER_WHITELIST.length > 0 && !GITHUB_USER_WHITELIST.includes(commentAuthor)) {
+                        continue;
+                    }
+
+                    const llmMatch = comment.body.match(/!gitfix:(\w+)/);
+                    const llm = llmMatch ? llmMatch[1] : null;
+
+                    const jobData = {
+                        pullRequestNumber: pr.number,
+                        commentId: comment.id,
+                        commentBody: comment.body,
+                        commentAuthor,
+                        repoOwner: owner,
+                        repoName: repo,
+                        branchName: pr.head.ref,
+                        llm,
+                        correlationId: generateCorrelationId(),
+                    };
+
+                    const jobId = `pr-comment-${owner}-${repo}-${pr.number}-${comment.id}`;
+
+                    try {
+                        await issueQueue.add('processPullRequestComment', jobData, { jobId });
+                        correlatedLogger.info({
+                            jobId,
+                            pullRequestNumber: pr.number,
+                            commentId: comment.id,
+                        }, 'Successfully added PR comment to processing queue');
+                    } catch (error) {
+                        if (error.message?.includes('Job already exists')) {
+                            correlatedLogger.debug({
+                                pullRequestNumber: pr.number,
+                                commentId: comment.id,
+                            }, 'PR comment job already in queue, skipping');
+                        } else {
+                            handleError(error, `Failed to add PR comment ${comment.id} to queue`, { correlationId });
+                        }
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        handleError(error, `Error polling PR comments for repository ${repoFullName}`, { correlationId });
     }
 }
 
@@ -207,6 +297,10 @@ async function pollForIssues() {
                     allDetectedIssues.push(issue);
                 }
             }
+            
+            // Poll for PR comments after processing issues
+            await pollForPullRequestComments(octokit, repoFullName, correlationId);
+            
         } catch (error) {
             handleError(error, `Error polling repository ${repoFullName}`, { correlationId });
         }
@@ -383,6 +477,9 @@ async function startDaemon(options = {}) {
         excludeDoneTag: AI_DONE_TAG,
         modelLabelPattern: MODEL_LABEL_PATTERN,
         defaultModelName: DEFAULT_MODEL_NAME,
+        botUsername: GITHUB_BOT_USERNAME || 'not configured',
+        userWhitelist: GITHUB_USER_WHITELIST.length > 0 ? GITHUB_USER_WHITELIST : 'all users allowed',
+        userBlacklist: GITHUB_USER_BLACKLIST.length > 0 ? GITHUB_USER_BLACKLIST : 'no users blocked',
         resetPerformed: !!options.reset
     }, 'GitHub Issue Detection Daemon starting...');
 
@@ -410,7 +507,7 @@ async function startDaemon(options = {}) {
 }
 
 // Export functions for testing
-export { fetchIssuesForRepo, pollForIssues, startDaemon, resetQueues, resetIssueLabels };
+export { fetchIssuesForRepo, pollForIssues, pollForPullRequestComments, startDaemon, resetQueues, resetIssueLabels };
 
 /**
  * Parse command line arguments
@@ -442,6 +539,9 @@ Environment Variables:
   AI_DONE_TAG                Done tag to exclude (default: AI-done)
   MODEL_LABEL_PATTERN        Regex pattern for model labels (default: ^llm-claude-(.+)$)
   DEFAULT_CLAUDE_MODEL       Default model when no model labels found (default: claude-3-5-sonnet-20240620)
+  GITHUB_BOT_USERNAME        Bot username to exclude from PR comment monitoring
+  GITHUB_USER_WHITELIST      Comma-separated list of allowed users for PR comments
+  GITHUB_USER_BLACKLIST      Comma-separated list of excluded users for PR comments
 
 Examples:
   node src/daemon.js                Start the daemon normally
