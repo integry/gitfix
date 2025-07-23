@@ -101,7 +101,9 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 - If you encounter git errors, report them but DO NOT attempt to reinitialize the repository
 - The workspace is a git worktree linked to the main repository
 - Only make changes to the specific files mentioned in the issue/request
-- If git commands fail, describe the error but do not try destructive recovery methods`;
+- If git commands fail, describe the error but do not try destructive recovery methods
+- NOTE: You may encounter permission errors when trying to commit - this is expected
+- The system will automatically commit your changes after you complete the modifications`;
         
         logger.debug({
             issueNumber: issueRef.number,

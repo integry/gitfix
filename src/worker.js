@@ -283,7 +283,7 @@ async function processPullRequestCommentJob(job) {
 - The current branch already contains changes for pull request #${pullRequestNumber}
 - Analyze the existing code on this branch
 - Implement ONLY the changes requested in the comment above
-- Commit your changes to the current branch
+- DO NOT commit your changes - the system will handle the commit for you
 - DO NOT create a new pull request
 - The repository is ${repoOwner}/${repoName}
 
