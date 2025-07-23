@@ -933,16 +933,19 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
         // Commit changes
         const result = await git.commit(finalCommitMessage);
         
+        // Extract the actual commit hash (remove "HEAD " prefix if present)
+        const commitHash = result.commit.replace(/^HEAD\s+/, '');
+        
         logger.info({ 
             worktreePath, 
-            commitHash: result.commit,
+            commitHash: commitHash,
             filesChanged: status.files.length,
             issueNumber,
             commitMessage: finalCommitMessage
         }, 'Changes committed successfully');
         
         return {
-            commitHash: result.commit,
+            commitHash: commitHash,
             commitMessage: finalCommitMessage
         };
         
@@ -1112,9 +1115,11 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
                 logger.warn({ error: listError.message }, 'Failed to list existing worktrees');
             }
             
-            // Create worktree checking out the existing remote branch
+            // Create worktree with a local branch tracking the remote branch
+            // Using -b flag with the same branch name to create a local tracking branch
             const worktreeAddResult = await git.raw([
                 'worktree', 'add',
+                '-B', branchName,  // Force create/reset local branch
                 worktreePath,
                 `origin/${branchName}`
             ]);
