@@ -668,10 +668,17 @@ export async function cleanupWorktree(localRepoPath, worktreePath, branchName, o
         await git.raw(['worktree', 'remove', worktreePath, '--force']);
         logger.info({ worktreePath }, 'Worktree removed successfully');
     } catch (error) {
-        logger.warn({ 
-            worktreePath, 
-            error: error.message 
-        }, 'Failed to remove worktree with git command, attempting directory removal');
+        // Check if the error is because it's not a valid worktree
+        if (error.message && error.message.includes('.git\' is not a .git file')) {
+            logger.info({ 
+                worktreePath
+            }, 'Directory is not a valid worktree (possibly converted to regular repo), will remove directly');
+        } else {
+            logger.warn({ 
+                worktreePath, 
+                error: error.message 
+            }, 'Failed to remove worktree with git command, attempting directory removal');
+        }
         
         // Try to remove directory directly if git command fails
         try {
@@ -845,6 +852,10 @@ export async function commitChanges(worktreePath, commitMessage, author, issueNu
                 gitPath,
                 issueNumber 
             }, '.git is a directory, not a worktree file - this suggests improper worktree creation');
+            
+            // This can happen if the worktree was converted to a regular repo during processing
+            // (e.g., by some git operations inside Docker containers)
+            // We can still continue as the git operations should work
         } else if (gitStats.isFile()) {
             // Read .git file content to verify it's a proper worktree
             const gitFileContent = await fs.readFile(gitPath, 'utf8');
