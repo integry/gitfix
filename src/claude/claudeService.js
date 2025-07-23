@@ -101,6 +101,13 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 - Only make changes to the specific files mentioned in the issue/request
 - If git commands fail, describe the error but do not try destructive recovery methods`;
         
+        logger.debug({
+            issueNumber: issueRef.number,
+            promptLength: prompt.length,
+            hasSafetyRules: prompt.includes('CRITICAL GIT SAFETY RULES'),
+            isCustomPrompt: !!customPrompt
+        }, 'Generated Claude prompt with safety rules');
+        
         if (isRetry) {
             logger.info({
                 issueNumber: issueRef.number,
@@ -154,6 +161,47 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 issueNumber: issueRef.number,
                 tempClaudeConfigDir
             }, 'Created temporary Claude config directory with proper permissions');
+            
+            // Verify worktree .git file before Docker execution
+            const worktreeGitPath = path.join(worktreePath, '.git');
+            let worktreeGitContent = null;
+            let mainRepoPath = null;
+            
+            try {
+                if (fs.existsSync(worktreeGitPath)) {
+                    const stats = fs.statSync(worktreeGitPath);
+                    if (stats.isFile()) {
+                        worktreeGitContent = fs.readFileSync(worktreeGitPath, 'utf8').trim();
+                        const gitdirMatch = worktreeGitContent.match(/gitdir:\s*(.+)/);
+                        if (gitdirMatch) {
+                            mainRepoPath = gitdirMatch[1].trim();
+                        }
+                        logger.debug({
+                            issueNumber: issueRef.number,
+                            worktreeGitPath,
+                            worktreeGitContent,
+                            mainRepoPath,
+                            mainRepoExists: mainRepoPath ? fs.existsSync(mainRepoPath) : false
+                        }, 'Verified worktree .git file structure');
+                    } else {
+                        logger.error({
+                            issueNumber: issueRef.number,
+                            worktreeGitPath,
+                            isDirectory: stats.isDirectory()
+                        }, 'CRITICAL: Worktree .git is a directory, not a file! This will cause git init disasters');
+                    }
+                } else {
+                    logger.warn({
+                        issueNumber: issueRef.number,
+                        worktreeGitPath
+                    }, 'Worktree .git file not found - this may cause issues');
+                }
+            } catch (verifyError) {
+                logger.error({
+                    issueNumber: issueRef.number,
+                    error: verifyError.message
+                }, 'Failed to verify worktree structure');
+            }
         } catch (configError) {
             logger.error({
                 issueNumber: issueRef.number,
@@ -217,12 +265,29 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             }, 'No model specified, Claude Code will use default');
         }
 
+        // Log Docker mount details for debugging
+        const mounts = [];
+        for (let i = 0; i < dockerArgs.length; i++) {
+            if (dockerArgs[i] === '-v' && i + 1 < dockerArgs.length) {
+                const [source, dest] = dockerArgs[i + 1].split(':');
+                mounts.push({
+                    source,
+                    destination: dest,
+                    sourceExists: fs.existsSync(source),
+                    sourceType: fs.existsSync(source) ? (fs.statSync(source).isDirectory() ? 'directory' : 'file') : 'missing'
+                });
+            }
+        }
+        
         logger.debug({
             issueNumber: issueRef.number,
             dockerArgs: dockerArgs, // Show full command
+            mounts,
+            workDir: '/home/node/workspace',
+            modelName: modelName || 'default',
             promptLength: prompt.length,
-            fullPrompt: prompt
-        }, 'Executing Docker command for Claude Code');
+            promptPreview: prompt.substring(0, 200) + '...'
+        }, 'Executing Docker command for Claude Code with detailed mount info');
 
         // Execute Docker command
         const result = await executeDockerCommand('docker', dockerArgs, {
@@ -338,9 +403,55 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             logger.info({
                 issueNumber: issueRef.number,
                 exitCode: result.exitCode,
-                stderr: result.stderr,
-                stdout: result.stdout
-            }, 'Claude Code execution succeeded - full output');
+                stderrLength: result.stderr?.length || 0,
+                stdoutLength: result.stdout?.length || 0,
+                hasConversationLog: !!response.conversationLog?.length,
+                conversationTurns: response.conversationLog?.length || 0,
+                model: response.model,
+                summary: response.summary?.substring(0, 200)
+            }, 'Claude Code execution succeeded');
+            
+            // Verify worktree state after execution
+            try {
+                const postExecGitPath = path.join(worktreePath, '.git');
+                if (fs.existsSync(postExecGitPath)) {
+                    const postStats = fs.statSync(postExecGitPath);
+                    const isNowDirectory = postStats.isDirectory();
+                    
+                    if (isNowDirectory) {
+                        logger.error({
+                            issueNumber: issueRef.number,
+                            worktreePath,
+                            preExecType: worktreeGitContent ? 'file' : 'unknown',
+                            postExecType: 'directory'
+                        }, 'CRITICAL: Worktree .git was converted from file to directory! Claude may have run git init');
+                        
+                        // Check for signs of git init
+                        const gitConfigPath = path.join(postExecGitPath, 'config');
+                        if (fs.existsSync(gitConfigPath)) {
+                            const gitConfig = fs.readFileSync(gitConfigPath, 'utf8');
+                            logger.error({
+                                issueNumber: issueRef.number,
+                                gitConfigPreview: gitConfig.substring(0, 200)
+                            }, 'Found git config in new .git directory - git init was definitely run');
+                        }
+                    } else {
+                        const postContent = fs.readFileSync(postExecGitPath, 'utf8').trim();
+                        if (postContent !== worktreeGitContent) {
+                            logger.warn({
+                                issueNumber: issueRef.number,
+                                preContent: worktreeGitContent,
+                                postContent: postContent
+                            }, 'Worktree .git file content changed during execution');
+                        }
+                    }
+                }
+            } catch (postVerifyError) {
+                logger.error({
+                    issueNumber: issueRef.number,
+                    error: postVerifyError.message
+                }, 'Failed to verify worktree state after execution');
+            }
         }
 
         return response;

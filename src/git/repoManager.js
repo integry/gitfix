@@ -910,10 +910,40 @@ export async function commitChanges(worktreePath, commitMessage, author, issueNu
         
         // Check if there are any changes to commit
         const status = await git.status();
+        
+        logger.debug({
+            worktreePath,
+            issueNumber,
+            tracked: status.tracked.length,
+            notAdded: status.not_added.length,
+            conflicted: status.conflicted.length,
+            created: status.created.length,
+            deleted: status.deleted.length,
+            modified: status.modified.length,
+            renamed: status.renamed.length,
+            staged: status.staged.length,
+            ahead: status.ahead,
+            behind: status.behind,
+            current: status.current,
+            detached: status.detached
+        }, 'Git status before commit');
+        
         if (status.files.length === 0) {
             logger.info({ worktreePath }, 'No changes to commit');
             return null;
         }
+        
+        // Log detailed file information
+        logger.info({
+            worktreePath,
+            issueNumber,
+            totalFiles: status.files.length,
+            files: status.files.map(f => ({
+                path: f.path,
+                index: f.index,
+                working_dir: f.working_dir
+            }))
+        }, 'Files to be committed');
         
         // Generate structured commit message
         let finalCommitMessage;
@@ -1126,7 +1156,8 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
             logger.info({ 
                 branchName, 
                 worktreePath,
-                gitOutput: worktreeAddResult.trim()
+                gitOutput: worktreeAddResult.trim(),
+                commandUsed: `git worktree add -B ${branchName} ${worktreePath} origin/${branchName}`
             }, 'Git worktree add command completed');
             
             // Verify the worktree was created properly
@@ -1345,7 +1376,29 @@ export async function pushBranch(worktreePath, branchName, options = {}) {
                     expectedBranch: branchName 
                 }, 'Branch mismatch detected, attempting to checkout correct branch');
                 
+                // Check if the branch exists locally
+                const branches = await git.branchLocal();
+                const branchExists = branches.all.includes(branchName);
+                
+                logger.debug({
+                    worktreePath,
+                    branchName,
+                    branchExists,
+                    localBranches: branches.all,
+                    currentBranch: branches.current
+                }, 'Checking local branches before checkout');
+                
                 await git.checkout(branchName);
+                
+                // Verify checkout succeeded
+                const newBranch = await git.revparse(['--abbrev-ref', 'HEAD']);
+                logger.info({
+                    worktreePath,
+                    previousBranch: currentBranch.trim(),
+                    newBranch: newBranch.trim(),
+                    expectedBranch: branchName,
+                    checkoutSuccess: newBranch.trim() === branchName
+                }, 'Branch checkout completed');
             }
         } catch (branchCheckError) {
             logger.warn({ 
