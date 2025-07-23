@@ -88,7 +88,18 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
     
     try {
         // Generate the prompt for Claude
-        const prompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
+        const basePrompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
+        
+        // Add critical safety instructions to prevent git repository corruption
+        const prompt = `${basePrompt}
+
+**CRITICAL GIT SAFETY RULES:**
+- NEVER run 'rm .git' or delete the .git file/directory
+- NEVER run 'git init' in the workspace - this is already a git repository
+- If you encounter git errors, report them but DO NOT attempt to reinitialize the repository
+- The workspace is a git worktree linked to the main repository
+- Only make changes to the specific files mentioned in the issue/request
+- If git commands fail, describe the error but do not try destructive recovery methods`;
         
         if (isRetry) {
             logger.info({
@@ -165,8 +176,9 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             // Mount the worktree as the workspace with proper ownership
             '-v', `${worktreePath}:/home/node/workspace:rw`,
             
-            // Mount the main git repository to fix worktree references
-            '-v', `${path.dirname(path.dirname(worktreePath))}:/tmp/git-processor:rw`,
+            // Mount the git-processor base directory that contains both clones and worktrees
+            // This ensures worktree .git files can reference the main repository
+            '-v', '/tmp/git-processor:/tmp/git-processor:rw',
             
             // Mount temporary Claude config directory with proper permissions
             '-v', `${tempClaudeConfigDir}:/home/node/.claude:rw`,
