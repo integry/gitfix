@@ -85,6 +85,8 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
     }, isRetry ? 'Starting Claude Code execution (RETRY)...' : 'Starting Claude Code execution...');
 
     let tempClaudeConfigDir = null;
+    let worktreeGitContent = null;
+    let mainRepoPath = null;
     
     try {
         // Generate the prompt for Claude
@@ -164,8 +166,6 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             
             // Verify worktree .git file before Docker execution
             const worktreeGitPath = path.join(worktreePath, '.git');
-            let worktreeGitContent = null;
-            let mainRepoPath = null;
             
             try {
                 if (fs.existsSync(worktreeGitPath)) {

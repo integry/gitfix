@@ -914,18 +914,19 @@ export async function commitChanges(worktreePath, commitMessage, author, issueNu
         logger.debug({
             worktreePath,
             issueNumber,
-            tracked: status.tracked.length,
-            notAdded: status.not_added.length,
-            conflicted: status.conflicted.length,
-            created: status.created.length,
-            deleted: status.deleted.length,
-            modified: status.modified.length,
-            renamed: status.renamed.length,
-            staged: status.staged.length,
-            ahead: status.ahead,
-            behind: status.behind,
-            current: status.current,
-            detached: status.detached
+            tracked: status.tracked?.length || 0,
+            notAdded: status.not_added?.length || 0,
+            conflicted: status.conflicted?.length || 0,
+            created: status.created?.length || 0,
+            deleted: status.deleted?.length || 0,
+            modified: status.modified?.length || 0,
+            renamed: status.renamed?.length || 0,
+            staged: status.staged?.length || 0,
+            ahead: status.ahead || 0,
+            behind: status.behind || 0,
+            current: status.current || null,
+            detached: status.detached || false,
+            totalFiles: status.files?.length || 0
         }, 'Git status before commit');
         
         if (status.files.length === 0) {
