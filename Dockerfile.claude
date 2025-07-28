@@ -42,7 +42,12 @@ WORKDIR /home/node/workspace
 # Set up Git configuration for the container user
 RUN git config --global user.name "Claude Code Bot" && \
     git config --global user.email "claude-bot@anthropic.com" && \
-    git config --global init.defaultBranch main
+    git config --global init.defaultBranch main && \
+    git config --global --add safe.directory '*'
+
+# Copy gh wrapper script
+COPY --chown=node:node scripts/gh-wrapper.sh /usr/local/bin/gh-wrapper
+RUN chmod +x /usr/local/bin/gh-wrapper
 
 # Create entrypoint script
 COPY --chown=node:node scripts/claude-entrypoint.sh /home/node/claude-entrypoint.sh

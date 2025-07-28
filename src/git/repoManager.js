@@ -519,6 +519,47 @@ export async function createWorktreeForIssue(localRepoPath, issueId, issueTitle,
             `origin/${baseBranch}`
         ]);
         
+        // Ensure worktree files are owned by UID 1000 for Docker container compatibility
+        try {
+            const { execSync } = await import('child_process');
+            execSync(`sudo chown -R 1000:1000 "${worktreePath}"`, { 
+                stdio: 'inherit',
+                timeout: 10000 // 10 seconds timeout
+            });
+            logger.debug({ 
+                worktreePath, 
+                branchName, 
+                issueId 
+            }, 'Set worktree ownership to UID 1000 for container compatibility');
+        } catch (chownError) {
+            logger.warn({ 
+                worktreePath, 
+                branchName, 
+                issueId,
+                error: chownError.message 
+            }, 'Failed to set worktree ownership - container may have permission issues');
+        }
+        
+        // Add the worktree and main repo to Git's safe directories to prevent "dubious ownership" errors
+        try {
+            await git.raw(['config', '--global', '--add', 'safe.directory', worktreePath]);
+            // Also add the main repository path for container compatibility
+            await git.raw(['config', '--global', '--add', 'safe.directory', localRepoPath]);
+            logger.debug({ 
+                worktreePath, 
+                localRepoPath,
+                branchName, 
+                issueId 
+            }, 'Added worktree and main repo to Git safe directories');
+        } catch (safeConfigError) {
+            logger.warn({ 
+                worktreePath, 
+                branchName, 
+                issueId,
+                error: safeConfigError.message 
+            }, 'Failed to add directories to Git safe directories - may encounter ownership warnings');
+        }
+        
         logger.info({ 
             worktreePath, 
             branchName, 
