@@ -7,7 +7,8 @@ import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { getStateManager, TaskStates } from './utils/workerStateManager.js';
 import { 
     ensureRepoCloned, 
-    createWorktreeForIssue, 
+    createWorktreeForIssue,
+    createWorktreeFromExistingBranch,
     cleanupWorktree,
     getRepoUrl,
     commitChanges,
@@ -21,11 +22,13 @@ import {
     validateRepositoryInfo 
 } from './utils/prValidation.js';
 import Redis from 'ioredis';
+import { getDefaultModel } from './config/modelAliases.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
+const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
 /**
  * Adds a small random delay to prevent concurrent execution conflicts
@@ -170,6 +173,326 @@ async function safeUpdateLabels(octokit, owner, repo, issueNumber, labelsToRemov
  * @param {import('bullmq').Job} job - The job to process
  * @returns {Promise<Object>} Processing result
  */
+async function processPullRequestCommentJob(job) {
+    const {
+        pullRequestNumber,
+        commentId,
+        commentBody,
+        commentAuthor,
+        branchName,
+        repoOwner,
+        repoName,
+        llm,
+        correlationId
+    } = job.data;
+    const correlatedLogger = logger.withCorrelation(correlationId);
+    correlatedLogger.info({ pullRequestNumber, branchName, llm }, 'Processing PR comment job...');
+
+    let octokit;
+    let localRepoPath;
+    let worktreeInfo;
+
+    try {
+        // Get authenticated Octokit instance
+        octokit = await withRetry(
+            () => getAuthenticatedOctokit(),
+            { ...retryConfigs.githubApi, correlationId },
+            'get_authenticated_octokit'
+        );
+
+        // Check if this comment has already been processed
+        const botUsername = process.env.GITHUB_BOT_USERNAME || 'github-actions[bot]';
+        const prComments = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            owner: repoOwner,
+            repo: repoName,
+            issue_number: pullRequestNumber,
+            per_page: 100,
+            page: 1
+        });
+
+        // Look for bot comments that reference this specific comment ID
+        const alreadyProcessed = prComments.data.some(comment => {
+            const isBotComment = comment.user.login === botUsername || 
+                                comment.user.type === 'Bot' ||
+                                comment.user.login.includes('[bot]');
+            
+            if (!isBotComment) return false;
+            
+            // Check if the bot comment references this specific comment ID
+            const referencesThisComment = comment.body.includes(`Comment ID: ${commentId}`) ||
+                                        comment.body.includes(`comment #${commentId}`) ||
+                                        comment.body.includes(`Processing comment ID: ${commentId}`);
+            
+            return referencesThisComment;
+        });
+
+        if (alreadyProcessed) {
+            correlatedLogger.info({
+                pullRequestNumber,
+                commentId,
+                commentAuthor
+            }, 'PR comment has already been processed, skipping');
+            
+            return { 
+                status: 'skipped', 
+                reason: 'already_processed',
+                pullRequestNumber 
+            };
+        }
+
+        // Post a "starting work" comment with specific comment ID reference
+        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            owner: repoOwner,
+            repo: repoName,
+            issue_number: pullRequestNumber,
+            body: `🔄 **Starting work on follow-up changes** requested by @${commentAuthor}\n\nI'll analyze the request and implement the necessary changes.\n\n---\n_Processing comment ID: ${commentId}_`,
+        });
+
+        const githubToken = await octokit.auth();
+        const repoUrl = getRepoUrl({ repoOwner, repoName });
+
+        // Step 1: Ensure repository is cloned
+        localRepoPath = await ensureRepoCloned(repoUrl, repoOwner, repoName, githubToken.token);
+
+        // Step 2: Create a worktree from the existing PR branch
+        // Generate unique worktree name for this follow-up task
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+        const worktreeDirName = `pr-${pullRequestNumber}-followup-${timestamp}`;
+
+        // Use the proper function to create worktree from existing branch
+        worktreeInfo = await createWorktreeFromExistingBranch(
+            localRepoPath,
+            branchName,
+            worktreeDirName,
+            repoOwner,
+            repoName
+        );
+
+        correlatedLogger.info({ 
+            worktreePath: worktreeInfo.worktreePath, 
+            branchName: worktreeInfo.branchName 
+        }, 'Created worktree from existing PR branch');
+
+        // Step 3: Generate prompt for follow-up changes
+        const prompt = `You are working on an existing pull request branch. A user has requested the following follow-up change:
+
+"${commentBody}"
+
+**CRITICAL INSTRUCTIONS:**
+- You are in directory: ${worktreeInfo.worktreePath}
+- The current branch already contains changes for pull request #${pullRequestNumber}
+- Analyze the existing code on this branch
+- Implement ONLY the changes requested in the comment above
+- DO NOT commit your changes - the system will handle the commit for you
+- DO NOT create a new pull request
+- The repository is ${repoOwner}/${repoName}
+
+**Context:**
+- This is a follow-up to an existing PR
+- Make sure your changes are compatible with the existing modifications on this branch
+- Use appropriate commit messages that reference the follow-up nature of the changes`;
+
+        // Step 4: Execute Claude Code with the follow-up prompt
+        const claudeResult = await executeClaudeCode({
+            worktreePath: worktreeInfo.worktreePath,
+            issueRef: { 
+                number: pullRequestNumber, 
+                repoOwner, 
+                repoName 
+            },
+            githubToken: githubToken.token,
+            customPrompt: prompt,
+            branchName: worktreeInfo.branchName,
+            modelName: llm || DEFAULT_MODEL_NAME
+        });
+
+        if (!claudeResult.success) {
+            throw new Error(`Claude execution failed: ${claudeResult.error || 'Unknown error'}`);
+        }
+
+        // Step 5: Commit and push changes
+        // Extract a summary from Claude's result
+        let changesSummary = '';
+        if (claudeResult.summary) {
+            changesSummary = claudeResult.summary;
+        } else if (claudeResult.finalResult?.result) {
+            changesSummary = claudeResult.finalResult.result;
+        }
+
+        // Parse the summary to extract key changes
+        let commitDetails = '';
+        if (changesSummary) {
+            // Try to extract bullet points or key changes
+            const lines = changesSummary.split('\n');
+            const changeLines = lines.filter(line => 
+                line.trim().startsWith('-') || 
+                line.trim().startsWith('*') || 
+                line.trim().startsWith('•') ||
+                line.match(/^\d+\./)
+            ).slice(0, 10); // Limit to 10 key points
+            
+            if (changeLines.length > 0) {
+                commitDetails = '\n\nKey changes:\n' + changeLines.join('\n');
+            }
+        }
+
+        const commitMessage = `feat(ai): Apply follow-up changes from PR comment
+
+${changesSummary ? changesSummary.split('\n')[0] : `Implemented changes requested by @${commentAuthor}`}${commitDetails}
+
+PR: #${pullRequestNumber}
+Comment by: @${commentAuthor} (ID: ${commentId})
+Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
+
+        const commitResult = await commitChanges(
+            worktreeInfo.worktreePath,
+            commitMessage,
+            { name: 'Claude Code', email: 'claude-code@anthropic.com' },
+            pullRequestNumber,
+            'Follow-up changes'
+        );
+
+        if (commitResult) {
+            await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                repoUrl,
+                authToken: githubToken.token
+            });
+
+            // Step 6: Add confirmation comment to the PR
+            let prCommentBody = `✅ **Applied the requested follow-up changes** in commit ${commitResult.commitHash.substring(0, 7)}\n\n`;
+            
+            // Add the actual changes summary
+            if (changesSummary) {
+                prCommentBody += `## Summary of Changes\n\n`;
+                
+                // Extract the most relevant parts of the summary
+                const summaryLines = changesSummary.split('\n');
+                let includedSummary = false;
+                
+                // Look for sections that describe what was done
+                for (let i = 0; i < summaryLines.length; i++) {
+                    const line = summaryLines[i];
+                    
+                    // Include headers and bullet points
+                    if (line.match(/^#+\s/) || line.trim().startsWith('-') || 
+                        line.trim().startsWith('*') || line.trim().startsWith('•') ||
+                        line.match(/^\d+\./)) {
+                        prCommentBody += line + '\n';
+                        includedSummary = true;
+                    } else if (includedSummary && line.trim() === '') {
+                        prCommentBody += '\n';
+                    } else if (includedSummary && !line.match(/^#+\s/) && i < 50) {
+                        // Include descriptive text after headers/bullets (limit lines)
+                        prCommentBody += line + '\n';
+                    }
+                }
+                
+                prCommentBody += '\n';
+            }
+            
+            prCommentBody += `---\n`;
+            prCommentBody += `🤖 **Implemented by Claude Code**\n`;
+            prCommentBody += `- Requested by: @${commentAuthor}\n`;
+            prCommentBody += `- Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}\n`;
+            if (claudeResult.finalResult?.num_turns) {
+                prCommentBody += `- Turns: ${claudeResult.finalResult.num_turns}\n`;
+            }
+            if (claudeResult.executionTime) {
+                prCommentBody += `- Execution time: ${Math.round(claudeResult.executionTime / 1000)}s\n`;
+            }
+            const cost = claudeResult.finalResult?.total_cost_usd || claudeResult.finalResult?.cost_usd;
+            if (cost) {
+                prCommentBody += `- Cost: $${cost.toFixed(2)}\n`;
+            }
+
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner: repoOwner,
+                repo: repoName,
+                issue_number: pullRequestNumber,
+                body: prCommentBody,
+            });
+
+            correlatedLogger.info({
+                pullRequestNumber,
+                commitHash: commitResult.commitHash
+            }, 'Successfully applied follow-up changes');
+        } else {
+            // No changes were necessary
+            let noChangesBody = `ℹ️ **Analyzed the follow-up request** by @${commentAuthor}\n\n`;
+            
+            if (changesSummary) {
+                noChangesBody += `## Analysis Summary\n\n${changesSummary}\n\n`;
+            }
+            
+            noChangesBody += `No code changes were necessary based on the current state of the branch.\n\n`;
+            noChangesBody += `---\n`;
+            noChangesBody += `🤖 **Analysis by Claude Code**\n`;
+            noChangesBody += `- Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}\n`;
+            if (claudeResult.executionTime) {
+                noChangesBody += `- Analysis time: ${Math.round(claudeResult.executionTime / 1000)}s\n`;
+            }
+            const analysisCost = claudeResult.finalResult?.total_cost_usd || claudeResult.finalResult?.cost_usd;
+            if (analysisCost) {
+                noChangesBody += `- Cost: $${analysisCost.toFixed(2)}\n`;
+            }
+            
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                owner: repoOwner,
+                repo: repoName,
+                issue_number: pullRequestNumber,
+                body: noChangesBody,
+            });
+        }
+
+        return { 
+            status: 'complete', 
+            commit: commitResult?.commitHash,
+            pullRequestNumber 
+        };
+
+    } catch (error) {
+        handleError(error, 'Failed to process PR comment job', { correlationId });
+        
+        // Add error comment to the PR
+        if (octokit) {
+            try {
+                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                    owner: repoOwner,
+                    repo: repoName,
+                    issue_number: pullRequestNumber,
+                    body: `❌ **Failed to apply follow-up changes** requested by @${commentAuthor}
+
+An error occurred while processing your request:
+
+\`\`\`
+${error.message}
+\`\`\`
+
+---
+Comment ID: ${commentId}
+Please check the logs for more details.`,
+                });
+            } catch (commentError) {
+                correlatedLogger.error({ error: commentError.message }, 'Failed to post error comment');
+            }
+        }
+        
+        throw error;
+    } finally {
+        // Cleanup worktree
+        if (localRepoPath && worktreeInfo) {
+            try {
+                await cleanupWorktree(localRepoPath, worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                    deleteBranch: false, // Never delete the branch for PR follow-ups
+                    success: true
+                });
+            } catch (cleanupError) {
+                correlatedLogger.warn({ error: cleanupError.message }, 'Failed to cleanup worktree');
+            }
+        }
+    }
+}
+
 async function processGitHubIssueJob(job) {
     const { id: jobId, name: jobName, data: issueRef } = job;
     const correlationId = issueRef.correlationId || generateCorrelationId();
@@ -1321,7 +1644,15 @@ async function startWorker(options = {}) {
         logger.info('Claude Code Docker image is ready');
     }
     
-    const worker = createWorker(GITHUB_ISSUE_QUEUE_NAME, processGitHubIssueJob);
+    const worker = createWorker(GITHUB_ISSUE_QUEUE_NAME, async (job) => {
+        if (job.name === 'processGitHubIssue') {
+            return processGitHubIssueJob(job);
+        } else if (job.name === 'processPullRequestComment') {
+            return processPullRequestCommentJob(job);
+        } else {
+            throw new Error(`Unknown job type: ${job.name}`);
+        }
+    });
 
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
@@ -1340,7 +1671,7 @@ async function startWorker(options = {}) {
 }
 
 // Export for testing
-export { processGitHubIssueJob, startWorker };
+export { processGitHubIssueJob, processPullRequestCommentJob, startWorker };
 
 // Start worker if this is the main module
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -5,6 +5,7 @@ import { withErrorHandling, handleError } from './utils/errorHandler.js';
 import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
+import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
 
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
@@ -13,7 +14,7 @@ const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
-const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || 'claude-3-5-sonnet-20240620';
+const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
 // New environment variables for PR comment monitoring
 const GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
@@ -84,7 +85,9 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
             for (const label of issue.labels) {
                 const match = label.name.match(modelLabelRegex);
                 if (match && match[1]) {
-                    identifiedModels.push(match[1]);
+                    // Resolve model alias to full model ID
+                    const resolvedModel = resolveModelAlias(match[1]);
+                    identifiedModels.push(resolvedModel);
                 }
             }
             
@@ -138,7 +141,13 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                 issue_number: pr.number,
             });
 
-            for (const comment of comments.data) {
+            // Check if any bot comments exist after this comment that indicate processing
+            const botUsername = GITHUB_BOT_USERNAME || 'github-actions[bot]';
+            const commentsByTime = comments.data.sort((a, b) => 
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+
+            for (const comment of commentsByTime) {
                 const commentAuthor = comment.user.login;
                 if (comment.body && comment.body.includes('!gitfix')) {
                     // 1. Check if author is the bot
@@ -156,8 +165,37 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                         continue;
                     }
 
+                    // 4. Check if this comment has already been processed
+                    const commentIndex = commentsByTime.indexOf(comment);
+                    const subsequentComments = commentsByTime.slice(commentIndex + 1);
+                    const alreadyProcessed = subsequentComments.some(laterComment => {
+                        const isBotComment = laterComment.user.login === botUsername || 
+                                           laterComment.user.type === 'Bot' ||
+                                           laterComment.user.login.includes('[bot]');
+                        
+                        if (!isBotComment) return false;
+                        
+                        // Check if bot comment references this specific comment
+                        return laterComment.body.includes(`Comment ID: ${comment.id}`) ||
+                               laterComment.body.includes(`@${commentAuthor}`) && (
+                                   laterComment.body.includes('Starting work on follow-up changes') ||
+                                   laterComment.body.includes('Applied the requested follow-up changes') ||
+                                   laterComment.body.includes('Failed to apply follow-up changes') ||
+                                   laterComment.body.includes('Analyzed the follow-up request')
+                               );
+                    });
+
+                    if (alreadyProcessed) {
+                        correlatedLogger.debug({
+                            pullRequestNumber: pr.number,
+                            commentId: comment.id,
+                            commentAuthor
+                        }, 'PR comment already processed, skipping');
+                        continue;
+                    }
+
                     const llmMatch = comment.body.match(/!gitfix:(\w+)/);
-                    const llm = llmMatch ? llmMatch[1] : null;
+                    const llm = llmMatch ? resolveModelAlias(llmMatch[1]) : null;
 
                     const jobData = {
                         pullRequestNumber: pr.number,

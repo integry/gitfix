@@ -4,6 +4,7 @@ import os from 'os';
 import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
+import { getDefaultModel } from '../config/modelAliases.js';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
@@ -85,10 +86,32 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
     }, isRetry ? 'Starting Claude Code execution (RETRY)...' : 'Starting Claude Code execution...');
 
     let tempClaudeConfigDir = null;
+    let worktreeGitContent = null;
+    let mainRepoPath = null;
     
     try {
         // Generate the prompt for Claude
-        const prompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
+        const basePrompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
+        
+        // Add critical safety instructions to prevent git repository corruption
+        const prompt = `${basePrompt}
+
+**CRITICAL GIT SAFETY RULES:**
+- NEVER run 'rm .git' or delete the .git file/directory
+- NEVER run 'git init' in the workspace - this is already a git repository
+- If you encounter git errors, report them but DO NOT attempt to reinitialize the repository
+- The workspace is a git worktree linked to the main repository
+- Only make changes to the specific files mentioned in the issue/request
+- If git commands fail, describe the error but do not try destructive recovery methods
+- NOTE: You may encounter permission errors when trying to commit - this is expected
+- The system will automatically commit your changes after you complete the modifications`;
+        
+        logger.debug({
+            issueNumber: issueRef.number,
+            promptLength: prompt.length,
+            hasSafetyRules: prompt.includes('CRITICAL GIT SAFETY RULES'),
+            isCustomPrompt: !!customPrompt
+        }, 'Generated Claude prompt with safety rules');
         
         if (isRetry) {
             logger.info({
@@ -143,6 +166,45 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 issueNumber: issueRef.number,
                 tempClaudeConfigDir
             }, 'Created temporary Claude config directory with proper permissions');
+            
+            // Verify worktree .git file before Docker execution
+            const worktreeGitPath = path.join(worktreePath, '.git');
+            
+            try {
+                if (fs.existsSync(worktreeGitPath)) {
+                    const stats = fs.statSync(worktreeGitPath);
+                    if (stats.isFile()) {
+                        worktreeGitContent = fs.readFileSync(worktreeGitPath, 'utf8').trim();
+                        const gitdirMatch = worktreeGitContent.match(/gitdir:\s*(.+)/);
+                        if (gitdirMatch) {
+                            mainRepoPath = gitdirMatch[1].trim();
+                        }
+                        logger.debug({
+                            issueNumber: issueRef.number,
+                            worktreeGitPath,
+                            worktreeGitContent,
+                            mainRepoPath,
+                            mainRepoExists: mainRepoPath ? fs.existsSync(mainRepoPath) : false
+                        }, 'Verified worktree .git file structure');
+                    } else {
+                        logger.error({
+                            issueNumber: issueRef.number,
+                            worktreeGitPath,
+                            isDirectory: stats.isDirectory()
+                        }, 'CRITICAL: Worktree .git is a directory, not a file! This will cause git init disasters');
+                    }
+                } else {
+                    logger.warn({
+                        issueNumber: issueRef.number,
+                        worktreeGitPath
+                    }, 'Worktree .git file not found - this may cause issues');
+                }
+            } catch (verifyError) {
+                logger.error({
+                    issueNumber: issueRef.number,
+                    error: verifyError.message
+                }, 'Failed to verify worktree structure');
+            }
         } catch (configError) {
             logger.error({
                 issueNumber: issueRef.number,
@@ -165,8 +227,9 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             // Mount the worktree as the workspace with proper ownership
             '-v', `${worktreePath}:/home/node/workspace:rw`,
             
-            // Mount the main git repository to fix worktree references
-            '-v', `${path.dirname(path.dirname(worktreePath))}:/tmp/git-processor:rw`,
+            // Mount the git-processor base directory that contains both clones and worktrees
+            // This ensures worktree .git files can reference the main repository
+            '-v', '/tmp/git-processor:/tmp/git-processor:rw',
             
             // Mount temporary Claude config directory with proper permissions
             '-v', `${tempClaudeConfigDir}:/home/node/.claude:rw`,
@@ -205,12 +268,29 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             }, 'No model specified, Claude Code will use default');
         }
 
+        // Log Docker mount details for debugging
+        const mounts = [];
+        for (let i = 0; i < dockerArgs.length; i++) {
+            if (dockerArgs[i] === '-v' && i + 1 < dockerArgs.length) {
+                const [source, dest] = dockerArgs[i + 1].split(':');
+                mounts.push({
+                    source,
+                    destination: dest,
+                    sourceExists: fs.existsSync(source),
+                    sourceType: fs.existsSync(source) ? (fs.statSync(source).isDirectory() ? 'directory' : 'file') : 'missing'
+                });
+            }
+        }
+        
         logger.debug({
             issueNumber: issueRef.number,
             dockerArgs: dockerArgs, // Show full command
+            mounts,
+            workDir: '/home/node/workspace',
+            modelName: modelName || 'default',
             promptLength: prompt.length,
-            fullPrompt: prompt
-        }, 'Executing Docker command for Claude Code');
+            promptPreview: prompt.substring(0, 200) + '...'
+        }, 'Executing Docker command for Claude Code with detailed mount info');
 
         // Execute Docker command
         const result = await executeDockerCommand('docker', dockerArgs, {
@@ -306,7 +386,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             conversationLog: claudeOutput.conversationLog || [],
             sessionId: claudeOutput.sessionId,
             conversationId: claudeOutput.conversationId,
-            model: claudeOutput.model || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022', // Default to current Sonnet
+            model: claudeOutput.model || process.env.CLAUDE_MODEL || getDefaultModel(), // Default to current Sonnet
             finalResult: claudeOutput.finalResult,
             
             // Extract specific fields if available in Claude's structured output
@@ -326,9 +406,55 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             logger.info({
                 issueNumber: issueRef.number,
                 exitCode: result.exitCode,
-                stderr: result.stderr,
-                stdout: result.stdout
-            }, 'Claude Code execution succeeded - full output');
+                stderrLength: result.stderr?.length || 0,
+                stdoutLength: result.stdout?.length || 0,
+                hasConversationLog: !!response.conversationLog?.length,
+                conversationTurns: response.conversationLog?.length || 0,
+                model: response.model,
+                summary: response.summary?.substring(0, 200)
+            }, 'Claude Code execution succeeded');
+            
+            // Verify worktree state after execution
+            try {
+                const postExecGitPath = path.join(worktreePath, '.git');
+                if (fs.existsSync(postExecGitPath)) {
+                    const postStats = fs.statSync(postExecGitPath);
+                    const isNowDirectory = postStats.isDirectory();
+                    
+                    if (isNowDirectory) {
+                        logger.error({
+                            issueNumber: issueRef.number,
+                            worktreePath,
+                            preExecType: worktreeGitContent ? 'file' : 'unknown',
+                            postExecType: 'directory'
+                        }, 'CRITICAL: Worktree .git was converted from file to directory! Claude may have run git init');
+                        
+                        // Check for signs of git init
+                        const gitConfigPath = path.join(postExecGitPath, 'config');
+                        if (fs.existsSync(gitConfigPath)) {
+                            const gitConfig = fs.readFileSync(gitConfigPath, 'utf8');
+                            logger.error({
+                                issueNumber: issueRef.number,
+                                gitConfigPreview: gitConfig.substring(0, 200)
+                            }, 'Found git config in new .git directory - git init was definitely run');
+                        }
+                    } else {
+                        const postContent = fs.readFileSync(postExecGitPath, 'utf8').trim();
+                        if (postContent !== worktreeGitContent) {
+                            logger.warn({
+                                issueNumber: issueRef.number,
+                                preContent: worktreeGitContent,
+                                postContent: postContent
+                            }, 'Worktree .git file content changed during execution');
+                        }
+                    }
+                }
+            } catch (postVerifyError) {
+                logger.error({
+                    issueNumber: issueRef.number,
+                    error: postVerifyError.message
+                }, 'Failed to verify worktree state after execution');
+            }
         }
 
         return response;

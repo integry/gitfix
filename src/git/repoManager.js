@@ -668,10 +668,17 @@ export async function cleanupWorktree(localRepoPath, worktreePath, branchName, o
         await git.raw(['worktree', 'remove', worktreePath, '--force']);
         logger.info({ worktreePath }, 'Worktree removed successfully');
     } catch (error) {
-        logger.warn({ 
-            worktreePath, 
-            error: error.message 
-        }, 'Failed to remove worktree with git command, attempting directory removal');
+        // Check if the error is because it's not a valid worktree
+        if (error.message && error.message.includes('.git\' is not a .git file')) {
+            logger.info({ 
+                worktreePath
+            }, 'Directory is not a valid worktree (possibly converted to regular repo), will remove directly');
+        } else {
+            logger.warn({ 
+                worktreePath, 
+                error: error.message 
+            }, 'Failed to remove worktree with git command, attempting directory removal');
+        }
         
         // Try to remove directory directly if git command fails
         try {
@@ -823,13 +830,79 @@ export function getRepoUrl(issue) {
  * @returns {Promise<{commitHash: string, commitMessage: string}|null>} Commit result
  */
 export async function commitChanges(worktreePath, commitMessage, author, issueNumber, issueTitle) {
-    const git = simpleGit(worktreePath);
+    // Validate worktree path exists and contains .git
+    try {
+        const gitPath = path.join(worktreePath, '.git');
+        const worktreeExists = await fs.pathExists(worktreePath);
+        const gitExists = await fs.pathExists(gitPath);
+        
+        if (!worktreeExists) {
+            throw new Error(`Worktree path does not exist: ${worktreePath}`);
+        }
+        
+        if (!gitExists) {
+            throw new Error(`Not a git repository (or any of the parent directories): ${worktreePath}`);
+        }
+        
+        // Check if .git is a file (worktree) or directory (regular repo)
+        const gitStats = await fs.stat(gitPath);
+        if (gitStats.isDirectory()) {
+            logger.warn({ 
+                worktreePath,
+                gitPath,
+                issueNumber 
+            }, '.git is a directory, not a worktree file - this suggests improper worktree creation');
+            
+            // This can happen if the worktree was converted to a regular repo during processing
+            // (e.g., by some git operations inside Docker containers)
+            // We can still continue as the git operations should work
+        } else if (gitStats.isFile()) {
+            // Read .git file content to verify it's a proper worktree
+            const gitFileContent = await fs.readFile(gitPath, 'utf8');
+            logger.debug({ 
+                worktreePath,
+                gitPath,
+                gitFileContent: gitFileContent.trim(),
+                issueNumber 
+            }, 'Validated worktree .git file');
+        }
+    } catch (validationError) {
+        logger.error({
+            worktreePath,
+            issueNumber,
+            error: validationError.message
+        }, 'Worktree validation failed');
+        throw validationError;
+    }
+    
+    // Initialize simple-git with proper baseDir option
+    const git = simpleGit({ baseDir: worktreePath });
+    
+    logger.debug({ 
+        worktreePath,
+        issueNumber 
+    }, 'Initializing git operations in worktree');
     
     try {
-        // Configure author if provided
+        // Try a different approach: set git config using raw commands instead of addConfig
         if (author) {
-            await git.addConfig('user.name', author.name, false, 'local');
-            await git.addConfig('user.email', author.email, false, 'local');
+            try {
+                // Use raw git commands to set config
+                await git.raw(['config', 'user.name', author.name]);
+                await git.raw(['config', 'user.email', author.email]);
+                logger.debug({
+                    worktreePath,
+                    author,
+                    issueNumber
+                }, 'Set git author config using raw commands');
+            } catch (configError) {
+                // If local config fails, try without --local flag
+                logger.warn({
+                    worktreePath,
+                    error: configError.message,
+                    issueNumber
+                }, 'Failed to set local git config, continuing without author config');
+            }
         }
         
         // Add all changes
@@ -837,10 +910,41 @@ export async function commitChanges(worktreePath, commitMessage, author, issueNu
         
         // Check if there are any changes to commit
         const status = await git.status();
+        
+        logger.debug({
+            worktreePath,
+            issueNumber,
+            tracked: status.tracked?.length || 0,
+            notAdded: status.not_added?.length || 0,
+            conflicted: status.conflicted?.length || 0,
+            created: status.created?.length || 0,
+            deleted: status.deleted?.length || 0,
+            modified: status.modified?.length || 0,
+            renamed: status.renamed?.length || 0,
+            staged: status.staged?.length || 0,
+            ahead: status.ahead || 0,
+            behind: status.behind || 0,
+            current: status.current || null,
+            detached: status.detached || false,
+            totalFiles: status.files?.length || 0
+        }, 'Git status before commit');
+        
         if (status.files.length === 0) {
             logger.info({ worktreePath }, 'No changes to commit');
             return null;
         }
+        
+        // Log detailed file information
+        logger.info({
+            worktreePath,
+            issueNumber,
+            totalFiles: status.files.length,
+            files: status.files.map(f => ({
+                path: f.path,
+                index: f.index,
+                working_dir: f.working_dir
+            }))
+        }, 'Files to be committed');
         
         // Generate structured commit message
         let finalCommitMessage;
@@ -860,16 +964,19 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
         // Commit changes
         const result = await git.commit(finalCommitMessage);
         
+        // Extract the actual commit hash (remove "HEAD " prefix if present)
+        const commitHash = result.commit.replace(/^HEAD\s+/, '');
+        
         logger.info({ 
             worktreePath, 
-            commitHash: result.commit,
+            commitHash: commitHash,
             filesChanged: status.files.length,
             issueNumber,
             commitMessage: finalCommitMessage
         }, 'Changes committed successfully');
         
         return {
-            commitHash: result.commit,
+            commitHash: commitHash,
             commitMessage: finalCommitMessage
         };
         
@@ -891,7 +998,7 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
  */
 export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, options = {}) {
     const { repoUrl, authToken } = options;
-    const git = simpleGit(worktreePath);
+    const git = simpleGit({ baseDir: worktreePath });
     
     try {
         // Set up authentication if provided
@@ -951,6 +1058,290 @@ export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, 
 }
 
 /**
+ * Creates a Git worktree from an existing branch (for PR follow-ups)
+ * @param {string} localRepoPath - Path to the main repository clone
+ * @param {string} branchName - Existing branch name to create worktree from
+ * @param {string} worktreeDirName - Name for the worktree directory
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @returns {Promise<{worktreePath: string, branchName: string}>} Worktree details
+ */
+export async function createWorktreeFromExistingBranch(localRepoPath, branchName, worktreeDirName, owner, repoName) {
+    const worktreePath = path.join(WORKTREES_BASE_PATH, owner, repoName, worktreeDirName);
+    
+    try {
+        const git = simpleGit(localRepoPath);
+        
+        // Check if worktree path already exists
+        if (await fs.pathExists(worktreePath)) {
+            logger.warn({ 
+                worktreePath, 
+                branchName 
+            }, 'Worktree path already exists. Checking if it\'s a valid worktree...');
+            
+            // Check if it's a proper worktree or just a directory
+            const gitPath = path.join(worktreePath, '.git');
+            let isProperWorktree = false;
+            
+            if (await fs.pathExists(gitPath)) {
+                const stats = await fs.stat(gitPath);
+                isProperWorktree = stats.isFile(); // Worktrees have .git as a file, not directory
+            }
+            
+            if (!isProperWorktree) {
+                logger.warn({ 
+                    worktreePath,
+                    gitPath,
+                    isDirectory: await fs.pathExists(gitPath) ? (await fs.stat(gitPath)).isDirectory() : false
+                }, 'Not a proper worktree, removing directory directly');
+                
+                // Force remove the directory since it's not a valid worktree
+                await fs.remove(worktreePath);
+            } else {
+                // It's a proper worktree, use cleanupWorktree
+                await cleanupWorktree(localRepoPath, worktreePath, branchName);
+            }
+            
+            // Double-check that the directory is really gone
+            if (await fs.pathExists(worktreePath)) {
+                logger.warn({ worktreePath }, 'Directory still exists after cleanup, forcing removal');
+                await fs.remove(worktreePath);
+            }
+        }
+        
+        // Ensure parent directory exists
+        await fs.ensureDir(path.dirname(worktreePath));
+        
+        logger.info({ 
+            localRepoPath, 
+            worktreePath, 
+            branchName
+        }, 'Creating Git worktree from existing branch...');
+        
+        // Fetch the latest changes for the branch
+        await git.fetch('origin', branchName);
+        logger.debug({ branchName }, 'Fetched latest changes for branch');
+        
+        // Always create worktree from remote branch to ensure fresh start
+        // This avoids complexity of tracking unpushed commits across failed attempts
+        try {
+            // First, ensure the worktree metadata directory exists in the main repo
+            const worktreeMetadataDir = path.join(localRepoPath, '.git', 'worktrees');
+            await fs.ensureDir(worktreeMetadataDir);
+            
+            // Verify the main repository is valid before creating worktree
+            const mainRepoGitPath = path.join(localRepoPath, '.git');
+            if (!await fs.pathExists(mainRepoGitPath)) {
+                throw new Error(`Main repository is invalid - no .git found at ${localRepoPath}`);
+            }
+            
+            // List existing worktrees to ensure we're not duplicating
+            try {
+                const existingWorktrees = await git.raw(['worktree', 'list', '--porcelain']);
+                logger.debug({ 
+                    localRepoPath,
+                    existingWorktrees: existingWorktrees.trim()
+                }, 'Current worktrees before adding new one');
+            } catch (listError) {
+                logger.warn({ error: listError.message }, 'Failed to list existing worktrees');
+            }
+            
+            // Create worktree with a local branch tracking the remote branch
+            // Using -b flag with the same branch name to create a local tracking branch
+            const worktreeAddResult = await git.raw([
+                'worktree', 'add',
+                '-B', branchName,  // Force create/reset local branch
+                worktreePath,
+                `origin/${branchName}`
+            ]);
+            logger.info({ 
+                branchName, 
+                worktreePath,
+                gitOutput: worktreeAddResult.trim(),
+                commandUsed: `git worktree add -B ${branchName} ${worktreePath} origin/${branchName}`
+            }, 'Git worktree add command completed');
+            
+            // Verify the worktree was created properly
+            const gitFilePath = path.join(worktreePath, '.git');
+            if (await fs.pathExists(gitFilePath)) {
+                const stats = await fs.stat(gitFilePath);
+                if (stats.isDirectory()) {
+                    // This means git created a regular repository instead of a worktree
+                    logger.error({
+                        worktreePath,
+                        gitFilePath,
+                        isDirectory: true
+                    }, 'Git created a regular repository instead of a worktree');
+                    throw new Error('Worktree creation failed - .git is a directory instead of a file');
+                } else {
+                    // Read the .git file to verify it points to the right place
+                    const gitFileContent = await fs.readFile(gitFilePath, 'utf8');
+                    logger.debug({
+                        worktreePath,
+                        gitFileContent: gitFileContent.trim()
+                    }, 'Worktree .git file content');
+                    
+                    // Extract the path from the .git file
+                    const match = gitFileContent.match(/gitdir:\s*(.+)/);
+                    if (match) {
+                        const gitdirPath = match[1].trim();
+                        // Verify the gitdir path exists
+                        if (!await fs.pathExists(gitdirPath)) {
+                            logger.error({
+                                worktreePath,
+                                gitdirPath,
+                                gitFileContent: gitFileContent.trim()
+                            }, 'Worktree .git file points to non-existent directory');
+                            throw new Error(`Worktree creation failed - gitdir path does not exist: ${gitdirPath}`);
+                        }
+                    }
+                }
+            } else {
+                throw new Error('Worktree creation failed - no .git file found');
+            }
+        } catch (error) {
+            // If creating from remote fails, check if it's due to improper worktree creation
+            if (error.message && error.message.includes('.git is a directory')) {
+                // This is a critical error - the worktree was not created properly
+                logger.error({ 
+                    branchName,
+                    worktreePath,
+                    error: error.message 
+                }, 'Worktree creation failed - improper structure detected');
+                
+                // Clean up the improperly created directory
+                try {
+                    await fs.remove(worktreePath);
+                    logger.info({ worktreePath }, 'Removed improperly created worktree directory');
+                } catch (cleanupError) {
+                    logger.error({ 
+                        worktreePath,
+                        error: cleanupError.message 
+                    }, 'Failed to clean up improper worktree directory');
+                }
+                
+                throw error; // Re-throw the original error
+            }
+            
+            // For other errors, assume the branch might not exist on remote
+            logger.error({ 
+                branchName,
+                error: error.message 
+            }, 'Failed to create worktree from remote branch');
+            throw new Error(`Cannot create worktree: branch '${branchName}' not found on remote`);
+        }
+        
+        // Ensure worktree files are owned by UID 1000 for Docker container compatibility
+        try {
+            const { execSync } = await import('child_process');
+            execSync(`sudo chown -R 1000:1000 "${worktreePath}"`, { 
+                stdio: 'inherit',
+                timeout: 10000
+            });
+            logger.debug({ 
+                worktreePath, 
+                branchName
+            }, 'Set worktree ownership to UID 1000 for container compatibility');
+        } catch (chownError) {
+            logger.warn({ 
+                worktreePath, 
+                branchName,
+                error: chownError.message 
+            }, 'Failed to set worktree ownership - container may have permission issues');
+        }
+        
+        // Add the worktree and main repo to Git's safe directories
+        try {
+            await git.raw(['config', '--global', '--add', 'safe.directory', worktreePath]);
+            await git.raw(['config', '--global', '--add', 'safe.directory', localRepoPath]);
+            logger.debug({ 
+                worktreePath, 
+                localRepoPath,
+                branchName
+            }, 'Added worktree and main repo to Git safe directories');
+        } catch (safeConfigError) {
+            logger.warn({ 
+                worktreePath, 
+                branchName,
+                error: safeConfigError.message 
+            }, 'Failed to add directories to Git safe directories - may encounter ownership warnings');
+        }
+        
+        // Set up remote in the worktree
+        // Worktrees don't automatically inherit remotes from the parent repository
+        const worktreeGit = simpleGit({ baseDir: worktreePath });
+        try {
+            // Check if origin remote exists
+            const remotes = await worktreeGit.getRemotes();
+            logger.debug({
+                worktreePath,
+                existingRemotes: remotes.map(r => r.name)
+            }, 'Checking existing remotes in worktree');
+            
+            if (!remotes.find(r => r.name === 'origin')) {
+                logger.info({ worktreePath }, 'No origin remote found in worktree, adding it');
+                
+                // Get the remote URL from the parent repository
+                const parentRemotes = await git.getRemotes(true);
+                const originRemote = parentRemotes.find(r => r.name === 'origin');
+                
+                if (originRemote && originRemote.refs.fetch) {
+                    await worktreeGit.addRemote('origin', originRemote.refs.fetch);
+                    logger.info({ 
+                        worktreePath, 
+                        remoteUrl: originRemote.refs.fetch
+                    }, 'Successfully added origin remote to worktree');
+                } else {
+                    logger.error({
+                        worktreePath,
+                        parentRemotes
+                    }, 'Could not find origin remote in parent repository');
+                }
+            } else {
+                logger.debug({ worktreePath }, 'Origin remote already exists in worktree');
+            }
+        } catch (remoteError) {
+            logger.error({ 
+                worktreePath, 
+                error: remoteError.message,
+                stack: remoteError.stack
+            }, 'Failed to set up remote in worktree - push operations WILL fail');
+        }
+        
+        // Final verification that the worktree is properly set up
+        try {
+            const finalRemotes = await worktreeGit.getRemotes(true);
+            const hasOrigin = finalRemotes.some(r => r.name === 'origin');
+            
+            if (!hasOrigin) {
+                throw new Error('Worktree was created but origin remote is missing');
+            }
+            
+            logger.info({ 
+                worktreePath, 
+                branchName,
+                remotes: finalRemotes.map(r => ({ name: r.name, url: r.refs.fetch }))
+            }, 'Git worktree created successfully from existing branch with remotes configured');
+        } catch (verifyError) {
+            logger.error({
+                worktreePath,
+                error: verifyError.message
+            }, 'Final verification failed - worktree may not be properly configured');
+            throw new Error(`Worktree setup incomplete: ${verifyError.message}`);
+        }
+        
+        return {
+            worktreePath,
+            branchName
+        };
+        
+    } catch (error) {
+        handleError(error, `Failed to create worktree from branch ${branchName}`);
+        throw error;
+    }
+}
+
+/**
  * Pushes branch from worktree to remote
  * @param {string} worktreePath - Path to the worktree
  * @param {string} branchName - Branch name to push
@@ -962,7 +1353,7 @@ export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, 
  */
 export async function pushBranch(worktreePath, branchName, options = {}) {
     const { repoUrl, authToken, remote = 'origin' } = options;
-    const git = simpleGit(worktreePath);
+    const git = simpleGit({ baseDir: worktreePath });
     
     try {
         // Set up authentication if provided
@@ -986,7 +1377,29 @@ export async function pushBranch(worktreePath, branchName, options = {}) {
                     expectedBranch: branchName 
                 }, 'Branch mismatch detected, attempting to checkout correct branch');
                 
+                // Check if the branch exists locally
+                const branches = await git.branchLocal();
+                const branchExists = branches.all.includes(branchName);
+                
+                logger.debug({
+                    worktreePath,
+                    branchName,
+                    branchExists,
+                    localBranches: branches.all,
+                    currentBranch: branches.current
+                }, 'Checking local branches before checkout');
+                
                 await git.checkout(branchName);
+                
+                // Verify checkout succeeded
+                const newBranch = await git.revparse(['--abbrev-ref', 'HEAD']);
+                logger.info({
+                    worktreePath,
+                    previousBranch: currentBranch.trim(),
+                    newBranch: newBranch.trim(),
+                    expectedBranch: branchName,
+                    checkoutSuccess: newBranch.trim() === branchName
+                }, 'Branch checkout completed');
             }
         } catch (branchCheckError) {
             logger.warn({ 
