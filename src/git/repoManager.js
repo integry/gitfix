@@ -1124,6 +1124,8 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
         
         // Always create worktree from remote branch to ensure fresh start
         // This avoids complexity of tracking unpushed commits across failed attempts
+        let worktreeCreated = false;
+        
         try {
             // First, ensure the worktree metadata directory exists in the main repo
             const worktreeMetadataDir = path.join(localRepoPath, '.git', 'worktrees');
@@ -1161,7 +1163,102 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
                 commandUsed: `git worktree add -B ${branchName} ${worktreePath} origin/${branchName}`
             }, 'Git worktree add command completed');
             
-            // Verify the worktree was created properly
+            worktreeCreated = true;
+        } catch (error) {
+            // Check if the error is because the branch is already checked out in another worktree
+            if (error.message && error.message.includes('is already used by worktree')) {
+                logger.error({ 
+                    branchName,
+                    error: error.message 
+                }, 'Branch is already checked out in another worktree');
+                
+                // Extract the existing worktree path from the error message
+                const match = error.message.match(/worktree at '([^']+)'/);
+                if (match) {
+                    const existingWorktreePath = match[1];
+                    logger.info({ 
+                        branchName,
+                        existingWorktreePath,
+                        newWorktreePath: worktreePath
+                    }, 'Attempting to remove existing worktree to allow new one');
+                    
+                    try {
+                        // Remove the existing worktree
+                        await git.raw(['worktree', 'remove', existingWorktreePath, '--force']);
+                        logger.info({ existingWorktreePath }, 'Successfully removed existing worktree');
+                        
+                        // Try creating the worktree again
+                        const worktreeAddResult = await git.raw([
+                            'worktree', 'add',
+                            '-B', branchName,  // Force create/reset local branch
+                            worktreePath,
+                            `origin/${branchName}`
+                        ]);
+                        logger.info({ 
+                            branchName, 
+                            worktreePath,
+                            gitOutput: worktreeAddResult.trim()
+                        }, 'Successfully created worktree after removing existing one');
+                        
+                        // Mark as created so we can continue with verification
+                        worktreeCreated = true;
+                    } catch (retryError) {
+                        logger.error({ 
+                            branchName,
+                            existingWorktreePath,
+                            error: retryError.message 
+                        }, 'Failed to handle existing worktree conflict');
+                        throw new Error(`Cannot create worktree: branch '${branchName}' is locked by another worktree`);
+                    }
+                } else {
+                    throw new Error(`Cannot create worktree: branch '${branchName}' is already checked out elsewhere`);
+                }
+            } else if (error.message && error.message.includes('.git is a directory')) {
+                // This is a critical error - the worktree was not created properly
+                logger.error({ 
+                    branchName,
+                    worktreePath,
+                    error: error.message 
+                }, 'Worktree creation failed - improper structure detected');
+                
+                // Clean up the improperly created directory
+                try {
+                    await fs.remove(worktreePath);
+                    logger.info({ worktreePath }, 'Removed improperly created worktree directory');
+                } catch (cleanupError) {
+                    logger.error({ 
+                        worktreePath,
+                        error: cleanupError.message 
+                    }, 'Failed to clean up improper worktree directory');
+                }
+                
+                throw error; // Re-throw the original error
+            } else {
+                // For other errors, check if it's really because branch doesn't exist
+                logger.error({ 
+                    branchName,
+                    error: error.message 
+                }, 'Failed to create worktree from remote branch');
+                
+                // Try to verify if the branch exists on remote
+                try {
+                    const remoteBranches = await git.branch(['-r']);
+                    const remoteBranchExists = remoteBranches.all.includes(`origin/${branchName}`);
+                    if (!remoteBranchExists) {
+                        throw new Error(`Cannot create worktree: branch '${branchName}' not found on remote`);
+                    } else {
+                        // Branch exists but some other error occurred
+                        throw new Error(`Cannot create worktree: ${error.message}`);
+                    }
+                } catch (branchCheckError) {
+                    // If we can't even check branches, throw the original error
+                    throw new Error(`Cannot create worktree: ${error.message}`);
+                }
+            }
+        }
+        
+        // Verify the worktree was created properly (runs for both initial and retry attempts)
+        if (worktreeCreated) {
             const gitFilePath = path.join(worktreePath, '.git');
             if (await fs.pathExists(gitFilePath)) {
                 const stats = await fs.stat(gitFilePath);
@@ -1199,36 +1296,6 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
             } else {
                 throw new Error('Worktree creation failed - no .git file found');
             }
-        } catch (error) {
-            // If creating from remote fails, check if it's due to improper worktree creation
-            if (error.message && error.message.includes('.git is a directory')) {
-                // This is a critical error - the worktree was not created properly
-                logger.error({ 
-                    branchName,
-                    worktreePath,
-                    error: error.message 
-                }, 'Worktree creation failed - improper structure detected');
-                
-                // Clean up the improperly created directory
-                try {
-                    await fs.remove(worktreePath);
-                    logger.info({ worktreePath }, 'Removed improperly created worktree directory');
-                } catch (cleanupError) {
-                    logger.error({ 
-                        worktreePath,
-                        error: cleanupError.message 
-                    }, 'Failed to clean up improper worktree directory');
-                }
-                
-                throw error; // Re-throw the original error
-            }
-            
-            // For other errors, assume the branch might not exist on remote
-            logger.error({ 
-                branchName,
-                error: error.message 
-            }, 'Failed to create worktree from remote branch');
-            throw new Error(`Cannot create worktree: branch '${branchName}' not found on remote`);
         }
         
         // Ensure worktree files are owned by UID 1000 for Docker container compatibility
