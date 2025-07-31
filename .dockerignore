@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+README.md
+.env
+.env.example
+docs/
+test/
+coverage/
+.nyc_output/
+.vscode/
+.idea/
+*.log
+.DS_Store
+/tmp/git-processor/
