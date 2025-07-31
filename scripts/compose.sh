@@ -10,6 +10,11 @@ case $COMMAND in
     docker-compose up --build -d
     echo "Environment is up and running."
     ;;
+  dev)
+    echo "Starting up Docker Compose environment in development mode..."
+    docker-compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+    echo "Development environment is up and running."
+    ;;
   down)
     echo "Stopping Docker Compose environment..."
     docker-compose down
@@ -25,7 +30,7 @@ case $COMMAND in
     echo "Images rebuilt."
     ;;
   *)
-    echo "Usage: $0 {up|down|logs|build}"
+    echo "Usage: $0 {up|dev|down|logs|build}"
     exit 1
     ;;
 esac

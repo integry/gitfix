@@ -16,6 +16,7 @@
     "worker:reset:dev": "LOG_LEVEL=debug node src/worker.js --reset",
     "config:repos": "node scripts/list-repo-configs.js",
     "compose:up": "./scripts/compose.sh up",
+    "compose:dev": "./scripts/compose.sh dev",
     "compose:down": "./scripts/compose.sh down",
     "compose:logs": "./scripts/compose.sh logs",
     "compose:build": "./scripts/compose.sh build"
