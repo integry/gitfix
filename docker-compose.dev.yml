@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  watcher:
+    command: npm run daemon:dev
+
+  worker:
+    command: npm run worker:dev

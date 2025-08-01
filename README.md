@@ -307,6 +307,38 @@ console.log(config.github.appId);
 console.log(config.logging.level);
 ```
 
+## Docker Compose Setup
+
+The project includes a complete Docker Compose configuration for running all services in containers. This simplifies development and deployment by managing GitFix, Redis, and the UI in a unified environment.
+
+### Docker Compose Commands
+
+Manage the entire application stack with these npm scripts:
+
+```bash
+# Start all services (builds if necessary)
+npm run compose:up
+
+# Stop all services
+npm run compose:down
+
+# View logs from all services
+npm run compose:logs
+
+# Force rebuild of all images
+npm run compose:build
+```
+
+These commands use the `scripts/compose.sh` script which wraps Docker Compose operations for convenience.
+
+### Docker Compose Services
+
+- **gitfix**: Main application (daemon and worker)
+- **redis**: Redis server for task queue management
+- **gitfix-ui**: Web UI for monitoring and management (port 5173)
+
+All services are configured in `docker-compose.yml` with proper networking and volume management.
+
 ## Redis Setup
 
 The task queue requires Redis. Install and start Redis:
@@ -323,6 +355,8 @@ sudo systemctl start redis
 # Docker
 docker run -d -p 6379:6379 redis:alpine
 ```
+
+**Note**: When using Docker Compose, Redis is automatically included and configured - no separate installation needed.
 
 ## Error Handling
 
