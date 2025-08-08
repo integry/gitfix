@@ -179,6 +179,7 @@ async function processPullRequestCommentJob(job) {
         commentId,
         commentBody,
         commentAuthor,
+        comments,  // New batch format
         branchName,
         repoOwner,
         repoName,
@@ -186,7 +187,22 @@ async function processPullRequestCommentJob(job) {
         correlationId
     } = job.data;
     const correlatedLogger = logger.withCorrelation(correlationId);
-    correlatedLogger.info({ pullRequestNumber, branchName, llm }, 'Processing PR comment job...');
+    
+    // Check if this is a batch job or single comment job
+    const isBatchJob = !!comments && Array.isArray(comments);
+    const commentsToProcess = isBatchJob ? comments : [{
+        id: commentId,
+        body: commentBody,
+        author: commentAuthor
+    }];
+    
+    correlatedLogger.info({ 
+        pullRequestNumber, 
+        branchName, 
+        llm,
+        isBatchJob,
+        commentsCount: commentsToProcess.length
+    }, `Processing PR comment${isBatchJob ? 's batch' : ''} job...`);
 
     let octokit;
     let localRepoPath;
@@ -200,7 +216,7 @@ async function processPullRequestCommentJob(job) {
             'get_authenticated_octokit'
         );
 
-        // Check if this comment has already been processed
+        // Check if comments have already been processed
         const botUsername = process.env.GITHUB_BOT_USERNAME || 'github-actions[bot]';
         const prComments = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
             owner: repoOwner,
@@ -210,28 +226,39 @@ async function processPullRequestCommentJob(job) {
             page: 1
         });
 
-        // Look for bot comments that reference this specific comment ID
-        const alreadyProcessed = prComments.data.some(comment => {
-            const isBotComment = comment.user.login === botUsername || 
-                                comment.user.type === 'Bot' ||
-                                comment.user.login.includes('[bot]');
+        // Filter out already processed comments
+        const unprocessedComments = commentsToProcess.filter(comment => {
+            const alreadyProcessed = prComments.data.some(prComment => {
+                const isBotComment = prComment.user.login === botUsername || 
+                                    prComment.user.type === 'Bot' ||
+                                    prComment.user.login.includes('[bot]');
+                
+                if (!isBotComment) return false;
+                
+                // Check if the bot comment references this specific comment ID
+                const referencesThisComment = prComment.body.includes(`Comment ID: ${comment.id}`) ||
+                                            prComment.body.includes(`comment #${comment.id}`) ||
+                                            prComment.body.includes(`Processing comment ID: ${comment.id}`);
+                
+                return referencesThisComment;
+            });
             
-            if (!isBotComment) return false;
+            if (alreadyProcessed) {
+                correlatedLogger.debug({
+                    pullRequestNumber,
+                    commentId: comment.id,
+                    commentAuthor: comment.author
+                }, 'Comment already processed, filtering out');
+            }
             
-            // Check if the bot comment references this specific comment ID
-            const referencesThisComment = comment.body.includes(`Comment ID: ${commentId}`) ||
-                                        comment.body.includes(`comment #${commentId}`) ||
-                                        comment.body.includes(`Processing comment ID: ${commentId}`);
-            
-            return referencesThisComment;
+            return !alreadyProcessed;
         });
 
-        if (alreadyProcessed) {
+        if (unprocessedComments.length === 0) {
             correlatedLogger.info({
                 pullRequestNumber,
-                commentId,
-                commentAuthor
-            }, 'PR comment has already been processed, skipping');
+                originalCount: commentsToProcess.length
+            }, 'All PR comments have already been processed, skipping');
             
             return { 
                 status: 'skipped', 
@@ -240,12 +267,30 @@ async function processPullRequestCommentJob(job) {
             };
         }
 
-        // Post a "starting work" comment with specific comment ID reference
-        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+        // Build combined comment body for prompt
+        let combinedCommentBody;
+        let commentAuthors = [];
+        
+        if (unprocessedComments.length === 1) {
+            combinedCommentBody = unprocessedComments[0].body;
+            commentAuthors = [unprocessedComments[0].author];
+        } else {
+            // Format multiple comments
+            combinedCommentBody = unprocessedComments.map((comment, index) => {
+                return `**Comment ${index + 1}** (by @${comment.author}):\n${comment.body}`;
+            }).join('\n\n---\n\n');
+            commentAuthors = [...new Set(unprocessedComments.map(c => c.author))];
+        }
+
+        // Post a "starting work" comment with reference to all comment IDs
+        const commentIds = unprocessedComments.map(c => c.id).join(', ');
+        const authorsText = commentAuthors.map(a => `@${a}`).join(', ');
+        
+        const startingWorkComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
             owner: repoOwner,
             repo: repoName,
             issue_number: pullRequestNumber,
-            body: `🔄 **Starting work on follow-up changes** requested by @${commentAuthor}\n\nI'll analyze the request and implement the necessary changes.\n\n---\n_Processing comment ID: ${commentId}_`,
+            body: `🔄 **Starting work on follow-up changes** requested by ${authorsText}\n\nI'll analyze the ${unprocessedComments.length} request${unprocessedComments.length > 1 ? 's' : ''} and implement the necessary changes.\n\n---\n_Processing comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${commentIds}_`,
         });
 
         const githubToken = await octokit.auth();
@@ -274,9 +319,9 @@ async function processPullRequestCommentJob(job) {
         }, 'Created worktree from existing PR branch');
 
         // Step 3: Generate prompt for follow-up changes
-        const prompt = `You are working on an existing pull request branch. A user has requested the following follow-up change:
+        const prompt = `You are working on an existing pull request branch. ${unprocessedComments.length > 1 ? `Users have requested the following ${unprocessedComments.length} follow-up changes` : 'A user has requested the following follow-up change'}:
 
-"${commentBody}"
+${combinedCommentBody}
 
 **CRITICAL INSTRUCTIONS:**
 - You are in directory: ${worktreeInfo.worktreePath}
@@ -336,12 +381,17 @@ async function processPullRequestCommentJob(job) {
             }
         }
 
-        const commitMessage = `feat(ai): Apply follow-up changes from PR comment
+        // Build commit message with all comment references
+        const commentReferences = unprocessedComments.map(c => 
+            `Comment by: @${c.author} (ID: ${c.id})`
+        ).join('\n');
+        
+        const commitMessage = `feat(ai): Apply follow-up changes from PR ${unprocessedComments.length > 1 ? 'comments' : 'comment'}
 
-${changesSummary ? changesSummary.split('\n')[0] : `Implemented changes requested by @${commentAuthor}`}${commitDetails}
+${changesSummary ? changesSummary.split('\n')[0] : `Implemented changes requested by ${authorsText}`}${commitDetails}
 
 PR: #${pullRequestNumber}
-Comment by: @${commentAuthor} (ID: ${commentId})
+${commentReferences}
 Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
 
         const commitResult = await commitChanges(
@@ -360,6 +410,15 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
 
             // Step 6: Add confirmation comment to the PR
             let prCommentBody = `✅ **Applied the requested follow-up changes** in commit ${commitResult.commitHash.substring(0, 7)}\n\n`;
+            
+            // Add reference to all processed comments
+            if (unprocessedComments.length > 1) {
+                prCommentBody += `Processed ${unprocessedComments.length} comments:\n`;
+                unprocessedComments.forEach((comment, index) => {
+                    prCommentBody += `- Comment ${index + 1} by @${comment.author} (ID: ${comment.id})\n`;
+                });
+                prCommentBody += '\n';
+            }
             
             // Add the actual changes summary
             if (changesSummary) {
@@ -392,7 +451,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             
             prCommentBody += `---\n`;
             prCommentBody += `🤖 **Implemented by Claude Code**\n`;
-            prCommentBody += `- Requested by: @${commentAuthor}\n`;
+            prCommentBody += `- Requested by: ${authorsText}\n`;
             prCommentBody += `- Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}\n`;
             if (claudeResult.finalResult?.num_turns) {
                 prCommentBody += `- Turns: ${claudeResult.finalResult.num_turns}\n`;
@@ -411,6 +470,18 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 issue_number: pullRequestNumber,
                 body: prCommentBody,
             });
+
+            // Delete the "starting work" comment
+            if (startingWorkComment?.data?.id) {
+                await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+                    owner: repoOwner,
+                    repo: repoName,
+                    comment_id: startingWorkComment.data.id,
+                });
+                correlatedLogger.info({
+                    commentId: startingWorkComment.data.id
+                }, 'Deleted starting work comment');
+            }
 
             correlatedLogger.info({
                 pullRequestNumber,
@@ -442,6 +513,18 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 issue_number: pullRequestNumber,
                 body: noChangesBody,
             });
+
+            // Delete the "starting work" comment
+            if (startingWorkComment?.data?.id) {
+                await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+                    owner: repoOwner,
+                    repo: repoName,
+                    comment_id: startingWorkComment.data.id,
+                });
+                correlatedLogger.info({
+                    commentId: startingWorkComment.data.id
+                }, 'Deleted starting work comment after no-changes analysis');
+            }
         }
 
         return { 
@@ -460,7 +543,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                     owner: repoOwner,
                     repo: repoName,
                     issue_number: pullRequestNumber,
-                    body: `❌ **Failed to apply follow-up changes** requested by @${commentAuthor}
+                    body: `❌ **Failed to apply follow-up changes** requested by ${authorsText}
 
 An error occurred while processing your request:
 
@@ -469,9 +552,25 @@ ${error.message}
 \`\`\`
 
 ---
-Comment ID: ${commentId}
+Comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${commentIds}
 Please check the logs for more details.`,
                 });
+
+                // Delete the "starting work" comment even on error
+                if (startingWorkComment?.data?.id) {
+                    try {
+                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+                            owner: repoOwner,
+                            repo: repoName,
+                            comment_id: startingWorkComment.data.id,
+                        });
+                        correlatedLogger.info({
+                            commentId: startingWorkComment.data.id
+                        }, 'Deleted starting work comment after error');
+                    } catch (deleteError) {
+                        correlatedLogger.error({ error: deleteError.message }, 'Failed to delete starting work comment');
+                    }
+                }
             } catch (commentError) {
                 correlatedLogger.error({ error: commentError.message }, 'Failed to post error comment');
             }

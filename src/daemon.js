@@ -126,6 +126,10 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
     const correlatedLogger = logger.withCorrelation(correlationId);
     const [owner, repo] = repoFullName.split('/');
 
+    correlatedLogger.debug({
+        repository: repoFullName
+    }, 'Checking for PR comments in repository');
+
     try {
         const prs = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
             owner,
@@ -134,18 +138,79 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
             per_page: 100,
         });
 
+        correlatedLogger.debug({
+            repository: repoFullName,
+            openPRCount: prs.data.length
+        }, `Found ${prs.data.length} open pull requests`);
+
+        if (prs.data.length === 0) {
+            correlatedLogger.debug({
+                repository: repoFullName
+            }, 'No open pull requests found, skipping PR comment check');
+            return;
+        }
+
         for (const pr of prs.data) {
-            const comments = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                owner,
-                repo,
-                issue_number: pr.number,
-            });
+            correlatedLogger.debug({
+                repository: repoFullName,
+                pullRequestNumber: pr.number,
+                pullRequestTitle: pr.title
+            }, 'Checking PR for comments');
+
+            // Fetch both issue comments and PR review comments
+            const [issueComments, reviewComments] = await Promise.all([
+                octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                    owner,
+                    repo,
+                    issue_number: pr.number,
+                }),
+                octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+                    owner,
+                    repo,
+                    pull_number: pr.number,
+                })
+            ]);
+
+            // Combine both types of comments
+            const allComments = [
+                ...issueComments.data,
+                ...reviewComments.data
+            ];
 
             // Check if any bot comments exist after this comment that indicate processing
             const botUsername = GITHUB_BOT_USERNAME || 'github-actions[bot]';
-            const commentsByTime = comments.data.sort((a, b) => 
+            const commentsByTime = allComments.sort((a, b) => 
                 new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
             );
+
+            const gitfixComments = commentsByTime.filter(c => c.body && c.body.includes('!gitfix'));
+            
+            correlatedLogger.debug({
+                repository: repoFullName,
+                pullRequestNumber: pr.number,
+                issueComments: issueComments.data.length,
+                reviewComments: reviewComments.data.length,
+                totalComments: allComments.length,
+                gitfixComments: gitfixComments.length
+            }, `Found ${allComments.length} comments (${issueComments.data.length} issue + ${reviewComments.data.length} review), ${gitfixComments.length} with !gitfix`);
+
+            // Log comment details for debugging
+            if (allComments.length > 0 && gitfixComments.length === 0) {
+                correlatedLogger.debug({
+                    repository: repoFullName,
+                    pullRequestNumber: pr.number,
+                    commentBodies: commentsByTime.map(c => ({
+                        id: c.id,
+                        author: c.user.login,
+                        type: c.pull_request_review_id ? 'review' : 'issue',
+                        bodyPreview: c.body ? c.body.substring(0, 100) + (c.body.length > 100 ? '...' : '') : 'null'
+                    }))
+                }, 'Comment details (no !gitfix found)');
+            }
+
+            // Collect all unprocessed !gitfix comments for batch processing
+            const unprocessedComments = [];
+            let selectedLlm = null;
 
             for (const comment of commentsByTime) {
                 const commentAuthor = comment.user.login;
@@ -187,46 +252,89 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
 
                     if (alreadyProcessed) {
                         correlatedLogger.debug({
+                            repository: `${owner}/${repo}`,
                             pullRequestNumber: pr.number,
                             commentId: comment.id,
-                            commentAuthor
+                            commentAuthor,
+                            commentType: comment.pull_request_review_id ? 'review' : 'issue'
                         }, 'PR comment already processed, skipping');
                         continue;
                     }
 
                     const llmMatch = comment.body.match(/!gitfix:(\w+)/);
                     const llm = llmMatch ? resolveModelAlias(llmMatch[1]) : null;
+                    
+                    // Use the first specified LLM, or fallback to the last one found
+                    if (llm && !selectedLlm) {
+                        selectedLlm = llm;
+                    }
 
-                    const jobData = {
-                        pullRequestNumber: pr.number,
-                        commentId: comment.id,
-                        commentBody: comment.body,
-                        commentAuthor,
-                        repoOwner: owner,
-                        repoName: repo,
-                        branchName: pr.head.ref,
-                        llm,
-                        correlationId: generateCorrelationId(),
-                    };
-
-                    const jobId = `pr-comment-${owner}-${repo}-${pr.number}-${comment.id}`;
-
-                    try {
-                        await issueQueue.add('processPullRequestComment', jobData, { jobId });
-                        correlatedLogger.info({
-                            jobId,
-                            pullRequestNumber: pr.number,
-                            commentId: comment.id,
-                        }, 'Successfully added PR comment to processing queue');
-                    } catch (error) {
-                        if (error.message?.includes('Job already exists')) {
-                            correlatedLogger.debug({
-                                pullRequestNumber: pr.number,
-                                commentId: comment.id,
-                            }, 'PR comment job already in queue, skipping');
-                        } else {
-                            handleError(error, `Failed to add PR comment ${comment.id} to queue`, { correlationId });
+                    // For review comments, include the code context
+                    let enhancedCommentBody = comment.body;
+                    if (comment.pull_request_review_id) {
+                        // This is a PR review comment
+                        const codeContext = [];
+                        if (comment.path) {
+                            codeContext.push(`File: ${comment.path}`);
                         }
+                        if (comment.line) {
+                            codeContext.push(`Line: ${comment.line}`);
+                        }
+                        if (comment.diff_hunk) {
+                            codeContext.push('Code context:');
+                            codeContext.push('```diff');
+                            codeContext.push(comment.diff_hunk);
+                            codeContext.push('```');
+                        }
+                        
+                        if (codeContext.length > 0) {
+                            enhancedCommentBody = `${comment.body}\n\n--- Review Comment Context ---\n${codeContext.join('\n')}`;
+                        }
+                    }
+
+                    unprocessedComments.push({
+                        id: comment.id,
+                        body: enhancedCommentBody,
+                        author: commentAuthor,
+                        type: comment.pull_request_review_id ? 'review' : 'issue',
+                        hasCodeContext: comment.pull_request_review_id && comment.diff_hunk ? true : false
+                    });
+                }
+            }
+
+            // If we have unprocessed comments, create a single batch job
+            if (unprocessedComments.length > 0) {
+                const jobData = {
+                    pullRequestNumber: pr.number,
+                    comments: unprocessedComments,  // Array of all comments to process
+                    repoOwner: owner,
+                    repoName: repo,
+                    branchName: pr.head.ref,
+                    llm: selectedLlm,
+                    correlationId: generateCorrelationId(),
+                };
+
+                // Create a unique job ID based on PR and timestamp to allow reprocessing
+                const timestamp = Date.now();
+                const jobId = `pr-comments-batch-${owner}-${repo}-${pr.number}-${timestamp}`;
+
+                try {
+                    await issueQueue.add('processPullRequestComment', jobData, { jobId });
+                    correlatedLogger.info({
+                        jobId,
+                        pullRequestNumber: pr.number,
+                        commentsCount: unprocessedComments.length,
+                        commentIds: unprocessedComments.map(c => c.id),
+                        commentTypes: unprocessedComments.map(c => c.type)
+                    }, `Successfully added batch PR comments job to processing queue (${unprocessedComments.length} comments)`);
+                } catch (error) {
+                    if (error.message?.includes('Job already exists')) {
+                        correlatedLogger.debug({
+                            pullRequestNumber: pr.number,
+                            commentsCount: unprocessedComments.length,
+                        }, 'PR comments batch job already in queue, skipping');
+                    } else {
+                        handleError(error, `Failed to add PR comments batch to queue`, { correlationId });
                     }
                 }
             }
