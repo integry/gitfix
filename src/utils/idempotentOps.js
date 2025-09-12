@@ -165,7 +165,8 @@ export class IdempotentGitHubOps {
 
         const checkCommentExists = async () => {
             try {
-                const comments = await this.octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                // Fetch ALL comments using pagination to ensure we don't miss any
+                const comments = await this.octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                     owner,
                     repo,
                     issue_number: issueNumber,
@@ -174,7 +175,7 @@ export class IdempotentGitHubOps {
                 
                 // Check if a comment with the idempotency key already exists
                 const keyPattern = `<!-- idempotency-key: ${idempotencyKey} -->`;
-                return comments.data.find(comment => comment.body.includes(keyPattern));
+                return comments.find(comment => comment.body.includes(keyPattern));
             } catch (error) {
                 return null; // Assume comment doesn't exist if we can't check
             }

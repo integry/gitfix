@@ -131,50 +131,55 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
     }, 'Checking for PR comments in repository');
 
     try {
-        const prs = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
+        // Fetch ALL open pull requests using pagination
+        const prs = await octokit.paginate('GET /repos/{owner}/{repo}/pulls', {
             owner,
             repo,
             state: 'open',
-            per_page: 100,
+            per_page: 100
         });
 
         correlatedLogger.debug({
             repository: repoFullName,
-            openPRCount: prs.data.length
-        }, `Found ${prs.data.length} open pull requests`);
+            openPRCount: prs.length
+        }, `Found ${prs.length} open pull requests`);
 
-        if (prs.data.length === 0) {
+        if (prs.length === 0) {
             correlatedLogger.debug({
                 repository: repoFullName
             }, 'No open pull requests found, skipping PR comment check');
             return;
         }
 
-        for (const pr of prs.data) {
+        for (const pr of prs) {
             correlatedLogger.debug({
                 repository: repoFullName,
                 pullRequestNumber: pr.number,
                 pullRequestTitle: pr.title
             }, 'Checking PR for comments');
 
-            // Fetch both issue comments and PR review comments
+            // Fetch all issue comments and PR review comments with pagination
+            // Using Octokit's paginate method to get ALL comments, not just the first page
             const [issueComments, reviewComments] = await Promise.all([
-                octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                     owner,
                     repo,
                     issue_number: pr.number,
+                    per_page: 100
                 }),
-                octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+                octokit.paginate('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
                     owner,
                     repo,
                     pull_number: pr.number,
+                    per_page: 100
                 })
             ]);
 
             // Combine both types of comments
+            // Note: issueComments and reviewComments are now arrays directly (not .data)
             const allComments = [
-                ...issueComments.data,
-                ...reviewComments.data
+                ...issueComments,
+                ...reviewComments
             ];
 
             // Check if any bot comments exist after this comment that indicate processing
@@ -188,8 +193,8 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
             correlatedLogger.debug({
                 repository: repoFullName,
                 pullRequestNumber: pr.number,
-                issueComments: issueComments.data.length,
-                reviewComments: reviewComments.data.length,
+                issueComments: issueComments.length,
+                reviewComments: reviewComments.length,
                 totalComments: allComments.length,
                 gitfixComments: gitfixComments.length
             }, `Found ${allComments.length} comments (${issueComments.data.length} issue + ${reviewComments.data.length} review), ${gitfixComments.length} with !gitfix`);
