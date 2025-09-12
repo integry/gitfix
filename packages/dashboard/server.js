@@ -4,12 +4,19 @@ const { createClient } = require('redis');
 const { Queue } = require('bullmq');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+const { setupAuth, ensureAuthenticated } = require('./auth');
 
 const app = express();
 const PORT = process.env.DASHBOARD_API_PORT || 4000;
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true
+}));
 app.use(express.json());
+
+// Setup authentication
+setupAuth(app);
 
 let redisClient;
 let taskQueue;
@@ -32,7 +39,7 @@ async function initRedis() {
   console.log('Connected to Redis');
 }
 
-app.get('/api/status', async (req, res) => {
+app.get('/api/status', ensureAuthenticated, async (req, res) => {
   try {
     const status = {
       api: 'healthy',
@@ -70,7 +77,7 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-app.get('/api/queue/stats', async (req, res) => {
+app.get('/api/queue/stats', ensureAuthenticated, async (req, res) => {
   try {
     const [waiting, active, completed, failed, delayed] = await Promise.all([
       taskQueue.getWaitingCount(),
@@ -94,7 +101,7 @@ app.get('/api/queue/stats', async (req, res) => {
   }
 });
 
-app.get('/api/activity', async (req, res) => {
+app.get('/api/activity', ensureAuthenticated, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
@@ -121,7 +128,7 @@ app.get('/api/activity', async (req, res) => {
   }
 });
 
-app.get('/api/metrics', async (req, res) => {
+app.get('/api/metrics', ensureAuthenticated, async (req, res) => {
   try {
     const metrics = {
       jobsProcessed: await redisClient.get('metrics:jobs:processed') || '0',
@@ -139,7 +146,7 @@ app.get('/api/metrics', async (req, res) => {
   }
 });
 
-app.get('/api/task/:taskId/history', async (req, res) => {
+app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
   try {
     const { taskId } = req.params;
     
