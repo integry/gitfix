@@ -1732,6 +1732,29 @@ async function startWorker(options = {}) {
         resetPerformed: options.reset || false
     }, 'Starting GitHub Issue Worker...');
     
+    // Initialize Redis connection for heartbeat
+    const heartbeatRedis = new Redis({
+        host: process.env.REDIS_HOST || 'localhost',
+        port: process.env.REDIS_PORT || 6379,
+        retryStrategy: times => Math.min(times * 50, 2000)
+    });
+    
+    // Function to send heartbeat
+    const sendHeartbeat = async () => {
+        try {
+            await heartbeatRedis.set('system:status:worker', Date.now(), 'EX', 90);
+            logger.debug('Worker heartbeat sent');
+        } catch (error) {
+            logger.error({ error: error.message }, 'Failed to send worker heartbeat');
+        }
+    };
+    
+    // Send initial heartbeat
+    await sendHeartbeat();
+    
+    // Set up heartbeat interval (every 30 seconds)
+    const heartbeatInterval = setInterval(sendHeartbeat, 30000);
+    
     // Ensure Claude Docker image is built before starting worker
     logger.info('Checking Claude Code Docker image...');
     const imageReady = await buildClaudeDockerImage();
@@ -1756,12 +1779,16 @@ async function startWorker(options = {}) {
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
         logger.info('Worker received SIGINT, shutting down gracefully...');
+        clearInterval(heartbeatInterval);
+        await heartbeatRedis.quit();
         await worker.close();
         process.exit(0);
     });
 
     process.on('SIGTERM', async () => {
         logger.info('Worker received SIGTERM, shutting down gracefully...');
+        clearInterval(heartbeatInterval);
+        await heartbeatRedis.quit();
         await worker.close();
         process.exit(0);
     });
