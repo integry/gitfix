@@ -237,6 +237,9 @@ async function processPullRequestCommentJob(job) {
     let octokit;
     let localRepoPath;
     let worktreeInfo;
+    
+    // Create task ID for this PR follow-up
+    const taskId = `pr-${repoOwner}-${repoName}-${pullRequestNumber}-followup`;
 
     try {
         // Get authenticated Octokit instance
@@ -381,7 +384,8 @@ ${combinedCommentBody}
             githubToken: githubToken.token,
             customPrompt: prompt,
             branchName: worktreeInfo.branchName,
-            modelName: llm || DEFAULT_MODEL_NAME
+            modelName: llm || DEFAULT_MODEL_NAME,
+            taskId: taskId
         });
 
         if (!claudeResult.success) {
@@ -877,7 +881,8 @@ async function processGitHubIssueJob(job) {
                 issueRef: issueRef,
                 githubToken: githubToken.token,
                 branchName: worktreeInfo.branchName,
-                modelName: modelName
+                modelName: modelName,
+                taskId: taskId
             });
             
             correlatedLogger.info({
@@ -1301,7 +1306,8 @@ This is an emergency retry - the main implementation is complete, you just need 
                                 isRetry: true,
                                 retryReason: 'Emergency PR creation - main implementation complete',
                                 branchName: worktreeInfo.branchName,
-                                modelName: modelName
+                                modelName: modelName,
+                                taskId: taskId
                             });
 
                             correlatedLogger.info({
@@ -1443,6 +1449,44 @@ This is an emergency retry - the main implementation is complete, you just need 
             timestamp: new Date().toISOString(),
             systemVersion: process.env.npm_package_version || 'unknown'
         }, 'Issue processing completed - comprehensive metrics logged');
+        
+        // Get final git diff for persistence
+        let finalDiff = '';
+        if (worktreeInfo && worktreeInfo.worktreePath) {
+            try {
+                const git = simpleGit(worktreeInfo.worktreePath);
+                finalDiff = await git.diff(['--cached', 'HEAD']);
+                if (!finalDiff) {
+                    // If no staged changes, get unstaged changes
+                    finalDiff = await git.diff();
+                }
+            } catch (diffError) {
+                correlatedLogger.warn({
+                    taskId,
+                    error: diffError.message
+                }, 'Failed to get final git diff for persistence');
+            }
+        }
+
+        // Mark task as completed with logs and diff persistence
+        try {
+            await stateManager.markTaskCompleted(taskId, {
+                prNumber: postProcessingResult?.pr?.number,
+                prUrl: postProcessingResult?.pr?.url,
+                claudeSuccess: claudeResult?.success,
+                finalStatus
+            }, {
+                logs: claudeResult?.rawOutput || '',
+                finalDiff: finalDiff,
+                claudeResult: claudeResult
+            });
+        } catch (stateError) {
+            correlatedLogger.warn({
+                taskId,
+                error: stateError.message
+            }, 'Failed to mark task as completed in state manager');
+        }
+        
         return { 
             status: finalStatus,
             issueNumber: issueRef.number,

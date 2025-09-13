@@ -237,15 +237,54 @@ export class WorkerStateManager {
      * Marks task as completed
      * @param {string} taskId - Task identifier
      * @param {object} result - Task result
+     * @param {object} taskData - Additional task data including logs and diffs
      * @returns {Promise<object>} Updated state
      */
-    async markTaskCompleted(taskId, result = {}) {
+    async markTaskCompleted(taskId, result = {}, taskData = {}) {
         const metadata = {
             result,
             reason: 'Task completed successfully'
         };
         
+        // Store task history data (logs and final diff) if provided
+        if (taskData.logs || taskData.finalDiff) {
+            const historyKey = `task:${taskId}:history`;
+            const historyData = {
+                completedAt: new Date().toISOString(),
+                logs: taskData.logs || '',
+                finalDiff: taskData.finalDiff || '',
+                claudeResult: taskData.claudeResult || null
+            };
+            
+            // Store history data with same expiry as task state
+            await this.redis.setex(historyKey, this.stateExpiry, JSON.stringify(historyData));
+            
+            logger.info({
+                taskId,
+                hasLogs: !!taskData.logs,
+                logSize: taskData.logs?.length || 0,
+                hasDiff: !!taskData.finalDiff,
+                diffSize: taskData.finalDiff?.length || 0
+            }, 'Stored task history data');
+        }
+        
         return await this.updateTaskState(taskId, TaskStates.COMPLETED, metadata);
+    }
+
+    /**
+     * Gets task history data (logs and diffs)
+     * @param {string} taskId - Task identifier
+     * @returns {Promise<object|null>} Task history or null if not found
+     */
+    async getTaskHistory(taskId) {
+        const historyKey = `task:${taskId}:history`;
+        const historyJson = await this.redis.get(historyKey);
+        
+        if (!historyJson) {
+            return null;
+        }
+        
+        return JSON.parse(historyJson);
     }
 
     /**

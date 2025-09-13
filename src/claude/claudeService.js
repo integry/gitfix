@@ -5,6 +5,7 @@ import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 import { getDefaultModel } from '../config/modelAliases.js';
+import Redis from 'ioredis';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
@@ -71,9 +72,10 @@ Your task is complete when you have implemented a working solution to the issue.
  * @param {string} options.retryReason - Reason for retry (optional)
  * @param {string} options.branchName - The specific branch name to use (optional)
  * @param {string} options.modelName - The AI model being used (optional)
+ * @param {string} options.taskId - Task ID for streaming logs (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, taskId }) {
     const startTime = Date.now();
     
     logger.info({
@@ -88,8 +90,22 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
     let tempClaudeConfigDir = null;
     let worktreeGitContent = null;
     let mainRepoPath = null;
+    let redisPublisher = null;
+    let diffInterval = null;
     
     try {
+        // Create Redis publisher if taskId is provided
+        if (taskId) {
+            redisPublisher = new Redis({
+                host: process.env.REDIS_HOST || 'redis',
+                port: process.env.REDIS_PORT || 6379
+            });
+            
+            logger.debug({
+                taskId,
+                issueNumber: issueRef.number
+            }, 'Created Redis publisher for streaming logs');
+        }
         // Generate the prompt for Claude
         const basePrompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
         
@@ -292,11 +308,45 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             promptPreview: prompt.substring(0, 200) + '...'
         }, 'Executing Docker command for Claude Code with detailed mount info');
 
+        // Set up periodic git diff publishing if taskId is provided
+        let diffInterval;
+        if (taskId && redisPublisher) {
+            diffInterval = setInterval(async () => {
+                try {
+                    // Run git diff to get current changes
+                    const diffResult = await executeDockerCommand('git', ['diff', '--color=never'], {
+                        timeout: 5000,
+                        cwd: worktreePath
+                    });
+                    
+                    if (diffResult.exitCode === 0 && diffResult.stdout) {
+                        redisPublisher.publish(`task:diff:${taskId}`, diffResult.stdout);
+                        logger.debug({
+                            taskId,
+                            diffLength: diffResult.stdout.length
+                        }, 'Published git diff to Redis');
+                    }
+                } catch (diffError) {
+                    logger.warn({
+                        taskId,
+                        error: diffError.message
+                    }, 'Failed to get/publish git diff');
+                }
+            }, 10000); // Every 10 seconds
+        }
+
         // Execute Docker command
         const result = await executeDockerCommand('docker', dockerArgs, {
             timeout: CLAUDE_TIMEOUT_MS,
-            cwd: worktreePath
+            cwd: worktreePath,
+            taskId,
+            redisPublisher
         });
+        
+        // Clear the diff interval
+        if (diffInterval) {
+            clearInterval(diffInterval);
+        }
 
         const executionTime = Date.now() - startTime;
 
@@ -478,6 +528,10 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             logs: error.stderr || error.message
         };
     } finally {
+        // Clear the diff interval if it exists
+        if (diffInterval) {
+            clearInterval(diffInterval);
+        }
         // Clean up temporary Claude config directory
         if (tempClaudeConfigDir) {
             try {
@@ -494,6 +548,23 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 }, 'Failed to clean up temporary Claude config directory');
             }
         }
+        
+        // Close Redis publisher if it was created
+        if (redisPublisher) {
+            try {
+                redisPublisher.disconnect();
+                logger.debug({
+                    taskId,
+                    issueNumber: issueRef.number
+                }, 'Closed Redis publisher connection');
+            } catch (redisError) {
+                logger.warn({
+                    taskId,
+                    issueNumber: issueRef.number,
+                    error: redisError.message
+                }, 'Failed to close Redis publisher connection');
+            }
+        }
     }
 }
 
@@ -502,11 +573,13 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
  * @param {string} command - Command to execute
  * @param {string[]} args - Command arguments
  * @param {Object} options - Execution options
+ * @param {string} options.taskId - Task ID for streaming logs to Redis
+ * @param {Redis} options.redisPublisher - Redis client for publishing logs
  * @returns {Promise<Object>} Execution result
  */
 function executeDockerCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const { timeout = 300000, cwd } = options;
+        const { timeout = 300000, cwd, taskId, redisPublisher } = options;
         
         const child = spawn(command, args, {
             cwd,
@@ -530,13 +603,39 @@ function executeDockerCommand(command, args, options = {}) {
             }, 5000);
         }, timeout);
 
-        // Collect output
+        // Collect output and stream to Redis if taskId is provided
         child.stdout.on('data', (data) => {
-            stdout += data.toString();
+            const chunk = data.toString();
+            stdout += chunk;
+            
+            // Publish to Redis if taskId is provided
+            if (taskId && redisPublisher) {
+                try {
+                    redisPublisher.publish(`task:log:${taskId}`, chunk);
+                } catch (publishError) {
+                    logger.warn({
+                        taskId,
+                        error: publishError.message
+                    }, 'Failed to publish log chunk to Redis');
+                }
+            }
         });
 
         child.stderr.on('data', (data) => {
-            stderr += data.toString();
+            const chunk = data.toString();
+            stderr += chunk;
+            
+            // Also publish stderr to logs
+            if (taskId && redisPublisher) {
+                try {
+                    redisPublisher.publish(`task:log:${taskId}`, `[stderr] ${chunk}`);
+                } catch (publishError) {
+                    logger.warn({
+                        taskId,
+                        error: publishError.message
+                    }, 'Failed to publish stderr chunk to Redis');
+                }
+            }
         });
 
         child.on('close', (exitCode) => {
