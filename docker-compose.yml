@@ -5,7 +5,7 @@ services:
     image: redis:alpine
     container_name: gitfix-redis
     ports:
-      - '6379:6379'
+      - '6380:6379'
     volumes:
       - redis_data:/data
     networks:
@@ -59,7 +59,7 @@ services:
       context: .
       dockerfile: Dockerfile.node
     container_name: gitfix-dashboard-api
-    command: node packages/dashboard/server.js
+    command: sh -c "cd /usr/src/app/packages/dashboard && node server.js"
     ports:
       - '4000:4000'
     volumes:
