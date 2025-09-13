@@ -5,6 +5,8 @@ import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 import { getDefaultModel } from '../config/modelAliases.js';
+import { getTaskStreamPublisher } from '../utils/taskStreamPublisher.js';
+import simpleGit from 'simple-git';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
@@ -75,6 +77,8 @@ Your task is complete when you have implemented a working solution to the issue.
  */
 export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
     const startTime = Date.now();
+    const taskId = `${issueRef.repoOwner}-${issueRef.repoName}-${issueRef.number}`;
+    const streamPublisher = getTaskStreamPublisher();
     
     logger.info({
         issueNumber: issueRef.number,
@@ -292,10 +296,48 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             promptPreview: prompt.substring(0, 200) + '...'
         }, 'Executing Docker command for Claude Code with detailed mount info');
 
-        // Execute Docker command
+        // Set up git diff tracking
+        const git = simpleGit(worktreePath);
+        let lastDiffTime = Date.now();
+        const DIFF_INTERVAL = 5000; // Send diff every 5 seconds
+        
+        // Function to get and publish git diff
+        const publishGitDiff = async () => {
+            try {
+                const diff = await git.diff();
+                if (diff) {
+                    await streamPublisher.publishDiff(taskId, diff);
+                }
+            } catch (error) {
+                logger.warn({ error: error.message, taskId }, 'Failed to get git diff');
+            }
+        };
+        
+        // Publish initial status
+        await streamPublisher.publishStatus(taskId, 'claude_executing', {
+            model: modelName || 'default',
+            isRetry,
+            worktreePath
+        });
+        
+        // Execute Docker command with streaming
         const result = await executeDockerCommand('docker', dockerArgs, {
             timeout: CLAUDE_TIMEOUT_MS,
-            cwd: worktreePath
+            cwd: worktreePath,
+            onStdout: async (chunk) => {
+                // Stream log data
+                await streamPublisher.publishLog(taskId, chunk);
+                
+                // Periodically send git diff
+                if (Date.now() - lastDiffTime > DIFF_INTERVAL) {
+                    lastDiffTime = Date.now();
+                    await publishGitDiff();
+                }
+            },
+            onStderr: async (chunk) => {
+                // Stream error data
+                await streamPublisher.publishLog(taskId, `[ERROR] ${chunk}`);
+            }
         });
 
         const executionTime = Date.now() - startTime;
@@ -457,6 +499,26 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             }
         }
 
+        // Get final git diff and persist data
+        try {
+            const finalDiff = await git.diff();
+            
+            // Persist logs and diff
+            await streamPublisher.persistLogs(taskId, result.stdout);
+            if (finalDiff) {
+                await streamPublisher.persistDiff(taskId, finalDiff);
+            }
+            
+            // Publish completion status
+            await streamPublisher.publishStatus(taskId, 'claude_completed', {
+                success: response.success,
+                executionTime,
+                model: response.model || modelName || 'default'
+            });
+        } catch (persistError) {
+            logger.warn({ error: persistError.message, taskId }, 'Failed to persist task data');
+        }
+        
         return response;
 
     } catch (error) {
@@ -470,6 +532,12 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             stack: error.stack
         }, 'Error during Claude Code execution');
 
+        // Publish failure status
+        await streamPublisher.publishStatus(taskId, 'claude_failed', {
+            error: error.message,
+            executionTime
+        });
+        
         return {
             success: false,
             error: error.message,
@@ -506,7 +574,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
  */
 function executeDockerCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const { timeout = 300000, cwd } = options;
+        const { timeout = 300000, cwd, onStdout, onStderr } = options;
         
         const child = spawn(command, args, {
             cwd,
@@ -532,11 +600,19 @@ function executeDockerCommand(command, args, options = {}) {
 
         // Collect output
         child.stdout.on('data', (data) => {
-            stdout += data.toString();
+            const chunk = data.toString();
+            stdout += chunk;
+            if (onStdout) {
+                onStdout(chunk);
+            }
         });
 
         child.stderr.on('data', (data) => {
-            stderr += data.toString();
+            const chunk = data.toString();
+            stderr += chunk;
+            if (onStderr) {
+                onStderr(chunk);
+            }
         });
 
         child.on('close', (exitCode) => {
