@@ -14,6 +14,8 @@ import {
     commitChanges,
     pushBranch
 } from './git/repoManager.js';
+import simpleGit from 'simple-git';
+import fs from 'fs-extra';
 import { completePostProcessing } from './githubService.js';
 import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
 import { 
@@ -79,6 +81,34 @@ async function safeRemoveLabel(octokit, owner, repo, issueNumber, labelName, log
             status: error.status 
         }, `Failed to remove label '${labelName}' from issue #${issueNumber}`);
         return false;
+    }
+}
+
+/**
+ * Validates that the current working directory is a git repository
+ * If not, it initializes a new git repository
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<boolean>} - True if git repo is valid
+ */
+async function ensureGitRepository(logger) {
+    try {
+        const git = simpleGit();
+        
+        // Check if current directory is a git repository
+        const isRepo = await git.checkIsRepo();
+        
+        if (!isRepo) {
+            logger.warn('Current directory is not a git repository. Initializing...');
+            await git.init();
+            logger.info('Git repository initialized successfully');
+        } else {
+            logger.debug('Current directory is a valid git repository');
+        }
+        
+        return true;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to ensure git repository');
+        throw error;
     }
 }
 
@@ -295,6 +325,9 @@ async function processPullRequestCommentJob(job) {
 
         const githubToken = await octokit.auth();
         const repoUrl = getRepoUrl({ repoOwner, repoName });
+
+        // Ensure we're in a valid git repository before proceeding
+        await ensureGitRepository(correlatedLogger);
 
         // Step 1: Ensure repository is cloned
         localRepoPath = await ensureRepoCloned(repoUrl, repoOwner, repoName, githubToken.token);
@@ -750,6 +783,9 @@ async function processGitHubIssueJob(job) {
         const repoUrl = getRepoUrl(issueRef);
         
         try {
+            // Ensure we're in a valid git repository before proceeding
+            await ensureGitRepository(correlatedLogger);
+            
             // Step 1: Ensure repository is cloned/updated
             logger.info({ 
                 jobId, 
@@ -1465,6 +1501,59 @@ This is an emergency retry - the main implementation is complete, you just need 
             timestamp: new Date().toISOString(),
             systemVersion: process.env.npm_package_version || 'unknown'
         }, 'Error processing GitHub issue job - enhanced error metrics logged');
+        
+        // Post error to GitHub issue
+        if (octokit) {
+            try {
+                let errorMessage = `❌ **Failed to process this issue**\n\n`;
+                errorMessage += `**Error Category:** ${errorCategory.replace('_', ' ')}\n`;
+                errorMessage += `**Error Message:** ${error.message}\n\n`;
+                
+                // Add user-friendly explanations based on error category
+                if (errorCategory === 'git_error') {
+                    errorMessage += `This appears to be a Git-related issue. The system may have encountered a corrupted repository or git operation failure. `;
+                    errorMessage += `The issue will be automatically retried, and any corrupted repositories will be cleaned up.\n\n`;
+                } else if (errorCategory === 'auth_error') {
+                    errorMessage += `This is an authentication issue. Please ensure the GitHub token has proper permissions.\n\n`;
+                } else if (errorCategory === 'network_error') {
+                    errorMessage += `This is a network connectivity issue. The system will automatically retry.\n\n`;
+                }
+                
+                errorMessage += `**Processing Stage:** ${claudeResult ? 'Post-processing (after AI analysis)' : 'Pre-processing (before AI analysis)'}\n`;
+                
+                if (worktreeInfo) {
+                    errorMessage += `**Branch:** ${worktreeInfo.branchName}\n`;
+                }
+                
+                errorMessage += `\n<details><summary>Technical Details</summary>\n\n`;
+                errorMessage += `\`\`\`\n${error.stack || error.message}\n\`\`\`\n`;
+                errorMessage += `</details>\n\n`;
+                errorMessage += `---\n*The system will automatically retry this task. If the issue persists, please contact support.*`;
+                
+                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                    owner: issueRef.repoOwner,
+                    repo: issueRef.repoName,
+                    issue_number: issueRef.number,
+                    body: errorMessage
+                });
+                
+                // Remove processing label if it exists
+                await safeRemoveLabel(
+                    octokit,
+                    issueRef.repoOwner,
+                    issueRef.repoName,
+                    issueRef.number,
+                    AI_PROCESSING_TAG,
+                    correlatedLogger
+                );
+                
+            } catch (commentError) {
+                correlatedLogger.error({ 
+                    error: commentError.message,
+                    issueNumber: issueRef.number
+                }, 'Failed to post error comment to GitHub issue');
+            }
+        }
         
         // Update task state to failed for tracking
         try {

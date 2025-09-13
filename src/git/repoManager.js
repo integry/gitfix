@@ -50,14 +50,37 @@ export async function ensureRepoCloned(repoUrl, owner, repoName, authToken) {
             logger.info({ 
                 repo: `${owner}/${repoName}`, 
                 path: localRepoPath 
-            }, 'Repository exists locally. Fetching updates...');
+            }, 'Repository exists locally. Validating and fetching updates...');
             
+            // Validate that it's a proper git repository
+            try {
+                const git = simpleGit(localRepoPath);
+                const isRepo = await git.checkIsRepo();
+                
+                if (!isRepo) {
+                    throw new Error('Directory exists but is not a valid git repository');
+                }
+                
+                // Set up authentication for fetch
+                await setupAuthenticatedRemote(git, repoUrl, authToken);
+                
+                await git.fetch(['origin', '--prune']);
+            } catch (gitError) {
+                logger.warn({ 
+                    repo: `${owner}/${repoName}`, 
+                    path: localRepoPath,
+                    error: gitError.message 
+                }, 'Git repository is corrupted or invalid. Removing and re-cloning...');
+                
+                // Remove the corrupted repository
+                await fs.remove(localRepoPath);
+                
+                // Fall through to clone logic
+                return ensureRepoCloned(repoUrl, owner, repoName, authToken);
+            }
+            
+            // Re-create git instance after validation
             const git = simpleGit(localRepoPath);
-            
-            // Set up authentication for fetch
-            await setupAuthenticatedRemote(git, repoUrl, authToken);
-            
-            await git.fetch(['origin', '--prune']);
             
             // Ensure we're on the correct default branch in the main repository
             const defaultBranch = await detectDefaultBranch(git, owner, repoName);
