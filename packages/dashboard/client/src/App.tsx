@@ -3,6 +3,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import Dashboard from './pages/Dashboard';
+import TaskDetailsPage from './pages/TaskDetailsPage';
 import Layout from './components/Layout';
 
 function App() {
@@ -17,6 +18,16 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Dashboard />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tasks/:taskId"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <TaskDetailsPage />
                 </Layout>
               </ProtectedRoute>
             }

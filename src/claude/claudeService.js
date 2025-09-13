@@ -5,6 +5,7 @@ import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 import { getDefaultModel } from '../config/modelAliases.js';
+import Redis from 'ioredis';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
@@ -292,13 +293,48 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             promptPreview: prompt.substring(0, 200) + '...'
         }, 'Executing Docker command for Claude Code with detailed mount info');
 
-        // Execute Docker command
-        const result = await executeDockerCommand('docker', dockerArgs, {
+        // Execute Docker command with streaming if taskId provided
+        const taskId = issueRef ? `${issueRef.repoOwner}-${issueRef.repoName}-${issueRef.number}` : null;
+        const result = await executeDockerCommandWithStreaming('docker', dockerArgs, {
             timeout: CLAUDE_TIMEOUT_MS,
-            cwd: worktreePath
+            cwd: worktreePath,
+            taskId: taskId
         });
 
         const executionTime = Date.now() - startTime;
+
+        // Persist logs to Redis if taskId is available
+        if (taskId) {
+            const redis = new Redis({
+                host: process.env.REDIS_HOST || '127.0.0.1',
+                port: parseInt(process.env.REDIS_PORT || '6379', 10)
+            });
+            
+            try {
+                // Persist the full stdout log
+                await redis.set(`task:${taskId}:logs`, result.stdout || '', 'EX', 86400); // 24 hours
+                
+                // Also publish task completion status
+                await redis.publish(`task-status:${taskId}`, JSON.stringify({
+                    status: result.exitCode === 0 ? 'completed' : 'failed',
+                    exitCode: result.exitCode,
+                    executionTime: executionTime
+                }));
+                
+                logger.info({
+                    issueNumber: issueRef.number,
+                    taskId,
+                    logsSize: result.stdout?.length || 0
+                }, 'Persisted task logs to Redis');
+            } catch (error) {
+                logger.warn({ 
+                    error: error.message, 
+                    taskId 
+                }, 'Failed to persist logs to Redis');
+            } finally {
+                await redis.quit();
+            }
+        }
 
         logger.info({
             issueNumber: issueRef.number,
@@ -556,6 +592,131 @@ function executeDockerCommand(command, args, options = {}) {
 
         child.on('error', (error) => {
             clearTimeout(timeoutHandle);
+            reject(error);
+        });
+    });
+}
+
+/**
+ * Execute Docker command with streaming support for Redis pub/sub
+ * @param {string} command - Command to execute
+ * @param {Array} args - Command arguments
+ * @param {Object} options - Execution options
+ * @param {string} options.taskId - Task ID for Redis pub/sub
+ * @param {number} options.timeout - Command timeout
+ * @param {string} options.cwd - Working directory
+ * @returns {Promise<Object>} Execution result
+ */
+function executeDockerCommandWithStreaming(command, args, options = {}) {
+    return new Promise(async (resolve, reject) => {
+        const { timeout = 300000, cwd, taskId } = options;
+        
+        let redis = null;
+        if (taskId) {
+            redis = new Redis({
+                host: process.env.REDIS_HOST || '127.0.0.1',
+                port: parseInt(process.env.REDIS_PORT || '6379', 10)
+            });
+        }
+        
+        const child = spawn(command, args, {
+            cwd,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        let stdout = '';
+        let stderr = '';
+        let timedOut = false;
+        let lastDiffTime = Date.now();
+        const DIFF_INTERVAL = 10000; // Send diff every 10 seconds
+
+        // Set up timeout
+        const timeoutHandle = setTimeout(() => {
+            timedOut = true;
+            child.kill('SIGTERM');
+            
+            // Force kill if SIGTERM doesn't work
+            setTimeout(() => {
+                if (!child.killed) {
+                    child.kill('SIGKILL');
+                }
+            }, 5000);
+        }, timeout);
+
+        // Collect and stream stdout
+        child.stdout.on('data', async (data) => {
+            const chunk = data.toString();
+            stdout += chunk;
+            
+            // Stream to Redis if taskId provided
+            if (redis && taskId) {
+                try {
+                    await redis.publish(`task-log:${taskId}`, chunk);
+                    
+                    // Periodically send git diff
+                    const now = Date.now();
+                    if (now - lastDiffTime > DIFF_INTERVAL) {
+                        lastDiffTime = now;
+                        const diffChild = spawn('git', ['diff'], { cwd });
+                        let diff = '';
+                        diffChild.stdout.on('data', (d) => { diff += d.toString(); });
+                        diffChild.on('close', async () => {
+                            if (diff) {
+                                await redis.publish(`task-diff:${taskId}`, diff);
+                            }
+                        });
+                    }
+                } catch (error) {
+                    logger.warn({ error: error.message, taskId }, 'Failed to publish to Redis');
+                }
+            }
+        });
+
+        // Collect stderr
+        child.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        child.on('close', async (exitCode) => {
+            clearTimeout(timeoutHandle);
+            
+            // Send final diff if taskId provided
+            if (redis && taskId && cwd) {
+                try {
+                    const diffChild = spawn('git', ['diff'], { cwd });
+                    let finalDiff = '';
+                    diffChild.stdout.on('data', (d) => { finalDiff += d.toString(); });
+                    diffChild.on('close', async () => {
+                        if (finalDiff) {
+                            await redis.publish(`task-diff:${taskId}`, finalDiff);
+                            // Also persist the final diff
+                            await redis.set(`task:${taskId}:diff`, finalDiff, 'EX', 86400); // 24 hours
+                        }
+                        await redis.quit();
+                    });
+                } catch (error) {
+                    logger.warn({ error: error.message, taskId }, 'Failed to send final diff');
+                    if (redis) await redis.quit();
+                }
+            } else if (redis) {
+                await redis.quit();
+            }
+            
+            if (timedOut) {
+                reject(new Error(`Command timed out after ${timeout}ms`));
+                return;
+            }
+
+            resolve({
+                exitCode,
+                stdout,
+                stderr
+            });
+        });
+
+        child.on('error', async (error) => {
+            clearTimeout(timeoutHandle);
+            if (redis) await redis.quit();
             reject(error);
         });
     });
