@@ -5,7 +5,7 @@ import { withErrorHandling, handleError } from './utils/errorHandler.js';
 import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
-import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
+import { resolveModelAlias, getDefaultModel, getProviderForModel } from './config/modelAliases.js';
 
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
@@ -13,7 +13,13 @@ const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000',
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
-const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
+// Support multiple provider label patterns
+const MODEL_LABEL_PATTERNS = {
+    claude: process.env.CLAUDE_LABEL_PATTERN || '^llm-claude-(.+)$',
+    openai: process.env.OPENAI_LABEL_PATTERN || '^llm-openai-(.+)$',
+    gemini: process.env.GEMINI_LABEL_PATTERN || '^llm-gemini-(.+)$'
+};
+const LEGACY_MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
 // New environment variables for PR comment monitoring
@@ -80,14 +86,32 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
         // Transform issues to a simplified format
         return response.data.items.map(issue => {
             const identifiedModels = [];
-            const modelLabelRegex = new RegExp(MODEL_LABEL_PATTERN);
             
+            // Check all provider label patterns
             for (const label of issue.labels) {
-                const match = label.name.match(modelLabelRegex);
-                if (match && match[1]) {
-                    // Resolve model alias to full model ID
-                    const resolvedModel = resolveModelAlias(match[1]);
-                    identifiedModels.push(resolvedModel);
+                let matched = false;
+                
+                // Check each provider pattern
+                for (const [provider, pattern] of Object.entries(MODEL_LABEL_PATTERNS)) {
+                    const regex = new RegExp(pattern);
+                    const match = label.name.match(regex);
+                    if (match && match[1]) {
+                        // Resolve model alias to full model ID
+                        const resolvedModel = resolveModelAlias(match[1]);
+                        identifiedModels.push(resolvedModel);
+                        matched = true;
+                        break;
+                    }
+                }
+                
+                // Also check legacy pattern for backward compatibility
+                if (!matched) {
+                    const legacyRegex = new RegExp(LEGACY_MODEL_LABEL_PATTERN);
+                    const legacyMatch = label.name.match(legacyRegex);
+                    if (legacyMatch && legacyMatch[1]) {
+                        const resolvedModel = resolveModelAlias(legacyMatch[1]);
+                        identifiedModels.push(resolvedModel);
+                    }
                 }
             }
             
