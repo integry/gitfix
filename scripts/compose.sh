@@ -7,26 +7,26 @@ COMMAND=$1
 case $COMMAND in
   up)
     echo "Starting up Docker Compose environment..."
-    docker-compose up --build -d
+    docker compose up --build -d
     echo "Environment is up and running."
     ;;
   dev)
     echo "Starting up Docker Compose environment in development mode..."
-    docker-compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
     echo "Development environment is up and running."
     ;;
   down)
     echo "Stopping Docker Compose environment..."
-    docker-compose down
+    docker compose down
     echo "Environment is stopped."
     ;;
   logs)
     echo "Tailing logs..."
-    docker-compose logs -f
+    docker compose logs -f
     ;;
   build)
     echo "Forcing a rebuild of all images..."
-    docker-compose build --no-cache
+    docker compose build --no-cache
     echo "Images rebuilt."
     ;;
   *)

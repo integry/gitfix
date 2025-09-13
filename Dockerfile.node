@@ -7,8 +7,8 @@ COPY package*.json ./
 COPY packages/dashboard/package*.json ./packages/dashboard/
 
 # Install dependencies
-RUN npm ci --only=production
-RUN cd packages/dashboard && npm ci --only=production
+RUN npm ci --omit=dev
+RUN cd packages/dashboard && npm ci --omit=dev
 
 # Copy application code
 COPY . .

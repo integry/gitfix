@@ -248,17 +248,17 @@ async function processPullRequestCommentJob(job) {
 
         // Check if comments have already been processed
         const botUsername = process.env.GITHUB_BOT_USERNAME || 'github-actions[bot]';
-        const prComments = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+        // Fetch ALL PR comments using pagination to ensure we don't miss any
+        const prComments = await octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
             owner: repoOwner,
             repo: repoName,
             issue_number: pullRequestNumber,
-            per_page: 100,
-            page: 1
+            per_page: 100
         });
 
         // Filter out already processed comments
         const unprocessedComments = commentsToProcess.filter(comment => {
-            const alreadyProcessed = prComments.data.some(prComment => {
+            const alreadyProcessed = prComments.some(prComment => {
                 const isBotComment = prComment.user.login === botUsername || 
                                     prComment.user.type === 'Bot' ||
                                     prComment.user.login.includes('[bot]');

@@ -10,6 +10,7 @@ RUN npm run build
 FROM node:20-slim
 WORKDIR /app
 COPY --from=build /app/dist /app/dist
+COPY serve.json /app/serve.json
 RUN npm install -g serve
 EXPOSE 5173
-CMD ["serve", "-s", "dist", "-l", "5173"]
+CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:5173", "-c", "../serve.json"]
