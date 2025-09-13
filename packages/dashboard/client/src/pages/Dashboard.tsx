@@ -1,23 +1,59 @@
 import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { SystemStatusPanel } from '../components/SystemStatusPanel';
+import { QueueStatsPanel } from '../components/QueueStatsPanel';
+import { ActivityFeed } from '../components/ActivityFeed';
+import { MetricsPanel } from '../components/MetricsPanel';
 
 const Dashboard: React.FC = () => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="py-12">
-        <div className="max-w-7xl mx-auto sm:px-6 lg:px-8">
-          <div className="bg-white overflow-hidden shadow-sm sm:rounded-lg">
-            <div className="p-6 bg-white border-b border-gray-200">
-              <h1 className="text-2xl font-bold text-gray-900">Welcome to GitFix Dashboard</h1>
-              <p className="mt-2 text-gray-600">
-                Hello, {user?.displayName || user?.username}!
+    <div className="min-h-screen bg-gray-900">
+      {/* Header */}
+      <header className="bg-gray-800 shadow-lg">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
+            <div>
+              <h1 className="text-2xl font-bold text-white">GitFix Dashboard</h1>
+              <p className="text-gray-400 text-sm">
+                Welcome, {user?.displayName || user?.username}!
               </p>
             </div>
+            <button
+              onClick={logout}
+              className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
+            >
+              Logout
+            </button>
           </div>
         </div>
-      </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* System Status Panel */}
+          <div className="lg:col-span-1">
+            <SystemStatusPanel />
+          </div>
+
+          {/* Queue Statistics Panel */}
+          <div className="lg:col-span-1">
+            <QueueStatsPanel />
+          </div>
+
+          {/* Metrics Panel */}
+          <div className="lg:col-span-2">
+            <MetricsPanel />
+          </div>
+
+          {/* Activity Feed */}
+          <div className="lg:col-span-2">
+            <ActivityFeed />
+          </div>
+        </div>
+      </main>
     </div>
   );
 };
