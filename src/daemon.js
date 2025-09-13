@@ -615,6 +615,29 @@ async function startDaemon(options = {}) {
         }
     }
     
+    // Initialize Redis connection for heartbeat
+    const heartbeatRedis = new Redis({
+        host: process.env.REDIS_HOST || 'localhost',
+        port: process.env.REDIS_PORT || 6379,
+        retryStrategy: times => Math.min(times * 50, 2000)
+    });
+    
+    // Function to send heartbeat
+    const sendHeartbeat = async () => {
+        try {
+            await heartbeatRedis.set('system:status:daemon', Date.now(), 'EX', 90);
+            logger.debug('Daemon heartbeat sent');
+        } catch (error) {
+            logger.error({ error: error.message }, 'Failed to send daemon heartbeat');
+        }
+    };
+    
+    // Send initial heartbeat
+    await sendHeartbeat();
+    
+    // Set up heartbeat interval (every 30 seconds)
+    const heartbeatInterval = setInterval(sendHeartbeat, 30000);
+    
     logger.info({
         repositories: repos,
         pollingInterval: POLLING_INTERVAL_MS,
@@ -640,6 +663,8 @@ async function startDaemon(options = {}) {
     process.on('SIGINT', async () => {
         logger.info('Received SIGINT, shutting down gracefully...');
         clearInterval(intervalId);
+        clearInterval(heartbeatInterval);
+        await heartbeatRedis.quit();
         await shutdownQueue();
         process.exit(0);
     });
@@ -647,6 +672,8 @@ async function startDaemon(options = {}) {
     process.on('SIGTERM', async () => {
         logger.info('Received SIGTERM, shutting down gracefully...');
         clearInterval(intervalId);
+        clearInterval(heartbeatInterval);
+        await heartbeatRedis.quit();
         await shutdownQueue();
         process.exit(0);
     });

@@ -6,14 +6,16 @@ services:
     container_name: gitfix-redis
     ports:
       - '6379:6379'
+    volumes:
+      - redis_data:/data
     networks:
       - gitfix-net
 
-  watcher:
+  daemon:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: gitfix-watcher
+      dockerfile: Dockerfile.node
+    container_name: gitfix-daemon
     command: npm run daemon
     volumes:
       - .:/usr/src/app
@@ -28,13 +30,13 @@ services:
   worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.node
     container_name: gitfix-worker
     command: npm run worker
     volumes:
       - .:/usr/src/app
       - /tmp/git-processor:/tmp/git-processor
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/.claude:/root/.claude
     env_file:
       - .env
     depends_on:
@@ -52,6 +54,40 @@ services:
     networks:
       - gitfix-net
 
+  dashboard-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: gitfix-dashboard-api
+    command: node packages/dashboard/server.js
+    ports:
+      - '4000:4000'
+    volumes:
+      - .:/usr/src/app
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    networks:
+      - gitfix-net
+
+  dashboard-client:
+    build:
+      context: ./packages/dashboard/client
+      dockerfile: Dockerfile
+    container_name: gitfix-dashboard-client
+    ports:
+      - '5174:5173'
+    environment:
+      - VITE_API_URL=http://dashboard-api:4000
+    depends_on:
+      - dashboard-api
+    networks:
+      - gitfix-net
+
 networks:
   gitfix-net:
     driver: bridge
+
+volumes:
+  redis_data:

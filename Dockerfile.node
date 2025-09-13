@@ -1,0 +1,23 @@
+FROM node:18-alpine
+
+WORKDIR /usr/src/app
+
+# Copy package files
+COPY package*.json ./
+COPY packages/dashboard/package*.json ./packages/dashboard/
+
+# Install dependencies
+RUN npm ci --only=production
+RUN cd packages/dashboard && npm ci --only=production
+
+# Copy application code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p /tmp/git-processor
+
+# Set environment
+ENV NODE_ENV=production
+
+# The command will be specified in docker-compose.yml
+CMD ["node"]
