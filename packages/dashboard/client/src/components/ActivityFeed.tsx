@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApiData } from '../hooks/useApiData';
 
 interface ActivityEvent {
@@ -8,7 +9,9 @@ interface ActivityEvent {
   user?: string;
   repository?: string;
   issueNumber?: number;
+  taskId?: string;
   description: string;
+  message?: string;
   status?: 'success' | 'error' | 'warning' | 'info';
 }
 
@@ -17,6 +20,7 @@ interface ActivityEventItemProps {
 }
 
 const ActivityEventItem: React.FC<ActivityEventItemProps> = ({ event }) => {
+  const navigate = useNavigate();
   const getStatusColor = (status?: string) => {
     switch (status) {
       case 'success':
@@ -41,6 +45,9 @@ const ActivityEventItem: React.FC<ActivityEventItemProps> = ({ event }) => {
       case 'build_started':
       case 'build_completed':
         return '🏗️';
+      case 'task_completed':
+        return '✅';
+      case 'task_failed':
       case 'error':
         return '❌';
       default:
@@ -64,23 +71,33 @@ const ActivityEventItem: React.FC<ActivityEventItemProps> = ({ event }) => {
     return `${diffDays}d ago`;
   };
 
+  const handleClick = () => {
+    if (event.taskId) {
+      navigate(`/task/${event.taskId}`);
+    }
+  };
+
   return (
-    <div className="flex items-start space-x-3 py-3 px-2 hover:bg-gray-700 rounded transition-colors">
+    <div 
+      className={`flex items-start space-x-3 py-3 px-2 hover:bg-gray-700 rounded transition-colors ${event.taskId ? 'cursor-pointer' : ''}`}
+      onClick={handleClick}
+    >
       <span className="text-xl">{getEventIcon(event.type)}</span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between">
           <p className={`text-sm ${getStatusColor(event.status)}`}>
-            {event.description}
+            {event.message || event.description}
           </p>
           <span className="text-xs text-gray-500 whitespace-nowrap ml-2">
             {formatTime(event.timestamp)}
           </span>
         </div>
-        {(event.repository || event.user) && (
+        {(event.repository || event.user || event.taskId) && (
           <div className="mt-1 text-xs text-gray-400">
             {event.repository && <span className="mr-2">📁 {event.repository}</span>}
             {event.user && <span>👤 {event.user}</span>}
             {event.issueNumber && <span className="ml-2">#{event.issueNumber}</span>}
+            {event.taskId && <span className="ml-2 text-blue-400">Task: {event.taskId.substring(0, 8)}</span>}
           </div>
         )}
       </div>
@@ -89,9 +106,11 @@ const ActivityEventItem: React.FC<ActivityEventItemProps> = ({ event }) => {
 };
 
 export const ActivityFeed: React.FC = () => {
-  const { data: events, error, loading } = useApiData<ActivityEvent[]>('/api/activity', {
+  const { data: response, error, loading } = useApiData<{ activities: ActivityEvent[] }>('/api/activity', {
     pollingInterval: 10000, // Poll every 10 seconds for activity updates
   });
+  
+  const events = response?.activities;
 
   if (loading && !events) {
     return (

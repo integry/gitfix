@@ -5,6 +5,7 @@ import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 import { getDefaultModel } from '../config/modelAliases.js';
+import redisPublisher from '../utils/redisPublisher.js';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
@@ -73,7 +74,7 @@ Your task is complete when you have implemented a working solution to the issue.
  * @param {string} options.modelName - The AI model being used (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, taskId }) {
     const startTime = Date.now();
     
     logger.info({
@@ -295,7 +296,8 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
         // Execute Docker command
         const result = await executeDockerCommand('docker', dockerArgs, {
             timeout: CLAUDE_TIMEOUT_MS,
-            cwd: worktreePath
+            cwd: worktreePath,
+            taskId
         });
 
         const executionTime = Date.now() - startTime;
@@ -506,7 +508,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
  */
 function executeDockerCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const { timeout = 300000, cwd } = options;
+        const { timeout = 300000, cwd, taskId } = options;
         
         const child = spawn(command, args, {
             cwd,
@@ -530,13 +532,27 @@ function executeDockerCommand(command, args, options = {}) {
             }, 5000);
         }, timeout);
 
-        // Collect output
+        // Collect output and stream to Redis if taskId is provided
         child.stdout.on('data', (data) => {
-            stdout += data.toString();
+            const chunk = data.toString();
+            stdout += chunk;
+            
+            if (taskId) {
+                redisPublisher.publishLog(taskId, chunk).catch(err => {
+                    logger.error({ taskId, error: err }, 'Failed to publish log to Redis');
+                });
+            }
         });
 
         child.stderr.on('data', (data) => {
-            stderr += data.toString();
+            const chunk = data.toString();
+            stderr += chunk;
+            
+            if (taskId) {
+                redisPublisher.publishLog(taskId, `[STDERR] ${chunk}`).catch(err => {
+                    logger.error({ taskId, error: err }, 'Failed to publish stderr to Redis');
+                });
+            }
         });
 
         child.on('close', (exitCode) => {

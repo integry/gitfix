@@ -1,6 +1,7 @@
 import Redis from 'ioredis';
 import logger, { generateCorrelationId } from './logger.js';
 import { handleError } from './errorHandler.js';
+import redisPublisher from './redisPublisher.js';
 
 /**
  * Worker task states
@@ -129,6 +130,14 @@ export class WorkerStateManager {
         });
         
         await this.redis.setex(key, this.stateExpiry, JSON.stringify(state));
+        
+        // Publish state change event
+        await redisPublisher.publishState(taskId, {
+            previousState,
+            newState,
+            metadata,
+            timestamp: new Date().toISOString()
+        });
         
         const correlatedLogger = logger.withCorrelation(state.correlationId);
         correlatedLogger.info({

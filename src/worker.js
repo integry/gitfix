@@ -25,6 +25,9 @@ import {
 } from './utils/prValidation.js';
 import Redis from 'ioredis';
 import { getDefaultModel } from './config/modelAliases.js';
+import redisPublisher from './utils/redisPublisher.js';
+import gitDiffStreamer from './utils/gitDiffStreamer.js';
+import taskDataPersistence from './utils/taskDataPersistence.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
@@ -872,12 +875,19 @@ async function processGitHubIssueJob(job) {
                 worktreePath: worktreeInfo.worktreePath
             }, 'EXECUTION DEBUG: About to execute Claude Code');
 
+            // Start git diff streaming before Claude execution
+            gitDiffStreamer.startStreaming(jobId, worktreeInfo.worktreePath);
+            
+            // Publish task state update
+            await redisPublisher.publishState(jobId, 'executing_claude');
+
             claudeResult = await executeClaudeCode({
                 worktreePath: worktreeInfo.worktreePath,
                 issueRef: issueRef,
                 githubToken: githubToken.token,
                 branchName: worktreeInfo.branchName,
-                modelName: modelName
+                modelName: modelName,
+                taskId: jobId
             });
             
             correlatedLogger.info({
@@ -942,6 +952,15 @@ async function processGitHubIssueJob(job) {
                     issueNumber: issueRef.number,
                     error: listError.message
                 }, 'Failed to list files in worktree');
+            }
+            
+            // Stop git diff streaming after Claude execution
+            gitDiffStreamer.stopStreaming(jobId);
+            
+            // Get final diff
+            const finalDiff = await gitDiffStreamer.getFinalDiff(worktreeInfo.worktreePath);
+            if (finalDiff) {
+                await redisPublisher.publishDiff(jobId, finalDiff);
             }
             
             // Step 5: Post-processing (deterministic commit, push, and PR creation)
@@ -1443,6 +1462,20 @@ This is an emergency retry - the main implementation is complete, you just need 
             timestamp: new Date().toISOString(),
             systemVersion: process.env.npm_package_version || 'unknown'
         }, 'Issue processing completed - comprehensive metrics logged');
+        
+        // Persist task completion data
+        await taskDataPersistence.persistTaskCompletion(jobId, {
+            success: true,
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+            branchName: worktreeInfo?.branchName,
+            prUrl: postProcessingResult?.pr?.html_url,
+            rawOutput: claudeResult?.output?.rawOutput || '',
+            finalDiff: finalDiff || '',
+            executionTime: claudeResult?.executionTime || 0,
+            modifiedFiles: claudeResult?.modifiedFiles || []
+        });
+        
         return { 
             status: finalStatus,
             issueNumber: issueRef.number,
@@ -1564,6 +1597,18 @@ This is an emergency retry - the main implementation is complete, you just need 
         } catch (stateError) {
             correlatedLogger.warn({ error: stateError.message }, 'Failed to update task state to failed');
         }
+        
+        // Persist task failure data
+        await taskDataPersistence.persistTaskCompletion(jobId, {
+            success: false,
+            issueNumber: issueRef.number,
+            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+            error: error.message,
+            errorCategory,
+            rawOutput: claudeResult?.output?.rawOutput || '',
+            finalDiff: finalDiff || '',
+            executionTime: claudeResult?.executionTime || 0
+        });
         
         throw error;
     }
