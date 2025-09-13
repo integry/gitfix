@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApiData } from '../hooks/useApiData';
+import { Link } from 'react-router-dom';
 
 interface ActivityEvent {
   id: string;
@@ -10,6 +11,7 @@ interface ActivityEvent {
   issueNumber?: number;
   description: string;
   status?: 'success' | 'error' | 'warning' | 'info';
+  taskId?: string;
 }
 
 interface ActivityEventItemProps {
@@ -76,11 +78,19 @@ const ActivityEventItem: React.FC<ActivityEventItemProps> = ({ event }) => {
             {formatTime(event.timestamp)}
           </span>
         </div>
-        {(event.repository || event.user) && (
-          <div className="mt-1 text-xs text-gray-400">
-            {event.repository && <span className="mr-2">📁 {event.repository}</span>}
+        {(event.repository || event.user || event.taskId) && (
+          <div className="mt-1 text-xs text-gray-400 flex items-center gap-2">
+            {event.repository && <span>📁 {event.repository}</span>}
             {event.user && <span>👤 {event.user}</span>}
-            {event.issueNumber && <span className="ml-2">#{event.issueNumber}</span>}
+            {event.issueNumber && <span>#{event.issueNumber}</span>}
+            {event.taskId && (
+              <Link 
+                to={`/task/${event.taskId}`} 
+                className="text-blue-400 hover:text-blue-300 underline"
+              >
+                View Task Details →
+              </Link>
+            )}
           </div>
         )}
       </div>

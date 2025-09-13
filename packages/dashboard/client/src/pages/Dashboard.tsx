@@ -4,6 +4,7 @@ import { SystemStatusPanel } from '../components/SystemStatusPanel';
 import { QueueStatsPanel } from '../components/QueueStatsPanel';
 import { ActivityFeed } from '../components/ActivityFeed';
 import { MetricsPanel } from '../components/MetricsPanel';
+import { TasksList } from '../components/TasksList';
 
 const Dashboard: React.FC = () => {
   const { user, logout } = useAuth();
@@ -48,8 +49,13 @@ const Dashboard: React.FC = () => {
             <MetricsPanel />
           </div>
 
+          {/* Tasks List */}
+          <div className="lg:col-span-1">
+            <TasksList />
+          </div>
+
           {/* Activity Feed */}
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-1">
             <ActivityFeed />
           </div>
         </div>

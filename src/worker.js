@@ -370,6 +370,9 @@ ${combinedCommentBody}
 - Make sure your changes are compatible with the existing modifications on this branch
 - Use appropriate commit messages that reference the follow-up nature of the changes`;
 
+        // Generate taskId for PR comment
+        const taskId = `${repoOwner}-${repoName}-pr-${pullRequestNumber}`;
+        
         // Step 4: Execute Claude Code with the follow-up prompt
         const claudeResult = await executeClaudeCode({
             worktreePath: worktreeInfo.worktreePath,
@@ -381,7 +384,8 @@ ${combinedCommentBody}
             githubToken: githubToken.token,
             customPrompt: prompt,
             branchName: worktreeInfo.branchName,
-            modelName: llm || DEFAULT_MODEL_NAME
+            modelName: llm || DEFAULT_MODEL_NAME,
+            taskId: taskId
         });
 
         if (!claudeResult.success) {
@@ -877,7 +881,8 @@ async function processGitHubIssueJob(job) {
                 issueRef: issueRef,
                 githubToken: githubToken.token,
                 branchName: worktreeInfo.branchName,
-                modelName: modelName
+                modelName: modelName,
+                taskId: taskId
             });
             
             correlatedLogger.info({
@@ -1301,7 +1306,8 @@ This is an emergency retry - the main implementation is complete, you just need 
                                 isRetry: true,
                                 retryReason: 'Emergency PR creation - main implementation complete',
                                 branchName: worktreeInfo.branchName,
-                                modelName: modelName
+                                modelName: modelName,
+                                taskId: taskId
                             });
 
                             correlatedLogger.info({

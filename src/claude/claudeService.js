@@ -5,6 +5,7 @@ import fs from 'fs';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 import { getDefaultModel } from '../config/modelAliases.js';
+import Redis from 'ioredis';
 
 // Configuration from environment variables
 const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
@@ -71,9 +72,10 @@ Your task is complete when you have implemented a working solution to the issue.
  * @param {string} options.retryReason - Reason for retry (optional)
  * @param {string} options.branchName - The specific branch name to use (optional)
  * @param {string} options.modelName - The AI model being used (optional)
+ * @param {string} options.taskId - Task ID for tracking and live streaming (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, taskId }) {
     const startTime = Date.now();
     
     logger.info({
@@ -292,10 +294,12 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             promptPreview: prompt.substring(0, 200) + '...'
         }, 'Executing Docker command for Claude Code with detailed mount info');
 
-        // Execute Docker command
+        // Execute Docker command with live streaming
         const result = await executeDockerCommand('docker', dockerArgs, {
             timeout: CLAUDE_TIMEOUT_MS,
-            cwd: worktreePath
+            cwd: worktreePath,
+            taskId,
+            issueRef
         });
 
         const executionTime = Date.now() - startTime;
@@ -310,6 +314,34 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             fullStdout: result.stdout,
             fullStderr: result.stderr
         }, 'Claude Code execution completed');
+        
+        // Save logs and final diff to Redis for completed tasks
+        if (taskId) {
+            const redisClient = new Redis({
+                host: process.env.REDIS_HOST || 'redis',
+                port: process.env.REDIS_PORT || 6379
+            });
+            
+            try {
+                // Save the complete logs
+                await redisClient.setex(`task:${taskId}:logs`, 7 * 24 * 60 * 60, result.stdout || '');
+                
+                // Get and save the final git diff
+                const { execSync } = require('child_process');
+                try {
+                    const finalDiff = execSync('git diff', { cwd: worktreePath, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+                    await redisClient.setex(`task:${taskId}:finalDiff`, 7 * 24 * 60 * 60, finalDiff || '');
+                } catch (diffError) {
+                    logger.error({ taskId, error: diffError.message }, 'Failed to get final git diff');
+                }
+                
+                logger.info({ taskId }, 'Saved task logs and final diff to Redis');
+            } catch (saveError) {
+                logger.error({ taskId, error: saveError.message }, 'Failed to save task data to Redis');
+            } finally {
+                await redisClient.disconnect();
+            }
+        }
 
         // Parse Claude's stream-json output
         let claudeOutput = {
@@ -506,7 +538,17 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
  */
 function executeDockerCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const { timeout = 300000, cwd } = options;
+        const { timeout = 300000, cwd, taskId, issueRef } = options;
+        
+        let redisPublisher;
+        
+        // Set up Redis publisher for live streaming if taskId is provided
+        if (taskId) {
+            redisPublisher = new Redis({
+                host: process.env.REDIS_HOST || 'redis',
+                port: process.env.REDIS_PORT || 6379
+            });
+        }
         
         const child = spawn(command, args, {
             cwd,
@@ -516,6 +558,25 @@ function executeDockerCommand(command, args, options = {}) {
         let stdout = '';
         let stderr = '';
         let timedOut = false;
+        let diffInterval;
+
+        // Set up periodic git diff publishing if we have taskId and cwd
+        if (taskId && cwd && redisPublisher) {
+            diffInterval = setInterval(async () => {
+                try {
+                    const { exec } = require('child_process');
+                    exec('git diff', { cwd }, (error, stdout, stderr) => {
+                        if (!error && stdout) {
+                            redisPublisher.publish(`task-diff:${taskId}`, stdout).catch(err => {
+                                logger.error({ taskId, error: err.message }, 'Failed to publish git diff to Redis');
+                            });
+                        }
+                    });
+                } catch (err) {
+                    logger.error({ taskId, error: err.message }, 'Failed to run git diff');
+                }
+            }, 5000); // Run every 5 seconds
+        }
 
         // Set up timeout
         const timeoutHandle = setTimeout(() => {
@@ -530,17 +591,43 @@ function executeDockerCommand(command, args, options = {}) {
             }, 5000);
         }, timeout);
 
-        // Collect output
+        // Collect output and stream to Redis if taskId is provided
         child.stdout.on('data', (data) => {
-            stdout += data.toString();
+            const chunk = data.toString();
+            stdout += chunk;
+            
+            // Publish to Redis for live streaming
+            if (redisPublisher && taskId) {
+                redisPublisher.publish(`task-log:${taskId}`, chunk).catch(err => {
+                    logger.error({ taskId, error: err.message }, 'Failed to publish log chunk to Redis');
+                });
+            }
         });
 
         child.stderr.on('data', (data) => {
-            stderr += data.toString();
+            const chunk = data.toString();
+            stderr += chunk;
+            
+            // Also publish stderr to Redis
+            if (redisPublisher && taskId) {
+                redisPublisher.publish(`task-log:${taskId}`, `[STDERR] ${chunk}`).catch(err => {
+                    logger.error({ taskId, error: err.message }, 'Failed to publish stderr chunk to Redis');
+                });
+            }
         });
 
         child.on('close', (exitCode) => {
             clearTimeout(timeoutHandle);
+            
+            // Clear diff interval
+            if (diffInterval) {
+                clearInterval(diffInterval);
+            }
+            
+            // Clean up Redis connection
+            if (redisPublisher) {
+                redisPublisher.disconnect();
+            }
             
             if (timedOut) {
                 reject(new Error(`Command timed out after ${timeout}ms`));
@@ -556,6 +643,17 @@ function executeDockerCommand(command, args, options = {}) {
 
         child.on('error', (error) => {
             clearTimeout(timeoutHandle);
+            
+            // Clear diff interval
+            if (diffInterval) {
+                clearInterval(diffInterval);
+            }
+            
+            // Clean up Redis connection on error
+            if (redisPublisher) {
+                redisPublisher.disconnect();
+            }
+            
             reject(error);
         });
     });

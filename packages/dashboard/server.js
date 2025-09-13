@@ -3,11 +3,14 @@ const cors = require('cors');
 const { createClient } = require('redis');
 const { Queue } = require('bullmq');
 const path = require('path');
+const http = require('http');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 const { setupAuth, ensureAuthenticated } = require('./auth');
+const { setupWebSocket } = require('./webSocket');
 
 const app = express();
 const PORT = process.env.DASHBOARD_API_PORT || 4000;
+const server = http.createServer(app);
 
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
@@ -150,23 +153,58 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
   try {
     const { taskId } = req.params;
     
-    const historyKey = `task:${taskId}:history`;
-    const history = await redisClient.lRange(historyKey, 0, -1);
+    // First try to get the task state from WorkerStateManager
+    const workerStateKey = `worker:state:${taskId}`;
+    const workerState = await redisClient.get(workerStateKey);
     
-    const parsedHistory = history.map(entry => {
-      try {
-        return JSON.parse(entry);
-      } catch (e) {
-        return entry;
-      }
-    });
+    let history = [];
+    if (workerState) {
+      const parsedState = JSON.parse(workerState);
+      history = parsedState.history || [];
+    }
+    
+    const logs = await redisClient.get(`task:${taskId}:logs`);
+    const finalDiff = await redisClient.get(`task:${taskId}:finalDiff`);
     
     res.json({
       taskId,
-      history: parsedHistory
+      history,
+      logs: logs || null,
+      finalDiff: finalDiff || null
     });
   } catch (error) {
     console.error('Error in /api/task/:taskId/history:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/tasks/recent', ensureAuthenticated, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    
+    // Get all task state keys from Redis
+    const keys = await redisClient.keys('worker:state:*');
+    
+    // Fetch all task states
+    const tasks = [];
+    for (const key of keys.slice(0, limit)) {
+      const taskData = await redisClient.get(key);
+      if (taskData) {
+        try {
+          const task = JSON.parse(taskData);
+          tasks.push(task);
+        } catch (e) {
+          console.error('Failed to parse task data:', e);
+        }
+      }
+    }
+    
+    // Sort by last updated timestamp
+    tasks.sort((a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime());
+    
+    res.json(tasks.slice(0, limit));
+  } catch (error) {
+    console.error('Error in /api/tasks/recent:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -179,8 +217,11 @@ async function start() {
   try {
     await initRedis();
     
-    app.listen(PORT, () => {
+    setupWebSocket(server);
+    
+    server.listen(PORT, () => {
       console.log(`Dashboard API server running on port ${PORT}`);
+      console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
