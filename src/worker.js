@@ -641,8 +641,8 @@ async function processGitHubIssueJob(job) {
         delayApplied: true
     }, 'Applied model-specific delay to prevent conflicts');
     
-    // Create task state
-    const taskId = `${issueRef.repoOwner}-${issueRef.repoName}-${issueRef.number}`;
+    // Create task state - include model name to allow parallel processing with different models
+    const taskId = `${issueRef.repoOwner}-${issueRef.repoName}-${issueRef.number}-${modelName}`;
     
     try {
         await stateManager.createTaskState(taskId, issueRef, correlationId);
