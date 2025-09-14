@@ -17,7 +17,7 @@ import {
 import simpleGit from 'simple-git';
 import fs from 'fs-extra';
 import { completePostProcessing } from './githubService.js';
-import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
+import { aiProviderFactory } from './ai/aiProviderFactory.js';
 import { 
     validatePRCreation, 
     generateEnhancedClaudePrompt, 
@@ -370,8 +370,8 @@ ${combinedCommentBody}
 - Make sure your changes are compatible with the existing modifications on this branch
 - Use appropriate commit messages that reference the follow-up nature of the changes`;
 
-        // Step 4: Execute Claude Code with the follow-up prompt
-        const claudeResult = await executeClaudeCode({
+        // Step 4: Execute AI Code with the follow-up prompt
+        const claudeResult = await aiProviderFactory.executeWithModel(llm || DEFAULT_MODEL_NAME, {
             worktreePath: worktreeInfo.worktreePath,
             issueRef: { 
                 number: pullRequestNumber, 
@@ -380,8 +380,7 @@ ${combinedCommentBody}
             },
             githubToken: githubToken.token,
             customPrompt: prompt,
-            branchName: worktreeInfo.branchName,
-            modelName: llm || DEFAULT_MODEL_NAME
+            branchName: worktreeInfo.branchName
         });
 
         if (!claudeResult.success) {
@@ -872,12 +871,11 @@ async function processGitHubIssueJob(job) {
                 worktreePath: worktreeInfo.worktreePath
             }, 'EXECUTION DEBUG: About to execute Claude Code');
 
-            claudeResult = await executeClaudeCode({
+            claudeResult = await aiProviderFactory.executeWithModel(modelName, {
                 worktreePath: worktreeInfo.worktreePath,
                 issueRef: issueRef,
                 githubToken: githubToken.token,
-                branchName: worktreeInfo.branchName,
-                modelName: modelName
+                branchName: worktreeInfo.branchName
             });
             
             correlatedLogger.info({
@@ -1293,15 +1291,14 @@ After creating the PR, verify it exists with: \`gh pr list\`
 This is an emergency retry - the main implementation is complete, you just need to create the PR.`;
 
                             // Emergency retry focused only on PR creation
-                            const emergencyRetry = await executeClaudeCode({
+                            const emergencyRetry = await aiProviderFactory.executeWithModel(modelName, {
                                 worktreePath: worktreeInfo.worktreePath,
                                 issueRef: issueRef,
                                 githubToken: githubToken.token,
                                 customPrompt: emergencyPrompt,
                                 isRetry: true,
                                 retryReason: 'Emergency PR creation - main implementation complete',
-                                branchName: worktreeInfo.branchName,
-                                modelName: modelName
+                                branchName: worktreeInfo.branchName
                             });
 
                             correlatedLogger.info({
@@ -1844,15 +1841,21 @@ async function startWorker(options = {}) {
     // Set up heartbeat interval (every 30 seconds)
     const heartbeatInterval = setInterval(sendHeartbeat, 30000);
     
-    // Ensure Claude Docker image is built before starting worker
-    logger.info('Checking Claude Code Docker image...');
-    const imageReady = await buildClaudeDockerImage();
+    // Build infrastructure for all AI providers
+    logger.info('Building infrastructure for AI providers...');
+    const infrastructureResults = await aiProviderFactory.buildAllInfrastructure();
     
-    if (!imageReady) {
-        logger.error('Failed to build Claude Code Docker image. Worker may not function properly.');
-        // Continue anyway - worker can still handle Git operations
+    const failedProviders = Object.entries(infrastructureResults)
+        .filter(([_, result]) => !result.success)
+        .map(([provider, _]) => provider);
+    
+    if (failedProviders.length > 0) {
+        logger.warn({
+            failedProviders,
+            infrastructureResults
+        }, 'Some AI providers failed to build infrastructure');
     } else {
-        logger.info('Claude Code Docker image is ready');
+        logger.info('All AI provider infrastructure ready');
     }
     
     const worker = createWorker(GITHUB_ISSUE_QUEUE_NAME, async (job) => {
