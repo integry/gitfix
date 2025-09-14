@@ -1,4 +1,5 @@
 import { Octokit } from '@octokit/core';
+import { paginateRest } from '@octokit/plugin-paginate-rest';
 import { createAppAuth } from '@octokit/auth-app';
 import fs from 'fs';
 import path from 'path';
@@ -16,7 +17,10 @@ if (appId && privateKeyPath && installationId) {
     try {
         privateKey = fs.readFileSync(path.resolve(privateKeyPath), 'utf8');
         
-        appOctokit = new Octokit({
+        // Create Octokit with pagination plugin
+        const MyOctokit = Octokit.plugin(paginateRest);
+        
+        appOctokit = new MyOctokit({
             authStrategy: createAppAuth,
             auth: {
                 appId,
@@ -60,5 +64,7 @@ export async function getGitHubInstallationToken() {
  */
 export async function getAuthenticatedOctokit() {
     const token = await getGitHubInstallationToken();
-    return new Octokit({ auth: token });
+    // Create Octokit with pagination plugin
+    const MyOctokit = Octokit.plugin(paginateRest);
+    return new MyOctokit({ auth: token });
 }

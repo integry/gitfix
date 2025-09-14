@@ -45,25 +45,40 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
         return [];
     }
 
-    // Build exclusion labels query
-    const excludeLabelsQuery = [AI_EXCLUDE_TAGS_PROCESSING, AI_DONE_TAG]
-        .map(tag => `-label:"${tag}"`)
-        .join(' ');
-
-    // Construct GitHub search query
-    const query = `repo:${owner}/${repo} is:issue is:open label:"${AI_PRIMARY_TAG}" ${excludeLabelsQuery}`;
-    correlatedLogger.debug({ repo: repoFullName, query }, 'Constructed search query');
-
     // Use retry wrapper for GitHub API calls
     const fetchWithRetry = () => withRetry(
         async () => {
-            const response = await octokit.request('GET /search/issues', {
-                q: query,
-                per_page: 100, // Get up to 100 issues per request
+            // Use the issues API instead of the deprecated search API
+            // First, get all open issues with the primary AI tag
+            const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', {
+                owner,
+                repo,
+                state: 'open',
+                labels: AI_PRIMARY_TAG,
+                per_page: 100,
                 sort: 'created',
-                order: 'desc'
+                direction: 'desc'
             });
-            return response;
+            
+            // Filter out issues that have exclusion labels
+            const filteredIssues = issues.filter(issue => {
+                const labelNames = issue.labels.map(label => 
+                    typeof label === 'string' ? label : label.name
+                );
+                // Exclude if it has any of the exclusion tags
+                return !labelNames.includes(AI_EXCLUDE_TAGS_PROCESSING) && 
+                       !labelNames.includes(AI_DONE_TAG);
+            });
+            
+            correlatedLogger.debug({ 
+                repo: repoFullName, 
+                totalIssues: issues.length,
+                filteredIssues: filteredIssues.length,
+                excludedLabels: [AI_EXCLUDE_TAGS_PROCESSING, AI_DONE_TAG]
+            }, 'Filtered issues by labels');
+            
+            // Return in the same format as search API for compatibility
+            return { data: { items: filteredIssues } };
         },
         { ...retryConfigs.githubApi, correlationId },
         `fetch_issues_${repoFullName}`
@@ -74,8 +89,8 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
 
         correlatedLogger.info({ 
             repo: repoFullName, 
-            count: response.data.total_count 
-        }, `Found ${response.data.total_count} matching issues.`);
+            count: response.data.items.length 
+        }, `Found ${response.data.items.length} matching issues.`);
 
         // Transform issues to a simplified format
         return response.data.items.map(issue => {
@@ -197,7 +212,7 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                 reviewComments: reviewComments.length,
                 totalComments: allComments.length,
                 gitfixComments: gitfixComments.length
-            }, `Found ${allComments.length} comments (${issueComments.data.length} issue + ${reviewComments.data.length} review), ${gitfixComments.length} with !gitfix`);
+            }, `Found ${allComments.length} comments (${issueComments.length} issue + ${reviewComments.length} review), ${gitfixComments.length} with !gitfix`);
 
             // Log comment details for debugging
             if (allComments.length > 0 && gitfixComments.length === 0) {
@@ -533,15 +548,16 @@ async function resetIssueLabels() {
             logger.info({ repository: repoFullName }, 'Checking for issues with processing labels...');
 
             try {
-                // Search for issues with ONLY processing labels (never remove AI-done labels!)
-                const searchQuery = `repo:${repoFullName} is:issue is:open label:"${AI_EXCLUDE_TAGS_PROCESSING}"`;
-                
-                const searchResponse = await octokit.request('GET /search/issues', {
-                    q: searchQuery,
+                // Get issues with processing labels using the issues API (never remove AI-done labels!)
+                const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', {
+                    owner,
+                    repo,
+                    state: 'open',
+                    labels: AI_EXCLUDE_TAGS_PROCESSING,
                     per_page: 100
                 });
 
-                for (const issue of searchResponse.data.items) {
+                for (const issue of issues) {
                     const labelsToRemove = [];
                     const currentLabels = issue.labels.map(label => label.name);
                     
