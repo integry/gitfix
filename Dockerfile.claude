@@ -27,8 +27,8 @@ RUN echo "node ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Create directories for workspace and config
-RUN mkdir -p /home/node/workspace /home/node/.claude && \
+# Create workspace directory only - Claude config will be mounted at runtime
+RUN mkdir -p /home/node/workspace && \
     chown -R node:node /home/node
 
 # Copy firewall initialization script

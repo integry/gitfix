@@ -1,5 +1,8 @@
 FROM node:18-alpine
 
+# Install git, sudo, and docker client which are required for various operations
+RUN apk add --no-cache git sudo docker-cli
+
 WORKDIR /usr/src/app
 
 # Copy package files

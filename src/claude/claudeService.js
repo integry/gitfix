@@ -25,7 +25,7 @@ const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10
 function generateClaudePrompt(issueRef, branchName = null, modelName = null) {
     const branchInfo = branchName ? `\n- **BRANCH**: You are working on branch \`${branchName}\`.` : '';
     const modelInfo = modelName ? `\n- **MODEL**: This task is being processed by the \`${modelName}\` model.` : '';
-    
+
     return `Please analyze and implement a solution for GitHub issue #${issueRef.number}.
 
 **REPOSITORY INFORMATION:**
@@ -75,7 +75,7 @@ Your task is complete when you have implemented a working solution to the issue.
  */
 export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
     const startTime = Date.now();
-    
+
     logger.info({
         issueNumber: issueRef.number,
         repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
@@ -85,14 +85,13 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
         retryReason
     }, isRetry ? 'Starting Claude Code execution (RETRY)...' : 'Starting Claude Code execution...');
 
-    let tempClaudeConfigDir = null;
     let worktreeGitContent = null;
     let mainRepoPath = null;
-    
+
     try {
         // Generate the prompt for Claude
         const basePrompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
-        
+
         // Add critical safety instructions to prevent git repository corruption
         const prompt = `${basePrompt}
 
@@ -105,14 +104,14 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 - If git commands fail, describe the error but do not try destructive recovery methods
 - NOTE: You may encounter permission errors when trying to commit - this is expected
 - The system will automatically commit your changes after you complete the modifications`;
-        
+
         logger.debug({
             issueNumber: issueRef.number,
             promptLength: prompt.length,
             hasSafetyRules: prompt.includes('CRITICAL GIT SAFETY RULES'),
             isCustomPrompt: !!customPrompt
         }, 'Generated Claude prompt with safety rules');
-        
+
         if (isRetry) {
             logger.info({
                 issueNumber: issueRef.number,
@@ -120,7 +119,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 promptLength: prompt.length
             }, 'Using enhanced prompt for retry execution');
         }
-        
+
         // Ensure worktree files are owned by UID 1000 (node user in container)
         try {
             await executeDockerCommand('sudo', ['chown', '-R', '1000:1000', worktreePath], {
@@ -137,39 +136,13 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 error: chownError.message
             }, 'Failed to set worktree ownership - container may have permission issues');
         }
-        
-        // Create temporary directory for Claude config with proper permissions
-        tempClaudeConfigDir = path.join('/tmp', `claude-config-${issueRef.number}-${Date.now()}`);
-        try {
-            // Create temp directory
-            await executeDockerCommand('mkdir', ['-p', tempClaudeConfigDir], { timeout: 5000 });
-            
-            // Copy Claude config files
-            await executeDockerCommand('cp', ['-r', `${CLAUDE_CONFIG_PATH}/.`, tempClaudeConfigDir], { timeout: 5000 });
-            
-            // Copy .claude.json if it exists
-            const claudeJsonPath = path.join(os.homedir(), '.claude.json');
-            if (fs.existsSync(claudeJsonPath)) {
-                await executeDockerCommand('cp', [claudeJsonPath, path.join(tempClaudeConfigDir, '.claude.json')], { timeout: 5000 });
-            }
-            
-            // Set proper ownership for container user (UID 1000)
-            await executeDockerCommand('sudo', ['chown', '-R', '1000:1000', tempClaudeConfigDir], { timeout: 5000 });
-            
-            // Ensure credentials file is readable by container user
-            const tempCredentialsPath = path.join(tempClaudeConfigDir, '.credentials.json');
-            if (fs.existsSync(tempCredentialsPath)) {
-                await executeDockerCommand('sudo', ['chmod', '644', tempCredentialsPath], { timeout: 5000 });
-            }
-            
-            logger.debug({
-                issueNumber: issueRef.number,
-                tempClaudeConfigDir
-            }, 'Created temporary Claude config directory with proper permissions');
-            
+
+        // No longer need temporary Claude config directory as we mount directly
+        // This entire block can be removed since we're using direct mount approach
+
             // Verify worktree .git file before Docker execution
             const worktreeGitPath = path.join(worktreePath, '.git');
-            
+
             try {
                 if (fs.existsSync(worktreeGitPath)) {
                     const stats = fs.statSync(worktreeGitPath);
@@ -205,47 +178,41 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                     error: verifyError.message
                 }, 'Failed to verify worktree structure');
             }
-        } catch (configError) {
-            logger.error({
-                issueNumber: issueRef.number,
-                error: configError.message
-            }, 'Failed to prepare Claude config for container');
-            throw new Error(`Failed to prepare Claude configuration: ${configError.message}`);
-        }
-        
+
         // Construct Docker run command
         const dockerArgs = [
             'run',
             '--rm',
             '--security-opt', 'no-new-privileges',
-            '--cap-drop', 'ALL',
+            // Remove cap-drop ALL to allow chown
+            '--cap-add', 'CHOWN',
             '--network', 'bridge', // Restrict network access
-            
-            // Ensure container runs as node user (UID 1000)
-            '--user', '1000:1000',
-            
+
+            // Run as root initially to fix permissions, then drop to node user
+            '--user', '0:0',
+
             // Mount the worktree as the workspace with proper ownership
             '-v', `${worktreePath}:/home/node/workspace:rw`,
-            
+
             // Mount the git-processor base directory that contains both clones and worktrees
             // This ensures worktree .git files can reference the main repository
             '-v', '/tmp/git-processor:/tmp/git-processor:rw',
-            
-            // Mount temporary Claude config directory with proper permissions
-            '-v', `${tempClaudeConfigDir}:/home/node/.claude:rw`,
-            // Mount .claude.json if it exists in temp directory
-            ...(fs.existsSync(path.join(tempClaudeConfigDir, '.claude.json')) ? 
-                ['-v', `${path.join(tempClaudeConfigDir, '.claude.json')}:/home/node/.claude.json:rw`] : []),
-            
+
+            // Mount the actual Claude config directory directly (read-write so Claude can create project dirs)
+            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:rw`,
+            // Also mount .claude.json if it exists
+            ...(fs.existsSync(path.join(os.homedir(), '.claude.json')) ?
+                ['-v', `${path.join(os.homedir(), '.claude.json')}:/home/node/.claude.json:rw`] : []),
+
             // Pass GitHub token as environment variable
             '-e', `GH_TOKEN=${githubToken}`,
-            
+
             // Set working directory
             '-w', '/home/node/workspace',
-            
+
             // Use the Claude Code Docker image
             CLAUDE_DOCKER_IMAGE,
-            
+
             // Execute Claude Code CLI with the generated prompt
             'claude',
             '-p', prompt,
@@ -254,7 +221,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             '--verbose',
             '--dangerously-skip-permissions'
         ];
-        
+
         // Add model specification if provided
         if (modelName) {
             dockerArgs.splice(-6, 0, '--model', modelName);
@@ -281,7 +248,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 });
             }
         }
-        
+
         logger.debug({
             issueNumber: issueRef.number,
             dockerArgs: dockerArgs, // Show full command
@@ -299,6 +266,8 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
         });
 
         const executionTime = Date.now() - startTime;
+
+        // No cleanup needed since we're using direct mount approach
 
         logger.info({
             issueNumber: issueRef.number,
@@ -320,44 +289,44 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             sessionId: null,
             finalResult: null
         };
-        
+
         // Parse stream-json output line by line
         if (result.stdout) {
             const lines = result.stdout.split('\n').filter(line => line.trim());
             for (const line of lines) {
                 try {
                     const jsonLine = JSON.parse(line);
-                    
+
                     // Collect conversation messages
                     if (jsonLine.type === 'user' || jsonLine.type === 'assistant') {
                         claudeOutput.conversationLog.push(jsonLine);
-                        
+
                         // Extract model from assistant messages
                         if (jsonLine.type === 'assistant' && jsonLine.message?.model) {
                             claudeOutput.model = jsonLine.message.model;
                         }
                     }
-                    
+
                     // Extract session ID
                     if (jsonLine.session_id) {
                         claudeOutput.sessionId = jsonLine.session_id;
                     }
-                    
+
                     // Extract conversation ID if available
                     if (jsonLine.conversation_id) {
                         claudeOutput.conversationId = jsonLine.conversation_id;
                     }
-                    
+
                     // Extract model information if available
                     if (jsonLine.model) {
                         claudeOutput.model = jsonLine.model;
                     }
-                    
+
                     // Extract final result
                     if (jsonLine.type === 'result') {
                         claudeOutput.finalResult = jsonLine;
                         claudeOutput.success = !jsonLine.is_error;
-                        
+
                         // Also check for model info in final result
                         if (jsonLine.model) {
                             claudeOutput.model = jsonLine.model;
@@ -381,14 +350,14 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             logs: result.stderr || '',
             exitCode: result.exitCode,
             rawOutput: result.stdout,
-            
+
             // Extract conversation and session info
             conversationLog: claudeOutput.conversationLog || [],
             sessionId: claudeOutput.sessionId,
             conversationId: claudeOutput.conversationId,
             model: claudeOutput.model || process.env.CLAUDE_MODEL || getDefaultModel(), // Default to current Sonnet
             finalResult: claudeOutput.finalResult,
-            
+
             // Extract specific fields if available in Claude's structured output
             modifiedFiles: [], // Will be determined by file system inspection
             commitMessage: null, // Will be extracted from conversation if present
@@ -413,14 +382,14 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 model: response.model,
                 summary: response.summary?.substring(0, 200)
             }, 'Claude Code execution succeeded');
-            
+
             // Verify worktree state after execution
             try {
                 const postExecGitPath = path.join(worktreePath, '.git');
                 if (fs.existsSync(postExecGitPath)) {
                     const postStats = fs.statSync(postExecGitPath);
                     const isNowDirectory = postStats.isDirectory();
-                    
+
                     if (isNowDirectory) {
                         logger.error({
                             issueNumber: issueRef.number,
@@ -428,7 +397,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                             preExecType: worktreeGitContent ? 'file' : 'unknown',
                             postExecType: 'directory'
                         }, 'CRITICAL: Worktree .git was converted from file to directory! Claude may have run git init');
-                        
+
                         // Check for signs of git init
                         const gitConfigPath = path.join(postExecGitPath, 'config');
                         if (fs.existsSync(gitConfigPath)) {
@@ -461,7 +430,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 
     } catch (error) {
         const executionTime = Date.now() - startTime;
-        
+
         logger.error({
             issueNumber: issueRef.number,
             repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
@@ -478,22 +447,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             logs: error.stderr || error.message
         };
     } finally {
-        // Clean up temporary Claude config directory
-        if (tempClaudeConfigDir) {
-            try {
-                await executeDockerCommand('rm', ['-rf', tempClaudeConfigDir], { timeout: 5000 });
-                logger.debug({
-                    issueNumber: issueRef.number,
-                    tempClaudeConfigDir
-                }, 'Cleaned up temporary Claude config directory');
-            } catch (cleanupError) {
-                logger.warn({
-                    issueNumber: issueRef.number,
-                    tempClaudeConfigDir,
-                    error: cleanupError.message
-                }, 'Failed to clean up temporary Claude config directory');
-            }
-        }
+        // Cleanup moved to after Docker execution completes
     }
 }
 
@@ -507,7 +461,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 function executeDockerCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
         const { timeout = 300000, cwd } = options;
-        
+
         const child = spawn(command, args, {
             cwd,
             stdio: ['ignore', 'pipe', 'pipe']
@@ -521,7 +475,7 @@ function executeDockerCommand(command, args, options = {}) {
         const timeoutHandle = setTimeout(() => {
             timedOut = true;
             child.kill('SIGTERM');
-            
+
             // Force kill if SIGTERM doesn't work
             setTimeout(() => {
                 if (!child.killed) {
@@ -541,7 +495,7 @@ function executeDockerCommand(command, args, options = {}) {
 
         child.on('close', (exitCode) => {
             clearTimeout(timeoutHandle);
-            
+
             if (timedOut) {
                 reject(new Error(`Command timed out after ${timeout}ms`));
                 return;

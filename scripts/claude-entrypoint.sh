@@ -16,7 +16,37 @@ else
     echo "GitHub CLI will use GH_TOKEN environment variable for authentication"
 fi
 
-# Ensure Claude config is mounted and accessible
+# Claude config should be directly mounted now
+if [ -d "/home/node/.claude" ]; then
+    echo "Claude config directory mounted"
+    echo "Contents of /home/node/.claude:"
+    ls -la /home/node/.claude/
+
+    # Fix ownership if running with sudo capability
+    if command -v sudo >/dev/null 2>&1; then
+        echo "Fixing ownership of Claude config files..."
+        sudo chown -R node:node /home/node/.claude 2>/dev/null || echo "Could not change ownership"
+    fi
+
+    # Ensure necessary subdirectories exist (they might not be in the mounted volume)
+    for dir in todos projects shell-snapshots statsig; do
+        if [ ! -d "/home/node/.claude/$dir" ]; then
+            echo "Creating missing directory: /home/node/.claude/$dir"
+            mkdir -p "/home/node/.claude/$dir" 2>/dev/null || echo "Could not create $dir (permission issue)"
+        fi
+    done
+
+    # Pre-create the project directory for our workspace to avoid the dash issue
+    project_dir="/home/node/.claude/projects/home-node-workspace"
+    if [ ! -d "$project_dir" ]; then
+        echo "Creating project directory: $project_dir"
+        mkdir -p "$project_dir" 2>/dev/null || echo "Could not create project directory"
+    fi
+else
+    echo "WARNING: Claude config directory not mounted at /home/node/.claude"
+fi
+
+# Ensure Claude config is accessible
 if [ ! -f "/home/node/.claude/.credentials.json" ]; then
     echo "Warning: Claude credentials not found"
     echo "Ensure Claude config directory is properly mounted"
@@ -65,7 +95,15 @@ fi
 # If arguments are provided, execute them
 if [ $# -gt 0 ]; then
     echo "Executing command: $@"
-    exec "$@"
+    # If running as root, switch to node user after setup
+    if [ "$(id -u)" = "0" ]; then
+        echo "Switching to node user..."
+        # Switch to node user and execute the command
+        cd /home/node/workspace
+        exec sudo -u node -H "$@"
+    else
+        exec "$@"
+    fi
 else
     echo "No command provided, starting interactive shell"
     exec /bin/bash

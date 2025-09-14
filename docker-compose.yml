@@ -37,6 +37,7 @@ services:
       - .:/usr/src/app
       - /tmp/git-processor:/tmp/git-processor
       - ~/.claude:/root/.claude
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - .env
     depends_on:
