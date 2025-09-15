@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios, { AxiosError } from 'axios';
+import config from '../config';
 
 interface UseApiDataOptions {
   pollingInterval?: number;
@@ -13,7 +14,7 @@ interface UseApiDataResult<T> {
   refetch: () => void;
 }
 
-const API_BASE_URL = 'http://localhost:4000';
+const API_BASE_URL = config.API_BASE_URL;
 
 export function useApiData<T = unknown>(
   endpoint: string,

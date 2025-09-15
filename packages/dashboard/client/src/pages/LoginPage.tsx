@@ -1,8 +1,9 @@
 import React from 'react';
+import config from '../config';
 
 const LoginPage: React.FC = () => {
   const handleGitHubLogin = () => {
-    window.location.href = 'http://localhost:4000/api/auth/github';
+    window.location.href = `${config.API_BASE_URL}/api/auth/github`;
   };
 
   return (

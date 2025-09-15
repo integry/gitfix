@@ -443,6 +443,23 @@ async function pollForIssues() {
                             
                             await addToQueueWithRetry();
                             
+                            // Log activity for dashboard
+                            try {
+                                const activity = {
+                                    id: `activity-${timestamp}-${issue.id}-${modelName}`,
+                                    type: 'issue_created',
+                                    timestamp: new Date().toISOString(),
+                                    repository: repoFullName,
+                                    issueNumber: issue.number,
+                                    description: `New issue #${issue.number} detected for processing with ${modelName}`,
+                                    status: 'info'
+                                };
+                                await redisClient.lpush('system:activity:log', JSON.stringify(activity));
+                                await redisClient.ltrim('system:activity:log', 0, 999); // Keep last 1000 activities
+                            } catch (activityError) {
+                                correlatedLogger.warn({ error: activityError.message }, 'Failed to log activity');
+                            }
+                            
                             correlatedLogger.info({ 
                                 jobId,
                                 issueNumber: issue.number,

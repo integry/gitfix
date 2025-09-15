@@ -64,16 +64,55 @@ export function createWorker(queueName, processorFunction) {
         autorun: true,
     });
 
-    worker.on('completed', (job, result) => {
+    worker.on('completed', async (job, result) => {
+        const duration = Date.now() - job.timestamp;
         logger.info({ 
             jobId: job.id, 
             jobName: job.name, 
             result,
-            duration: Date.now() - job.timestamp
+            duration
         }, 'Job completed successfully');
+        
+        // Update metrics
+        try {
+            const metricsRedis = new Redis(connectionOptions);
+            const dateKey = new Date().toISOString().split('T')[0];
+            
+            // Update overall metrics
+            await metricsRedis.incr('metrics:jobs:processed');
+            await metricsRedis.incr(`metrics:daily:${dateKey}:processed`);
+            
+            // Update average processing time
+            const totalProcessed = await metricsRedis.get('metrics:jobs:processed') || '1';
+            const currentAvg = parseFloat(await metricsRedis.get('metrics:jobs:avgTime') || '0');
+            const newAvg = ((currentAvg * (parseInt(totalProcessed) - 1)) + (duration / 1000)) / parseInt(totalProcessed);
+            await metricsRedis.set('metrics:jobs:avgTime', newAvg.toFixed(2));
+            
+            // Track active repository
+            if (job.data?.repository) {
+                await metricsRedis.sadd('active:repositories', job.data.repository);
+            }
+            
+            // Log activity
+            const activity = {
+                id: `activity-${Date.now()}-${job.id}`,
+                type: job.name === 'processGitHubIssue' ? 'issue_processed' : 'pr_processed',
+                timestamp: new Date().toISOString(),
+                repository: job.data?.repository,
+                issueNumber: job.data?.issueNumber,
+                description: `Successfully processed ${job.name === 'processGitHubIssue' ? 'issue' : 'PR'} #${job.data?.issueNumber || 'unknown'}`,
+                status: 'success'
+            };
+            await metricsRedis.lpush('system:activity:log', JSON.stringify(activity));
+            await metricsRedis.ltrim('system:activity:log', 0, 999); // Keep last 1000 activities
+            
+            await metricsRedis.quit();
+        } catch (error) {
+            logger.error({ error: error.message }, 'Failed to update metrics');
+        }
     });
 
-    worker.on('failed', (job, err) => {
+    worker.on('failed', async (job, err) => {
         logger.error({ 
             jobId: job?.id, 
             jobName: job?.name, 
@@ -82,6 +121,33 @@ export function createWorker(queueName, processorFunction) {
             stack: err.stack,
             attemptsMade: job?.attemptsMade
         }, 'Job failed');
+        
+        // Update failure metrics
+        try {
+            const metricsRedis = new Redis(connectionOptions);
+            const dateKey = new Date().toISOString().split('T')[0];
+            
+            // Update failure metrics
+            await metricsRedis.incr('metrics:jobs:failed');
+            await metricsRedis.incr(`metrics:daily:${dateKey}:failed`);
+            
+            // Log activity
+            const activity = {
+                id: `activity-${Date.now()}-${job?.id || 'unknown'}`,
+                type: 'error',
+                timestamp: new Date().toISOString(),
+                repository: job?.data?.repository,
+                issueNumber: job?.data?.issueNumber,
+                description: `Failed to process ${job?.name === 'processGitHubIssue' ? 'issue' : 'PR'} #${job?.data?.issueNumber || 'unknown'}: ${err.message}`,
+                status: 'error'
+            };
+            await metricsRedis.lpush('system:activity:log', JSON.stringify(activity));
+            await metricsRedis.ltrim('system:activity:log', 0, 999); // Keep last 1000 activities
+            
+            await metricsRedis.quit();
+        } catch (error) {
+            logger.error({ error: error.message }, 'Failed to update failure metrics');
+        }
     });
 
     worker.on('error', (err) => {
