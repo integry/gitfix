@@ -23,14 +23,12 @@ export const getSystemStatus = async () => {
   const data = await response.json();
   
   // Transform backend response to match frontend expectations
-  // Handle workers - backend sends 'worker' (singular) status, frontend expects array
+  // The system has a single worker process, not multiple workers
+  // Show worker status as a single item to be accurate
   let workers = [];
   if (data.worker === 'running') {
-    // Show 3 workers when worker service is running (matching the mock data pattern)
     workers = [
-      { id: 1, status: 'active' },
-      { id: 2, status: 'active' },
-      { id: 3, status: 'active' }
+      { id: 1, status: 'active' }
     ];
   }
   

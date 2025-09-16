@@ -67,6 +67,7 @@ services:
       - '4000:4000'
     volumes:
       - .:/usr/src/app
+      - ~/.claude:/root/.claude:ro
     env_file:
       - .env
     depends_on:

@@ -76,9 +76,32 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
                                  process.env.GH_INSTALLATION_ID;
       status.githubAuth = githubAppConfigured ? 'connected' : 'disconnected';
       
-      // Check Claude authentication
-      const claudeApiKey = process.env.ANTHROPIC_API_KEY;
-      status.claudeAuth = claudeApiKey ? 'connected' : 'disconnected';
+      // Check Claude authentication - verify recent successful executions
+      let claudeActive = false;
+      try {
+        // Check recent activity for successful Claude executions
+        const recentActivity = await redisClient.lRange('system:activity:log', 0, 20);
+        const oneHourAgo = Date.now() - (60 * 60 * 1000); // 1 hour
+        
+        for (const activityStr of recentActivity) {
+          try {
+            const activity = JSON.parse(activityStr);
+            // Check if this is a recent successful issue processing (which uses Claude)
+            if (activity.type === 'issue_processed' && 
+                activity.status === 'success' &&
+                activity.id && activity.id.includes('claude-') &&
+                new Date(activity.timestamp).getTime() > oneHourAgo) {
+              claudeActive = true;
+              break;
+            }
+          } catch (e) {
+            // Skip invalid entries
+          }
+        }
+      } catch (err) {
+        console.error('Error checking Claude status:', err);
+      }
+      status.claudeAuth = claudeActive ? 'connected' : 'disconnected';
       
     } catch (error) {
       status.redis = 'disconnected';
