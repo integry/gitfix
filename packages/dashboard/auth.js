@@ -46,7 +46,8 @@ function setupAuth(app) {
         passport.authenticate('github', { failureRedirect: '/login' }),
         (req, res) => {
             // Successful authentication, redirect to the dashboard.
-            res.redirect('http://localhost:5173/');
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+            res.redirect(`${frontendUrl}/`);
         }
     );
 
@@ -55,7 +56,8 @@ function setupAuth(app) {
             if (err) {
                 console.error('Logout error:', err);
             }
-            res.redirect('http://localhost:5173/login');
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+            res.redirect(`${frontendUrl}/login`);
         });
     });
 

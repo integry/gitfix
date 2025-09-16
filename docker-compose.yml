@@ -52,6 +52,8 @@ services:
     container_name: gitfix-web-ui
     ports:
       - '5173:5173'
+    environment:
+      - VITE_API_URL=http://dashboard-api:4000
     networks:
       - gitfix-net
 

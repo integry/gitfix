@@ -46,28 +46,39 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
       redis: 'unknown',
       daemon: 'unknown',
       worker: 'unknown',
+      githubAuth: 'unknown',
+      claudeAuth: 'unknown',
       timestamp: new Date().toISOString()
     };
     
     try {
       await redisClient.ping();
-      status.redis = 'healthy';
+      status.redis = 'connected';
       
       const daemonHeartbeat = await redisClient.get('system:status:daemon');
       if (daemonHeartbeat && Date.now() - parseInt(daemonHeartbeat) < 120000) {
-        status.daemon = 'healthy';
+        status.daemon = 'running';
       } else {
-        status.daemon = 'unhealthy';
+        status.daemon = 'stopped';
       }
       
       const workerHeartbeat = await redisClient.get('system:status:worker');
       if (workerHeartbeat && Date.now() - parseInt(workerHeartbeat) < 120000) {
-        status.worker = 'healthy';
+        status.worker = 'running';
       } else {
-        status.worker = 'unhealthy';
+        status.worker = 'stopped';
       }
+      
+      // Check GitHub authentication
+      const githubToken = await redisClient.get('github:auth:token');
+      status.githubAuth = githubToken ? 'connected' : 'disconnected';
+      
+      // Check Claude authentication
+      const claudeApiKey = process.env.ANTHROPIC_API_KEY;
+      status.claudeAuth = claudeApiKey ? 'connected' : 'disconnected';
+      
     } catch (error) {
-      status.redis = 'unhealthy';
+      status.redis = 'disconnected';
     }
     
     res.json(status);
@@ -108,20 +119,34 @@ app.get('/api/activity', ensureAuthenticated, async (req, res) => {
     
     const activities = await redisClient.lRange('system:activity:log', offset, offset + limit - 1);
     
-    const parsedActivities = activities.map(activity => {
+    const parsedActivities = activities.map((activity, index) => {
       try {
-        return JSON.parse(activity);
+        const parsed = JSON.parse(activity);
+        // Ensure the activity has the expected format
+        return {
+          id: parsed.id || `activity-${Date.now()}-${index}`,
+          type: parsed.type || 'info',
+          timestamp: parsed.timestamp || new Date().toISOString(),
+          user: parsed.user,
+          repository: parsed.repository,
+          issueNumber: parsed.issueNumber,
+          description: parsed.description || parsed.message || JSON.stringify(parsed),
+          status: parsed.status || 'info'
+        };
       } catch (e) {
-        return activity;
+        // If it's not JSON, treat it as a simple message
+        return {
+          id: `activity-${Date.now()}-${index}`,
+          type: 'info',
+          timestamp: new Date().toISOString(),
+          description: activity.toString(),
+          status: 'info'
+        };
       }
     });
     
-    res.json({
-      activities: parsedActivities,
-      total: await redisClient.lLen('system:activity:log'),
-      limit,
-      offset
-    });
+    // Return as array directly for the frontend
+    res.json(parsedActivities);
   } catch (error) {
     console.error('Error in /api/activity:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -130,10 +155,46 @@ app.get('/api/activity', ensureAuthenticated, async (req, res) => {
 
 app.get('/api/metrics', ensureAuthenticated, async (req, res) => {
   try {
+    // Get basic metrics
+    const jobsProcessed = parseInt(await redisClient.get('metrics:jobs:processed') || '0');
+    const jobsFailed = parseInt(await redisClient.get('metrics:jobs:failed') || '0');
+    const avgTimeStr = await redisClient.get('metrics:jobs:avgTime') || '0';
+    const avgTime = parseFloat(avgTimeStr);
+    
+    // Calculate success rate
+    const totalJobs = jobsProcessed + jobsFailed;
+    const successRate = totalJobs > 0 ? jobsProcessed / totalJobs : 1;
+    
+    // Get active repositories count
+    const activeRepos = await redisClient.sMembers('active:repositories');
+    const activeRepositories = activeRepos.length;
+    
+    // Get daily stats for the last 7 days
+    const dailyStats = [];
+    const today = new Date();
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateKey = date.toISOString().split('T')[0];
+      
+      const processed = parseInt(await redisClient.get(`metrics:daily:${dateKey}:processed`) || '0');
+      const failed = parseInt(await redisClient.get(`metrics:daily:${dateKey}:failed`) || '0');
+      const successful = processed - failed;
+      
+      dailyStats.push({
+        date: dateKey,
+        processed,
+        successful,
+        failed
+      });
+    }
+    
     const metrics = {
-      jobsProcessed: await redisClient.get('metrics:jobs:processed') || '0',
-      jobsFailed: await redisClient.get('metrics:jobs:failed') || '0',
-      averageProcessingTime: await redisClient.get('metrics:jobs:avgTime') || '0',
+      totalIssuesProcessed: jobsProcessed,
+      successRate,
+      averageProcessingTime: avgTime,
+      activeRepositories,
+      dailyStats,
       uptime: process.uptime(),
       memoryUsage: process.memoryUsage(),
       timestamp: new Date().toISOString()

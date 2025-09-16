@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - gitfix-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  dashboard:
+    build:
+      context: ./packages/dashboard
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_BASE_URL: ${FRONTEND_API_URL:-http://localhost}
+        VITE_APP_URL: ${FRONTEND_APP_URL:-http://localhost}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DASHBOARD_API_PORT: 4000
+      SESSION_SECRET: ${SESSION_SECRET}
+      GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
+      GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+      GH_OAUTH_CALLBACK_URL: ${GH_OAUTH_CALLBACK_URL}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - gitfix-network
+
+  daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GH_APP_ID: ${GH_APP_ID}
+      GH_APP_PRIVATE_KEY: ${GH_APP_PRIVATE_KEY}
+      GH_WEBHOOK_SECRET: ${GH_WEBHOOK_SECRET}
+      GH_CLIENT_ID: ${GH_CLIENT_ID}
+      GH_CLIENT_SECRET: ${GH_CLIENT_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ALLOWED_ORGS: ${ALLOWED_ORGS}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - gitfix-network
+    command: ["node", "src/daemon.js"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GH_APP_ID: ${GH_APP_ID}
+      GH_APP_PRIVATE_KEY: ${GH_APP_PRIVATE_KEY}
+      GH_WEBHOOK_SECRET: ${GH_WEBHOOK_SECRET}
+      GH_CLIENT_ID: ${GH_CLIENT_ID}
+      GH_CLIENT_SECRET: ${GH_CLIENT_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ALLOWED_ORGS: ${ALLOWED_ORGS}
+    volumes:
+      - ./logs:/app/logs
+      - ./repos:/app/repos
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - gitfix-network
+    command: ["node", "src/worker.js"]
+
+networks:
+  gitfix-network:
+    driver: bridge
+
+volumes:
+  redis-data:
