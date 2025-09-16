@@ -29,7 +29,8 @@ async function initRedis() {
   redisClient.on('error', (err) => console.error('Redis Client Error', err));
   await redisClient.connect();
   
-  taskQueue = new Queue('taskQueue', {
+  const queueName = process.env.GITHUB_ISSUE_QUEUE_NAME || 'github-issue-processor';
+  taskQueue = new Queue(queueName, {
     connection: {
       host: process.env.REDIS_HOST || 'redis',
       port: process.env.REDIS_PORT || 6379
@@ -69,9 +70,11 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
         status.worker = 'stopped';
       }
       
-      // Check GitHub authentication
-      const githubToken = await redisClient.get('github:auth:token');
-      status.githubAuth = githubToken ? 'connected' : 'disconnected';
+      // Check GitHub authentication - verify GitHub App is configured
+      const githubAppConfigured = process.env.GH_APP_ID && 
+                                 process.env.GH_PRIVATE_KEY_PATH && 
+                                 process.env.GH_INSTALLATION_ID;
+      status.githubAuth = githubAppConfigured ? 'connected' : 'disconnected';
       
       // Check Claude authentication
       const claudeApiKey = process.env.ANTHROPIC_API_KEY;

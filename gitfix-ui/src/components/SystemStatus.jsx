@@ -94,6 +94,12 @@ const SystemStatus = () => {
             {status?.githubAuth || 'Unknown'}
           </span>
         </div>
+        <div className="status-item">
+          <span className="status-label">Claude Auth:</span>
+          <span className="status-value" style={{ color: getStatusColor(status?.claudeAuth) }}>
+            {status?.claudeAuth || 'Unknown'}
+          </span>
+        </div>
       </div>
     </div>
   );
