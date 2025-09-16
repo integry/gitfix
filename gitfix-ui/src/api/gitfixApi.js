@@ -2,9 +2,24 @@
 
 const API_BASE_URL = 'https://api.gitfix.dev';
 
+// Helper function to handle API responses and auth
+const handleApiResponse = async (response) => {
+  if (response.status === 401) {
+    // Redirect to GitHub OAuth login
+    window.location.href = `${API_BASE_URL}/api/auth/github`;
+    throw new Error('Authentication required');
+  }
+  if (!response.ok) {
+    throw new Error(`API request failed: ${response.status}`);
+  }
+  return response;
+};
+
 export const getSystemStatus = async () => {
-  const response = await fetch(`${API_BASE_URL}/api/status`);
-  if (!response.ok) throw new Error('Failed to fetch system status');
+  const response = await fetch(`${API_BASE_URL}/api/status`, {
+    credentials: 'include' // Include cookies for session
+  });
+  await handleApiResponse(response);
   const data = await response.json();
   
   // Transform backend response to match frontend expectations
@@ -17,8 +32,10 @@ export const getSystemStatus = async () => {
 };
 
 export const getQueueStats = async () => {
-  const response = await fetch(`${API_BASE_URL}/api/queue/stats`);
-  if (!response.ok) throw new Error('Failed to fetch queue stats');
+  const response = await fetch(`${API_BASE_URL}/api/queue/stats`, {
+    credentials: 'include' // Include cookies for session
+  });
+  await handleApiResponse(response);
   return response.json();
 };
 //
