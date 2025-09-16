@@ -47,12 +47,19 @@ const TaskList = ({ onTaskSelect }) => {
     return date.toLocaleString();
   };
 
-  const formatDuration = (startTime, endTime) => {
-    if (!startTime || !endTime) return 'N/A';
-    const duration = new Date(endTime) - new Date(startTime);
+  const formatDuration = (startTime, endTime, status) => {
+    if (!startTime) return 'N/A';
+    
+    // For active tasks, calculate duration from start time to now
+    const end = endTime ? new Date(endTime) : new Date();
+    const duration = end - new Date(startTime);
+    
     const minutes = Math.floor(duration / 60000);
     const seconds = Math.floor((duration % 60000) / 1000);
-    return `${minutes}m ${seconds}s`;
+    
+    // Add indicator for active tasks
+    const suffix = status === 'active' ? ' (running)' : '';
+    return `${minutes}m ${seconds}s${suffix}`;
   };
 
   if (loading && tasks.length === 0) return <div>Loading tasks...</div>;
@@ -100,7 +107,7 @@ const TaskList = ({ onTaskSelect }) => {
             <thead>
               <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                 <th style={{ padding: '0.75rem', textAlign: 'left' }}>Repository</th>
-                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Issue</th>
+                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Issue/Task</th>
                 <th style={{ padding: '0.75rem', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '0.75rem', textAlign: 'left' }}>Created</th>
                 <th style={{ padding: '0.75rem', textAlign: 'left' }}>Duration</th>
@@ -121,11 +128,16 @@ const TaskList = ({ onTaskSelect }) => {
                     {task.repository || 'Unknown'}
                   </td>
                   <td style={{ padding: '0.75rem' }}>
-                    #{task.issueNumber || 'N/A'}
+                    <div style={{ fontWeight: '500' }}>
+                      {task.id.startsWith('pr-comments-batch') ? 
+                        `PR #${task.issueNumber || 'N/A'} Comments` : 
+                        task.issueNumber ? `Issue #${task.issueNumber}` : 'Task'
+                      }
+                    </div>
                     {task.title && (
-                      <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                        {task.title.substring(0, 50)}
-                        {task.title.length > 50 && '...'}
+                      <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.25rem' }}>
+                        {task.title.substring(0, 60)}
+                        {task.title.length > 60 && '...'}
                       </div>
                     )}
                   </td>
@@ -142,7 +154,7 @@ const TaskList = ({ onTaskSelect }) => {
                     {formatDate(task.createdAt)}
                   </td>
                   <td style={{ padding: '0.75rem' }}>
-                    {formatDuration(task.processedAt || task.createdAt, task.completedAt)}
+                    {formatDuration(task.processedAt || task.createdAt, task.completedAt, task.status)}
                   </td>
                   <td style={{ padding: '0.75rem' }}>
                     <button

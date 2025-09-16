@@ -263,8 +263,10 @@ app.get('/api/tasks', ensureAuthenticated, async (req, res) => {
       repository: job.data?.repoOwner && job.data?.repoName 
         ? `${job.data.repoOwner}/${job.data.repoName}`
         : 'Unknown',
-      issueNumber: job.data?.number || job.data?.issueNumber,
-      title: job.data?.title || `Issue #${job.data?.number || 'N/A'}`,
+      issueNumber: job.data?.number || job.data?.issueNumber || 
+        (job.id.startsWith('pr-comments-batch') ? 
+          parseInt(job.id.match(/-(\d+)-\d+$/)?.[1]) : null),
+      title: job.returnvalue?.issueTitle || job.data?.title || null,
       status: job.failedReason ? 'failed' : job.finishedOn ? 'completed' : job.processedOn ? 'active' : 'waiting',
       createdAt: new Date(job.timestamp).toISOString(),
       completedAt: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
