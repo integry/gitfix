@@ -48,6 +48,22 @@ export const getQueueStats = async () => {
   await handleApiResponse(response);
   return response.json();
 };
+
+export const getTasks = async (status = 'all', limit = 50, offset = 0) => {
+  const response = await fetch(`${API_BASE_URL}/api/tasks?status=${status}&limit=${limit}&offset=${offset}`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const getTaskHistory = async (taskId) => {
+  const response = await fetch(`${API_BASE_URL}/api/task/${taskId}/history`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
 //
 // export const getWorkerDetails = async (workerId) => {
 //   const response = await fetch(`/api/workers/${workerId}`);
