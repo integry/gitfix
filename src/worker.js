@@ -238,6 +238,7 @@ async function processPullRequestCommentJob(job) {
     let octokit;
     let localRepoPath;
     let worktreeInfo;
+    let claudeResult = null;
 
     try {
         // Get authenticated Octokit instance
@@ -372,7 +373,7 @@ ${combinedCommentBody}
 - Use appropriate commit messages that reference the follow-up nature of the changes`;
 
         // Step 4: Execute Claude Code with the follow-up prompt
-        const claudeResult = await executeClaudeCode({
+        claudeResult = await executeClaudeCode({
             worktreePath: worktreeInfo.worktreePath,
             issueRef: { 
                 number: pullRequestNumber, 
@@ -576,6 +577,26 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
 
     } catch (error) {
         handleError(error, 'Failed to process PR comment job', { correlationId });
+        
+        // Record LLM metrics even if the job failed, as long as Claude was executed
+        if (claudeResult) {
+            try {
+                await recordLLMMetrics(claudeResult, { 
+                    number: pullRequestNumber, 
+                    repoOwner, 
+                    repoName 
+                }, 'pr_comment', correlationId);
+                correlatedLogger.info({
+                    correlationId,
+                    pullRequestNumber
+                }, 'LLM metrics recorded for failed PR comment job');
+            } catch (metricsError) {
+                correlatedLogger.error({
+                    error: metricsError.message,
+                    correlationId
+                }, 'Failed to record LLM metrics for failed PR comment job');
+            }
+        }
         
         // Add error comment to the PR
         if (octokit) {
@@ -1512,6 +1533,22 @@ This is an emergency retry - the main implementation is complete, you just need 
             timestamp: new Date().toISOString(),
             systemVersion: process.env.npm_package_version || 'unknown'
         }, 'Error processing GitHub issue job - enhanced error metrics logged');
+        
+        // Record LLM metrics even if the job failed, as long as Claude was executed
+        if (claudeResult) {
+            try {
+                await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId);
+                correlatedLogger.info({
+                    correlationId,
+                    issueNumber: issueRef.number
+                }, 'LLM metrics recorded for failed job');
+            } catch (metricsError) {
+                correlatedLogger.error({
+                    error: metricsError.message,
+                    correlationId
+                }, 'Failed to record LLM metrics for failed job');
+            }
+        }
         
         // Post error to GitHub issue
         if (octokit) {
