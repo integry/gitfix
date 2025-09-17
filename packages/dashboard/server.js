@@ -474,6 +474,97 @@ app.get('/api/execution/:sessionId/prompt', ensureAuthenticated, async (req, res
   }
 });
 
+// Get log files for a specific execution
+app.get('/api/execution/:sessionId/logs', ensureAuthenticated, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    // Try to get log data from Redis
+    let logData = null;
+    const sessionKey = `execution:logs:session:${sessionId}`;
+    const logJson = await redisClient.get(sessionKey);
+    
+    if (logJson) {
+      logData = JSON.parse(logJson);
+    } else {
+      // Fallback to conversationId if provided
+      const { conversationId } = req.query;
+      if (conversationId) {
+        const conversationKey = `execution:logs:conversation:${conversationId}`;
+        const conversationLogJson = await redisClient.get(conversationKey);
+        if (conversationLogJson) {
+          logData = JSON.parse(conversationLogJson);
+        }
+      }
+    }
+    
+    if (!logData || !logData.files) {
+      return res.status(404).json({ error: 'Log files not found for this execution' });
+    }
+    
+    res.json({
+      sessionId,
+      ...logData
+    });
+  } catch (error) {
+    console.error('Error in /api/execution/:sessionId/logs:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Serve a specific log file
+app.get('/api/execution/:sessionId/logs/:type', ensureAuthenticated, async (req, res) => {
+  try {
+    const { sessionId, type } = req.params;
+    const fs = require('fs').promises;
+    
+    // Get log data from Redis
+    let logData = null;
+    const sessionKey = `execution:logs:session:${sessionId}`;
+    const logJson = await redisClient.get(sessionKey);
+    
+    if (logJson) {
+      logData = JSON.parse(logJson);
+    } else {
+      // Fallback to conversationId if provided
+      const { conversationId } = req.query;
+      if (conversationId) {
+        const conversationKey = `execution:logs:conversation:${conversationId}`;
+        const conversationLogJson = await redisClient.get(conversationKey);
+        if (conversationLogJson) {
+          logData = JSON.parse(conversationLogJson);
+        }
+      }
+    }
+    
+    if (!logData || !logData.files || !logData.files[type]) {
+      return res.status(404).json({ error: `Log file '${type}' not found for this execution` });
+    }
+    
+    const filePath = logData.files[type];
+    
+    // Check if file exists
+    try {
+      await fs.access(filePath);
+    } catch (err) {
+      return res.status(404).json({ error: `Log file no longer exists at ${filePath}` });
+    }
+    
+    // Read and return file content
+    const content = await fs.readFile(filePath, 'utf8');
+    
+    // Set appropriate content type
+    const contentType = type === 'conversation' ? 'application/json' : 'text/plain';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(filePath)}"`);
+    
+    res.send(content);
+  } catch (error) {
+    console.error('Error in /api/execution/:sessionId/logs/:type:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });

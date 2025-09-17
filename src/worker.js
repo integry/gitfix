@@ -1693,6 +1693,55 @@ async function createLogFiles(claudeResult, issueRef) {
         logger.info({ outputPath, size: claudeResult.rawOutput.length }, 'Created raw output log file');
     }
     
+    // Store log file paths in Redis for later retrieval
+    if (Object.keys(files).length > 0 && (claudeResult.sessionId || claudeResult.conversationId)) {
+        try {
+            const redis = new Redis({
+                host: process.env.REDIS_HOST || 'redis',
+                port: process.env.REDIS_PORT || 6379
+            });
+            
+            const logData = {
+                files: files,
+                issueNumber: issueRef.number,
+                repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+                timestamp: timestamp,
+                sessionId: claudeResult.sessionId,
+                conversationId: claudeResult.conversationId
+            };
+            
+            // Store by sessionId if available
+            if (claudeResult.sessionId) {
+                const sessionKey = `execution:logs:session:${claudeResult.sessionId}`;
+                await redis.set(sessionKey, JSON.stringify(logData), 'EX', 86400 * 30); // 30 days
+            }
+            
+            // Store by conversationId if available  
+            if (claudeResult.conversationId) {
+                const conversationKey = `execution:logs:conversation:${claudeResult.conversationId}`;
+                await redis.set(conversationKey, JSON.stringify(logData), 'EX', 86400 * 30);
+            }
+            
+            // Store by issue for listing
+            const issueKey = `execution:logs:issue:${issueRef.repoOwner}:${issueRef.repoName}:${issueRef.number}:${timestamp}`;
+            await redis.set(issueKey, JSON.stringify(logData), 'EX', 86400 * 30);
+            
+            logger.info({
+                issueNumber: issueRef.number,
+                sessionId: claudeResult.sessionId,
+                conversationId: claudeResult.conversationId,
+                logFiles: Object.keys(files)
+            }, 'Stored log file paths in Redis');
+            
+            await redis.quit();
+        } catch (redisError) {
+            logger.warn({
+                issueNumber: issueRef.number,
+                error: redisError.message
+            }, 'Failed to store log file paths in Redis');
+        }
+    }
+    
     return files;
 }
 

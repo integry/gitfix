@@ -230,6 +230,9 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             // This ensures worktree .git files can reference the main repository
             '-v', '/tmp/git-processor:/tmp/git-processor:rw',
 
+            // Mount the claude-logs directory for log persistence across containers
+            '-v', '/tmp/claude-logs:/tmp/claude-logs:rw',
+
             // Mount the actual Claude config directory directly (read-write so Claude can create project dirs)
             '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:rw`,
             // Also mount .claude.json if it exists

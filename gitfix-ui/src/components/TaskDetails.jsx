@@ -7,6 +7,9 @@ const TaskDetails = ({ taskId, onBack }) => {
   const [error, setError] = useState(null);
   const [selectedPrompt, setSelectedPrompt] = useState(null);
   const [loadingPrompt, setLoadingPrompt] = useState(false);
+  const [logFiles, setLogFiles] = useState(null);
+  const [selectedLogFile, setSelectedLogFile] = useState(null);
+  const [loadingLogFile, setLoadingLogFile] = useState(false);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -47,6 +50,64 @@ const TaskDetails = ({ taskId, onBack }) => {
       alert('Failed to fetch prompt: ' + err.message);
     } finally {
       setLoadingPrompt(false);
+    }
+  };
+
+  const fetchLogFiles = async (sessionId, conversationId) => {
+    try {
+      const API_BASE_URL = 'https://api.gitfix.dev';
+      const response = await fetch(
+        `${API_BASE_URL}/api/execution/${sessionId}/logs${conversationId ? `?conversationId=${conversationId}` : ''}`,
+        { credentials: 'include' }
+      );
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          // Log files not found, but don't alert
+          return;
+        }
+        throw new Error('Failed to fetch log files');
+      }
+      
+      const data = await response.json();
+      setLogFiles(data);
+    } catch (err) {
+      console.error('Error fetching log files:', err);
+    }
+  };
+
+  const viewLogFile = async (sessionId, conversationId, type) => {
+    try {
+      setLoadingLogFile(true);
+      const API_BASE_URL = 'https://api.gitfix.dev';
+      const response = await fetch(
+        `${API_BASE_URL}/api/execution/${sessionId}/logs/${type}${conversationId ? `?conversationId=${conversationId}` : ''}`,
+        { credentials: 'include' }
+      );
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch log file');
+      }
+      
+      const contentType = response.headers.get('content-type');
+      let content;
+      
+      if (contentType?.includes('application/json')) {
+        content = await response.json();
+      } else {
+        content = await response.text();
+      }
+      
+      setSelectedLogFile({
+        type,
+        content,
+        isJson: contentType?.includes('application/json')
+      });
+    } catch (err) {
+      console.error('Error fetching log file:', err);
+      alert('Failed to fetch log file: ' + err.message);
+    } finally {
+      setLoadingLogFile(false);
     }
   };
 
@@ -184,7 +245,7 @@ const TaskDetails = ({ taskId, onBack }) => {
                   )}
                   {(entry.state === 'CLAUDE_EXECUTION' || entry.state === 'CLAUDE_COMPLETED') && 
                    (entry.metadata?.sessionId || entry.metadata?.conversationId) && (
-                    <div style={{ marginTop: '0.5rem' }}>
+                    <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
                       <button
                         onClick={() => fetchPrompt(entry.metadata.sessionId, entry.metadata.conversationId)}
                         style={{
@@ -199,6 +260,27 @@ const TaskDetails = ({ taskId, onBack }) => {
                         disabled={loadingPrompt}
                       >
                         {loadingPrompt ? 'Loading...' : 'View Prompt'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          fetchLogFiles(entry.metadata.sessionId, entry.metadata.conversationId);
+                          // Store session info for later use
+                          window._currentSessionInfo = {
+                            sessionId: entry.metadata.sessionId,
+                            conversationId: entry.metadata.conversationId
+                          };
+                        }}
+                        style={{
+                          padding: '0.25rem 0.75rem',
+                          backgroundColor: '#10b981',
+                          color: '#ffffff',
+                          borderRadius: '4px',
+                          border: 'none',
+                          cursor: 'pointer',
+                          fontSize: '0.875rem'
+                        }}
+                      >
+                        View Logs
                       </button>
                     </div>
                   )}
@@ -293,6 +375,165 @@ const TaskDetails = ({ taskId, onBack }) => {
               overflowX: 'auto'
             }}>
               {selectedPrompt.prompt}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Log Files Modal */}
+      {logFiles && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '8px',
+            padding: '1.5rem',
+            maxWidth: '600px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '1rem'
+            }}>
+              <h3 style={{ margin: 0 }}>Log Files</h3>
+              <button
+                onClick={() => setLogFiles(null)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#6b7280',
+                  color: '#ffffff',
+                  borderRadius: '4px',
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                Close
+              </button>
+            </div>
+            
+            {logFiles.files && Object.keys(logFiles.files).length > 0 ? (
+              <div>
+                <p style={{ marginBottom: '1rem', color: '#6b7280' }}>
+                  Click on a log file to view its contents:
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {Object.entries(logFiles.files).map(([type, path]) => (
+                    <button
+                      key={type}
+                      onClick={() => viewLogFile(
+                        window._currentSessionInfo?.sessionId,
+                        window._currentSessionInfo?.conversationId,
+                        type
+                      )}
+                      style={{
+                        padding: '0.75rem',
+                        backgroundColor: '#f3f4f6',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.target.style.backgroundColor = '#e5e7eb'}
+                      onMouseLeave={(e) => e.target.style.backgroundColor = '#f3f4f6'}
+                      disabled={loadingLogFile}
+                    >
+                      <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                        {type === 'conversation' ? '💬 Conversation Log' : '📄 Raw Output'}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                        {path.split('/').pop()}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p style={{ color: '#6b7280', textAlign: 'center' }}>
+                No log files available for this execution
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Log File Content Modal */}
+      {selectedLogFile && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1001
+        }}>
+          <div style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '8px',
+            padding: '1.5rem',
+            maxWidth: '90%',
+            maxHeight: '90vh',
+            overflow: 'auto',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '1rem'
+            }}>
+              <h3 style={{ margin: 0 }}>
+                {selectedLogFile.type === 'conversation' ? '💬 Conversation Log' : '📄 Raw Output'}
+              </h3>
+              <button
+                onClick={() => setSelectedLogFile(null)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#6b7280',
+                  color: '#ffffff',
+                  borderRadius: '4px',
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                Close
+              </button>
+            </div>
+            
+            <div style={{
+              backgroundColor: '#f3f4f6',
+              borderRadius: '4px',
+              padding: '1rem',
+              fontFamily: 'monospace',
+              fontSize: '0.875rem',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflowX: 'auto',
+              maxHeight: '70vh',
+              overflowY: 'auto'
+            }}>
+              {selectedLogFile.isJson
+                ? JSON.stringify(selectedLogFile.content, null, 2)
+                : selectedLogFile.content}
             </div>
           </div>
         </div>
