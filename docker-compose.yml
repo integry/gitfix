@@ -38,6 +38,7 @@ services:
       - /tmp/git-processor:/tmp/git-processor
       - ~/.claude:/root/.claude
       - /var/run/docker.sock:/var/run/docker.sock
+      - claude_logs:/tmp/claude-logs
     env_file:
       - .env
     depends_on:
@@ -68,6 +69,7 @@ services:
     volumes:
       - .:/usr/src/app
       - ~/.claude:/root/.claude:ro
+      - claude_logs:/tmp/claude-logs:ro
     env_file:
       - .env
     depends_on:
@@ -95,3 +97,4 @@ networks:
 
 volumes:
   redis_data:
+  claude_logs:
