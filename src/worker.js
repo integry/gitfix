@@ -901,12 +901,41 @@ async function processGitHubIssueJob(job) {
                 worktreePath: worktreeInfo.worktreePath
             }, 'EXECUTION DEBUG: About to execute Claude Code');
 
+            // Fetch issue comments before executing Claude
+            let issueComments = [];
+            try {
+                issueComments = await octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                    owner: issueRef.repoOwner,
+                    repo: issueRef.repoName,
+                    issue_number: issueRef.number,
+                    per_page: 100
+                });
+                correlatedLogger.info({
+                    issueNumber: issueRef.number,
+                    commentsCount: issueComments.length
+                }, 'Fetched issue comments for Claude');
+            } catch (commentError) {
+                correlatedLogger.warn({
+                    issueNumber: issueRef.number,
+                    error: commentError.message
+                }, 'Failed to fetch issue comments, continuing without them');
+            }
+
             claudeResult = await executeClaudeCode({
                 worktreePath: worktreeInfo.worktreePath,
                 issueRef: issueRef,
                 githubToken: githubToken.token,
                 branchName: worktreeInfo.branchName,
-                modelName: modelName
+                modelName: modelName,
+                issueDetails: {
+                    title: currentIssueData.data.title,
+                    body: currentIssueData.data.body,
+                    comments: issueComments,
+                    labels: currentIssueData.data.labels,
+                    created_at: currentIssueData.data.created_at,
+                    updated_at: currentIssueData.data.updated_at,
+                    user: currentIssueData.data.user
+                }
             });
             
             // Record LLM metrics for issue processing

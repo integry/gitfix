@@ -20,26 +20,57 @@ const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10
  * @param {string} issueRef.repoName - Repository name
  * @param {string} branchName - The specific branch name to use (optional)
  * @param {string} modelName - The AI model being used (optional)
+ * @param {Object} issueDetails - Pre-fetched issue details (optional)
  * @returns {string} Formatted prompt for Claude
  */
-function generateClaudePrompt(issueRef, branchName = null, modelName = null) {
+function generateClaudePrompt(issueRef, branchName = null, modelName = null, issueDetails = null) {
     const branchInfo = branchName ? `\n- **BRANCH**: You are working on branch \`${branchName}\`.` : '';
     const modelInfo = modelName ? `\n- **MODEL**: This task is being processed by the \`${modelName}\` model.` : '';
+
+    // Build issue details section if provided
+    let issueDetailsSection = '';
+    if (issueDetails) {
+        issueDetailsSection = `
+
+**ISSUE DETAILS (Pre-fetched for reliability):**
+
+**Title:** ${issueDetails.title || 'N/A'}
+
+**Description:**
+${issueDetails.body || 'No description provided'}
+
+**Labels:** ${issueDetails.labels?.map(l => l.name).join(', ') || 'None'}
+
+**Created by:** @${issueDetails.user?.login || 'unknown'}
+**Created at:** ${issueDetails.created_at || 'unknown'}`;
+
+        // Add comments if available
+        if (issueDetails.comments && issueDetails.comments.length > 0) {
+            issueDetailsSection += `\n\n**Comments (${issueDetails.comments.length} total):**\n`;
+            issueDetails.comments.forEach((comment, index) => {
+                issueDetailsSection += `\n---\n**Comment ${index + 1}** by @${comment.user?.login || 'unknown'} (${comment.created_at || 'unknown'}):\n${comment.body || 'Empty comment'}\n`;
+            });
+        } else {
+            issueDetailsSection += `\n\n**Comments:** No comments on this issue yet.`;
+        }
+
+        issueDetailsSection += `\n\n**Note:** The above issue details have been automatically injected. You can still use \`gh issue view ${issueRef.number}\` if you need to fetch any additional information or verify the details.`;
+    }
 
     return `Please analyze and implement a solution for GitHub issue #${issueRef.number}.
 
 **REPOSITORY INFORMATION:**
 - Repository Owner: ${issueRef.repoOwner}
 - Repository Name: ${issueRef.repoName}
-- Full Repository: ${issueRef.repoOwner}/${issueRef.repoName}${branchInfo}${modelInfo}
+- Full Repository: ${issueRef.repoOwner}/${issueRef.repoName}${branchInfo}${modelInfo}${issueDetailsSection}
 
 **YOUR FOCUS: IMPLEMENTATION ONLY**
 
 The git workflow (branching, committing, pushing, PR creation) is handled automatically by the system. Your job is to focus solely on implementing the solution.
 
 Follow these steps systematically:
-1. Use \`gh issue view ${issueRef.number}\` to get the issue details
-2. Use \`gh issue view ${issueRef.number} --comments\` to read all issue comments for additional context
+1. ${issueDetails ? 'Review the pre-fetched issue details above' : `Use \`gh issue view ${issueRef.number}\` to get the issue details`}
+2. ${issueDetails ? '(Optional)' : ''} Use \`gh issue view ${issueRef.number} --comments\` to ${issueDetails ? 'fetch any additional comments or verify the information' : 'read all issue comments for additional context'}
 3. **Pay attention to any images, screenshots, or attachments** in the issue description and comments - these often contain crucial visual information like UI mockups, error screenshots, or design specifications
 4. Understand the complete problem described in the issue, comments, and any visual materials
 5. Search the codebase to understand the current implementation
@@ -71,9 +102,10 @@ Your task is complete when you have implemented a working solution to the issue.
  * @param {string} options.retryReason - Reason for retry (optional)
  * @param {string} options.branchName - The specific branch name to use (optional)
  * @param {string} options.modelName - The AI model being used (optional)
+ * @param {Object} options.issueDetails - Pre-fetched issue details (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, issueDetails }) {
     const startTime = Date.now();
 
     logger.info({
@@ -90,7 +122,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
 
     try {
         // Generate the prompt for Claude
-        const basePrompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName);
+        const basePrompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName, issueDetails);
 
         // Add critical safety instructions to prevent git repository corruption
         const prompt = `${basePrompt}
