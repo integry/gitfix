@@ -911,16 +911,29 @@ async function processGitHubIssueJob(job) {
             // Fetch issue comments before executing Claude
             let issueComments = [];
             try {
-                issueComments = await octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                const allComments = await octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                     owner: issueRef.repoOwner,
                     repo: issueRef.repoName,
                     issue_number: issueRef.number,
                     per_page: 100
                 });
+                
+                // Filter out bot comments (especially gitfixio bot)
+                const botUsername = process.env.GITHUB_BOT_USERNAME || 'github-actions[bot]';
+                issueComments = allComments.filter(comment => {
+                    const isBot = comment.user.login === botUsername || 
+                                  comment.user.type === 'Bot' ||
+                                  comment.user.login.includes('[bot]') ||
+                                  comment.user.login.toLowerCase().includes('gitfixio');
+                    return !isBot;
+                });
+                
                 correlatedLogger.info({
                     issueNumber: issueRef.number,
-                    commentsCount: issueComments.length
-                }, 'Fetched issue comments for Claude');
+                    totalComments: allComments.length,
+                    filteredComments: issueComments.length,
+                    botCommentsRemoved: allComments.length - issueComments.length
+                }, 'Fetched and filtered issue comments for Claude');
             } catch (commentError) {
                 correlatedLogger.warn({
                     issueNumber: issueRef.number,
