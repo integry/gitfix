@@ -239,6 +239,10 @@ async function processPullRequestCommentJob(job) {
     let localRepoPath;
     let worktreeInfo;
     let claudeResult = null;
+    let authorsText = '';
+    let commentIds = '';
+    let startingWorkComment;
+    let unprocessedComments = [];
 
     try {
         // Get authenticated Octokit instance
@@ -259,7 +263,7 @@ async function processPullRequestCommentJob(job) {
         });
 
         // Filter out already processed comments
-        const unprocessedComments = commentsToProcess.filter(comment => {
+        unprocessedComments = commentsToProcess.filter(comment => {
             const alreadyProcessed = prComments.some(prComment => {
                 const isBotComment = prComment.user.login === botUsername || 
                                     prComment.user.type === 'Bot' ||
@@ -315,10 +319,10 @@ async function processPullRequestCommentJob(job) {
         }
 
         // Post a "starting work" comment with reference to all comment IDs
-        const commentIds = unprocessedComments.map(c => c.id).join(', ');
-        const authorsText = commentAuthors.map(a => `@${a}`).join(', ');
+        commentIds = unprocessedComments.map(c => c.id).join(', ');
+        authorsText = commentAuthors.map(a => `@${a}`).join(', ');
         
-        const startingWorkComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+        startingWorkComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
             owner: repoOwner,
             repo: repoName,
             issue_number: pullRequestNumber,
