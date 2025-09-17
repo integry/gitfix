@@ -370,7 +370,9 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
               timestamp: new Date(claudeStartTime + 1000).toISOString(), // 1 second after start
               message: `Claude AI processing started with model: ${job.returnvalue.modelName || 'claude'}`,
               metadata: {
-                model: job.returnvalue.modelName
+                model: job.returnvalue.modelName,
+                sessionId: claudeResult.sessionId,
+                conversationId: claudeResult.conversationId
               }
             });
             
