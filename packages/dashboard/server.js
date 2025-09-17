@@ -30,7 +30,8 @@ async function initRedis() {
   redisClient.on('error', (err) => console.error('Redis Client Error', err));
   await redisClient.connect();
   
-  taskQueue = new Queue('taskQueue', {
+  const queueName = process.env.GITHUB_ISSUE_QUEUE_NAME || 'github-issue-processor';
+  taskQueue = new Queue(queueName, {
     connection: {
       host: process.env.REDIS_HOST || 'redis',
       port: process.env.REDIS_PORT || 6379
@@ -70,13 +71,38 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
         status.worker = 'stopped';
       }
       
-      // Check GitHub authentication
-      const githubToken = await redisClient.get('github:auth:token');
-      status.githubAuth = githubToken ? 'connected' : 'disconnected';
+      // Check GitHub authentication - verify GitHub App is configured
+      const githubAppConfigured = process.env.GH_APP_ID && 
+                                 process.env.GH_PRIVATE_KEY_PATH && 
+                                 process.env.GH_INSTALLATION_ID;
+      status.githubAuth = githubAppConfigured ? 'connected' : 'disconnected';
       
-      // Check Claude authentication
-      const claudeApiKey = process.env.ANTHROPIC_API_KEY;
-      status.claudeAuth = claudeApiKey ? 'connected' : 'disconnected';
+      // Check Claude authentication - verify recent successful executions
+      let claudeActive = false;
+      try {
+        // Check recent activity for successful Claude executions
+        const recentActivity = await redisClient.lRange('system:activity:log', 0, 20);
+        const oneHourAgo = Date.now() - (60 * 60 * 1000); // 1 hour
+        
+        for (const activityStr of recentActivity) {
+          try {
+            const activity = JSON.parse(activityStr);
+            // Check if this is a recent successful issue processing (which uses Claude)
+            if (activity.type === 'issue_processed' && 
+                activity.status === 'success' &&
+                activity.id && activity.id.includes('claude-') &&
+                new Date(activity.timestamp).getTime() > oneHourAgo) {
+              claudeActive = true;
+              break;
+            }
+          } catch (e) {
+            // Skip invalid entries
+          }
+        }
+      } catch (err) {
+        console.error('Error checking Claude status:', err);
+      }
+      status.claudeAuth = claudeActive ? 'connected' : 'disconnected';
       
     } catch (error) {
       status.redis = 'disconnected';
@@ -208,6 +234,64 @@ app.get('/api/metrics', ensureAuthenticated, async (req, res) => {
   }
 });
 
+app.get('/api/tasks', ensureAuthenticated, async (req, res) => {
+  try {
+    const { status = 'all', limit = 50, offset = 0 } = req.query;
+    
+    // Get jobs from the queue
+    let jobs = [];
+    if (status === 'all' || status === 'completed') {
+      const completed = await taskQueue.getJobs(['completed'], parseInt(offset), parseInt(offset) + parseInt(limit));
+      jobs = jobs.concat(completed);
+    }
+    if (status === 'all' || status === 'failed') {
+      const failed = await taskQueue.getJobs(['failed'], parseInt(offset), parseInt(offset) + parseInt(limit));
+      jobs = jobs.concat(failed);
+    }
+    if (status === 'all' || status === 'active') {
+      const active = await taskQueue.getJobs(['active'], parseInt(offset), parseInt(offset) + parseInt(limit));
+      jobs = jobs.concat(active);
+    }
+    if (status === 'all' || status === 'waiting') {
+      const waiting = await taskQueue.getJobs(['waiting'], parseInt(offset), parseInt(offset) + parseInt(limit));
+      jobs = jobs.concat(waiting);
+    }
+    
+    // Transform jobs to task format
+    const tasks = jobs.map(job => ({
+      id: job.id,
+      issueId: job.id, // Using job id as issueId for now
+      repository: job.data?.repoOwner && job.data?.repoName 
+        ? `${job.data.repoOwner}/${job.data.repoName}`
+        : 'Unknown',
+      issueNumber: job.data?.number || job.data?.issueNumber || 
+        (job.id.startsWith('pr-comments-batch') ? 
+          parseInt(job.id.match(/-(\d+)-\d+$/)?.[1]) : null),
+      title: job.returnvalue?.issueTitle || job.data?.title || null,
+      status: job.failedReason ? 'failed' : job.finishedOn ? 'completed' : job.processedOn ? 'active' : 'waiting',
+      createdAt: new Date(job.timestamp).toISOString(),
+      completedAt: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
+      processedAt: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+      failedReason: job.failedReason,
+      progress: job.progress,
+      attemptsMade: job.attemptsMade,
+      modelName: job.data?.modelName
+    }));
+    
+    // Sort by creation time descending
+    tasks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
+    res.json({
+      tasks: tasks.slice(0, limit),
+      total: tasks.length,
+      offset: parseInt(offset),
+      limit: parseInt(limit)
+    });
+  } catch (error) {
+    console.error('Error in /api/tasks:', error);
+  }
+});
+
 app.get('/api/llm-metrics', ensureAuthenticated, async (req, res) => {
   try {
     const llmMetrics = await getLLMMetricsSummary();
@@ -238,20 +322,111 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
   try {
     const { taskId } = req.params;
     
-    const historyKey = `task:${taskId}:history`;
-    const history = await redisClient.lRange(historyKey, 0, -1);
+    // First try to get history from worker state
+    const stateKey = `worker:state:${taskId}`;
+    const stateData = await redisClient.get(stateKey);
     
-    const parsedHistory = history.map(entry => {
+    let history = [];
+    if (stateData) {
       try {
-        return JSON.parse(entry);
+        const state = JSON.parse(stateData);
+        history = state.history || [];
       } catch (e) {
-        return entry;
+        console.error('Error parsing state data:', e);
       }
-    });
+    }
+    
+    // If no history in state, try to reconstruct from job data
+    if (history.length === 0 && taskQueue) {
+      try {
+        const job = await taskQueue.getJob(taskId);
+        if (job) {
+          // Create history from job lifecycle
+          history = [];
+          
+          // Job created
+          history.push({
+            state: 'PENDING',
+            timestamp: new Date(job.timestamp).toISOString(),
+            message: 'Task created and queued'
+          });
+          
+          // Job started
+          if (job.processedOn) {
+            history.push({
+              state: 'PROCESSING',
+              timestamp: new Date(job.processedOn).toISOString(),
+              message: 'Task processing started'
+            });
+          }
+          
+          // Claude execution (if available in return value)
+          if (job.returnvalue?.claudeResult) {
+            const claudeResult = job.returnvalue.claudeResult;
+            const claudeStartTime = job.processedOn ? new Date(job.processedOn).getTime() : job.timestamp;
+            
+            history.push({
+              state: 'CLAUDE_EXECUTION',
+              timestamp: new Date(claudeStartTime + 1000).toISOString(), // 1 second after start
+              message: `Claude AI processing started with model: ${job.returnvalue.modelName || 'claude'}`,
+              metadata: {
+                model: job.returnvalue.modelName
+              }
+            });
+            
+            // Add Claude completion
+            if (claudeResult.executionTime) {
+              const claudeEndTime = claudeStartTime + claudeResult.executionTime;
+              history.push({
+                state: 'CLAUDE_COMPLETED',
+                timestamp: new Date(claudeEndTime).toISOString(),
+                message: claudeResult.success ? 'Claude execution completed successfully' : 'Claude execution failed',
+                metadata: {
+                  duration: claudeResult.executionTime,
+                  success: claudeResult.success,
+                  conversationTurns: claudeResult.conversationLog?.length || 0
+                }
+              });
+            }
+          }
+          
+          // Post-processing (if PR was created)
+          if (job.returnvalue?.postProcessing) {
+            const pp = job.returnvalue.postProcessing;
+            history.push({
+              state: 'POST_PROCESSING',
+              timestamp: new Date(job.finishedOn - 5000).toISOString(), // 5 seconds before completion
+              message: pp.success ? 'Creating pull request' : 'Post-processing failed',
+              metadata: pp.pr ? {
+                pullRequest: {
+                  number: pp.pr.number,
+                  url: pp.pr.url
+                }
+              } : undefined
+            });
+          }
+          
+          // Job completed or failed
+          if (job.finishedOn) {
+            history.push({
+              state: job.failedReason ? 'FAILED' : 'COMPLETED',
+              timestamp: new Date(job.finishedOn).toISOString(),
+              message: job.failedReason || 
+                      (job.returnvalue?.postProcessing?.pr ? 
+                        `Task completed successfully. PR #${job.returnvalue.postProcessing.pr.number} created` : 
+                        'Task completed successfully'),
+              metadata: job.failedReason ? { error: job.failedReason } : undefined
+            });
+          }
+        }
+      } catch (e) {
+        console.error('Error getting job data:', e);
+      }
+    }
     
     res.json({
       taskId,
-      history: parsedHistory
+      history
     });
   } catch (error) {
     console.error('Error in /api/task/:taskId/history:', error);

@@ -23,17 +23,43 @@ export const getSystemStatus = async () => {
   const data = await response.json();
   
   // Transform backend response to match frontend expectations
+  // The system has a single worker process, not multiple workers
+  // Show worker status as a single item to be accurate
+  let workers = [];
+  if (data.worker === 'running') {
+    workers = [
+      { id: 1, status: 'active' }
+    ];
+  }
+  
   return {
-    daemon: data.daemon?.status === 'online' ? 'Running' : 'Stopped',
-    workers: data.workers || [],
-    redis: data.redis?.status === 'ready' ? 'Connected' : 'Disconnected',
-    githubAuth: data.github?.authenticated ? 'Authenticated' : 'Failed',
+    daemon: data.daemon === 'running' ? 'Running' : 'Stopped',
+    workers: workers,
+    redis: data.redis === 'connected' ? 'Connected' : 'Disconnected',
+    githubAuth: data.githubAuth === 'connected' ? 'Authenticated' : 'Failed',
+    claudeAuth: data.claudeAuth === 'connected' ? 'Authenticated' : 'Failed',
   };
 };
 
 export const getQueueStats = async () => {
   const response = await fetch(`${API_BASE_URL}/api/queue/stats`, {
     credentials: 'include' // Include cookies for session
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const getTasks = async (status = 'all', limit = 50, offset = 0) => {
+  const response = await fetch(`${API_BASE_URL}/api/tasks?status=${status}&limit=${limit}&offset=${offset}`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const getTaskHistory = async (taskId) => {
+  const response = await fetch(`${API_BASE_URL}/api/task/${taskId}/history`, {
+    credentials: 'include'
   });
   await handleApiResponse(response);
   return response.json();

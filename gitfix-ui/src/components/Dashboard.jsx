@@ -1,8 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import SystemStatus from './SystemStatus';
 import TaskQueueStats from './TaskQueueStats';
+import TaskList from './TaskList';
+import TaskDetails from './TaskDetails';
 
 const Dashboard = () => {
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
+
   return (
     <div>
       <h2>System Overview</h2>
@@ -10,6 +14,17 @@ const Dashboard = () => {
         <SystemStatus />
         <TaskQueueStats />
       </div>
+      
+      {selectedTaskId ? (
+        <TaskDetails 
+          taskId={selectedTaskId} 
+          onBack={() => setSelectedTaskId(null)} 
+        />
+      ) : (
+        <TaskList 
+          onTaskSelect={setSelectedTaskId} 
+        />
+      )}
     </div>
   );
 };
