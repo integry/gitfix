@@ -239,6 +239,10 @@ async function processPullRequestCommentJob(job) {
     let localRepoPath;
     let worktreeInfo;
     let claudeResult = null;
+    let authorsText = '';
+    let commentIds = '';
+    let unprocessedComments = [];
+    let startingWorkComment = null;
 
     try {
         // Get authenticated Octokit instance
@@ -259,7 +263,7 @@ async function processPullRequestCommentJob(job) {
         });
 
         // Filter out already processed comments
-        const unprocessedComments = commentsToProcess.filter(comment => {
+        unprocessedComments = commentsToProcess.filter(comment => {
             const alreadyProcessed = prComments.some(prComment => {
                 const isBotComment = prComment.user.login === botUsername || 
                                     prComment.user.type === 'Bot' ||
@@ -270,7 +274,10 @@ async function processPullRequestCommentJob(job) {
                 // Check if the bot comment references this specific comment ID
                 const referencesThisComment = prComment.body.includes(`Comment ID: ${comment.id}`) ||
                                             prComment.body.includes(`comment #${comment.id}`) ||
-                                            prComment.body.includes(`Processing comment ID: ${comment.id}`);
+                                            prComment.body.includes(`Processing comment ID: ${comment.id}`) ||
+                                            prComment.body.includes(`_Processing comment ID: ${comment.id}`) ||
+                                            prComment.body.includes(`_Processing comment IDs: ${comment.id}`) ||
+                                            prComment.body.includes(`_Processing comment IDs:`) && prComment.body.includes(comment.id.toString());
                 
                 return referencesThisComment;
             });
@@ -315,10 +322,10 @@ async function processPullRequestCommentJob(job) {
         }
 
         // Post a "starting work" comment with reference to all comment IDs
-        const commentIds = unprocessedComments.map(c => c.id).join(', ');
-        const authorsText = commentAuthors.map(a => `@${a}`).join(', ');
+        commentIds = unprocessedComments.map(c => c.id).join(', ');
+        authorsText = commentAuthors.map(a => `@${a}`).join(', ');
         
-        const startingWorkComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+        startingWorkComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
             owner: repoOwner,
             repo: repoName,
             issue_number: pullRequestNumber,
@@ -531,7 +538,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             }, 'Successfully applied follow-up changes');
         } else {
             // No changes were necessary
-            let noChangesBody = `ℹ️ **Analyzed the follow-up request** by @${commentAuthor}\n\n`;
+            let noChangesBody = `ℹ️ **Analyzed the follow-up request** by ${authorsText}\n\n`;
             
             if (changesSummary) {
                 noChangesBody += `## Analysis Summary\n\n${changesSummary}\n\n`;
