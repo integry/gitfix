@@ -13,6 +13,19 @@ const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '1000', 10);
 const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10); // 5 minutes
 
 /**
+ * Custom error for Claude usage limits.
+ * This allows the worker to catch this specific error and requeue the job.
+ */
+export class UsageLimitError extends Error {
+  constructor(message, resetTimestamp) {
+    super(message);
+    this.name = 'UsageLimitError';
+    this.resetTimestamp = resetTimestamp; // UNIX timestamp (seconds)
+    this.retryable = true;
+  }
+}
+
+/**
  * Generates a context-aware prompt for Claude Code to analyze and fix GitHub issues
  * @param {Object} issueRef - GitHub issue reference
  * @param {string} issueRef.number - Issue number
@@ -362,6 +375,19 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                         claudeOutput.finalResult = jsonLine;
                         claudeOutput.success = !jsonLine.is_error;
 
+                        // CRITICAL: Check for Usage Limit error provided in the result stream
+                        if (jsonLine.result) {
+                            const limitMatch = jsonLine.result.match(/Claude AI usage limit reached\|(\d+)/);
+                            if (limitMatch && limitMatch[1]) {
+                                const resetTimestamp = parseInt(limitMatch[1], 10);
+                                logger.warn({ resetTimestamp }, 'Claude usage limit reached. Throwing specific error for requeue.');
+                                throw new UsageLimitError(
+                                    `Claude usage limit reached. Limit resets at timestamp ${resetTimestamp}.`,
+                                    resetTimestamp
+                                );
+                            }
+                        }
+                        
                         // Also check for model info in final result
                         if (jsonLine.model) {
                             claudeOutput.model = jsonLine.model;
