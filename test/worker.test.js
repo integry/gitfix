@@ -34,6 +34,12 @@ await mock.module('../src/queue/taskQueue.js', {
     }
 });
 
+await mock.module('../src/utils/llmMetrics.js', {
+    namedExports: {
+        recordLLMMetrics: mock.fn(async () => {})
+    }
+});
+
 // Import the worker module
 const { processGitHubIssueJob, startWorker } = await import('../src/worker.js');
 
