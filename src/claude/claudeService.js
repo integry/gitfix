@@ -361,8 +361,71 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
             // Extract specific fields if available in Claude's structured output
             modifiedFiles: [], // Will be determined by file system inspection
             commitMessage: null, // Will be extracted from conversation if present
-            summary: claudeOutput.finalResult?.result || null
+            summary: claudeOutput.finalResult?.result || null,
+            
+            // Include the prompt for debugging and display
+            prompt: prompt
         };
+        
+        // Store the prompt in Redis with execution identifiers for later retrieval
+        if (claudeOutput.sessionId || claudeOutput.conversationId) {
+            try {
+                const Redis = await import('ioredis');
+                const redis = new Redis.default({
+                    host: process.env.REDIS_HOST || 'redis',
+                    port: process.env.REDIS_PORT || 6379
+                });
+                
+                // Store prompt with multiple keys for flexible retrieval
+                const promptData = {
+                    prompt: prompt,
+                    timestamp: new Date().toISOString(),
+                    issueRef: issueRef,
+                    sessionId: claudeOutput.sessionId,
+                    conversationId: claudeOutput.conversationId,
+                    model: response.model,
+                    isRetry: isRetry,
+                    retryReason: retryReason
+                };
+                
+                const promptKeys = [];
+                
+                // Key by sessionId (most unique)
+                if (claudeOutput.sessionId) {
+                    const sessionKey = `execution:prompt:session:${claudeOutput.sessionId}`;
+                    await redis.set(sessionKey, JSON.stringify(promptData), 'EX', 86400 * 30); // 30 days
+                    promptKeys.push(sessionKey);
+                }
+                
+                // Key by conversationId
+                if (claudeOutput.conversationId) {
+                    const conversationKey = `execution:prompt:conversation:${claudeOutput.conversationId}`;
+                    await redis.set(conversationKey, JSON.stringify(promptData), 'EX', 86400 * 30);
+                    promptKeys.push(conversationKey);
+                }
+                
+                // Also store by issue/timestamp for listing all executions
+                const timestamp = Date.now();
+                const issueKey = `execution:prompt:issue:${issueRef.repoOwner}:${issueRef.repoName}:${issueRef.number}:${timestamp}`;
+                await redis.set(issueKey, JSON.stringify(promptData), 'EX', 86400 * 30);
+                promptKeys.push(issueKey);
+                
+                logger.info({
+                    issueNumber: issueRef.number,
+                    sessionId: claudeOutput.sessionId,
+                    conversationId: claudeOutput.conversationId,
+                    promptKeys: promptKeys,
+                    promptLength: prompt.length
+                }, 'Stored execution prompt in Redis with unique identifiers');
+                
+                await redis.quit();
+            } catch (redisError) {
+                logger.warn({
+                    issueNumber: issueRef.number,
+                    error: redisError.message
+                }, 'Failed to store execution prompt in Redis - continuing');
+            }
+        }
 
         if (!response.success) {
             logger.error({

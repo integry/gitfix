@@ -1489,7 +1489,10 @@ This is an emergency retry - the main implementation is complete, you just need 
                 executionTime: claudeResult?.executionTime || 0,
                 modifiedFiles: claudeResult?.modifiedFiles || [],
                 conversationLog: claudeResult?.conversationLog || [],
-                error: claudeResult?.error || null
+                error: claudeResult?.error || null,
+                sessionId: claudeResult?.sessionId || null,
+                conversationId: claudeResult?.conversationId || null,
+                model: claudeResult?.model || null
             },
             postProcessing: {
                 success: !!postProcessingResult,

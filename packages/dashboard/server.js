@@ -384,7 +384,10 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
                 metadata: {
                   duration: claudeResult.executionTime,
                   success: claudeResult.success,
-                  conversationTurns: claudeResult.conversationLog?.length || 0
+                  conversationTurns: claudeResult.conversationLog?.length || 0,
+                  sessionId: claudeResult.sessionId,
+                  conversationId: claudeResult.conversationId,
+                  model: claudeResult.model
                 }
               });
             }
@@ -430,6 +433,43 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
     });
   } catch (error) {
     console.error('Error in /api/task/:taskId/history:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/execution/:sessionId/prompt', ensureAuthenticated, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    // Try to fetch prompt by sessionId first
+    let promptData = null;
+    const sessionKey = `execution:prompt:session:${sessionId}`;
+    const promptJson = await redisClient.get(sessionKey);
+    
+    if (promptJson) {
+      promptData = JSON.parse(promptJson);
+    } else {
+      // Fallback to conversationId if provided
+      const { conversationId } = req.query;
+      if (conversationId) {
+        const conversationKey = `execution:prompt:conversation:${conversationId}`;
+        const conversationPromptJson = await redisClient.get(conversationKey);
+        if (conversationPromptJson) {
+          promptData = JSON.parse(conversationPromptJson);
+        }
+      }
+    }
+    
+    if (!promptData) {
+      return res.status(404).json({ error: 'Prompt not found for this execution' });
+    }
+    
+    res.json({
+      sessionId,
+      ...promptData
+    });
+  } catch (error) {
+    console.error('Error in /api/execution/:sessionId/prompt:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

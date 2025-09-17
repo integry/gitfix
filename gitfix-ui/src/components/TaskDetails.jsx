@@ -5,6 +5,8 @@ const TaskDetails = ({ taskId, onBack }) => {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedPrompt, setSelectedPrompt] = useState(null);
+  const [loadingPrompt, setLoadingPrompt] = useState(false);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -24,6 +26,29 @@ const TaskDetails = ({ taskId, onBack }) => {
 
     fetchHistory();
   }, [taskId]);
+
+  const fetchPrompt = async (sessionId, conversationId) => {
+    try {
+      setLoadingPrompt(true);
+      const API_BASE_URL = 'https://api.gitfix.dev';
+      const response = await fetch(
+        `${API_BASE_URL}/api/execution/${sessionId}/prompt${conversationId ? `?conversationId=${conversationId}` : ''}`,
+        { credentials: 'include' }
+      );
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch prompt');
+      }
+      
+      const data = await response.json();
+      setSelectedPrompt(data);
+    } catch (err) {
+      console.error('Error fetching prompt:', err);
+      alert('Failed to fetch prompt: ' + err.message);
+    } finally {
+      setLoadingPrompt(false);
+    }
+  };
 
   const getStateColor = (state) => {
     switch (state) {
@@ -157,6 +182,26 @@ const TaskDetails = ({ taskId, onBack }) => {
                       )}
                     </div>
                   )}
+                  {(entry.state === 'CLAUDE_EXECUTION' || entry.state === 'CLAUDE_COMPLETED') && 
+                   (entry.metadata?.sessionId || entry.metadata?.conversationId) && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <button
+                        onClick={() => fetchPrompt(entry.metadata.sessionId, entry.metadata.conversationId)}
+                        style={{
+                          padding: '0.25rem 0.75rem',
+                          backgroundColor: '#3b82f6',
+                          color: '#ffffff',
+                          borderRadius: '4px',
+                          border: 'none',
+                          cursor: 'pointer',
+                          fontSize: '0.875rem'
+                        }}
+                        disabled={loadingPrompt}
+                      >
+                        {loadingPrompt ? 'Loading...' : 'View Prompt'}
+                      </button>
+                    </div>
+                  )}
                   {entry.metadata.pullRequest && (
                     <div style={{ marginTop: '0.5rem' }}>
                       Pull Request: <a 
@@ -173,6 +218,83 @@ const TaskDetails = ({ taskId, onBack }) => {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Prompt Modal */}
+      {selectedPrompt && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '8px',
+            padding: '1.5rem',
+            maxWidth: '80%',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '1rem'
+            }}>
+              <h3 style={{ margin: 0 }}>LLM Prompt</h3>
+              <button
+                onClick={() => setSelectedPrompt(null)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#6b7280',
+                  color: '#ffffff',
+                  borderRadius: '4px',
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                Close
+              </button>
+            </div>
+            
+            <div style={{
+              marginBottom: '1rem',
+              fontSize: '0.875rem',
+              color: '#6b7280'
+            }}>
+              <div>Session ID: {selectedPrompt.sessionId}</div>
+              {selectedPrompt.conversationId && <div>Conversation ID: {selectedPrompt.conversationId}</div>}
+              <div>Model: {selectedPrompt.model}</div>
+              <div>Timestamp: {selectedPrompt.timestamp}</div>
+              {selectedPrompt.isRetry && (
+                <div style={{ marginTop: '0.5rem', color: '#f59e0b' }}>
+                  Retry: {selectedPrompt.retryReason || 'Yes'}
+                </div>
+              )}
+            </div>
+            
+            <div style={{
+              backgroundColor: '#f3f4f6',
+              borderRadius: '4px',
+              padding: '1rem',
+              fontFamily: 'monospace',
+              fontSize: '0.875rem',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflowX: 'auto'
+            }}>
+              {selectedPrompt.prompt}
+            </div>
+          </div>
         </div>
       )}
     </div>
