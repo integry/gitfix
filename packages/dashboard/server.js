@@ -5,6 +5,7 @@ const { Queue } = require('bullmq');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 const { setupAuth, ensureAuthenticated } = require('./auth');
+const { getLLMMetricsSummary, getLLMMetricsByCorrelationId } = require('./llmMetricsAdapter');
 
 const app = express();
 const PORT = process.env.DASHBOARD_API_PORT || 4000;
@@ -203,6 +204,32 @@ app.get('/api/metrics', ensureAuthenticated, async (req, res) => {
     res.json(metrics);
   } catch (error) {
     console.error('Error in /api/metrics:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/llm-metrics', ensureAuthenticated, async (req, res) => {
+  try {
+    const llmMetrics = await getLLMMetricsSummary();
+    res.json(llmMetrics);
+  } catch (error) {
+    console.error('Error in /api/llm-metrics:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/llm-metrics/:correlationId', ensureAuthenticated, async (req, res) => {
+  try {
+    const { correlationId } = req.params;
+    const metrics = await getLLMMetricsByCorrelationId(correlationId);
+    
+    if (!metrics) {
+      return res.status(404).json({ error: 'Metrics not found for this correlation ID' });
+    }
+    
+    res.json(metrics);
+  } catch (error) {
+    console.error('Error in /api/llm-metrics/:correlationId:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

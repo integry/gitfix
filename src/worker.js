@@ -18,6 +18,7 @@ import simpleGit from 'simple-git';
 import fs from 'fs-extra';
 import { completePostProcessing } from './githubService.js';
 import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
+import { recordLLMMetrics } from './utils/llmMetrics.js';
 import { 
     validatePRCreation, 
     generateEnhancedClaudePrompt, 
@@ -383,6 +384,13 @@ ${combinedCommentBody}
             branchName: worktreeInfo.branchName,
             modelName: llm || DEFAULT_MODEL_NAME
         });
+
+        // Record LLM metrics for PR comment processing
+        await recordLLMMetrics(claudeResult, { 
+            number: pullRequestNumber, 
+            repoOwner, 
+            repoName 
+        }, 'pr_comment', correlationId);
 
         if (!claudeResult.success) {
             throw new Error(`Claude execution failed: ${claudeResult.error || 'Unknown error'}`);
@@ -879,6 +887,9 @@ async function processGitHubIssueJob(job) {
                 branchName: worktreeInfo.branchName,
                 modelName: modelName
             });
+            
+            // Record LLM metrics for issue processing
+            await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId);
             
             correlatedLogger.info({
                 jobId,

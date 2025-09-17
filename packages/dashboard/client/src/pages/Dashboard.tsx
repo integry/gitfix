@@ -4,6 +4,7 @@ import { SystemStatusPanel } from '../components/SystemStatusPanel';
 import { QueueStatsPanel } from '../components/QueueStatsPanel';
 import { ActivityFeed } from '../components/ActivityFeed';
 import { MetricsPanel } from '../components/MetricsPanel';
+import { LLMMetricsPanel } from '../components/LLMMetricsPanel';
 
 const Dashboard: React.FC = () => {
   const { user, logout } = useAuth();
@@ -46,6 +47,11 @@ const Dashboard: React.FC = () => {
           {/* Metrics Panel */}
           <div className="lg:col-span-2">
             <MetricsPanel />
+          </div>
+
+          {/* LLM Metrics Panel */}
+          <div className="lg:col-span-2">
+            <LLMMetricsPanel />
           </div>
 
           {/* Activity Feed */}
