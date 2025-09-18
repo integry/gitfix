@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
+import { withRetry, retryConfigs } from '../utils/retryHandler.js';
 
 /**
  * Sets up authenticated remote URL for a Git repository
@@ -1017,16 +1018,19 @@ Implemented by Claude Code. Full conversation log in PR comment.`;
  * @param {Object} options - Setup options
  * @param {string} options.repoUrl - Repository URL for authentication
  * @param {string} options.authToken - GitHub authentication token
+ * @param {Object} options.tokenRefreshFn - Function to refresh token if needed
+ * @param {string} options.correlationId - Correlation ID for logging
  * @returns {Promise<void>}
  */
 export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, options = {}) {
-    const { repoUrl, authToken } = options;
-    const git = simpleGit({ baseDir: worktreePath });
+    const { repoUrl, authToken, tokenRefreshFn, correlationId } = options;
     
-    try {
+    const pushOperation = async (currentToken) => {
+        const git = simpleGit({ baseDir: worktreePath });
+        
         // Set up authentication if provided
-        if (repoUrl && authToken) {
-            await setupAuthenticatedRemote(git, repoUrl, authToken);
+        if (repoUrl && currentToken) {
+            await setupAuthenticatedRemote(git, repoUrl, currentToken);
         }
         
         logger.info({ 
@@ -1068,6 +1072,52 @@ export async function ensureBranchAndPush(worktreePath, branchName, baseBranch, 
             baseBranch,
             worktreePath 
         }, 'Branch successfully pushed to remote');
+    };
+    
+    try {
+        let currentToken = authToken;
+        let lastError;
+        
+        // Wrap the push operation with retry logic
+        await withRetry(
+            async () => {
+                try {
+                    await pushOperation(currentToken);
+                } catch (error) {
+                    lastError = error;
+                    
+                    // Check if it's an authentication error and we can refresh the token
+                    if (tokenRefreshFn && 
+                        (error.message.includes('Authentication failed') || 
+                         error.message.includes('Invalid username or token'))) {
+                        logger.info({
+                            correlationId,
+                            worktreePath,
+                            branchName
+                        }, 'Authentication error detected, attempting to refresh token');
+                        
+                        try {
+                            const refreshedToken = await tokenRefreshFn();
+                            if (refreshedToken && refreshedToken !== currentToken) {
+                                currentToken = refreshedToken;
+                                logger.info({
+                                    correlationId
+                                }, 'Token refreshed successfully, retrying push');
+                            }
+                        } catch (refreshError) {
+                            logger.error({
+                                correlationId,
+                                error: refreshError.message
+                            }, 'Failed to refresh token');
+                        }
+                    }
+                    
+                    throw error;
+                }
+            },
+            { ...retryConfigs.gitPush, correlationId },
+            `Git push for branch ${branchName}`
+        );
         
     } catch (error) {
         logger.error({ 
@@ -1439,16 +1489,19 @@ export async function createWorktreeFromExistingBranch(localRepoPath, branchName
  * @param {string} options.repoUrl - Repository URL for authentication
  * @param {string} options.authToken - GitHub authentication token
  * @param {string} options.remote - Remote name (default: 'origin')
+ * @param {Object} options.tokenRefreshFn - Function to refresh token if needed
+ * @param {string} options.correlationId - Correlation ID for logging
  * @returns {Promise<void>}
  */
 export async function pushBranch(worktreePath, branchName, options = {}) {
-    const { repoUrl, authToken, remote = 'origin' } = options;
-    const git = simpleGit({ baseDir: worktreePath });
+    const { repoUrl, authToken, remote = 'origin', tokenRefreshFn, correlationId } = options;
     
-    try {
+    const pushOperation = async (currentToken) => {
+        const git = simpleGit({ baseDir: worktreePath });
+        
         // Set up authentication if provided
-        if (repoUrl && authToken) {
-            await setupAuthenticatedRemote(git, repoUrl, authToken);
+        if (repoUrl && currentToken) {
+            await setupAuthenticatedRemote(git, repoUrl, currentToken);
         }
         
         // Verify the branch exists before pushing
@@ -1504,6 +1557,52 @@ export async function pushBranch(worktreePath, branchName, options = {}) {
             branchName, 
             remote 
         }, 'Branch pushed to remote successfully');
+    };
+    
+    try {
+        let currentToken = authToken;
+        let lastError;
+        
+        // Wrap the push operation with retry logic
+        await withRetry(
+            async () => {
+                try {
+                    await pushOperation(currentToken);
+                } catch (error) {
+                    lastError = error;
+                    
+                    // Check if it's an authentication error and we can refresh the token
+                    if (tokenRefreshFn && 
+                        (error.message.includes('Authentication failed') || 
+                         error.message.includes('Invalid username or token'))) {
+                        logger.info({
+                            correlationId,
+                            worktreePath,
+                            branchName
+                        }, 'Authentication error detected, attempting to refresh token');
+                        
+                        try {
+                            const refreshedToken = await tokenRefreshFn();
+                            if (refreshedToken && refreshedToken !== currentToken) {
+                                currentToken = refreshedToken;
+                                logger.info({
+                                    correlationId
+                                }, 'Token refreshed successfully, retrying push');
+                            }
+                        } catch (refreshError) {
+                            logger.error({
+                                correlationId,
+                                error: refreshError.message
+                            }, 'Failed to refresh token');
+                        }
+                    }
+                    
+                    throw error;
+                }
+            },
+            { ...retryConfigs.gitPush, correlationId },
+            `Git push for branch ${branchName}`
+        );
         
     } catch (error) {
         handleError(error, `Failed to push branch ${branchName} from worktree ${worktreePath}`);

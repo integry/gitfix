@@ -60,7 +60,10 @@ function isRetryableError(error, config) {
         /network/i,
         /connection/i,
         /temporary/i,
-        /try again/i
+        /try again/i,
+        /authentication failed/i,
+        /invalid username or token/i,
+        /credentials/i
     ];
     
     return retryablePatterns.some(pattern => 
@@ -211,6 +214,15 @@ export const retryConfigs = {
         maxDelay: 10000,
         exponentialBase: 2,
         retryableErrors: ['ECONNRESET', 'ETIMEDOUT', 'NETWORK_ERROR']
+    },
+    
+    // Git push operations (with authentication retry)
+    gitPush: {
+        maxAttempts: 3,
+        baseDelay: 2000,
+        maxDelay: 15000,
+        exponentialBase: 2,
+        retryableErrors: ['ECONNRESET', 'ETIMEDOUT', 'NETWORK_ERROR', 'EAUTH', 'ENOTFOUND']
     },
     
     // Claude Code execution

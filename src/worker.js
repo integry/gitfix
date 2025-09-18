@@ -454,7 +454,12 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
         if (commitResult) {
             await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
                 repoUrl,
-                authToken: githubToken.token
+                authToken: githubToken.token,
+                tokenRefreshFn: async () => {
+                    const newToken = await octokit.auth();
+                    return newToken.token;
+                },
+                correlationId
             });
 
             // Step 6: Add confirmation comment to the PR
@@ -884,7 +889,12 @@ async function processGitHubIssueJob(job) {
             
             await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
                 repoUrl,
-                authToken: githubToken.token
+                authToken: githubToken.token,
+                tokenRefreshFn: async () => {
+                    const newToken = await octokit.auth();
+                    return newToken.token;
+                },
+                correlationId
             });
             
             logger.info({ 
