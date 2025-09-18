@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { GITHUB_ISSUE_QUEUE_NAME, createWorker } from './queue/taskQueue.js';
+import { GITHUB_ISSUE_QUEUE_NAME, createWorker, issueQueue } from './queue/taskQueue.js';
 import logger, { generateCorrelationId } from './utils/logger.js';
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
 import { withErrorHandling, handleError, ErrorCategories } from './utils/errorHandler.js';
@@ -17,7 +17,7 @@ import {
 import simpleGit from 'simple-git';
 import fs from 'fs-extra';
 import { completePostProcessing } from './githubService.js';
-import { executeClaudeCode, buildClaudeDockerImage } from './claude/claudeService.js';
+import { executeClaudeCode, buildClaudeDockerImage, UsageLimitError } from './claude/claudeService.js';
 import { recordLLMMetrics } from './utils/llmMetrics.js';
 import { 
     validatePRCreation, 
@@ -32,6 +32,24 @@ const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
+
+// Buffer to add AFTER the reset timestamp to ensure limit is reset
+const REQUEUE_BUFFER_MS = parseInt(process.env.REQUEUE_BUFFER_MS || (5 * 60 * 1000), 10); // 5 minutes buffer
+// Jitter to prevent thundering herd if multiple jobs reset at the same time
+const REQUEUE_JITTER_MS = parseInt(process.env.REQUEUE_JITTER_MS || (2 * 60 * 1000), 10); // 2 minutes jitter
+
+/**
+ * Formats a UNIX timestamp (seconds) into a readable string for GitHub comments
+ * @param {number} resetTimestamp - UNIX timestamp in seconds
+ * @returns {string} Formatted date/time string
+ */
+function formatResetTime(resetTimestamp) {
+    if (!resetTimestamp || typeof resetTimestamp !== 'number') {
+        return 'at a later time';
+    }
+    const resetDate = new Date(resetTimestamp * 1000);
+    return `${resetDate.toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })} on ${resetDate.toLocaleDateString()}`;
+}
 
 /**
  * Adds a small random delay to prevent concurrent execution conflicts
@@ -583,36 +601,73 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
         };
 
     } catch (error) {
-        handleError(error, 'Failed to process PR comment job', { correlationId });
-        
-        // Record LLM metrics even if the job failed, as long as Claude was executed
-        if (claudeResult) {
-            try {
-                await recordLLMMetrics(claudeResult, { 
-                    number: pullRequestNumber, 
-                    repoOwner, 
-                    repoName 
-                }, 'pr_comment', correlationId);
-                correlatedLogger.info({
-                    correlationId,
-                    pullRequestNumber
-                }, 'LLM metrics recorded for failed PR comment job');
-            } catch (metricsError) {
-                correlatedLogger.error({
-                    error: metricsError.message,
-                    correlationId
-                }, 'Failed to record LLM metrics for failed PR comment job');
+        if (error instanceof UsageLimitError) {
+            correlatedLogger.warn({
+                pullRequestNumber,
+                resetTimestamp: error.resetTimestamp
+            }, 'Claude usage limit hit during PR comment processing. Requeueing job.');
+
+            const resetTimeUTC = error.resetTimestamp ? (error.resetTimestamp * 1000) : (Date.now() + 60 * 60 * 1000); // Default to 1 hour if timestamp parse failed
+            const delay = (resetTimeUTC - Date.now()) + REQUEUE_BUFFER_MS + Math.floor(Math.random() * REQUEUE_JITTER_MS);
+            const readableResetTime = formatResetTime(error.resetTimestamp);
+
+            // Add comment to PR notifying user
+            if (octokit) {
+                try {
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                        owner: repoOwner,
+                        repo: repoName,
+                        issue_number: pullRequestNumber,
+                        body: `⌛ **Processing Delayed:** Claude's usage limit was reached while processing requests from ${authorsText}.
+                        
+The job has been automatically rescheduled and will restart ${readableResetTime}.
+
+---
+*Job ID: ${job.id} will run again after delay.*`
+                    });
+                } catch (commentError) {
+                    correlatedLogger.error({ error: commentError.message }, 'Failed to post usage limit delay comment to PR.');
+                }
             }
-        }
-        
-        // Add error comment to the PR
-        if (octokit) {
-            try {
-                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                    owner: repoOwner,
-                    repo: repoName,
-                    issue_number: pullRequestNumber,
-                    body: `❌ **Failed to apply follow-up changes** requested by ${authorsText}
+
+            // Re-add the job to the queue with the calculated delay
+            await issueQueue.add(job.name, job.data, { delay: Math.max(0, delay) });
+            
+            // Do NOT throw the error, as this job is technically "handled" by being requeued.
+            // BullMQ would retry it immediately if we throw.
+
+        } else {
+            // Handle all other errors
+            handleError(error, 'Failed to process PR comment job', { correlationId });
+            
+            // Record LLM metrics even if the job failed, as long as Claude was executed
+            if (claudeResult) {
+                try {
+                    await recordLLMMetrics(claudeResult, { 
+                        number: pullRequestNumber, 
+                        repoOwner, 
+                        repoName 
+                    }, 'pr_comment', correlationId);
+                    correlatedLogger.info({
+                        correlationId,
+                        pullRequestNumber
+                    }, 'LLM metrics recorded for failed PR comment job');
+                } catch (metricsError) {
+                    correlatedLogger.error({
+                        error: metricsError.message,
+                        correlationId
+                    }, 'Failed to record LLM metrics for failed PR comment job');
+                }
+            }
+            
+            // Add error comment to the PR
+            if (octokit) {
+                try {
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                        owner: repoOwner,
+                        repo: repoName,
+                        issue_number: pullRequestNumber,
+                        body: `❌ **Failed to apply follow-up changes** requested by ${authorsText}
 
 An error occurred while processing your request:
 
@@ -623,29 +678,30 @@ ${error.message}
 ---
 Comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${commentIds}
 Please check the logs for more details.`,
-                });
+                    });
 
-                // Delete the "starting work" comment even on error
-                if (startingWorkComment?.data?.id) {
-                    try {
-                        await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
-                            owner: repoOwner,
-                            repo: repoName,
-                            comment_id: startingWorkComment.data.id,
-                        });
-                        correlatedLogger.info({
-                            commentId: startingWorkComment.data.id
-                        }, 'Deleted starting work comment after error');
-                    } catch (deleteError) {
-                        correlatedLogger.error({ error: deleteError.message }, 'Failed to delete starting work comment');
+                    // Delete the "starting work" comment even on error
+                    if (startingWorkComment?.data?.id) {
+                        try {
+                            await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+                                owner: repoOwner,
+                                repo: repoName,
+                                comment_id: startingWorkComment.data.id,
+                            });
+                            correlatedLogger.info({
+                                commentId: startingWorkComment.data.id
+                            }, 'Deleted starting work comment after error');
+                        } catch (deleteError) {
+                            correlatedLogger.error({ error: deleteError.message }, 'Failed to delete starting work comment');
+                        }
                     }
+                } catch (commentError) {
+                    correlatedLogger.error({ error: commentError.message }, 'Failed to post error comment');
                 }
-            } catch (commentError) {
-                correlatedLogger.error({ error: commentError.message }, 'Failed to post error comment');
             }
+            
+            throw error; // Re-throw general errors so BullMQ marks the job as failed
         }
-        
-        throw error;
     } finally {
         // Cleanup worktree
         if (localRepoPath && worktreeInfo) {
@@ -1551,121 +1607,169 @@ This is an emergency retry - the main implementation is complete, you just need 
         };
 
     } catch (error) {
-        // Enhanced error metrics logging for QA framework
-        const errorCategory = error.message?.includes('authentication') ? 'auth_error' :
-                             error.message?.includes('network') ? 'network_error' :
-                             error.message?.includes('git') ? 'git_error' :
-                             error.message?.includes('GitHub') ? 'github_api_error' :
-                             error.message?.includes('timeout') ? 'timeout_error' :
-                             'unknown_error';
-        
-        correlatedLogger.error({ 
-            // Core identification
-            jobId, 
-            issueNumber: issueRef.number,
-            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
-            correlationId,
-            taskId,
+        if (error instanceof UsageLimitError) {
+            correlatedLogger.warn({
+                jobId,
+                issueNumber: issueRef.number,
+                resetTimestamp: error.resetTimestamp
+            }, 'Claude usage limit hit during issue processing. Requeueing job.');
+
+            const resetTimeUTC = error.resetTimestamp ? (error.resetTimestamp * 1000) : (Date.now() + 60 * 60 * 1000); // Default to 1 hour
+            const delay = (resetTimeUTC - Date.now()) + REQUEUE_BUFFER_MS + Math.floor(Math.random() * REQUEUE_JITTER_MS);
+            const readableResetTime = formatResetTime(error.resetTimestamp);
+
+            // Add comment to issue notifying user
+            if (octokit) {
+                try {
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        issue_number: issueRef.number,
+                        body: `⌛ **Processing Delayed:** Claude's usage limit was reached while processing this issue.
+                        
+The job has been automatically rescheduled and will restart ${readableResetTime}.
             
-            // Error details
-            errMessage: error.message, 
-            stack: error.stack,
-            
-            // Failure metrics
-            status: 'system_error',
-            resolution: 'failed',
-            failureCategory: errorCategory,
-            
-            // Processing state when error occurred
-            claudeAttempted: !!claudeResult,
-            claudeSuccess: claudeResult?.success || false,
-            worktreeCreated: !!worktreeInfo,
-            
-            // Metadata for analysis
-            timestamp: new Date().toISOString(),
-            systemVersion: process.env.npm_package_version || 'unknown'
-        }, 'Error processing GitHub issue job - enhanced error metrics logged');
-        
-        // Record LLM metrics even if the job failed, as long as Claude was executed
-        if (claudeResult) {
-            try {
-                await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId);
-                correlatedLogger.info({
-                    correlationId,
-                    issueNumber: issueRef.number
-                }, 'LLM metrics recorded for failed job');
-            } catch (metricsError) {
-                correlatedLogger.error({
-                    error: metricsError.message,
-                    correlationId
-                }, 'Failed to record LLM metrics for failed job');
+---
+*Job ID: ${jobId} will run again after delay.*`
+                    });
+                } catch (commentError) {
+                    correlatedLogger.error({ error: commentError.message }, 'Failed to post usage limit delay comment to issue.');
+                }
             }
-        }
-        
-        // Post error to GitHub issue
-        if (octokit) {
+
+            // Re-add the job to the queue with the calculated delay
+            await issueQueue.add(job.name, job.data, { delay: Math.max(0, delay) });
+
+            // Do NOT throw, as this job is handled.
+            // We only need to update the state manager to reflect failure (for now) but the job shouldn't fully "fail" in BullMQ
             try {
-                let errorMessage = `❌ **Failed to process this issue**\n\n`;
-                errorMessage += `**Error Category:** ${errorCategory.replace('_', ' ')}\n`;
-                errorMessage += `**Error Message:** ${error.message}\n\n`;
-                
-                // Add user-friendly explanations based on error category
-                if (errorCategory === 'git_error') {
-                    errorMessage += `This appears to be a Git-related issue. The system may have encountered a corrupted repository or git operation failure. `;
-                    errorMessage += `The issue will be automatically retried, and any corrupted repositories will be cleaned up.\n\n`;
-                } else if (errorCategory === 'auth_error') {
-                    errorMessage += `This is an authentication issue. Please ensure the GitHub token has proper permissions.\n\n`;
-                } else if (errorCategory === 'network_error') {
-                    errorMessage += `This is a network connectivity issue. The system will automatically retry.\n\n`;
-                }
-                
-                errorMessage += `**Processing Stage:** ${claudeResult ? 'Post-processing (after AI analysis)' : 'Pre-processing (before AI analysis)'}\n`;
-                
-                if (worktreeInfo) {
-                    errorMessage += `**Branch:** ${worktreeInfo.branchName}\n`;
-                }
-                
-                errorMessage += `\n<details><summary>Technical Details</summary>\n\n`;
-                errorMessage += `\`\`\`\n${error.stack || error.message}\n\`\`\`\n`;
-                errorMessage += `</details>\n\n`;
-                errorMessage += `---\n*The system will automatically retry this task. If the issue persists, please contact support.*`;
-                
-                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-                    owner: issueRef.repoOwner,
-                    repo: issueRef.repoName,
-                    issue_number: issueRef.number,
-                    body: errorMessage
+                await stateManager.markTaskFailed(taskId, error, { 
+                    errorCategory: ErrorCategories.CLAUDE_EXECUTION,
+                    processingStage: 'claude_execution',
+                    requeued: true,
+                    delay: delay
                 });
-                
-                // Remove processing label if it exists
-                await safeRemoveLabel(
-                    octokit,
-                    issueRef.repoOwner,
-                    issueRef.repoName,
-                    issueRef.number,
-                    AI_PROCESSING_TAG,
-                    correlatedLogger
-                );
-                
-            } catch (commentError) {
-                correlatedLogger.error({ 
-                    error: commentError.message,
-                    issueNumber: issueRef.number
-                }, 'Failed to post error comment to GitHub issue');
+            } catch (stateError) {
+                correlatedLogger.warn({ error: stateError.message }, 'Failed to update task state to failed (requeued)');
             }
+
+        } else {
+            // Standard Error Handling for non-usage-limit errors
+            const errorCategory = error.message?.includes('authentication') ? 'auth_error' :
+                                 error.message?.includes('network') ? 'network_error' :
+                                 error.message?.includes('git') ? 'git_error' :
+                                 error.message?.includes('GitHub') ? 'github_api_error' :
+                                 error.message?.includes('timeout') ? 'timeout_error' :
+                                 'unknown_error';
+            
+            correlatedLogger.error({ 
+                // Core identification
+                jobId, 
+                issueNumber: issueRef.number,
+                repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+                correlationId,
+                taskId,
+                
+                // Error details
+                errMessage: error.message, 
+                stack: error.stack,
+                
+                // Failure metrics
+                status: 'system_error',
+                resolution: 'failed',
+                failureCategory: errorCategory,
+                
+                // Processing state when error occurred
+                claudeAttempted: !!claudeResult,
+                claudeSuccess: claudeResult?.success || false,
+                worktreeCreated: !!worktreeInfo,
+                
+                // Metadata for analysis
+                timestamp: new Date().toISOString(),
+                systemVersion: process.env.npm_package_version || 'unknown'
+            }, 'Error processing GitHub issue job - enhanced error metrics logged');
+            
+            // Record LLM metrics even if the job failed, as long as Claude was executed
+            if (claudeResult) {
+                try {
+                    await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId);
+                    correlatedLogger.info({
+                        correlationId,
+                        issueNumber: issueRef.number
+                    }, 'LLM metrics recorded for failed job');
+                } catch (metricsError) {
+                    correlatedLogger.error({
+                        error: metricsError.message,
+                        correlationId
+                    }, 'Failed to record LLM metrics for failed job');
+                }
+            }
+            
+            // Post error to GitHub issue
+            if (octokit) {
+                try {
+                    let errorMessage = `❌ **Failed to process this issue**\n\n`;
+                    errorMessage += `**Error Category:** ${errorCategory.replace('_', ' ')}\n`;
+                    errorMessage += `**Error Message:** ${error.message}\n\n`;
+                    
+                    // Add user-friendly explanations based on error category
+                    if (errorCategory === 'git_error') {
+                        errorMessage += `This appears to be a Git-related issue. The system may have encountered a corrupted repository or git operation failure. `;
+                        errorMessage += `The issue will be automatically retried, and any corrupted repositories will be cleaned up.\n\n`;
+                    } else if (errorCategory === 'auth_error') {
+                        errorMessage += `This is an authentication issue. Please ensure the GitHub token has proper permissions.\n\n`;
+                    } else if (errorCategory === 'network_error') {
+                        errorMessage += `This is a network connectivity issue. The system will automatically retry.\n\n`;
+                    }
+                    
+                    errorMessage += `**Processing Stage:** ${claudeResult ? 'Post-processing (after AI analysis)' : 'Pre-processing (before AI analysis)'}\n`;
+                    
+                    if (worktreeInfo) {
+                        errorMessage += `**Branch:** ${worktreeInfo.branchName}\n`;
+                    }
+                    
+                    errorMessage += `\n<details><summary>Technical Details</summary>\n\n`;
+                    errorMessage += `\`\`\`\n${error.stack || error.message}\n\`\`\`\n`;
+                    errorMessage += `</details>\n\n`;
+                    errorMessage += `---\n*The system will automatically retry this task. If the issue persists, please contact support.*`;
+                    
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        issue_number: issueRef.number,
+                        body: errorMessage
+                    });
+                    
+                    // Remove processing label if it exists
+                    await safeRemoveLabel(
+                        octokit,
+                        issueRef.repoOwner,
+                        issueRef.repoName,
+                        issueRef.number,
+                        AI_PROCESSING_TAG,
+                        correlatedLogger
+                    );
+                    
+                } catch (commentError) {
+                    correlatedLogger.error({ 
+                        error: commentError.message,
+                        issueNumber: issueRef.number
+                    }, 'Failed to post error comment to GitHub issue');
+                }
+            }
+            
+            // Update task state to failed for tracking
+            try {
+                await stateManager.markTaskFailed(taskId, error, { 
+                    errorCategory,
+                    processingStage: claudeResult ? 'post_processing' : 'pre_processing'
+                });
+            } catch (stateError) {
+                correlatedLogger.warn({ error: stateError.message }, 'Failed to update task state to failed');
+            }
+            
+            throw error; // Throw general errors so BullMQ marks the job as failed
         }
-        
-        // Update task state to failed for tracking
-        try {
-            await stateManager.markTaskFailed(taskId, error, { 
-                errorCategory,
-                processingStage: claudeResult ? 'post_processing' : 'pre_processing'
-            });
-        } catch (stateError) {
-            correlatedLogger.warn({ error: stateError.message }, 'Failed to update task state to failed');
-        }
-        
-        throw error;
     }
 }
 
