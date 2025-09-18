@@ -89,8 +89,9 @@ export function createWorker(queueName, processorFunction) {
             await metricsRedis.set('metrics:jobs:avgTime', newAvg.toFixed(2));
             
             // Track active repository
-            if (job.data?.repository) {
-                await metricsRedis.sadd('active:repositories', job.data.repository);
+            const repoFullName = job.data?.repository || (job.data?.repoOwner && job.data?.repoName ? `${job.data.repoOwner}/${job.data.repoName}` : null);
+            if (repoFullName) {
+                await metricsRedis.sadd('active:repositories', repoFullName);
             }
             
             // Log activity
@@ -98,11 +99,30 @@ export function createWorker(queueName, processorFunction) {
                 id: `activity-${Date.now()}-${job.id}`,
                 type: job.name === 'processGitHubIssue' ? 'issue_processed' : 'pr_processed',
                 timestamp: new Date().toISOString(),
-                repository: job.data?.repository,
+                repository: repoFullName,
                 issueNumber: job.data?.issueNumber,
                 description: `Successfully processed ${job.name === 'processGitHubIssue' ? 'issue' : 'PR'} #${job.data?.issueNumber || 'unknown'}`,
                 status: 'success'
             };
+
+            // Store detailed AI metrics in a Sorted Set for time-based querying
+            if (result?.claudeResult) {
+                const cost = result.claudeResult.claudeCostUsd || result.claudeResult.costUsd || result.claudeResult.finalResult?.cost_usd || 0;
+                const aiMetrics = {
+                    timestamp: job.timestamp, // Use job start time
+                    cost: typeof cost === 'string' ? parseFloat(cost) : cost,
+                    model: result.claudeResult.model || job.data?.modelName || 'unknown',
+                    turns: result.claudeResult.claudeNumTurns || result.claudeResult.finalResult?.num_turns || 0,
+                    executionTimeMs: result.claudeResult.executionTime || 0,
+                    issueNumber: job.data?.number,
+                    repo: repoFullName,
+                    status: 'success',
+                    correlationId: job.data?.correlationId || result.correlationId,
+                };
+                // Use timestamp as score for the sorted set
+                await metricsRedis.zadd('metrics:ai:log:v1', job.timestamp, JSON.stringify(aiMetrics));
+            }
+
             await metricsRedis.lpush('system:activity:log', JSON.stringify(activity));
             await metricsRedis.ltrim('system:activity:log', 0, 999); // Keep last 1000 activities
             
@@ -131,12 +151,31 @@ export function createWorker(queueName, processorFunction) {
             await metricsRedis.incr('metrics:jobs:failed');
             await metricsRedis.incr(`metrics:daily:${dateKey}:failed`);
             
+            // Log failed AI metrics to sorted set for complete statistics
+            const repoFullName = job?.data?.repository || (job?.data?.repoOwner && job?.data?.repoName ? `${job.data.repoOwner}/${job.data.repoName}` : null);
+            const aiMetrics = {
+                timestamp: job.timestamp,
+                cost: 0, // Failed jobs may still incur cost, but we log 0 for aggregation logic
+                model: job.data?.modelName || 'unknown',
+                turns: 0,
+                executionTimeMs: (job.finishedOn ? job.finishedOn : Date.now()) - (job.timestamp || Date.now()),
+                issueNumber: job.data?.number,
+                repo: repoFullName,
+                status: 'failed',
+                correlationId: job.data?.correlationId,
+                error: err.message.substring(0, 100), // Log snippet of error
+            };
+            // Use timestamp as score
+            if (job.timestamp) { // Ensure timestamp exists
+                 await metricsRedis.zadd('metrics:ai:log:v1', job.timestamp, JSON.stringify(aiMetrics));
+            }
+
             // Log activity
             const activity = {
                 id: `activity-${Date.now()}-${job?.id || 'unknown'}`,
                 type: 'error',
                 timestamp: new Date().toISOString(),
-                repository: job?.data?.repository,
+                repository: repoFullName,
                 issueNumber: job?.data?.issueNumber,
                 description: `Failed to process ${job?.name === 'processGitHubIssue' ? 'issue' : 'PR'} #${job?.data?.issueNumber || 'unknown'}: ${err.message}`,
                 status: 'error'
