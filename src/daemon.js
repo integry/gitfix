@@ -7,6 +7,14 @@ import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
 
+// Create Redis client for activity logging
+const redisClient = new Redis({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+});
+
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000', 10);
@@ -703,6 +711,7 @@ async function startDaemon(options = {}) {
         clearInterval(intervalId);
         clearInterval(heartbeatInterval);
         await heartbeatRedis.quit();
+        await redisClient.quit();
         await shutdownQueue();
         process.exit(0);
     });
@@ -712,6 +721,7 @@ async function startDaemon(options = {}) {
         clearInterval(intervalId);
         clearInterval(heartbeatInterval);
         await heartbeatRedis.quit();
+        await redisClient.quit();
         await shutdownQueue();
         process.exit(0);
     });
