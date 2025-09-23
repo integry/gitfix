@@ -51,7 +51,12 @@ export async function createPullRequestRobust(params) {
         // Step 1: Ensure branch is properly pushed to remote
         await ensureBranchAndPush(worktreePath, branchName, baseBranch, {
             repoUrl,
-            authToken
+            authToken,
+            tokenRefreshFn: async () => {
+                const newAuth = await octokit.auth();
+                return newAuth.token;
+            },
+            correlationId: params.correlationId || 'unknown'
         });
         
         // Step 1.5: Wait for GitHub to propagate branch data (timing fix)
