@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'path';
 import { GITHUB_ISSUE_QUEUE_NAME, createWorker, issueQueue } from './queue/taskQueue.js';
 import logger, { generateCorrelationId } from './utils/logger.js';
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
@@ -17,7 +18,7 @@ import {
 import simpleGit from 'simple-git';
 import fs from 'fs-extra';
 import { completePostProcessing } from './githubService.js';
-import { executeClaudeCode, buildClaudeDockerImage, UsageLimitError } from './claude/claudeService.js';
+import { executeClaudeCode, buildClaudeDockerImage, UsageLimitError, generateTaskImportPrompt } from './claude/claudeService.js';
 import { recordLLMMetrics } from './utils/llmMetrics.js';
 import { 
     validatePRCreation, 
@@ -719,6 +720,128 @@ Please check the logs for more details.`,
                 correlatedLogger.warn({ error: cleanupError.message }, 'Failed to cleanup worktree');
             }
         }
+    }
+}
+
+/**
+ * Processes a task import job - analyzes user request and creates GitHub issues
+ * @param {Object} job - BullMQ job object
+ * @returns {Promise<Object>} Processing result
+ */
+async function processTaskImportJob(job) {
+    const { id: jobId, name: jobName, data } = job;
+    const { taskDescription, repository, correlationId, user } = data;
+    
+    const correlatedLogger = logger.withCorrelation(correlationId);
+    
+    correlatedLogger.info({
+        jobId,
+        jobName,
+        repository,
+        user,
+        taskDescription: taskDescription.substring(0, 100) + '...'
+    }, 'Starting task import job');
+    
+    const stateManager = getStateManager(jobId);
+    
+    try {
+        // Phase 1: Setup
+        await stateManager.updateState(TaskStates.SETUP, 'Initializing task import process');
+        
+        // Split repository into owner and name
+        const [repoOwner, repoName] = repository.split('/');
+        if (!repoOwner || !repoName) {
+            throw new Error('Invalid repository format. Expected: owner/name');
+        }
+        
+        // Ensure repository is cloned
+        await stateManager.updateState(TaskStates.SETUP, 'Cloning repository if needed');
+        await ensureRepoCloned(repoOwner, repoName, correlationId);
+        
+        // Create worktree for analysis
+        await stateManager.updateState(TaskStates.SETUP, 'Creating worktree for analysis');
+        const worktreeInfo = await createWorktreeForIssue(
+            repoOwner, 
+            repoName, 
+            'import', // Using 'import' as placeholder issueId
+            'planner', // Using 'planner' as modelName for unique naming
+            correlationId
+        );
+        
+        correlatedLogger.info({
+            worktreePath: worktreeInfo.worktreePath,
+            branch: worktreeInfo.branch
+        }, 'Worktree created for task import');
+        
+        // Phase 2: AI Processing
+        await stateManager.updateState(TaskStates.AI_PROCESSING, 'Generating task import prompt');
+        
+        const prompt = generateTaskImportPrompt(taskDescription, repoOwner, repoName, worktreeInfo.worktreePath);
+        
+        await stateManager.updateState(TaskStates.AI_PROCESSING, 'Executing Claude analysis');
+        
+        const claudeResult = await executeClaudeCode(
+            prompt,
+            worktreeInfo.worktreePath,
+            {
+                jobId,
+                correlationId,
+                repoOwner,
+                repoName,
+                issueNumber: 'import',
+                user
+            }
+        );
+        
+        correlatedLogger.info({
+            success: claudeResult.success,
+            stdout: claudeResult.stdout?.substring(0, 500),
+            conversationTurns: claudeResult.conversationLog?.length
+        }, 'Claude analysis completed');
+        
+        // Phase 3: Cleanup
+        await stateManager.updateState(TaskStates.CLEANUP, 'Cleaning up worktree');
+        await cleanupWorktree(worktreeInfo.worktreePath, correlationId);
+        
+        await stateManager.updateState(TaskStates.COMPLETED, 'Task import completed successfully');
+        
+        return {
+            success: true,
+            jobId,
+            repository,
+            claudeResult: {
+                success: claudeResult.success,
+                executionTime: claudeResult.executionTime,
+                conversationTurns: claudeResult.conversationLog?.length || 0,
+                stdout: claudeResult.stdout
+            }
+        };
+        
+    } catch (error) {
+        correlatedLogger.error({
+            error: error.message,
+            stack: error.stack
+        }, 'Task import job failed');
+        
+        await stateManager.updateState(TaskStates.FAILED, `Task import failed: ${error.message}`);
+        
+        // Always try to cleanup worktree on error
+        try {
+            const worktreePath = path.join(
+                process.env.WORKSPACE_ROOT || '/tmp/workspace',
+                repoOwner,
+                repoName,
+                'worktrees',
+                `import-planner`
+            );
+            await cleanupWorktree(worktreePath, correlationId);
+        } catch (cleanupError) {
+            correlatedLogger.error({
+                error: cleanupError.message
+            }, 'Failed to cleanup worktree after error');
+        }
+        
+        throw error;
     }
 }
 
@@ -2123,6 +2246,8 @@ async function startWorker(options = {}) {
             return processGitHubIssueJob(job);
         } else if (job.name === 'processPullRequestComment') {
             return processPullRequestCommentJob(job);
+        } else if (job.name === 'processTaskImport') {
+            return processTaskImportJob(job);
         } else {
             throw new Error(`Unknown job type: ${job.name}`);
         }
@@ -2149,7 +2274,7 @@ async function startWorker(options = {}) {
 }
 
 // Export for testing
-export { processGitHubIssueJob, processPullRequestCommentJob, startWorker };
+export { processGitHubIssueJob, processPullRequestCommentJob, processTaskImportJob, startWorker };
 
 // Start worker if this is the main module
 if (import.meta.url === `file://${process.argv[1]}`) {
