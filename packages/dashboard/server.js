@@ -571,6 +571,71 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskDescription, repository } = req.body;
+    
+    // Validate input
+    if (!taskDescription || !repository) {
+      return res.status(400).json({ 
+        error: 'Both taskDescription and repository are required' 
+      });
+    }
+    
+    // Validate repository format
+    const repoPattern = /^[a-zA-Z0-9\-_]+\/[a-zA-Z0-9\-_]+$/;
+    if (!repoPattern.test(repository)) {
+      return res.status(400).json({ 
+        error: 'Invalid repository format. Expected: owner/name' 
+      });
+    }
+    
+    // Generate a unique job ID
+    const jobId = `import-tasks-${repository.replace('/', '-')}-${Date.now()}`;
+    
+    // Create correlation ID for tracking
+    const correlationId = `${jobId}-${Math.random().toString(36).substring(2, 9)}`;
+    
+    // Add job to queue
+    const newJob = await taskQueue.add('processTaskImport', {
+      taskDescription,
+      repository,
+      correlationId,
+      user: req.user.username
+    }, {
+      jobId,
+      removeOnComplete: {
+        age: 24 * 3600, // Keep for 24 hours
+        count: 100,     // Keep max 100 completed jobs
+      },
+      removeOnFail: {
+        age: 7 * 24 * 3600, // Keep failed jobs for 7 days
+      },
+    });
+    
+    // Log activity
+    const activity = {
+      id: `activity-${Date.now()}-${jobId}`,
+      type: 'task_import',
+      timestamp: new Date().toISOString(),
+      user: req.user.username,
+      repository: repository,
+      description: `Task import job created for ${repository}`,
+      status: 'pending'
+    };
+    
+    await redisClient.lpush('system:activity:log', JSON.stringify(activity));
+    await redisClient.ltrim('system:activity:log', 0, 999); // Keep last 1000 activities
+    
+    console.log(`Created task import job ${jobId} for repository ${repository}`);
+    
+    res.json({ jobId: newJob.id });
+  } catch (error) {
+    console.error('Error in /api/import-tasks:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 async function start() {
   try {
     await initRedis();

@@ -17,7 +17,7 @@ import {
 import simpleGit from 'simple-git';
 import fs from 'fs-extra';
 import { completePostProcessing } from './githubService.js';
-import { executeClaudeCode, buildClaudeDockerImage, UsageLimitError } from './claude/claudeService.js';
+import { executeClaudeCode, buildClaudeDockerImage, UsageLimitError, generateTaskImportPrompt } from './claude/claudeService.js';
 import { recordLLMMetrics } from './utils/llmMetrics.js';
 import { 
     validatePRCreation, 
@@ -713,6 +713,157 @@ Please check the logs for more details.`,
             try {
                 await cleanupWorktree(localRepoPath, worktreeInfo.worktreePath, worktreeInfo.branchName, {
                     deleteBranch: false, // Never delete the branch for PR follow-ups
+                    success: true
+                });
+            } catch (cleanupError) {
+                correlatedLogger.warn({ error: cleanupError.message }, 'Failed to cleanup worktree');
+            }
+        }
+    }
+}
+
+/**
+ * Processes a task import job from the queue
+ * @param {import('bullmq').Job} job - The job to process
+ * @returns {Promise<Object>} Processing result
+ */
+async function processTaskImportJob(job) {
+    const {
+        taskDescription,
+        repository,
+        correlationId,
+        user
+    } = job.data;
+    const correlatedLogger = logger.withCorrelation(correlationId);
+    
+    correlatedLogger.info({ 
+        repository, 
+        user,
+        taskDescriptionLength: taskDescription?.length || 0
+    }, 'Processing task import job...');
+
+    let octokit;
+    let localRepoPath;
+    let worktreeInfo;
+
+    try {
+        // Get authenticated Octokit instance
+        octokit = await withRetry(
+            () => getAuthenticatedOctokit(),
+            { ...retryConfigs.githubApi, correlationId },
+            'get_authenticated_octokit'
+        );
+
+        // Parse repository into owner and name
+        const [repoOwner, repoName] = repository.split('/');
+        
+        if (!repoOwner || !repoName) {
+            throw new Error(`Invalid repository format: ${repository}. Expected format: owner/name`);
+        }
+
+        const githubToken = await octokit.auth();
+        const repoUrl = getRepoUrl({ repoOwner, repoName });
+
+        // Ensure we're in a valid git repository before proceeding
+        await ensureGitRepository(correlatedLogger);
+
+        // Step 1: Ensure repository is cloned
+        localRepoPath = await ensureRepoCloned(repoUrl, repoOwner, repoName, githubToken.token);
+
+        // Step 2: Create a worktree for the task import analysis
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+        const worktreeDirName = `task-import-${timestamp}`;
+
+        // Use placeholder values for issue-specific parameters
+        worktreeInfo = await createWorktreeForIssue(
+            localRepoPath,
+            'import', // issueNumber placeholder
+            'Task Import Analysis', // title
+            repoOwner,
+            repoName,
+            null, // Use auto-detected default branch
+            octokit,
+            'planner' // modelName placeholder
+        );
+
+        correlatedLogger.info({ 
+            worktreePath: worktreeInfo.worktreePath, 
+            branchName: worktreeInfo.branchName 
+        }, 'Created worktree for task import analysis');
+
+        // Step 3: Generate the task import prompt
+        const prompt = generateTaskImportPrompt(taskDescription, repoOwner, repoName, worktreeInfo.worktreePath);
+
+        // Step 4: Execute Claude Code with the task import prompt
+        const claudeResult = await executeClaudeCode({
+            worktreePath: worktreeInfo.worktreePath,
+            issueRef: { 
+                number: 'import', // placeholder
+                repoOwner, 
+                repoName 
+            },
+            githubToken: githubToken.token,
+            customPrompt: prompt,
+            branchName: worktreeInfo.branchName,
+            modelName: 'claude-3-5-sonnet-20241022' // Use a specific model for planning
+        });
+
+        correlatedLogger.info({
+            success: claudeResult.success,
+            executionTime: claudeResult.executionTime
+        }, 'Claude task import analysis completed');
+
+        // Log the result (this is a fire-and-forget job)
+        if (claudeResult.success) {
+            correlatedLogger.info({
+                repository,
+                user,
+                stdout: claudeResult.output?.rawOutput || claudeResult.output
+            }, 'Task import job completed successfully - Claude executed gh commands');
+        } else {
+            correlatedLogger.error({
+                repository,
+                user,
+                error: claudeResult.error
+            }, 'Task import job failed');
+        }
+
+        return { 
+            status: 'complete', 
+            repository,
+            success: claudeResult.success
+        };
+
+    } catch (error) {
+        if (error instanceof UsageLimitError) {
+            correlatedLogger.warn({
+                repository,
+                resetTimestamp: error.resetTimestamp
+            }, 'Claude usage limit hit during task import processing. Requeueing job.');
+
+            const resetTimeUTC = error.resetTimestamp ? (error.resetTimestamp * 1000) : (Date.now() + 60 * 60 * 1000);
+            const delay = (resetTimeUTC - Date.now()) + REQUEUE_BUFFER_MS + Math.floor(Math.random() * REQUEUE_JITTER_MS);
+
+            // Re-add the job to the queue with delay
+            await issueQueue.add(job.name, job.data, { delay: Math.max(0, delay) });
+            
+            // Don't throw - job is handled by requeueing
+            return { 
+                status: 'requeued', 
+                repository,
+                delay
+            };
+        } else {
+            // Handle all other errors
+            handleError(error, 'Failed to process task import job', { correlationId });
+            throw error;
+        }
+    } finally {
+        // Cleanup worktree
+        if (localRepoPath && worktreeInfo) {
+            try {
+                await cleanupWorktree(localRepoPath, worktreeInfo.worktreePath, worktreeInfo.branchName, {
+                    deleteBranch: true, // Always delete branch for task imports
                     success: true
                 });
             } catch (cleanupError) {
@@ -2123,6 +2274,8 @@ async function startWorker(options = {}) {
             return processGitHubIssueJob(job);
         } else if (job.name === 'processPullRequestComment') {
             return processPullRequestCommentJob(job);
+        } else if (job.name === 'processTaskImport') {
+            return processTaskImportJob(job);
         } else {
             throw new Error(`Unknown job type: ${job.name}`);
         }
@@ -2149,7 +2302,7 @@ async function startWorker(options = {}) {
 }
 
 // Export for testing
-export { processGitHubIssueJob, processPullRequestCommentJob, startWorker };
+export { processGitHubIssueJob, processPullRequestCommentJob, processTaskImportJob, startWorker };
 
 // Start worker if this is the main module
 if (import.meta.url === `file://${process.argv[1]}`) {
