@@ -1,4 +1,4 @@
-FROM node:18-alpine
+FROM node:20-alpine
 
 # Install git, sudo, and docker client which are required for various operations
 RUN apk add --no-cache git sudo docker-cli

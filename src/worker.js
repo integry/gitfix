@@ -901,6 +901,7 @@ async function processTaskImportJob(job) {
                 correlatedLogger.warn({ error: cleanupError.message }, 'Failed to cleanup worktree');
             }
         }
+    }
 }
 
 async function processGitHubIssueJob(job) {
