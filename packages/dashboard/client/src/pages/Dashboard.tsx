@@ -1,13 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { SystemStatusPanel } from '../components/SystemStatusPanel';
 import { QueueStatsPanel } from '../components/QueueStatsPanel';
 import { ActivityFeed } from '../components/ActivityFeed';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { LLMMetricsPanel } from '../components/LLMMetricsPanel';
+import { ImportTasksModal } from '../components/ImportTasksModal';
 
 const Dashboard: React.FC = () => {
   const { user, logout } = useAuth();
+  const [isImportModalOpen, setImportModalOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-gray-900">
@@ -21,12 +23,20 @@ const Dashboard: React.FC = () => {
                 Welcome, {user?.displayName || user?.username}!
               </p>
             </div>
-            <button
-              onClick={logout}
-              className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
-            >
-              Logout
-            </button>
+            <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setImportModalOpen(true)}
+                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                Import Tasks
+              </button>
+              <button
+                onClick={logout}
+                className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                Logout
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -59,6 +69,10 @@ const Dashboard: React.FC = () => {
             <ActivityFeed />
           </div>
         </div>
+        <ImportTasksModal
+          isOpen={isImportModalOpen}
+          onClose={() => setImportModalOpen(false)}
+        />
       </main>
     </div>
   );
