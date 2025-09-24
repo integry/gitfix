@@ -105,6 +105,39 @@ Your task is complete when you have implemented a working solution to the issue.
 }
 
 /**
+ * Generates a prompt for Claude to analyze a task description and create GitHub issues
+ * @param {string} taskDescription - The raw text blob describing the tasks
+ * @param {string} repoOwner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {string} worktreePath - Path to the Git worktree containing the repository
+ * @returns {string} Formatted prompt for Claude
+ */
+export function generateTaskImportPrompt(taskDescription, repoOwner, repoName, worktreePath) {
+    return `You are an expert software analyst. Your task is to convert code change requests into detailed GitHub issue specifications for the **${repoOwner}/${repoName}** repo, so a junior developer can implement them. If the issue specification with comments is already defined, publish it directly to Github without modifications, otherwise carefully analyze the request first and then publish the issues.
+
+You are working in a git worktree at '${worktreePath}' which contains the full source code for analysis and planning.
+
+You MUST publish issues and their respective comments using gh commands:
+
+1. **Create an Issue:** The issue body must contain:
+   * A detailed task description and context.
+   * Clear, step-by-step implementation instructions.
+2. **Add a Comment:** After creating the issue and capturing its ID/number, add a separate comment to that issue containing the suggested implementation code (use diffs where possible).
+3. **Multi-Issue Tasks:** If the work is significant, break it into multiple issues. When doing so, the issue description must reference the previous issue ID and describe the epic's overall goal and current stage. Prefer a single issue when possible.
+
+**YOUR FOCUS: ANALYSIS AND 'gh' COMMANDS ONLY**
+- You have read-only access to the codebase for planning.
+- DO NOT implement any code changes.
+- DO NOT use git commands (add, commit, push).
+- Your *only* output should be the bash script using 'gh' commands to create the issues.
+
+Here is the user's request:
+---
+${taskDescription}
+---`;
+}
+
+/**
  * Executes Claude Code CLI in a Docker container to analyze and fix a GitHub issue
  * @param {Object} options - Execution options
  * @param {string} options.worktreePath - Path to the Git worktree containing the repository
