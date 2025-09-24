@@ -6,6 +6,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 const { setupAuth, ensureAuthenticated } = require('./auth');
 const { getLLMMetricsSummary, getLLMMetricsByCorrelationId } = require('./llmMetricsAdapter');
+const { generateCorrelationId } = require('../../src/utils/logger.js');
 
 const app = express();
 const PORT = process.env.DASHBOARD_API_PORT || 4000;
@@ -564,6 +565,33 @@ app.get('/api/execution/:sessionId/logs/:type', ensureAuthenticated, async (req,
   } catch (error) {
     console.error('Error in /api/execution/:sessionId/logs/:type:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskDescription, repository } = req.body;
+    
+    if (!taskDescription || !repository) {
+      return res.status(400).json({ error: 'taskDescription and repository are required' });
+    }
+    
+    const jobId = `import-tasks-${repository.replace('/', '-')}-${Date.now()}`;
+    const correlationId = generateCorrelationId();
+    
+    const job = await taskQueue.add('processTaskImport', {
+      taskDescription,
+      repository,
+      correlationId,
+      user: req.user.username
+    }, {
+      jobId
+    });
+    
+    res.json({ jobId: job.id });
+  } catch (error) {
+    console.error('Error in /api/import-tasks:', error);
+    res.status(500).json({ error: 'Failed to create import task' });
   }
 });
 

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'path';
 import { GITHUB_ISSUE_QUEUE_NAME, createWorker, issueQueue } from './queue/taskQueue.js';
 import logger, { generateCorrelationId } from './utils/logger.js';
 import { getAuthenticatedOctokit } from './auth/githubAuth.js';
@@ -724,18 +725,23 @@ Please check the logs for more details.`,
  * @returns {Promise<Object>} Processing result
  */
 async function processTaskImportJob(job) {
+    const { id: jobId, name: jobName, data } = job;
     const {
         taskDescription,
         repository,
         correlationId,
         user
-    } = job.data;
+    } = data;
     const correlatedLogger = logger.withCorrelation(correlationId);
+    const stateManager = getStateManager(jobId);
     
     correlatedLogger.info({ 
+        jobId,
+        jobName,
         repository, 
         user,
-        taskDescriptionLength: taskDescription?.length || 0
+        taskDescriptionLength: taskDescription?.length || 0,
+        taskDescriptionPreview: taskDescription?.substring(0, 100) + '...'
     }, 'Processing task import job...');
 
     let octokit;
@@ -743,6 +749,9 @@ async function processTaskImportJob(job) {
     let worktreeInfo;
 
     try {
+        // Phase 1: Setup
+        await stateManager.updateState(TaskStates.SETUP, 'Initializing task import process');
+        
         // Get authenticated Octokit instance
         octokit = await withRetry(
             () => getAuthenticatedOctokit(),
@@ -764,9 +773,11 @@ async function processTaskImportJob(job) {
         await ensureGitRepository(correlatedLogger);
 
         // Step 1: Ensure repository is cloned
+        await stateManager.updateState(TaskStates.SETUP, 'Cloning repository if needed');
         localRepoPath = await ensureRepoCloned(repoUrl, repoOwner, repoName, githubToken.token);
 
         // Step 2: Create a worktree for the task import analysis
+        await stateManager.updateState(TaskStates.SETUP, 'Creating worktree for analysis');
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
         const worktreeDirName = `task-import-${timestamp}`;
 
@@ -787,9 +798,14 @@ async function processTaskImportJob(job) {
             branchName: worktreeInfo.branchName 
         }, 'Created worktree for task import analysis');
 
+        // Phase 2: AI Processing
+        await stateManager.updateState(TaskStates.AI_PROCESSING, 'Generating task import prompt');
+        
         // Step 3: Generate the task import prompt
         const prompt = generateTaskImportPrompt(taskDescription, repoOwner, repoName, worktreeInfo.worktreePath);
 
+        await stateManager.updateState(TaskStates.AI_PROCESSING, 'Executing Claude analysis');
+        
         // Step 4: Execute Claude Code with the task import prompt
         const claudeResult = await executeClaudeCode({
             worktreePath: worktreeInfo.worktreePath,
@@ -806,7 +822,8 @@ async function processTaskImportJob(job) {
 
         correlatedLogger.info({
             success: claudeResult.success,
-            executionTime: claudeResult.executionTime
+            executionTime: claudeResult.executionTime,
+            conversationTurns: claudeResult.conversationLog?.length || 0
         }, 'Claude task import analysis completed');
 
         // Log the result (this is a fire-and-forget job)
@@ -823,11 +840,22 @@ async function processTaskImportJob(job) {
                 error: claudeResult.error
             }, 'Task import job failed');
         }
+        
+        // Phase 3: Cleanup
+        await stateManager.updateState(TaskStates.CLEANUP, 'Cleaning up worktree');
+        await stateManager.updateState(TaskStates.COMPLETED, 'Task import completed successfully');
 
         return { 
             status: 'complete', 
             repository,
-            success: claudeResult.success
+            success: claudeResult.success,
+            jobId,
+            claudeResult: {
+                success: claudeResult.success,
+                executionTime: claudeResult.executionTime,
+                conversationTurns: claudeResult.conversationLog?.length || 0,
+                stdout: claudeResult.output?.rawOutput || claudeResult.output
+            }
         };
 
     } catch (error) {
@@ -851,6 +879,13 @@ async function processTaskImportJob(job) {
             };
         } else {
             // Handle all other errors
+            correlatedLogger.error({
+                error: error.message,
+                stack: error.stack
+            }, 'Task import job failed');
+            
+            await stateManager.updateState(TaskStates.FAILED, `Task import failed: ${error.message}`);
+            
             handleError(error, 'Failed to process task import job', { correlationId });
             throw error;
         }
@@ -866,7 +901,6 @@ async function processTaskImportJob(job) {
                 correlatedLogger.warn({ error: cleanupError.message }, 'Failed to cleanup worktree');
             }
         }
-    }
 }
 
 async function processGitHubIssueJob(job) {
