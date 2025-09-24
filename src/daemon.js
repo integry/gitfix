@@ -261,14 +261,8 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                         if (!isBotComment) return false;
                         
                         // Check if bot comment references this specific comment
-                        return laterComment.body.includes(`Comment ID: ${comment.id}`) ||
-                               laterComment.body.includes(`Processing comment ID: ${comment.id}`) ||
-                               laterComment.body.includes(`@${commentAuthor}`) && (
-                                   laterComment.body.includes('Starting work on follow-up changes') ||
-                                   laterComment.body.includes('Applied the requested follow-up changes') ||
-                                   laterComment.body.includes('Failed to apply follow-up changes') ||
-                                   laterComment.body.includes('Analyzed the follow-up request')
-                               );
+                        // Look for comment ID with checkmark marker (e.g., "3324906845✓")
+                        return laterComment.body.includes(`${comment.id}✓`);
                     });
 
                     if (alreadyProcessed) {

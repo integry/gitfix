@@ -290,12 +290,8 @@ async function processPullRequestCommentJob(job) {
                 if (!isBotComment) return false;
                 
                 // Check if the bot comment references this specific comment ID
-                const referencesThisComment = prComment.body.includes(`Comment ID: ${comment.id}`) ||
-                                            prComment.body.includes(`comment #${comment.id}`) ||
-                                            prComment.body.includes(`Processing comment ID: ${comment.id}`) ||
-                                            prComment.body.includes(`_Processing comment ID: ${comment.id}`) ||
-                                            prComment.body.includes(`_Processing comment IDs: ${comment.id}`) ||
-                                            prComment.body.includes(`_Processing comment IDs:`) && prComment.body.includes(comment.id.toString());
+                // Look for comment ID with checkmark marker (e.g., "3324906845✓")
+                const referencesThisComment = prComment.body.includes(`${comment.id}✓`);
                 
                 return referencesThisComment;
             });
@@ -347,7 +343,7 @@ async function processPullRequestCommentJob(job) {
             owner: repoOwner,
             repo: repoName,
             issue_number: pullRequestNumber,
-            body: `🔄 **Starting work on follow-up changes** requested by ${authorsText}\n\nI'll analyze the ${unprocessedComments.length} request${unprocessedComments.length > 1 ? 's' : ''} and implement the necessary changes.\n\n---\n_Processing comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${commentIds}_`,
+            body: `🔄 **Starting work on follow-up changes** requested by ${authorsText}\n\nI'll analyze the ${unprocessedComments.length} request${unprocessedComments.length > 1 ? 's' : ''} and implement the necessary changes.\n\n---\n_Processing comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${unprocessedComments.map(c => c.id + '✓').join(', ')}_`,
         });
 
         const githubToken = await octokit.auth();
@@ -487,7 +483,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             if (unprocessedComments.length > 1) {
                 prCommentBody += `Processed ${unprocessedComments.length} comments:\n`;
                 unprocessedComments.forEach((comment, index) => {
-                    prCommentBody += `- Comment ${index + 1} by @${comment.author} (ID: ${comment.id})\n`;
+                    prCommentBody += `- Comment ${index + 1} by @${comment.author} (ID: ${comment.id}✓)\n`;
                 });
                 prCommentBody += '\n';
             }
@@ -681,7 +677,7 @@ ${error.message}
 \`\`\`
 
 ---
-Comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${commentIds}
+Comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${unprocessedComments.map(c => c.id + '✓').join(', ')}
 Please check the logs for more details.`,
                     });
 
