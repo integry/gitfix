@@ -292,7 +292,7 @@ async function processPullRequestCommentJob(job) {
                 
                 // Check if the bot comment references this specific comment ID
                 // Look for comment ID with checkmark marker (e.g., "3324906845✓")
-                const referencesThisComment = prComment.body.includes(`${comment.id}✓`);
+                const referencesThisComment = prComment.body.includes(`${String(comment.id)}✓`);
                 
                 return referencesThisComment;
             });
@@ -344,7 +344,7 @@ async function processPullRequestCommentJob(job) {
             owner: repoOwner,
             repo: repoName,
             issue_number: pullRequestNumber,
-            body: `🔄 **Starting work on follow-up changes** requested by ${authorsText}\n\nI'll analyze the ${unprocessedComments.length} request${unprocessedComments.length > 1 ? 's' : ''} and implement the necessary changes.\n\n---\n_Processing comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${unprocessedComments.map(c => c.id + '✓').join(', ')}_`,
+            body: `🔄 **Starting work on follow-up changes** requested by ${authorsText}\n\nI'll analyze the ${unprocessedComments.length} request${unprocessedComments.length > 1 ? 's' : ''} and implement the necessary changes.\n\n---\n_Processing comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${unprocessedComments.map(c => String(c.id) + '✓').join(', ')}_`,
         });
 
         const githubToken = await octokit.auth();
@@ -484,7 +484,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             if (unprocessedComments.length > 1) {
                 prCommentBody += `Processed ${unprocessedComments.length} comments:\n`;
                 unprocessedComments.forEach((comment, index) => {
-                    prCommentBody += `- Comment ${index + 1} by @${comment.author} (ID: ${comment.id}✓)\n`;
+                    prCommentBody += `- Comment ${index + 1} by @${comment.author} (ID: ${String(comment.id)}✓)\n`;
                 });
                 prCommentBody += '\n';
             }
@@ -540,17 +540,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 body: prCommentBody,
             });
 
-            // Delete the "starting work" comment
-            if (startingWorkComment?.data?.id) {
-                await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
-                    owner: repoOwner,
-                    repo: repoName,
-                    comment_id: startingWorkComment.data.id,
-                });
-                correlatedLogger.info({
-                    commentId: startingWorkComment.data.id
-                }, 'Deleted starting work comment');
-            }
+            // Keep the "starting work" comment for duplicate detection tracking
 
             correlatedLogger.info({
                 pullRequestNumber,
@@ -583,17 +573,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 body: noChangesBody,
             });
 
-            // Delete the "starting work" comment
-            if (startingWorkComment?.data?.id) {
-                await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
-                    owner: repoOwner,
-                    repo: repoName,
-                    comment_id: startingWorkComment.data.id,
-                });
-                correlatedLogger.info({
-                    commentId: startingWorkComment.data.id
-                }, 'Deleted starting work comment after no-changes analysis');
-            }
+            // Keep the "starting work" comment for duplicate detection tracking
         }
 
         return { 
@@ -678,25 +658,11 @@ ${error.message}
 \`\`\`
 
 ---
-Comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${unprocessedComments.map(c => c.id + '✓').join(', ')}
+Comment ID${unprocessedComments.length > 1 ? 's' : ''}: ${unprocessedComments.map(c => String(c.id) + '✓').join(', ')}
 Please check the logs for more details.`,
                     });
 
-                    // Delete the "starting work" comment even on error
-                    if (startingWorkComment?.data?.id) {
-                        try {
-                            await octokit.request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
-                                owner: repoOwner,
-                                repo: repoName,
-                                comment_id: startingWorkComment.data.id,
-                            });
-                            correlatedLogger.info({
-                                commentId: startingWorkComment.data.id
-                            }, 'Deleted starting work comment after error');
-                        } catch (deleteError) {
-                            correlatedLogger.error({ error: deleteError.message }, 'Failed to delete starting work comment');
-                        }
-                    }
+                    // Keep the "starting work" comment for duplicate detection tracking even on error
                 } catch (commentError) {
                     correlatedLogger.error({ error: commentError.message }, 'Failed to post error comment');
                 }

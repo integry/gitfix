@@ -270,7 +270,7 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                         
                         // Check if bot comment references this specific comment
                         // Look for comment ID with checkmark marker (e.g., "3324906845✓")
-                        return laterComment.body.includes(`${comment.id}✓`);
+                        return laterComment.body.includes(`${String(comment.id)}✓`);
                     });
 
                     if (alreadyProcessed) {
