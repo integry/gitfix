@@ -79,20 +79,6 @@ services:
     networks:
       - gitfix-net
 
-  dashboard-client:
-    build:
-      context: ./packages/dashboard/client
-      dockerfile: Dockerfile
-    container_name: gitfix-dashboard-client
-    ports:
-      - '5174:5173'
-    environment:
-      - VITE_API_URL=http://dashboard-api:4000
-    depends_on:
-      - dashboard-api
-    networks:
-      - gitfix-net
-
 networks:
   gitfix-net:
     driver: bridge
