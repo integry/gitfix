@@ -3,6 +3,10 @@ import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import Dashboard from './pages/Dashboard';
+import RepositoriesPage from './pages/RepositoriesPage';
+import TasksPage from './pages/TasksPage';
+import AiToolsPage from './pages/AiToolsPage';
+import SettingsPage from './pages/SettingsPage';
 import Layout from './components/Layout';
 
 function App() {
@@ -17,6 +21,46 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Dashboard />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/repositories"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <RepositoriesPage />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tasks"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <TasksPage />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/ai-tools"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <AiToolsPage />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <SettingsPage />
                 </Layout>
               </ProtectedRoute>
             }
