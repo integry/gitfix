@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getTaskHistory } from '../api/gitfixApi';
 
 const TaskDetails = ({ taskId, onBack }) => {
@@ -10,6 +10,10 @@ const TaskDetails = ({ taskId, onBack }) => {
   const [logFiles, setLogFiles] = useState(null);
   const [selectedLogFile, setSelectedLogFile] = useState(null);
   const [loadingLogFile, setLoadingLogFile] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const logContentRef = useRef(null);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -29,6 +33,42 @@ const TaskDetails = ({ taskId, onBack }) => {
 
     fetchHistory();
   }, [taskId]);
+
+  useEffect(() => {
+    if (selectedLogFile && searchQuery) {
+      const content = selectedLogFile.isJson
+        ? JSON.stringify(selectedLogFile.content, null, 2)
+        : selectedLogFile.content;
+      const regex = new RegExp(searchQuery, 'gi');
+      const matches = [...content.matchAll(regex)];
+      setSearchMatches(matches);
+      setCurrentMatchIndex(0);
+    } else {
+      setSearchMatches([]);
+    }
+  }, [searchQuery, selectedLogFile]);
+
+  const handleSearchChange = (e) => {
+    setSearchQuery(e.target.value);
+  };
+
+  useEffect(() => {
+    if (searchMatches.length > 0 && logContentRef.current) {
+      const marks = logContentRef.current.querySelectorAll('mark');
+      if (marks[currentMatchIndex]) {
+        marks.forEach((mark, index) => {
+          if (index === currentMatchIndex) {
+            mark.style.backgroundColor = '#fbbf24';
+            mark.style.fontWeight = 'bold';
+            mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+            mark.style.backgroundColor = '#fef3c7';
+            mark.style.fontWeight = 'normal';
+          }
+        });
+      }
+    }
+  }, [currentMatchIndex, searchMatches]);
 
   const fetchPrompt = async (sessionId, conversationId) => {
     try {
@@ -109,6 +149,20 @@ const TaskDetails = ({ taskId, onBack }) => {
     } finally {
       setLoadingLogFile(false);
     }
+  };
+
+  const downloadLogFile = () => {
+    if (!selectedLogFile) return;
+    const content = selectedLogFile.isJson
+      ? JSON.stringify(selectedLogFile.content, null, 2)
+      : selectedLogFile.content;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${taskId}-${selectedLogFile.type}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const getStateColor = (state) => {
@@ -497,43 +551,142 @@ const TaskDetails = ({ taskId, onBack }) => {
           }}>
             <div style={{
               display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
+              flexDirection: 'column',
+              gap: '1rem',
               marginBottom: '1rem'
             }}>
-              <h3 style={{ margin: 0 }}>
-                {selectedLogFile.type === 'conversation' ? '💬 Conversation Log' : '📄 Raw Output'}
-              </h3>
-              <button
-                onClick={() => setSelectedLogFile(null)}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#6b7280',
-                  color: '#ffffff',
-                  borderRadius: '4px',
-                  border: 'none',
-                  cursor: 'pointer'
-                }}
-              >
-                Close
-              </button>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <h3 style={{ margin: 0 }}>
+                  {selectedLogFile.type === 'conversation' ? '💬 Conversation Log' : '📄 Raw Output'}
+                </h3>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    onClick={downloadLogFile}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: '#10b981',
+                      color: '#ffffff',
+                      borderRadius: '4px',
+                      border: 'none',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Download
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedLogFile(null);
+                      setSearchQuery('');
+                      setSearchMatches([]);
+                      setCurrentMatchIndex(0);
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: '#6b7280',
+                      color: '#ffffff',
+                      borderRadius: '4px',
+                      border: 'none',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center',
+                gap: '0.5rem',
+                backgroundColor: '#f3f4f6',
+                borderRadius: '4px',
+                padding: '0.5rem'
+              }}>
+                <input
+                  type="text"
+                  placeholder="Search log..."
+                  value={searchQuery}
+                  onChange={handleSearchChange}
+                  style={{
+                    flex: 1,
+                    padding: '0.5rem',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '4px',
+                    fontSize: '0.875rem'
+                  }}
+                />
+                <button 
+                  onClick={() => setCurrentMatchIndex(Math.max(0, currentMatchIndex - 1))} 
+                  disabled={searchMatches.length === 0}
+                  style={{
+                    padding: '0.5rem 0.75rem',
+                    backgroundColor: searchMatches.length > 0 ? '#3b82f6' : '#9ca3af',
+                    color: '#ffffff',
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: searchMatches.length > 0 ? 'pointer' : 'not-allowed',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  &lt;
+                </button>
+                <span style={{ 
+                  fontSize: '0.875rem', 
+                  color: '#6b7280',
+                  minWidth: '60px',
+                  textAlign: 'center'
+                }}>
+                  {searchMatches.length > 0 ? `${currentMatchIndex + 1} of ${searchMatches.length}` : '0 of 0'}
+                </span>
+                <button 
+                  onClick={() => setCurrentMatchIndex(Math.min(searchMatches.length - 1, currentMatchIndex + 1))} 
+                  disabled={searchMatches.length === 0}
+                  style={{
+                    padding: '0.5rem 0.75rem',
+                    backgroundColor: searchMatches.length > 0 ? '#3b82f6' : '#9ca3af',
+                    color: '#ffffff',
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: searchMatches.length > 0 ? 'pointer' : 'not-allowed',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  &gt;
+                </button>
+              </div>
             </div>
             
-            <div style={{
-              backgroundColor: '#f3f4f6',
-              borderRadius: '4px',
-              padding: '1rem',
-              fontFamily: 'monospace',
-              fontSize: '0.875rem',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              overflowX: 'auto',
-              maxHeight: '70vh',
-              overflowY: 'auto'
-            }}>
-              {selectedLogFile.isJson
-                ? JSON.stringify(selectedLogFile.content, null, 2)
-                : selectedLogFile.content}
+            <div 
+              ref={logContentRef}
+              style={{
+                backgroundColor: '#f3f4f6',
+                borderRadius: '4px',
+                padding: '1rem',
+                fontFamily: 'monospace',
+                fontSize: '0.875rem',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                overflowX: 'auto',
+                maxHeight: '70vh',
+                overflowY: 'auto'
+              }}
+            >
+              {searchQuery ? (
+                <div dangerouslySetInnerHTML={{
+                  __html: (selectedLogFile.isJson
+                    ? JSON.stringify(selectedLogFile.content, null, 2)
+                    : selectedLogFile.content
+                  ).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(new RegExp(searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), (match) => `<mark style="background-color: #fef3c7; padding: 0 2px; border-radius: 2px;">${match}</mark>`)
+                }} />
+              ) : (
+                selectedLogFile.isJson
+                  ? JSON.stringify(selectedLogFile.content, null, 2)
+                  : selectedLogFile.content
+              )}
             </div>
           </div>
         </div>
