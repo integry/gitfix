@@ -6,7 +6,8 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 const { setupAuth, ensureAuthenticated } = require('./auth');
 const { getLLMMetricsSummary, getLLMMetricsByCorrelationId } = require('./llmMetricsAdapter');
-const { generateCorrelationId } = require('../../src/utils/logger.js');
+
+let generateCorrelationId;
 
 const app = express();
 const PORT = process.env.DASHBOARD_API_PORT || 4000;
@@ -666,8 +667,12 @@ app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
 
 async function start() {
   try {
+    // Dynamically import ES module
+    const loggerModule = await import('../../src/utils/logger.js');
+    generateCorrelationId = loggerModule.generateCorrelationId;
+
     await initRedis();
-    
+
     app.listen(PORT, () => {
       console.log(`Dashboard API server running on port ${PORT}`);
     });
