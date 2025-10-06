@@ -64,13 +64,6 @@ const Layout = ({ children }) => {
 
       {/* Main content */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <header style={{
-          backgroundColor: '#2d2d2d',
-          borderBottom: '1px solid #3d3d3d',
-          padding: '1rem 2rem',
-        }}>
-          <h1 style={{ color: '#fff', fontSize: '1.5rem', margin: 0 }}>GitFix Management UI</h1>
-        </header>
         <main style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
           {children}
         </main>
