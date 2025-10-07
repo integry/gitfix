@@ -6,6 +6,7 @@ import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
+import { loadMonitoredRepos, ensureConfigRepoExists } from './config/configRepoManager.js';
 
 // Create Redis client for activity logging
 const redisClient = new Redis({
@@ -29,12 +30,32 @@ const GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
 const GITHUB_USER_WHITELIST = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
 const GITHUB_USER_BLACKLIST = (process.env.GITHUB_USER_BLACKLIST || '').split(',').filter(u => u);
 
-// Parse repositories list
-const getRepos = () => {
+let monitoredRepos = [];
+
+async function loadReposFromConfig() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            monitoredRepos = await loadMonitoredRepos();
+            logger.info({ repos: monitoredRepos }, 'Successfully loaded monitored repositories from config repo');
+        } else {
+            monitoredRepos = getReposFromEnv();
+            logger.info({ repos: monitoredRepos }, 'Using repositories from environment variable');
+        }
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to load repositories from config, falling back to environment variable');
+        monitoredRepos = getReposFromEnv();
+    }
+}
+
+const getReposFromEnv = () => {
     if (!GITHUB_REPOS_TO_MONITOR) {
         return [];
     }
     return GITHUB_REPOS_TO_MONITOR.split(',').map(r => r.trim()).filter(r => r);
+};
+
+const getRepos = () => {
+    return monitoredRepos;
 };
 
 /**
@@ -658,11 +679,13 @@ async function resetIssueLabels() {
  * Starts the daemon with configured polling interval
  */
 async function startDaemon(options = {}) {
+    await loadReposFromConfig();
+    
     const repos = getRepos();
     
     // Validate required configuration
     if (repos.length === 0) {
-        logger.error('GITHUB_REPOS_TO_MONITOR environment variable is not set or empty. Exiting.');
+        logger.error('No repositories configured. Set GITHUB_REPOS_TO_MONITOR or CONFIG_REPO. Exiting.');
         process.exit(1);
     }
     
@@ -724,10 +747,22 @@ async function startDaemon(options = {}) {
     // Set up recurring polling
     const intervalId = setInterval(safePoll, POLLING_INTERVAL_MS);
 
+    // Set up config reloading (every 5 minutes)
+    const configReloadInterval = setInterval(async () => {
+        try {
+            if (process.env.CONFIG_REPO) {
+                await loadReposFromConfig();
+            }
+        } catch (error) {
+            logger.error({ error: error.message }, 'Failed to reload config');
+        }
+    }, 5 * 60 * 1000);
+
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
         logger.info('Received SIGINT, shutting down gracefully...');
         clearInterval(intervalId);
+        clearInterval(configReloadInterval);
         clearInterval(heartbeatInterval);
         await heartbeatRedis.quit();
         await redisClient.quit();
@@ -738,6 +773,7 @@ async function startDaemon(options = {}) {
     process.on('SIGTERM', async () => {
         logger.info('Received SIGTERM, shutting down gracefully...');
         clearInterval(intervalId);
+        clearInterval(configReloadInterval);
         clearInterval(heartbeatInterval);
         await heartbeatRedis.quit();
         await redisClient.quit();

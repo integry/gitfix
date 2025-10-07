@@ -8,6 +8,7 @@ const { setupAuth, ensureAuthenticated } = require('./auth');
 const { getLLMMetricsSummary, getLLMMetricsByCorrelationId } = require('./llmMetricsAdapter');
 
 let generateCorrelationId;
+let configRepoManager;
 
 const app = express();
 const PORT = process.env.DASHBOARD_API_PORT || 4000;
@@ -596,6 +597,83 @@ app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
   }
 });
 
+app.get('/api/config/repos', ensureAuthenticated, async (req, res) => {
+  try {
+    const repos = await configRepoManager.loadMonitoredRepos();
+    res.json({ repos_to_monitor: repos });
+  } catch (error) {
+    console.error('Error in /api/config/repos GET:', error);
+    res.status(500).json({ error: 'Failed to load repository configuration' });
+  }
+});
+
+app.post('/api/config/repos', ensureAuthenticated, async (req, res) => {
+  const lockKey = 'config:repos:lock';
+  const lockValue = `${Date.now()}-${Math.random()}`;
+  const lockTimeout = 30;
+  
+  try {
+    const { repos_to_monitor } = req.body;
+    
+    if (!Array.isArray(repos_to_monitor)) {
+      return res.status(400).json({ error: 'repos_to_monitor must be an array' });
+    }
+    
+    for (const repo of repos_to_monitor) {
+      if (typeof repo !== 'string' || !repo.match(/^[a-zA-Z0-9\-_]+\/[a-zA-Z0-9\-_]+$/)) {
+        return res.status(400).json({ error: `Invalid repository format: ${repo}` });
+      }
+    }
+    
+    const acquired = await redisClient.set(lockKey, lockValue, {
+      NX: true,
+      EX: lockTimeout
+    });
+    
+    if (!acquired) {
+      return res.status(409).json({ error: 'Configuration is being updated by another request. Please try again.' });
+    }
+    
+    try {
+      await configRepoManager.saveMonitoredRepos(
+        repos_to_monitor,
+        `Update monitored repositories via UI by ${req.user.username}`
+      );
+      
+      const activity = {
+        id: `activity-${Date.now()}-config-update`,
+        type: 'config_updated',
+        timestamp: new Date().toISOString(),
+        user: req.user.username,
+        description: `Updated monitored repositories list (${repos_to_monitor.length} repos)`,
+        status: 'success'
+      };
+      await redisClient.lpush('system:activity:log', JSON.stringify(activity));
+      await redisClient.ltrim('system:activity:log', 0, 999);
+      
+      res.json({ success: true, repos_to_monitor });
+    } finally {
+      const currentLockValue = await redisClient.get(lockKey);
+      if (currentLockValue === lockValue) {
+        await redisClient.del(lockKey);
+      }
+    }
+  } catch (error) {
+    console.error('Error in /api/config/repos POST:', error);
+    
+    try {
+      const currentLockValue = await redisClient.get(lockKey);
+      if (currentLockValue === lockValue) {
+        await redisClient.del(lockKey);
+      }
+    } catch (unlockError) {
+      console.error('Error releasing lock:', unlockError);
+    }
+    
+    res.status(500).json({ error: 'Failed to update repository configuration' });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
@@ -670,6 +748,8 @@ async function start() {
     // Dynamically import ES module
     const loggerModule = await import('../../src/utils/logger.js');
     generateCorrelationId = loggerModule.generateCorrelationId;
+
+    configRepoManager = await import('../../src/config/configRepoManager.js');
 
     await initRedis();
 
