@@ -681,6 +681,35 @@ app.post('/api/config/repos', ensureAuthenticated, async (req, res) => {
   }
 });
 
+app.get('/api/github/repos', ensureAuthenticated, async (req, res) => {
+  try {
+    if (!req.user.accessToken) {
+      return res.status(401).json({ error: 'GitHub access token not available' });
+    }
+
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated', {
+      headers: {
+        'Authorization': `Bearer ${req.user.accessToken}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'GitFix-Dashboard'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub API request failed: ${response.status}`);
+    }
+
+    const repos = await response.json();
+    const repoNames = repos.map(repo => repo.full_name);
+
+    res.json({ repos: repoNames });
+  } catch (error) {
+    console.error('Error in /api/github/repos:', error);
+    res.status(500).json({ error: 'Failed to fetch GitHub repositories' });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });

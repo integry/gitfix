@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { getRepoConfig, updateRepoConfig } from '../api/gitfixApi';
+import { getRepoConfig, updateRepoConfig, getAvailableGithubRepos } from '../api/gitfixApi';
 
 const RepositoriesPage = () => {
-  const [repos, setRepos] = useState('');
+  const [repos, setRepos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [newRepo, setNewRepo] = useState('');
+  const [availableRepos, setAvailableRepos] = useState([]);
 
   useEffect(() => {
     loadRepos();
+    loadAvailableRepos();
   }, []);
 
   const loadRepos = async () => {
@@ -17,7 +20,7 @@ const RepositoriesPage = () => {
       setLoading(true);
       setError(null);
       const data = await getRepoConfig();
-      setRepos(data.repos_to_monitor.join('\n'));
+      setRepos(data.repos_to_monitor || []);
     } catch (err) {
       setError(err.message || 'Failed to load repositories');
     } finally {
@@ -25,16 +28,49 @@ const RepositoriesPage = () => {
     }
   };
 
+  const loadAvailableRepos = async () => {
+    try {
+      const data = await getAvailableGithubRepos();
+      setAvailableRepos(data.repos || []);
+    } catch (err) {
+      console.error('Failed to load available GitHub repos:', err);
+    }
+  };
+
+  const handleAddRepo = () => {
+    if (newRepo && !repos.some(r => r.name === newRepo)) {
+      setRepos([...repos, { name: newRepo, enabled: true }]);
+      setNewRepo('');
+    }
+  };
+
+  const handleRemoveRepo = (repoNameToRemove) => {
+    if (window.confirm(`Are you sure you want to remove the repository "${repoNameToRemove}"?`)) {
+      setRepos(repos.filter(repo => repo.name !== repoNameToRemove));
+    }
+  };
+
+  const handleToggleRepo = (repoNameToToggle) => {
+    setRepos(
+      repos.map(repo =>
+        repo.name === repoNameToToggle ? { ...repo, enabled: !repo.enabled } : repo
+      )
+    );
+  };
+
   const handleSave = async () => {
     setError(null);
     setSuccess(null);
     setSaving(true);
     
-    const repoList = repos.split('\n').map(r => r.trim()).filter(Boolean);
-    
     try {
-      await updateRepoConfig(repoList);
-      setSuccess('Repository list updated successfully! Changes will be picked up within 5 minutes.');
+      for (const repo of repos) {
+        if (!/^[a-zA-Z0-9\-_]+\/[a-zA-Z0-9\-_]+$/.test(repo.name)) {
+          throw new Error(`Invalid repository format: "${repo.name}"`);
+        }
+      }
+      await updateRepoConfig(repos);
+      setSuccess('Repository list updated successfully! The daemon will pick up changes within 5 minutes.');
     } catch (err) {
       setError(err.message || 'Failed to update repository list');
     } finally {
@@ -42,7 +78,7 @@ const RepositoriesPage = () => {
     }
   };
 
-  if (loading && !repos) {
+  if (loading && repos.length === 0) {
     return (
       <div>
         <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>Repositories</h2>
@@ -55,44 +91,112 @@ const RepositoriesPage = () => {
     <div>
       <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>Manage Monitored Repositories</h2>
       <p style={{ color: '#9ca3af', marginBottom: '1rem' }}>
-        Enter one repository per line (e.g., 'owner/repo'). Changes will be automatically picked up by the daemon within 5 minutes.
+        Add repositories to monitor, enable/disable them, or remove them from the list. Changes will be automatically picked up by the daemon within 5 minutes.
       </p>
       
-      <textarea
-        value={repos}
-        onChange={(e) => setRepos(e.target.value)}
-        rows={15}
-        style={{
-          width: '100%',
-          fontFamily: 'monospace',
-          fontSize: '0.9rem',
-          padding: '0.75rem',
-          backgroundColor: '#1f2937',
-          color: '#fff',
-          border: '1px solid #374151',
-          borderRadius: '0.375rem',
-          marginBottom: '1rem',
-          resize: 'vertical'
-        }}
-        disabled={saving}
-        placeholder="owner/repo1&#10;owner/repo2&#10;owner/repo3"
-      />
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+        <input
+          list="available-repos"
+          value={newRepo}
+          onChange={(e) => setNewRepo(e.target.value)}
+          placeholder="owner/repo or select from list"
+          style={{
+            flex: 1,
+            padding: '0.5rem',
+            backgroundColor: '#1f2937',
+            color: '#fff',
+            border: '1px solid #374151',
+            borderRadius: '0.375rem',
+            fontFamily: 'monospace'
+          }}
+        />
+        <datalist id="available-repos">
+          {availableRepos.map(repo => <option key={repo} value={repo} />)}
+        </datalist>
+        <button
+          onClick={handleAddRepo}
+          disabled={!newRepo || repos.some(r => r.name === newRepo)}
+          style={{
+            padding: '0.5rem 1rem',
+            backgroundColor: !newRepo || repos.some(r => r.name === newRepo) ? '#6b7280' : '#10B981',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '0.375rem',
+            cursor: !newRepo || repos.some(r => r.name === newRepo) ? 'not-allowed' : 'pointer',
+            fontSize: '0.9rem',
+            fontWeight: '500'
+          }}
+        >
+          Add Repository
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+        {repos.map(repo => (
+          <div
+            key={repo.name}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0.75rem 1rem',
+              backgroundColor: '#374151',
+              borderRadius: '0.375rem',
+            }}
+          >
+            <span style={{ fontFamily: 'monospace', color: '#fff', opacity: repo.enabled ? 1 : 0.5 }}>
+              {repo.name}
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#9ca3af' }}>
+                <input
+                  type="checkbox"
+                  checked={repo.enabled}
+                  onChange={() => handleToggleRepo(repo.name)}
+                  style={{ marginRight: '0.5rem', height: '1rem', width: '1rem', cursor: 'pointer' }}
+                />
+                Enabled
+              </label>
+              <button
+                onClick={() => handleRemoveRepo(repo.name)}
+                style={{
+                  backgroundColor: '#EF4444',
+                  fontSize: '0.75rem',
+                  padding: '0.25rem 0.75rem',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  cursor: 'pointer',
+                  fontWeight: '500'
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        ))}
+        {repos.length === 0 && (
+          <p style={{ color: '#9ca3af', textAlign: 'center', padding: '2rem' }}>
+            No repositories configured. Add a repository to get started.
+          </p>
+        )}
+      </div>
       
       <button
         onClick={handleSave}
-        disabled={saving}
+        disabled={saving || repos.length === 0}
         style={{
-          padding: '0.5rem 1rem',
-          backgroundColor: saving ? '#6b7280' : '#3b82f6',
+          padding: '0.75rem 1.5rem',
+          backgroundColor: saving || repos.length === 0 ? '#6b7280' : '#3b82f6',
           color: '#fff',
           border: 'none',
           borderRadius: '0.375rem',
-          cursor: saving ? 'not-allowed' : 'pointer',
-          fontSize: '0.9rem',
-          fontWeight: '500'
+          cursor: saving || repos.length === 0 ? 'not-allowed' : 'pointer',
+          fontSize: '1rem',
+          fontWeight: 'bold'
         }}
       >
-        {saving ? 'Saving...' : 'Save Changes'}
+        {saving ? 'Saving...' : 'Save All Changes'}
       </button>
       
       {error && (

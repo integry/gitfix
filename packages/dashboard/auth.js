@@ -40,7 +40,7 @@ function setupAuth(app) {
     passport.deserializeUser((obj, done) => done(null, obj));
 
     // Routes
-    app.get('/api/auth/github', passport.authenticate('github', { scope: ['user:email', 'read:org'] }));
+    app.get('/api/auth/github', passport.authenticate('github', { scope: ['user:email', 'read:org', 'repo'] }));
 
     app.get('/api/auth/github/callback',
         passport.authenticate('github', { failureRedirect: '/login' }),
