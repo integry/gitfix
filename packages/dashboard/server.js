@@ -69,10 +69,28 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
       }
       
       const workerHeartbeat = await redisClient.get('system:status:worker');
-      if (workerHeartbeat && Date.now() - parseInt(workerHeartbeat) < 120000) {
+      let workerConcurrency = 1;
+      let workerTimestamp = null;
+      
+      if (workerHeartbeat) {
+        try {
+          const heartbeatData = JSON.parse(workerHeartbeat);
+          workerTimestamp = heartbeatData.timestamp;
+          workerConcurrency = heartbeatData.concurrency || 1;
+        } catch (e) {
+          workerTimestamp = parseInt(workerHeartbeat);
+        }
+      }
+      
+      if (workerTimestamp && Date.now() - workerTimestamp < 120000) {
         status.worker = 'running';
+        status.workers = Array.from({ length: workerConcurrency }, (_, i) => ({
+          id: i + 1,
+          status: 'active'
+        }));
       } else {
         status.worker = 'stopped';
+        status.workers = [];
       }
       
       // Check GitHub authentication - verify GitHub App is configured
