@@ -648,8 +648,8 @@ app.post('/api/config/repos', ensureAuthenticated, async (req, res) => {
         description: `Updated monitored repositories list (${repos_to_monitor.length} repos)`,
         status: 'success'
       };
-      await redisClient.lpush('system:activity:log', JSON.stringify(activity));
-      await redisClient.ltrim('system:activity:log', 0, 999);
+      await redisClient.lPush('system:activity:log', JSON.stringify(activity));
+      await redisClient.lTrim('system:activity:log', 0, 999);
       
       res.json({ success: true, repos_to_monitor });
     } finally {
@@ -752,6 +752,13 @@ async function start() {
     configRepoManager = await import('../../src/config/configRepoManager.js');
 
     await initRedis();
+
+    // Initialize config repository with config.json if it doesn't exist
+    try {
+      await configRepoManager.ensureConfigRepoExists();
+    } catch (error) {
+      console.warn('Failed to initialize config repository:', error.message);
+    }
 
     app.listen(PORT, () => {
       console.log(`Dashboard API server running on port ${PORT}`);

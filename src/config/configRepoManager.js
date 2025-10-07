@@ -2,6 +2,7 @@ import simpleGit from 'simple-git';
 import fs from 'fs-extra';
 import path from 'path';
 import logger from '../utils/logger.js';
+import { getGitHubInstallationToken } from '../auth/githubAuth.js';
 
 const CONFIG_REPO_URL = process.env.CONFIG_REPO || 'https://github.com/integry/gitfix-config.git';
 const LOCAL_CONFIG_PATH = path.join(process.cwd(), '.config_repo');
@@ -9,20 +10,34 @@ const CONFIG_FILE_PATH = path.join(LOCAL_CONFIG_PATH, 'config.json');
 
 export async function cloneOrPullConfigRepo() {
     try {
-        const authToken = process.env.GH_TOKEN;
-        if (!authToken) {
-            throw new Error('GH_TOKEN environment variable is required for config repo access');
-        }
-
+        const authToken = await getGitHubInstallationToken();
         const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
 
         if (await fs.pathExists(LOCAL_CONFIG_PATH)) {
             const git = simpleGit(LOCAL_CONFIG_PATH);
-            await git.pull();
-            logger.debug('Config repository pulled successfully');
+            try {
+                await git.pull();
+                logger.debug('Config repository pulled successfully');
+            } catch (pullError) {
+                // If pull fails (e.g., no remote branch yet), that's okay - we'll handle it in ensureConfigRepoExists
+                logger.debug({ error: pullError.message }, 'Pull failed, repository may be empty');
+            }
         } else {
-            await simpleGit().clone(authenticatedUrl, LOCAL_CONFIG_PATH);
-            logger.info('Config repository cloned successfully');
+            try {
+                await simpleGit().clone(authenticatedUrl, LOCAL_CONFIG_PATH);
+                logger.info('Config repository cloned successfully');
+            } catch (cloneError) {
+                // If clone fails because repo doesn't exist, create it locally
+                if (cloneError.message.includes('Repository not found') || cloneError.message.includes('not found')) {
+                    await fs.ensureDir(LOCAL_CONFIG_PATH);
+                    const git = simpleGit(LOCAL_CONFIG_PATH);
+                    await git.init();
+                    await git.addRemote('origin', authenticatedUrl);
+                    logger.info('Initialized new config repository locally');
+                } else {
+                    throw cloneError;
+                }
+            }
         }
     } catch (error) {
         logger.error({ error: error.message }, 'Failed to clone or pull config repository');
@@ -53,12 +68,21 @@ export async function saveMonitoredRepos(repos, commitMessage = 'Update monitore
         config.repos_to_monitor = repos;
         
         await fs.writeJson(CONFIG_FILE_PATH, config, { spaces: 2 });
-        
+
         const git = simpleGit(LOCAL_CONFIG_PATH);
+
+        // Configure git user for commits if not already set
+        try {
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+        } catch (e) {
+            // Config may already exist, ignore error
+        }
+
         await git.add('config.json');
         await git.commit(commitMessage);
-        
-        const authToken = process.env.GH_TOKEN;
+
+        const authToken = await getGitHubInstallationToken();
         const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
         await git.push(authenticatedUrl, 'main');
         
@@ -73,19 +97,24 @@ export async function saveMonitoredRepos(repos, commitMessage = 'Update monitore
 export async function ensureConfigRepoExists() {
     try {
         await cloneOrPullConfigRepo();
-        
+
         if (!await fs.pathExists(CONFIG_FILE_PATH)) {
             const initialConfig = {
                 repos_to_monitor: []
             };
-            
+
             await fs.writeJson(CONFIG_FILE_PATH, initialConfig, { spaces: 2 });
-            
+
             const git = simpleGit(LOCAL_CONFIG_PATH);
+
+            // Configure git user for commits
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+
             await git.add('config.json');
             await git.commit('Initialize config.json');
-            
-            const authToken = process.env.GH_TOKEN;
+
+            const authToken = await getGitHubInstallationToken();
             const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
             await git.push(authenticatedUrl, 'main');
             
