@@ -60,7 +60,7 @@ const SettingsPage = () => {
 
   return (
     <div>
-      <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>Application Settings</h2>
+      <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>GitFix Settings</h2>
       <p style={{ color: '#9ca3af', marginBottom: '2rem' }}>
         Configure system-wide settings. These settings from the config repository will override any values set in the '.env' file.
       </p>
@@ -80,7 +80,7 @@ const SettingsPage = () => {
             style={{ width: '100%', padding: '0.5rem', backgroundColor: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '0.375rem' }}
           />
           <p style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.5rem' }}>
-            Number of jobs a worker can process concurrently. Overrides 'WORKER_CONCURRENCY' in '.env'.
+            Number of jobs a worker can process concurrently.
           </p>
         </div>
 
@@ -98,7 +98,7 @@ const SettingsPage = () => {
             style={{ width: '100%', padding: '0.5rem', backgroundColor: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '0.375rem', fontFamily: 'monospace' }}
           />
           <p style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.5rem' }}>
-            Comma-separated list of GitHub usernames allowed to trigger actions via PR comments. Overrides 'GITHUB_USER_WHITELIST' in '.env'.
+            Comma-separated list of GitHub usernames allowed to trigger actions via PR comments.
           </p>
         </div>
 
