@@ -7,7 +7,7 @@ COMMAND=$1
 case $COMMAND in
   up)
     echo "Starting up Docker Compose environment..."
-    docker compose up --build -d
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
     echo "Environment is up and running."
     ;;
   dev)
