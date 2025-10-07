@@ -64,31 +64,22 @@ export const getTaskHistory = async (taskId) => {
   await handleApiResponse(response);
   return response.json();
 };
-//
-// export const getWorkerDetails = async (workerId) => {
-//   const response = await fetch(`/api/workers/${workerId}`);
-//   if (!response.ok) throw new Error('Failed to fetch worker details');
-//   return response.json();
-// };
-//
-// export const getActivityFeed = async (limit = 10) => {
-//   const response = await fetch(`/api/activity?limit=${limit}`);
-//   if (!response.ok) throw new Error('Failed to fetch activity feed');
-//   return response.json();
-// };
-//
-// export const getConfiguration = async () => {
-//   const response = await fetch('/api/config');
-//   if (!response.ok) throw new Error('Failed to fetch configuration');
-//   return response.json();
-// };
-//
-// export const updateConfiguration = async (config) => {
-//   const response = await fetch('/api/config', {
-//     method: 'PUT',
-//     headers: { 'Content-Type': 'application/json' },
-//     body: JSON.stringify(config)
-//   });
-//   if (!response.ok) throw new Error('Failed to update configuration');
-//   return response.json();
-// };
+
+export const getRepoConfig = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/repos`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updateRepoConfig = async (repos) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/repos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repos_to_monitor: repos }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
