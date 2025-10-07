@@ -91,3 +91,22 @@ export const getAvailableGithubRepos = async () => {
   await handleApiResponse(response);
   return response.json();
 };
+
+export const getSettings = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/settings`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updateSettings = async (settings) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};

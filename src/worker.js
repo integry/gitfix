@@ -2260,7 +2260,11 @@ async function startWorker(options = {}) {
     // Function to send heartbeat
     const sendHeartbeat = async () => {
         try {
-            await heartbeatRedis.set('system:status:worker', Date.now(), 'EX', 90);
+            const heartbeatData = {
+                timestamp: Date.now(),
+                concurrency: workerConcurrency
+            };
+            await heartbeatRedis.set('system:status:worker', JSON.stringify(heartbeatData), 'EX', 90);
             logger.debug('Worker heartbeat sent');
         } catch (error) {
             logger.error({ error: error.message }, 'Failed to send worker heartbeat');

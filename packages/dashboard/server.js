@@ -69,10 +69,28 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
       }
       
       const workerHeartbeat = await redisClient.get('system:status:worker');
-      if (workerHeartbeat && Date.now() - parseInt(workerHeartbeat) < 120000) {
+      let workerConcurrency = 1;
+      let workerTimestamp = null;
+      
+      if (workerHeartbeat) {
+        try {
+          const heartbeatData = JSON.parse(workerHeartbeat);
+          workerTimestamp = heartbeatData.timestamp;
+          workerConcurrency = heartbeatData.concurrency || 1;
+        } catch (e) {
+          workerTimestamp = parseInt(workerHeartbeat);
+        }
+      }
+      
+      if (workerTimestamp && Date.now() - workerTimestamp < 120000) {
         status.worker = 'running';
+        status.workers = Array.from({ length: workerConcurrency }, (_, i) => ({
+          id: i + 1,
+          status: 'active'
+        }));
       } else {
         status.worker = 'stopped';
+        status.workers = [];
       }
       
       // Check GitHub authentication - verify GitHub App is configured
@@ -720,7 +738,15 @@ app.get('/api/github/repos', ensureAuthenticated, async (req, res) => {
 app.get('/api/config/settings', ensureAuthenticated, async (req, res) => {
   try {
     const settings = await configRepoManager.loadSettings();
-    res.json(settings);
+    const envDefaults = {
+      worker_concurrency: parseInt(process.env.WORKER_CONCURRENCY || '5', 10),
+      github_user_whitelist: (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u.trim())
+    };
+    const mergedSettings = {
+      worker_concurrency: settings.worker_concurrency || envDefaults.worker_concurrency,
+      github_user_whitelist: settings.github_user_whitelist || envDefaults.github_user_whitelist
+    };
+    res.json(mergedSettings);
   } catch (error) {
     console.error('Error in /api/config/settings GET:', error);
     res.status(500).json({ error: 'Failed to load settings' });
