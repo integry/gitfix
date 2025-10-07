@@ -27,6 +27,7 @@ import {
 } from './utils/prValidation.js';
 import Redis from 'ioredis';
 import { getDefaultModel } from './config/modelAliases.js';
+import { loadSettings } from './config/configRepoManager.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
@@ -2224,11 +2225,28 @@ Examples:
  * Starts the worker process
  */
 async function startWorker(options = {}) {
+    let workerConcurrency = parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
+    
+    try {
+        if (process.env.CONFIG_REPO) {
+            const settings = await loadSettings();
+            if (settings.worker_concurrency && typeof settings.worker_concurrency === 'number') {
+                workerConcurrency = settings.worker_concurrency;
+                logger.info({ concurrency: workerConcurrency }, 'Successfully loaded worker_concurrency from config repo');
+            } else {
+                logger.info({ concurrency: workerConcurrency }, 'Using worker_concurrency from environment variable');
+            }
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load settings from config, using environment variable for worker_concurrency');
+    }
+    
     logger.info({
         queue: GITHUB_ISSUE_QUEUE_NAME,
         processingTag: AI_PROCESSING_TAG,
         primaryTag: AI_PRIMARY_TAG,
         doneTag: AI_DONE_TAG,
+        concurrency: workerConcurrency,
         resetPerformed: options.reset || false
     }, 'Starting GitHub Issue Worker...');
     
@@ -2276,7 +2294,7 @@ async function startWorker(options = {}) {
         } else {
             throw new Error(`Unknown job type: ${job.name}`);
         }
-    });
+    }, { concurrency: workerConcurrency });
 
     // Handle graceful shutdown
     process.on('SIGINT', async () => {

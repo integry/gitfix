@@ -55,12 +55,15 @@ issueQueue.on('error', (err) => {
  * Creates and starts a BullMQ worker
  * @param {string} queueName - The name of the queue to process
  * @param {Function} processorFunction - The async function to process jobs
+ * @param {Object} options - Optional worker configuration
+ * @param {number} options.concurrency - Worker concurrency (defaults to env var or 5)
  * @returns {Worker} The created worker instance
  */
-export function createWorker(queueName, processorFunction) {
+export function createWorker(queueName, processorFunction, options = {}) {
+    const concurrency = options.concurrency || parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
     const worker = new Worker(queueName, processorFunction, {
         connection: redisConnection,
-        concurrency: parseInt(process.env.WORKER_CONCURRENCY || '5', 10),
+        concurrency: concurrency,
         autorun: true,
     });
 
