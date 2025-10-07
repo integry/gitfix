@@ -3,6 +3,7 @@ const cors = require('cors');
 const { createClient } = require('redis');
 const { Queue } = require('bullmq');
 const path = require('path');
+const fs = require('fs-extra');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 const { setupAuth, ensureAuthenticated } = require('./auth');
 const { getLLMMetricsSummary, getLLMMetricsByCorrelationId } = require('./llmMetricsAdapter');
@@ -599,7 +600,10 @@ app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
 
 app.get('/api/config/repos', ensureAuthenticated, async (req, res) => {
   try {
-    const repos = await configRepoManager.loadMonitoredRepos();
+    await configRepoManager.cloneOrPullConfigRepo();
+    const configPath = path.join(process.cwd(), '../.config_repo', 'config.json');
+    const config = await fs.readJson(configPath);
+    const repos = config.repos_to_monitor || [];
     res.json({ repos_to_monitor: repos });
   } catch (error) {
     console.error('Error in /api/config/repos GET:', error);
@@ -620,8 +624,11 @@ app.post('/api/config/repos', ensureAuthenticated, async (req, res) => {
     }
     
     for (const repo of repos_to_monitor) {
-      if (typeof repo !== 'string' || !repo.match(/^[a-zA-Z0-9\-_]+\/[a-zA-Z0-9\-_]+$/)) {
-        return res.status(400).json({ error: `Invalid repository format: ${repo}` });
+      if (typeof repo.name !== 'string' || 
+          !repo.name.match(/^[a-zA-Z0-9\-_]+\/[a-zA-Z0-9\-_]+$/) ||
+          typeof repo.enabled !== 'boolean'
+      ) {
+        return res.status(400).json({ error: `Invalid repository format: ${JSON.stringify(repo)}` });
       }
     }
     

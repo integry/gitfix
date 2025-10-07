@@ -50,9 +50,15 @@ export async function loadMonitoredRepos() {
         await cloneOrPullConfigRepo();
         
         const config = await fs.readJson(CONFIG_FILE_PATH);
-        const repos = config.repos_to_monitor || [];
+        let reposToMonitor = config.repos_to_monitor || [];
+
+        if (reposToMonitor.length > 0 && typeof reposToMonitor[0] === 'string') {
+            reposToMonitor = reposToMonitor.map(repo => ({ name: repo, enabled: true }));
+        }
+
+        const repos = reposToMonitor.filter(repo => repo.enabled).map(repo => repo.name);
         
-        logger.info({ repos }, 'Successfully loaded monitored repositories');
+        logger.info({ repos_to_monitor: repos, total_configured: reposToMonitor.length }, 'Successfully loaded enabled monitored repositories');
         return repos;
     } catch (error) {
         logger.error({ error: error.message }, 'Failed to load monitored repositories from config');
