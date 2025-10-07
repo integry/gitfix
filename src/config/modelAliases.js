@@ -3,9 +3,9 @@ const MODEL_ALIASES = {
     'opus': 'claude-opus-4-20250514',           // Claude Opus 4
     'opus4': 'claude-opus-4-20250514',          // Claude Opus 4
     'opus-4-0': 'claude-opus-4-20250514',       // Official alias
-    'sonnet': 'claude-sonnet-4-20250514',       // Claude Sonnet 4 (default)
-    'sonnet4': 'claude-sonnet-4-20250514',      // Claude Sonnet 4
-    'sonnet-4-0': 'claude-sonnet-4-20250514',   // Official alias
+    'sonnet': 'claude-sonnet-4-5-20250929',       // Claude Sonnet 4.5 (default)
+    'sonnet4': 'claude-sonnet-4-5-20250929',      // Claude Sonnet 4.5
+    'sonnet-4-0': 'claude-sonnet-4-5-20250929',   // Official alias
     'sonnet37': 'claude-3-7-sonnet-20250219',   // Claude Sonnet 3.7
     'sonnet35': 'claude-3-5-sonnet-20241022',   // Claude Sonnet 3.5
     'haiku': 'claude-3-5-haiku-20241022',       // Claude Haiku 3.5
@@ -14,7 +14,7 @@ const MODEL_ALIASES = {
     
     // Official aliases from documentation
     'claude-opus-4-0': 'claude-opus-4-20250514',
-    'claude-sonnet-4-0': 'claude-sonnet-4-20250514',
+    'claude-sonnet-4-0': 'claude-sonnet-4-5-20250929',
     'claude-3-7-sonnet-latest': 'claude-3-7-sonnet-20250219',
     'claude-3-5-sonnet-latest': 'claude-3-5-sonnet-20241022',
     'claude-3-5-haiku-latest': 'claude-3-5-haiku-20241022',

@@ -1,11 +1,7 @@
 version: '3.8'
 
 services:
-  watcher:
-    extends:
-      file: docker-compose.yml
-      service: daemon
-    container_name: gitfix-watcher
+  daemon:
     command: npm run daemon:dev
 
   worker:

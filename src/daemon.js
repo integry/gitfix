@@ -258,16 +258,31 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                         continue;
                     }
 
-                    // 4. Check if this comment has already been processed
+                    // 4. Check if this comment has already been queued or processed
+                    const commentTrackingKey = `pr-comment-processed:${owner}:${repo}:${pr.number}:${comment.id}`;
+                    const alreadyQueued = await redisClient.get(commentTrackingKey);
+
+                    if (alreadyQueued) {
+                        correlatedLogger.debug({
+                            repository: `${owner}/${repo}`,
+                            pullRequestNumber: pr.number,
+                            commentId: comment.id,
+                            commentAuthor,
+                            commentType: comment.pull_request_review_id ? 'review' : 'issue'
+                        }, 'PR comment already queued/processed, skipping');
+                        continue;
+                    }
+
+                    // Also check if bot has already responded to this comment
                     const commentIndex = commentsByTime.indexOf(comment);
                     const subsequentComments = commentsByTime.slice(commentIndex + 1);
                     const alreadyProcessed = subsequentComments.some(laterComment => {
-                        const isBotComment = laterComment.user.login === botUsername || 
+                        const isBotComment = laterComment.user.login === botUsername ||
                                            laterComment.user.type === 'Bot' ||
                                            laterComment.user.login.includes('[bot]');
-                        
+
                         if (!isBotComment) return false;
-                        
+
                         // Check if bot comment references this specific comment
                         // Look for comment ID with checkmark marker (e.g., "3324906845✓")
                         return laterComment.body.includes(`${comment.id}✓`);
@@ -280,7 +295,7 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                             commentId: comment.id,
                             commentAuthor,
                             commentType: comment.pull_request_review_id ? 'review' : 'issue'
-                        }, 'PR comment already processed, skipping');
+                        }, 'PR comment already processed by bot, skipping');
                         continue;
                     }
 
@@ -343,6 +358,15 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
 
                 try {
                     await issueQueue.add('processPullRequestComment', jobData, { jobId });
+
+                    // Mark all comments as queued in Redis with 24 hour expiration
+                    const pipeline = redisClient.pipeline();
+                    for (const comment of unprocessedComments) {
+                        const trackingKey = `pr-comment-processed:${owner}:${repo}:${pr.number}:${comment.id}`;
+                        pipeline.setex(trackingKey, 86400, Date.now().toString()); // 24 hours
+                    }
+                    await pipeline.exec();
+
                     correlatedLogger.info({
                         jobId,
                         pullRequestNumber: pr.number,
