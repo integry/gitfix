@@ -74,6 +74,8 @@ services:
       - /tmp/claude-logs:/tmp/claude-logs:ro
     env_file:
       - .env
+    environment:
+      - CONFIG_REPO_PATH=/tmp/config_repo
     depends_on:
       - redis
     networks:

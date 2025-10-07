@@ -5,7 +5,7 @@ import logger from '../utils/logger.js';
 import { getGitHubInstallationToken } from '../auth/githubAuth.js';
 
 const CONFIG_REPO_URL = process.env.CONFIG_REPO || 'https://github.com/integry/gitfix-config.git';
-const LOCAL_CONFIG_PATH = path.join(process.cwd(), '.config_repo');
+const LOCAL_CONFIG_PATH = process.env.CONFIG_REPO_PATH || path.join(process.cwd(), '.config_repo');
 const CONFIG_FILE_PATH = path.join(LOCAL_CONFIG_PATH, 'config.json');
 
 export async function cloneOrPullConfigRepo() {

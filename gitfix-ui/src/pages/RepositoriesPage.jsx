@@ -38,10 +38,15 @@ const RepositoriesPage = () => {
   };
 
   const handleAddRepo = () => {
-    if (newRepo && !repos.some(r => r.name === newRepo)) {
-      setRepos([...repos, { name: newRepo, enabled: true }]);
-      setNewRepo('');
+    if (!newRepo) return;
+
+    if (repos.some(r => r.name === newRepo)) {
+      alert(`Repository "${newRepo}" has already been added to the list.`);
+      return;
     }
+
+    setRepos([...repos, { name: newRepo, enabled: true }]);
+    setNewRepo('');
   };
 
   const handleRemoveRepo = (repoNameToRemove) => {
@@ -111,7 +116,9 @@ const RepositoriesPage = () => {
           }}
         />
         <datalist id="available-repos">
-          {availableRepos.map(repo => <option key={repo} value={repo} />)}
+          {availableRepos
+            .filter(repo => !repos.some(r => r.name === repo))
+            .map(repo => <option key={repo} value={repo} />)}
         </datalist>
         <button
           onClick={handleAddRepo}

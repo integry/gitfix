@@ -601,9 +601,16 @@ app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
 app.get('/api/config/repos', ensureAuthenticated, async (req, res) => {
   try {
     await configRepoManager.cloneOrPullConfigRepo();
-    const configPath = path.join(process.cwd(), '../.config_repo', 'config.json');
+    const configRepoPath = process.env.CONFIG_REPO_PATH || path.join(process.cwd(), '.config_repo');
+    const configPath = path.join(configRepoPath, 'config.json');
     const config = await fs.readJson(configPath);
-    const repos = config.repos_to_monitor || [];
+    let repos = config.repos_to_monitor || [];
+
+    // Convert string array to object array if needed
+    if (repos.length > 0 && typeof repos[0] === 'string') {
+      repos = repos.map(repo => ({ name: repo, enabled: true }));
+    }
+
     res.json({ repos_to_monitor: repos });
   } catch (error) {
     console.error('Error in /api/config/repos GET:', error);
