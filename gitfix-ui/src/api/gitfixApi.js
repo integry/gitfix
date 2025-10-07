@@ -83,3 +83,11 @@ export const updateRepoConfig = async (repos) => {
   await handleApiResponse(response);
   return response.json();
 };
+
+export const getAvailableGithubRepos = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/github/repos`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};

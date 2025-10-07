@@ -601,9 +601,16 @@ app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
 app.get('/api/config/repos', ensureAuthenticated, async (req, res) => {
   try {
     await configRepoManager.cloneOrPullConfigRepo();
-    const configPath = path.join(process.cwd(), '../.config_repo', 'config.json');
+    const configRepoPath = process.env.CONFIG_REPO_PATH || path.join(process.cwd(), '.config_repo');
+    const configPath = path.join(configRepoPath, 'config.json');
     const config = await fs.readJson(configPath);
-    const repos = config.repos_to_monitor || [];
+    let repos = config.repos_to_monitor || [];
+
+    // Convert string array to object array if needed
+    if (repos.length > 0 && typeof repos[0] === 'string') {
+      repos = repos.map(repo => ({ name: repo, enabled: true }));
+    }
+
     res.json({ repos_to_monitor: repos });
   } catch (error) {
     console.error('Error in /api/config/repos GET:', error);
@@ -678,6 +685,35 @@ app.post('/api/config/repos', ensureAuthenticated, async (req, res) => {
     }
     
     res.status(500).json({ error: 'Failed to update repository configuration' });
+  }
+});
+
+app.get('/api/github/repos', ensureAuthenticated, async (req, res) => {
+  try {
+    if (!req.user.accessToken) {
+      return res.status(401).json({ error: 'GitHub access token not available' });
+    }
+
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated', {
+      headers: {
+        'Authorization': `Bearer ${req.user.accessToken}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'GitFix-Dashboard'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub API request failed: ${response.status}`);
+    }
+
+    const repos = await response.json();
+    const repoNames = repos.map(repo => repo.full_name);
+
+    res.json({ repos: repoNames });
+  } catch (error) {
+    console.error('Error in /api/github/repos:', error);
+    res.status(500).json({ error: 'Failed to fetch GitHub repositories' });
   }
 });
 
