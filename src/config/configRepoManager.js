@@ -133,3 +133,50 @@ export async function ensureConfigRepoExists() {
         throw error;
     }
 }
+
+export async function loadSettings() {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        const settings = config.settings || {};
+        
+        logger.info({ settings }, 'Successfully loaded settings from config repo');
+        return settings;
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load settings from config repo, returning empty object.');
+        return {};
+    }
+}
+
+export async function saveSettings(settings, commitMessage = 'Update settings via UI') {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        config.settings = { ...(config.settings || {}), ...settings };
+        
+        await fs.writeJson(CONFIG_FILE_PATH, config, { spaces: 2 });
+
+        const git = simpleGit(LOCAL_CONFIG_PATH);
+
+        try {
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+        } catch (e) {
+        }
+
+        await git.add('config.json');
+        await git.commit(commitMessage);
+
+        const authToken = await getGitHubInstallationToken();
+        const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
+        await git.push(authenticatedUrl, 'main');
+        
+        logger.info({ settings }, 'Successfully saved and pushed settings');
+        return true;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to save settings');
+        throw error;
+    }
+}

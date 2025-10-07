@@ -6,7 +6,7 @@ import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
-import { loadMonitoredRepos, ensureConfigRepoExists } from './config/configRepoManager.js';
+import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings } from './config/configRepoManager.js';
 
 // Create Redis client for activity logging
 const redisClient = new Redis({
@@ -27,10 +27,10 @@ const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel()
 
 // New environment variables for PR comment monitoring
 const GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
-const GITHUB_USER_WHITELIST = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
 const GITHUB_USER_BLACKLIST = (process.env.GITHUB_USER_BLACKLIST || '').split(',').filter(u => u);
 
 let monitoredRepos = [];
+let GITHUB_USER_WHITELIST = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
 
 async function loadReposFromConfig() {
     try {
@@ -44,6 +44,24 @@ async function loadReposFromConfig() {
     } catch (error) {
         logger.error({ error: error.message }, 'Failed to load repositories from config, falling back to environment variable');
         monitoredRepos = getReposFromEnv();
+    }
+}
+
+async function loadSettingsFromConfig() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            const settings = await loadSettings();
+            
+            if (settings.github_user_whitelist && Array.isArray(settings.github_user_whitelist)) {
+                GITHUB_USER_WHITELIST = settings.github_user_whitelist;
+                logger.info({ whitelist: GITHUB_USER_WHITELIST }, 'Successfully loaded github_user_whitelist from config repo');
+            } else if (process.env.GITHUB_USER_WHITELIST) {
+                GITHUB_USER_WHITELIST = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
+                logger.info({ whitelist: GITHUB_USER_WHITELIST }, 'Using github_user_whitelist from environment variable');
+            }
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load settings from config, using environment variable');
     }
 }
 
@@ -680,6 +698,7 @@ async function resetIssueLabels() {
  */
 async function startDaemon(options = {}) {
     await loadReposFromConfig();
+    await loadSettingsFromConfig();
     
     const repos = getRepos();
     
@@ -752,6 +771,7 @@ async function startDaemon(options = {}) {
         try {
             if (process.env.CONFIG_REPO) {
                 await loadReposFromConfig();
+                await loadSettingsFromConfig();
             }
         } catch (error) {
             logger.error({ error: error.message }, 'Failed to reload config');

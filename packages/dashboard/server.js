@@ -717,6 +717,55 @@ app.get('/api/github/repos', ensureAuthenticated, async (req, res) => {
   }
 });
 
+app.get('/api/config/settings', ensureAuthenticated, async (req, res) => {
+  try {
+    const settings = await configRepoManager.loadSettings();
+    res.json(settings);
+  } catch (error) {
+    console.error('Error in /api/config/settings GET:', error);
+    res.status(500).json({ error: 'Failed to load settings' });
+  }
+});
+
+app.post('/api/config/settings', ensureAuthenticated, async (req, res) => {
+  const lockKey = 'config:settings:lock';
+  const lockValue = Date.now() + '-' + Math.random();
+  const lockTimeout = 30;
+
+  try {
+    const { settings } = req.body;
+
+    if (!settings || typeof settings !== 'object') {
+      return res.status(400).json({ error: 'settings object is required' });
+    }
+
+    const acquired = await redisClient.set(lockKey, lockValue, {
+      NX: true,
+      EX: lockTimeout
+    });
+
+    if (!acquired) {
+      return res.status(409).json({ error: 'Configuration is being updated by another request. Please try again.' });
+    }
+
+    try {
+      await configRepoManager.saveSettings(
+        settings,
+        'Update settings via UI by ' + req.user.username
+      );
+      res.json({ success: true, settings });
+    } finally {
+      const currentLockValue = await redisClient.get(lockKey);
+      if (currentLockValue === lockValue) {
+        await redisClient.del(lockKey);
+      }
+    }
+  } catch (error) {
+    console.error('Error in /api/config/settings POST:', error);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
