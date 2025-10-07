@@ -23,13 +23,9 @@ export const getSystemStatus = async () => {
   const data = await response.json();
   
   // Transform backend response to match frontend expectations
-  // The system has a single worker process, not multiple workers
-  // Show worker status as a single item to be accurate
   let workers = [];
-  if (data.worker === 'running') {
-    workers = [
-      { id: 1, status: 'active' }
-    ];
+  for (let i = 0; i < (data.workerCount || 0); i++) {
+    workers.push({ id: i + 1, status: 'active' });
   }
   
   return {

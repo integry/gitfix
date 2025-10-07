@@ -62,36 +62,11 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
       status.redis = 'connected';
       
       const daemonHeartbeat = await redisClient.get('system:status:daemon');
-      if (daemonHeartbeat && Date.now() - parseInt(daemonHeartbeat) < 120000) {
-        status.daemon = 'running';
-      } else {
-        status.daemon = 'stopped';
-      }
+      status.daemon = (daemonHeartbeat && Date.now() - parseInt(daemonHeartbeat) < 120000) ? 'running' : 'stopped';
       
-      const workerHeartbeat = await redisClient.get('system:status:worker');
-      let workerConcurrency = 1;
-      let workerTimestamp = null;
-      
-      if (workerHeartbeat) {
-        try {
-          const heartbeatData = JSON.parse(workerHeartbeat);
-          workerTimestamp = heartbeatData.timestamp;
-          workerConcurrency = heartbeatData.concurrency || 1;
-        } catch (e) {
-          workerTimestamp = parseInt(workerHeartbeat);
-        }
-      }
-      
-      if (workerTimestamp && Date.now() - workerTimestamp < 120000) {
-        status.worker = 'running';
-        status.workers = Array.from({ length: workerConcurrency }, (_, i) => ({
-          id: i + 1,
-          status: 'active'
-        }));
-      } else {
-        status.worker = 'stopped';
-        status.workers = [];
-      }
+      const activeWorkers = await redisClient.sCard('system:status:workers');
+      status.worker = activeWorkers > 0 ? 'running' : 'stopped';
+      status.workerCount = activeWorkers;
       
       // Check GitHub authentication - verify GitHub App is configured
       const githubAppConfigured = process.env.GH_APP_ID && 
