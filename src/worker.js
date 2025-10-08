@@ -543,31 +543,12 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             
             // Add the actual changes summary
             if (changesSummary) {
-                prCommentBody += `## Summary of Changes\n\n`;
-                
-                // Extract the most relevant parts of the summary
-                const summaryLines = changesSummary.split('\n');
-                let includedSummary = false;
-                
-                // Look for sections that describe what was done
-                for (let i = 0; i < summaryLines.length; i++) {
-                    const line = summaryLines[i];
-                    
-                    // Include headers and bullet points
-                    if (line.match(/^#+\s/) || line.trim().startsWith('-') || 
-                        line.trim().startsWith('*') || line.trim().startsWith('•') ||
-                        line.match(/^\d+\./)) {
-                        prCommentBody += line + '\n';
-                        includedSummary = true;
-                    } else if (includedSummary && line.trim() === '') {
-                        prCommentBody += '\n';
-                    } else if (includedSummary && !line.match(/^#+\s/) && i < 50) {
-                        // Include descriptive text after headers/bullets (limit lines)
-                        prCommentBody += line + '\n';
-                    }
+                const commitBody = commitMessage.split('\n\n').slice(1).join('\n\n').trim();
+                if (commitBody) {
+                    prCommentBody += `## Summary of Changes\n\n${commitBody}\n\n`;
+                } else {
+                    prCommentBody += `## Summary of Changes\n\n${changesSummary}\n\n`;
                 }
-                
-                prCommentBody += '\n';
             }
             
             prCommentBody += `---\n`;
