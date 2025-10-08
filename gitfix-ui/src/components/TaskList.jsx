@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { getTasks } from '../api/gitfixApi';
 
-const TaskList = ({ onTaskSelect, limit, showViewAll = false }) => {
+const TaskList = ({ limit, showViewAll = false }) => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -98,6 +98,11 @@ const TaskList = ({ onTaskSelect, limit, showViewAll = false }) => {
           <option value="failed">Failed</option>
           <option value="waiting">Waiting</option>
         </select>
+        {showViewAll && (
+          <Link to="/tasks" style={{ color: '#3b82f6', textDecoration: 'none' }}>
+            View All Tasks
+          </Link>
+        )}
       </div>
 
       {tasks.length === 0 ? (
@@ -158,20 +163,21 @@ const TaskList = ({ onTaskSelect, limit, showViewAll = false }) => {
                     {formatDuration(task.processedAt || task.createdAt, task.completedAt, task.status)}
                   </td>
                   <td style={{ padding: '0.75rem' }}>
-                    <button
-                      onClick={() => onTaskSelect(task.id)}
-                      style={{
-                        padding: '0.25rem 0.75rem',
-                        backgroundColor: '#3b82f6',
-                        color: '#ffffff',
-                        borderRadius: '4px',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.875rem'
-                      }}
-                    >
-                      View Details
-                    </button>
+                    <Link to={`/tasks/${task.id}`}>
+                      <button
+                        style={{
+                          padding: '0.25rem 0.75rem',
+                          backgroundColor: '#3b82f6',
+                          color: '#ffffff',
+                          borderRadius: '4px',
+                          border: 'none',
+                          cursor: 'pointer',
+                          fontSize: '0.875rem'
+                        }}
+                      >
+                        View Details
+                      </button>
+                    </Link>
                   </td>
                 </tr>
               ))}
