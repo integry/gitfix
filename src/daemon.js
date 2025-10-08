@@ -301,19 +301,20 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                 }
 
                 if (isTriggered) {
-                    // 1. Check if author is the bot
-                    if (GITHUB_BOT_USERNAME && commentAuthor === GITHUB_BOT_USERNAME) {
-                        continue;
-                    }
+                    // If a whitelist is defined, only users in that list are allowed.
+                    if (GITHUB_USER_WHITELIST.length > 0) {
+                        if (!GITHUB_USER_WHITELIST.includes(commentAuthor)) {
+                            continue;
+                        }
+                    } else {
+                        // If no whitelist, fall back to bot and blacklist checks.
+                        if (GITHUB_BOT_USERNAME && commentAuthor === GITHUB_BOT_USERNAME) {
+                            continue;
+                        }
 
-                    // 2. Check blacklist
-                    if (GITHUB_USER_BLACKLIST.length > 0 && GITHUB_USER_BLACKLIST.includes(commentAuthor)) {
-                        continue;
-                    }
-
-                    // 3. Check whitelist
-                    if (GITHUB_USER_WHITELIST.length > 0 && !GITHUB_USER_WHITELIST.includes(commentAuthor)) {
-                        continue;
+                        if (GITHUB_USER_BLACKLIST.length > 0 && GITHUB_USER_BLACKLIST.includes(commentAuthor)) {
+                            continue;
+                        }
                     }
 
                     // 4. Check if this comment has already been queued or processed
