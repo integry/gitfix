@@ -52,7 +52,7 @@ function generateMockCompletionComment(claudeResult, issueRef) {
         const result = claudeResult.finalResult;
         comment += `**Claude Code Results:**\n`;
         comment += `- Turns Used: ${result.num_turns || 'unknown'}\n`;
-        comment += `- Cost: $${result.cost_usd || 'unknown'}\n`;
+        comment += `- Cost: $${result.cost_usd != null ? result.cost_usd.toFixed(2) : (result.total_cost_usd != null ? result.total_cost_usd.toFixed(2) : 'unknown')}\n`;
         comment += `- Session ID: \`${claudeResult.sessionId || 'unknown'}\`\n\n`;
     }
     
@@ -156,4 +156,31 @@ test('GitHub comment handles different model types correctly', () => {
         assert.ok(comment.includes(`- LLM Model: ${expected}`), 
                    `Expected to find "${expected}" for model "${model}"`);
     });
+});
+
+test('GitHub comment correctly displays cost when total_cost_usd is present', () => {
+    const mockClaudeResult = {
+        success: true,
+        executionTime: 95000,
+        conversationId: 'conv_test123',
+        sessionId: 'session_test456',
+        model: 'claude-3-5-sonnet-20241022',
+        finalResult: {
+            num_turns: 12,
+            total_cost_usd: 0.35
+        }
+    };
+    
+    const mockIssueRef = {
+        number: 456,
+        repoOwner: 'testorg',
+        repoName: 'testrepo'
+    };
+    
+    const comment = generateMockCompletionComment(mockClaudeResult, mockIssueRef);
+    
+    assert.ok(comment.includes('🤖 **AI Processing Completed**'));
+    assert.ok(comment.includes('- Issue: #456'));
+    assert.ok(comment.includes('- Turns Used: 12'));
+    assert.ok(comment.includes('- Cost: $0.35'));
 });
