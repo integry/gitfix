@@ -632,7 +632,8 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
         return { 
             status: 'complete', 
             commit: commitResult?.commitHash,
-            pullRequestNumber 
+            pullRequestNumber,
+            claudeResult
         };
 
     } catch (error) {
