@@ -41,6 +41,13 @@ main {
   color: #1f2937;
 }
 
+/* Dashboard Layout */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
 /* System Status Styles */
 .status-list {
   display: flex;

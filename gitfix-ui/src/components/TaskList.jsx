@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { getTasks } from '../api/gitfixApi';
 
-const TaskList = ({ onTaskSelect }) => {
+const TaskList = ({ onTaskSelect, limit, showViewAll = false }) => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
 
   useEffect(() => {
-    const fetchTasks = async () => {
+    const fetchTasks = async (loadConfig) => {
       try {
-        setLoading(true);
-        const data = await getTasks(filter);
+        setLoading(loadConfig?.setLoadingState ?? true);
+        const data = await getTasks(filter, limit);
         setTasks(data.tasks || []);
       } catch (err) {
         setError(err.message);
@@ -21,10 +22,10 @@ const TaskList = ({ onTaskSelect }) => {
       }
     };
 
-    fetchTasks();
-    const interval = setInterval(fetchTasks, 5000); // Refresh every 5 seconds
+    fetchTasks({ setLoadingState: true });
+    const interval = setInterval(() => fetchTasks({ setLoadingState: false }), 5000); // Refresh every 5 seconds
     return () => clearInterval(interval);
-  }, [filter]);
+  }, [filter, limit]);
 
   const getStatusColor = (status) => {
     switch (status) {
