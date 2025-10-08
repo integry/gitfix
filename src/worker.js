@@ -264,6 +264,15 @@ async function processPullRequestCommentJob(job) {
     let unprocessedComments = [];
     let startingWorkComment = null;
 
+    const formatCommentForPrompt = (body) => {
+        if (!body) return '[Empty comment]';
+        const maxLength = 1000;
+        if (body.length > maxLength) {
+            return body.substring(0, maxLength) + '... (comment truncated)';
+        }
+        return body;
+    };
+
     try {
         // Get authenticated Octokit instance
         octokit = await withRetry(
@@ -337,6 +346,47 @@ async function processPullRequestCommentJob(job) {
             commentAuthors = [...new Set(unprocessedComments.map(c => c.author))];
         }
 
+        // Fetch all PR comments (both issue and review comments) for context
+        const issueComments = await octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            owner: repoOwner,
+            repo: repoName,
+            issue_number: pullRequestNumber,
+            per_page: 100
+        });
+
+        const reviewComments = await octokit.paginate('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+            owner: repoOwner,
+            repo: repoName,
+            pull_number: pullRequestNumber,
+            per_page: 100
+        });
+
+        const allComments = [
+            ...issueComments,
+            ...reviewComments
+        ];
+
+        const commentsByTime = allComments.sort((a, b) => 
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+
+        let commentHistory = '';
+        const reversedComments = [...commentsByTime].reverse();
+        if (reversedComments.length > 0) {
+            commentHistory += 'Here is the recent comment history on this PR (newest first) for context:\n\n';
+            for (const comment of reversedComments) {
+                const author = comment.user.login;
+                const body = formatCommentForPrompt(comment.body);
+                const commentType = comment.pull_request_review_id ? 'Review Comment' : 'General Comment';
+                commentHistory += `---
+**Author:** @${author} (${commentType})
+**Comment:**
+${body}
+---\n`;
+            }
+            commentHistory += '\n';
+        }
+
         // Post a "starting work" comment with reference to all comment IDs
         commentIds = unprocessedComments.map(c => c.id).join(', ');
         authorsText = commentAuthors.map(a => `@${a}`).join(', ');
@@ -377,23 +427,25 @@ async function processPullRequestCommentJob(job) {
         }, 'Created worktree from existing PR branch');
 
         // Step 3: Generate prompt for follow-up changes
-        const prompt = `You are working on an existing pull request branch. ${unprocessedComments.length > 1 ? `Users have requested the following ${unprocessedComments.length} follow-up changes` : 'A user has requested the following follow-up change'}:
+        const prompt = `You are working on an existing pull request branch to apply follow-up changes.
+
+${commentHistory}
+
+**New Request${unprocessedComments.length > 1 ? 's' : ''}:**
 
 ${combinedCommentBody}
 
 **CRITICAL INSTRUCTIONS:**
 - You are in directory: ${worktreeInfo.worktreePath}
-- The current branch already contains changes for pull request #${pullRequestNumber}
-- Analyze the existing code on this branch
-- Implement ONLY the changes requested in the comment above
+- Analyze the existing code on this branch and the comment history provided above.
+- Implement ONLY the changes requested in the **New Request(s)** section.
 - DO NOT commit your changes - the system will handle the commit for you
 - DO NOT create a new pull request
 - The repository is ${repoOwner}/${repoName}
 
 **Context:**
-- This is a follow-up to an existing PR
-- Make sure your changes are compatible with the existing modifications on this branch
-- Use appropriate commit messages that reference the follow-up nature of the changes`;
+- This is a follow-up to an existing pull request #${pullRequestNumber}.
+- Make sure your changes are compatible with the existing modifications on this branch.`;
 
         // Step 4: Execute Claude Code with the follow-up prompt
         claudeResult = await executeClaudeCode({
