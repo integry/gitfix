@@ -26,12 +26,35 @@ const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
 // New environment variables for PR comment monitoring
-const GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
+let GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
 const GITHUB_USER_BLACKLIST = (process.env.GITHUB_USER_BLACKLIST || '').split(',').filter(u => u);
-const PR_FOLLOWUP_TRIGGER_KEYWORDS = (process.env.PR_FOLLOWUP_TRIGGER_KEYWORDS !== undefined ? process.env.PR_FOLLOWUP_TRIGGER_KEYWORDS : '!gitfix').split(',').filter(k => k.trim()).map(k => k.trim());
+const PR_FOLLOWUP_TRIGGER_KEYWORDS = (process.env.PR_FOLLOWUP_TRIGGER_KEYWORDS !== undefined ? process.env.PR_FOLLOWUP_TRIGGER_KEYWORDS : '').split(',').filter(k => k.trim()).map(k => k.trim());
 
 let monitoredRepos = [];
 let GITHUB_USER_WHITELIST = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
+
+/**
+ * Auto-detect the bot username by querying the GitHub API
+ */
+async function detectBotUsername() {
+    if (GITHUB_BOT_USERNAME) {
+        return GITHUB_BOT_USERNAME; // Already configured
+    }
+
+    try {
+        const octokit = await getAuthenticatedOctokit();
+        // GitHub Apps can't access GET /user, so we get the app info instead
+        const { data: installation } = await octokit.request('GET /installation');
+        // The bot username is the app slug with [bot] suffix
+        GITHUB_BOT_USERNAME = `${installation.app_slug}[bot]`;
+        logger.info({ botUsername: GITHUB_BOT_USERNAME }, 'Auto-detected bot username');
+        return GITHUB_BOT_USERNAME;
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to auto-detect bot username, will use default');
+        GITHUB_BOT_USERNAME = 'github-actions[bot]';
+        return GITHUB_BOT_USERNAME;
+    }
+}
 
 async function loadReposFromConfig() {
     try {
@@ -301,19 +324,21 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                 }
 
                 if (isTriggered) {
-                    // 1. Check if author is the bot
+                    // Always skip this bot's own comments to prevent infinite loops
                     if (GITHUB_BOT_USERNAME && commentAuthor === GITHUB_BOT_USERNAME) {
                         continue;
                     }
 
-                    // 2. Check blacklist
-                    if (GITHUB_USER_BLACKLIST.length > 0 && GITHUB_USER_BLACKLIST.includes(commentAuthor)) {
-                        continue;
-                    }
-
-                    // 3. Check whitelist
-                    if (GITHUB_USER_WHITELIST.length > 0 && !GITHUB_USER_WHITELIST.includes(commentAuthor)) {
-                        continue;
+                    // If a whitelist is defined, only users in that list are allowed.
+                    if (GITHUB_USER_WHITELIST.length > 0) {
+                        if (!GITHUB_USER_WHITELIST.includes(commentAuthor)) {
+                            continue;
+                        }
+                    } else {
+                        // If no whitelist, check blacklist
+                        if (GITHUB_USER_BLACKLIST.length > 0 && GITHUB_USER_BLACKLIST.includes(commentAuthor)) {
+                            continue;
+                        }
                     }
 
                     // 4. Check if this comment has already been queued or processed
@@ -733,7 +758,8 @@ async function resetIssueLabels() {
 async function startDaemon(options = {}) {
     await loadReposFromConfig();
     await loadSettingsFromConfig();
-    
+    await detectBotUsername();
+
     const repos = getRepos();
     
     // Validate required configuration
@@ -788,7 +814,7 @@ async function startDaemon(options = {}) {
         modelLabelPattern: MODEL_LABEL_PATTERN,
         defaultModelName: DEFAULT_MODEL_NAME,
         botUsername: GITHUB_BOT_USERNAME || 'not configured',
-        userWhitelist: GITHUB_USER_WHITELIST.length > 0 ? GITHUB_USER_WHITELIST : 'all users allowed',
+        userWhitelist: GITHUB_USER_WHITELIST.length > 0 ? GITHUB_USER_WHITELIST : '',
         userBlacklist: GITHUB_USER_BLACKLIST.length > 0 ? GITHUB_USER_BLACKLIST : 'no users blocked',
         prFollowupTriggerKeywords: PR_FOLLOWUP_TRIGGER_KEYWORDS.length > 0 ? PR_FOLLOWUP_TRIGGER_KEYWORDS : 'any comment triggers',
         resetPerformed: !!options.reset
