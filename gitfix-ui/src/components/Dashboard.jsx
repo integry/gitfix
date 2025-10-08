@@ -1,30 +1,24 @@
-import React, { useState } from 'react';
+import React from 'react';
 import SystemStatus from './SystemStatus';
 import TaskQueueStats from './TaskQueueStats';
 import TaskList from './TaskList';
-import TaskDetails from './TaskDetails';
 
 const Dashboard = () => {
-  const [selectedTaskId, setSelectedTaskId] = useState(null);
-
   return (
     <div>
       <h2>System Overview</h2>
-      <div style={{ display: 'flex', justifyContent: 'space-around', gap: '2rem', flexWrap: 'wrap' }}>
+      <div className="dashboard-grid">
         <SystemStatus />
         <TaskQueueStats />
       </div>
       
-      {selectedTaskId ? (
-        <TaskDetails 
-          taskId={selectedTaskId} 
-          onBack={() => setSelectedTaskId(null)} 
+      <div style={{ marginTop: '2rem' }}>
+        <h3>Recent Tasks</h3>
+        <TaskList
+          limit={5}
+          showViewAll={true}
         />
-      ) : (
-        <TaskList 
-          onTaskSelect={setSelectedTaskId} 
-        />
-      )}
+      </div>
     </div>
   );
 };
