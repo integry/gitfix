@@ -347,7 +347,9 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                     }
 
                     // For review comments, include the code context
-                    let enhancedCommentBody = comment.body;
+                    // Strip the !gitfix command from the body before processing
+                    let enhancedCommentBody = comment.body.replace(/!gitfix(:\w+)?/g, '').trim();
+
                     if (comment.pull_request_review_id) {
                         // This is a PR review comment
                         const codeContext = [];
