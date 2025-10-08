@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { getSettings, updateSettings } from '../api/gitfixApi';
+import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords } from '../api/gitfixApi';
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
     worker_concurrency: '',
     github_user_whitelist: ''
   });
+  const [keywords, setKeywords] = useState([]);
+  const [newKeyword, setNewKeyword] = useState('');
   const [loading, setLoading] = useState(true);
+  const [keywordsLoading, setKeywordsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [keywordsSaving, setKeywordsSaving] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [keywordsError, setKeywordsError] = useState(null);
+  const [keywordsSuccess, setKeywordsSuccess] = useState(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -28,6 +34,22 @@ const SettingsPage = () => {
       }
     };
     loadSettings();
+  }, []);
+
+  useEffect(() => {
+    const loadKeywords = async () => {
+      try {
+        setKeywordsLoading(true);
+        setKeywordsError(null);
+        const data = await getFollowupKeywords();
+        setKeywords(data.followup_keywords || []);
+      } catch (err) {
+        setKeywordsError(err.message || 'Failed to load keywords');
+      } finally {
+        setKeywordsLoading(false);
+      }
+    };
+    loadKeywords();
   }, []);
 
   const handleChange = (e) => {
@@ -54,6 +76,31 @@ const SettingsPage = () => {
     }
   };
 
+  const handleAddKeyword = () => {
+    if (newKeyword && !keywords.includes(newKeyword)) {
+      setKeywords([...keywords, newKeyword]);
+      setNewKeyword('');
+    }
+  };
+
+  const handleRemoveKeyword = (keywordToRemove) => {
+    setKeywords(keywords.filter(k => k !== keywordToRemove));
+  };
+
+  const handleSaveKeywords = async () => {
+    setKeywordsError(null);
+    setKeywordsSuccess(null);
+    setKeywordsSaving(true);
+    try {
+      await updateFollowupKeywords(keywords);
+      setKeywordsSuccess('Keywords updated successfully!');
+    } catch (err) {
+      setKeywordsError(err.message || 'Failed to update keywords');
+    } finally {
+      setKeywordsSaving(false);
+    }
+  };
+
   if (loading) {
     return <div>Loading settings...</div>;
   }
@@ -64,6 +111,92 @@ const SettingsPage = () => {
       <p style={{ color: '#9ca3af', marginBottom: '2rem' }}>
         Configure system-wide settings. These settings from the config repository will override any values set in the '.env' file.
       </p>
+
+      <div style={{ marginBottom: '3rem' }}>
+        <h3 style={{ color: '#fff', fontSize: '1.25rem', marginBottom: '1rem' }}>PR Follow-up Trigger Keywords</h3>
+        <div style={{ backgroundColor: '#374151', padding: '1.5rem', borderRadius: '0.5rem' }}>
+          <p style={{ color: '#9ca3af', marginBottom: '1rem' }}>
+            Manage keywords that trigger AI follow-ups on pull request comments. If no keywords are specified, any comment from a whitelisted user will trigger a follow-up.
+          </p>
+
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+            <input
+              value={newKeyword}
+              onChange={(e) => setNewKeyword(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
+              placeholder="Enter new keyword (e.g., !gitfix)"
+              style={{
+                flex: 1,
+                padding: '0.5rem',
+                backgroundColor: '#1f2937',
+                color: '#fff',
+                border: '1px solid #4b5563',
+                borderRadius: '0.375rem',
+              }}
+            />
+            <button 
+              onClick={handleAddKeyword} 
+              style={{ 
+                backgroundColor: '#10B981', 
+                color: '#fff', 
+                border: 'none', 
+                padding: '0.5rem 1rem', 
+                borderRadius: '0.375rem', 
+                cursor: 'pointer',
+                fontWeight: 'bold'
+              }}
+            >
+              Add
+            </button>
+          </div>
+
+          {keywordsLoading ? <p style={{ color: '#9ca3af' }}>Loading keywords...</p> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+              {keywords.map((keyword, index) => (
+                <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#4b5563', padding: '0.5rem 1rem', borderRadius: '0.375rem' }}>
+                  <span style={{ color: '#fff' }}>{keyword}</span>
+                  <button 
+                    onClick={() => handleRemoveKeyword(keyword)} 
+                    style={{ 
+                      backgroundColor: '#EF4444', 
+                      color: '#fff', 
+                      border: 'none', 
+                      padding: '0.25rem 0.75rem', 
+                      borderRadius: '0.375rem', 
+                      cursor: 'pointer',
+                      fontSize: '0.875rem'
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              {keywords.length === 0 && <p style={{ color: '#9ca3af', textAlign: 'center' }}>No keywords configured. All whitelisted user comments will trigger follow-ups.</p>}
+            </div>
+          )}
+
+          <button 
+            onClick={handleSaveKeywords} 
+            disabled={keywordsSaving} 
+            style={{ 
+              backgroundColor: keywordsSaving ? '#6b7280' : '#3b82f6', 
+              color: '#fff', 
+              width: '100%', 
+              border: 'none', 
+              padding: '0.75rem', 
+              borderRadius: '0.375rem', 
+              cursor: keywordsSaving ? 'not-allowed' : 'pointer',
+              fontSize: '1rem',
+              fontWeight: 'bold'
+            }}
+          >
+            {keywordsSaving ? 'Saving...' : 'Save Keywords'}
+          </button>
+
+          {keywordsError && <p style={{ color: '#ef4444', marginTop: '1rem' }}>Error: {keywordsError}</p>}
+          {keywordsSuccess && <p style={{ color: '#10b981', marginTop: '1rem' }}>{keywordsSuccess}</p>}
+        </div>
+      </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '600px' }}>
         <div>

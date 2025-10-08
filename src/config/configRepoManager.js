@@ -45,6 +45,21 @@ export async function cloneOrPullConfigRepo() {
     }
 }
 
+export async function loadFollowupKeywords() {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        const keywords = config.followup_keywords || [];
+        
+        logger.info({ followup_keywords: keywords }, 'Successfully loaded followup keywords');
+        return keywords;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to load followup keywords from config');
+        throw error;
+    }
+}
+
 export async function loadMonitoredRepos() {
     try {
         await cloneOrPullConfigRepo();
@@ -66,6 +81,38 @@ export async function loadMonitoredRepos() {
     }
 }
 
+export async function saveFollowupKeywords(keywords, commitMessage = 'Update followup keywords via UI') {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        config.followup_keywords = keywords;
+        
+        await fs.writeJson(CONFIG_FILE_PATH, config, { spaces: 2 });
+
+        const git = simpleGit(LOCAL_CONFIG_PATH);
+
+        try {
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+        } catch (e) {
+        }
+
+        await git.add('config.json');
+        await git.commit(commitMessage);
+
+        const authToken = await getGitHubInstallationToken();
+        const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
+        await git.push(authenticatedUrl, 'main');
+        
+        logger.info({ keywords }, 'Successfully saved and pushed followup keywords');
+        return true;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to save followup keywords');
+        throw error;
+    }
+}
+
 export async function saveMonitoredRepos(repos, commitMessage = 'Update monitored repositories via UI') {
     try {
         await cloneOrPullConfigRepo();
@@ -77,12 +124,10 @@ export async function saveMonitoredRepos(repos, commitMessage = 'Update monitore
 
         const git = simpleGit(LOCAL_CONFIG_PATH);
 
-        // Configure git user for commits if not already set
         try {
             await git.addConfig('user.email', 'gitfix@example.com');
             await git.addConfig('user.name', 'GitFix Bot');
         } catch (e) {
-            // Config may already exist, ignore error
         }
 
         await git.add('config.json');
