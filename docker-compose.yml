@@ -41,8 +41,6 @@ services:
       - /tmp/claude-logs:/tmp/claude-logs
     env_file:
       - .env
-    environment:
-      - WORKER_CONCURRENCY=1
     depends_on:
       - redis
     networks:

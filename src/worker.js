@@ -2225,6 +2225,7 @@ Examples:
  * Starts the worker process
  */
 async function startWorker(options = {}) {
+    const workerId = `worker:${generateCorrelationId()}`;
     let workerConcurrency = parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
     
     try {
@@ -2260,11 +2261,8 @@ async function startWorker(options = {}) {
     // Function to send heartbeat
     const sendHeartbeat = async () => {
         try {
-            const heartbeatData = {
-                timestamp: Date.now(),
-                concurrency: workerConcurrency
-            };
-            await heartbeatRedis.set('system:status:worker', JSON.stringify(heartbeatData), 'EX', 90);
+            await heartbeatRedis.sadd('system:status:workers', workerId);
+            await heartbeatRedis.expire('system:status:workers', 90);
             logger.debug('Worker heartbeat sent');
         } catch (error) {
             logger.error({ error: error.message }, 'Failed to send worker heartbeat');
@@ -2303,6 +2301,7 @@ async function startWorker(options = {}) {
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
         logger.info('Worker received SIGINT, shutting down gracefully...');
+        await heartbeatRedis.srem('system:status:workers', workerId);
         clearInterval(heartbeatInterval);
         await heartbeatRedis.quit();
         await worker.close();
@@ -2311,6 +2310,7 @@ async function startWorker(options = {}) {
 
     process.on('SIGTERM', async () => {
         logger.info('Worker received SIGTERM, shutting down gracefully...');
+        await heartbeatRedis.srem('system:status:workers', workerId);
         clearInterval(heartbeatInterval);
         await heartbeatRedis.quit();
         await worker.close();
