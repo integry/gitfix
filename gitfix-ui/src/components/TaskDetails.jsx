@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { getTaskHistory } from '../api/gitfixApi';
 
-const TaskDetails = ({ taskId, onBack }) => {
+const TaskDetails = () => {
+  const { taskId } = useParams();
+  const navigate = useNavigate();
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -213,9 +216,9 @@ const TaskDetails = ({ taskId, onBack }) => {
         alignItems: 'center',
         marginBottom: '1rem'
       }}>
-        <h3>Task History: {taskId}</h3>
+        <h3 style={{ wordBreak: 'break-all' }}>Task History: {taskId}</h3>
         <button
-          onClick={onBack}
+          onClick={() => navigate('/tasks')}
           style={{
             padding: '0.5rem 1rem',
             backgroundColor: '#6b7280',

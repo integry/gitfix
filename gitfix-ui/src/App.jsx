@@ -37,6 +37,14 @@ function App() {
           }
         />
         <Route
+          path="/tasks/:taskId"
+          element={
+            <Layout>
+              <TasksPage />
+            </Layout>
+          }
+        />
+        <Route
           path="/ai-tools"
           element={
             <Layout>
