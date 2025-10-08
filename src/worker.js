@@ -427,13 +427,12 @@ ${body}
         }, 'Created worktree from existing PR branch');
 
         // Step 3: Generate prompt for follow-up changes
-        const prompt = `You are working on an existing pull request branch to apply follow-up changes.
-
-${commentHistory}
+        const prompt = `You are working on pull request #${pullRequestNumber} to apply follow-up changes.
 
 **New Request${unprocessedComments.length > 1 ? 's' : ''}:**
+${combinedCommentBody.replace(/^/gm, '> ')}
 
-${combinedCommentBody}
+${commentHistory}
 
 **CRITICAL INSTRUCTIONS:**
 - You are in directory: ${worktreeInfo.worktreePath}
