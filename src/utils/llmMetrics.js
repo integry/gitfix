@@ -32,8 +32,8 @@ export async function recordLLMMetrics(claudeResult, issueRef, jobType = 'issue'
         const executionTimeMs = claudeResult?.executionTime || 0;
         const executionTimeSec = Math.round(executionTimeMs / 1000);
         const numTurns = claudeResult?.finalResult?.num_turns || 0;
-        const costUsd = claudeResult?.finalResult?.total_cost_usd || 
-                       claudeResult?.finalResult?.cost_usd || 0;
+        const costUsd = claudeResult?.finalResult?.cost_usd ||
+                       claudeResult?.finalResult?.total_cost_usd || 0;
         const sessionId = claudeResult?.sessionId || 'unknown';
         const conversationId = claudeResult?.conversationId || null;
         

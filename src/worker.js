@@ -581,8 +581,8 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             if (claudeResult.executionTime) {
                 prCommentBody += `- Execution time: ${Math.round(claudeResult.executionTime / 1000)}s\n`;
             }
-            const cost = claudeResult.finalResult?.total_cost_usd || claudeResult.finalResult?.cost_usd;
-            if (cost) {
+            const cost = claudeResult.finalResult?.cost_usd || claudeResult.finalResult?.total_cost_usd;
+            if (cost != null) {
                 prCommentBody += `- Cost: $${cost.toFixed(2)}\n`;
             }
 
@@ -2122,7 +2122,7 @@ async function generateCompletionComment(claudeResult, issueRef) {
         const result = claudeResult.finalResult;
         comment += `**Claude Code Results:**\n`;
         comment += `- Turns Used: ${result.num_turns || 'unknown'}\n`;
-        comment += `- Cost: $${result.cost_usd || 'unknown'}\n`;
+        comment += `- Cost: $${result.cost_usd != null ? result.cost_usd.toFixed(2) : 'unknown'}\n`;
         comment += `- Session ID: \`${claudeResult.sessionId || 'unknown'}\`\n\n`;
         
         if (result.subtype === 'error_max_turns') {

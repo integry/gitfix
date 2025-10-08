@@ -421,6 +421,11 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                             }
                         }
                         
+                        // Standardize cost field
+                        if (jsonLine.total_cost_usd && !jsonLine.cost_usd) {
+                            claudeOutput.finalResult.cost_usd = jsonLine.total_cost_usd;
+                        }
+                        
                         // Also check for model info in final result
                         if (jsonLine.model) {
                             claudeOutput.model = jsonLine.model;
