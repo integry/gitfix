@@ -591,6 +591,55 @@ app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
   }
 });
 
+app.get('/api/config/followup-keywords', ensureAuthenticated, async (req, res) => {
+  try {
+    const keywords = await configRepoManager.loadFollowupKeywords();
+    res.json({ followup_keywords: keywords });
+  } catch (error) {
+    console.error('Error in /api/config/followup-keywords GET:', error);
+    res.status(500).json({ error: 'Failed to load followup keywords' });
+  }
+});
+
+app.post('/api/config/followup-keywords', ensureAuthenticated, async (req, res) => {
+  const lockKey = 'config:keywords:lock';
+  const lockValue = `${Date.now()}-${Math.random()}`;
+  const lockTimeout = 30;
+
+  try {
+    const { followup_keywords } = req.body;
+
+    if (!Array.isArray(followup_keywords)) {
+      return res.status(400).json({ error: 'followup_keywords must be an array of strings' });
+    }
+
+    const acquired = await redisClient.set(lockKey, lockValue, {
+      NX: true,
+      EX: lockTimeout
+    });
+
+    if (!acquired) {
+      return res.status(409).json({ error: 'Configuration is being updated. Please try again.' });
+    }
+
+    try {
+      await configRepoManager.saveFollowupKeywords(
+        followup_keywords,
+        `Update PR followup keywords via UI by ${req.user.username}`
+      );
+      res.json({ success: true, followup_keywords });
+    } finally {
+      const currentLockValue = await redisClient.get(lockKey);
+      if (currentLockValue === lockValue) {
+        await redisClient.del(lockKey);
+      }
+    }
+  } catch (error) {
+    console.error('Error in /api/config/followup-keywords POST:', error);
+    res.status(500).json({ error: 'Failed to update followup keywords' });
+  }
+});
+
 app.get('/api/config/repos', ensureAuthenticated, async (req, res) => {
   try {
     await configRepoManager.cloneOrPullConfigRepo();
@@ -599,7 +648,6 @@ app.get('/api/config/repos', ensureAuthenticated, async (req, res) => {
     const config = await fs.readJson(configPath);
     let repos = config.repos_to_monitor || [];
 
-    // Convert string array to object array if needed
     if (repos.length > 0 && typeof repos[0] === 'string') {
       repos = repos.map(repo => ({ name: repo, enabled: true }));
     }

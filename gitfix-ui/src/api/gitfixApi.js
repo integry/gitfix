@@ -106,3 +106,22 @@ export const updateSettings = async (settings) => {
   await handleApiResponse(response);
   return response.json();
 };
+
+export const getFollowupKeywords = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/followup-keywords`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updateFollowupKeywords = async (keywords) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/followup-keywords`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ followup_keywords: keywords }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
