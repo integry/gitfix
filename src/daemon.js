@@ -28,6 +28,7 @@ const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel()
 // New environment variables for PR comment monitoring
 const GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
 const GITHUB_USER_BLACKLIST = (process.env.GITHUB_USER_BLACKLIST || '').split(',').filter(u => u);
+const PR_FOLLOWUP_TRIGGER_KEYWORDS = (process.env.PR_FOLLOWUP_TRIGGER_KEYWORDS || '!gitfix').split(',').filter(k => k.trim()).map(k => k.trim());
 
 let monitoredRepos = [];
 let GITHUB_USER_WHITELIST = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
@@ -250,7 +251,15 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                 new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
             );
 
-            const gitfixComments = commentsByTime.filter(c => c.body && c.body.includes('!gitfix'));
+            const triggerComments = commentsByTime.filter(c => {
+                if (!c.body) return false;
+
+                if (PR_FOLLOWUP_TRIGGER_KEYWORDS.length > 0) {
+                    return PR_FOLLOWUP_TRIGGER_KEYWORDS.some(keyword => c.body.includes(keyword));
+                }
+
+                return true;
+            });
             
             correlatedLogger.debug({
                 repository: repoFullName,
@@ -258,11 +267,11 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                 issueComments: issueComments.length,
                 reviewComments: reviewComments.length,
                 totalComments: allComments.length,
-                gitfixComments: gitfixComments.length
-            }, `Found ${allComments.length} comments (${issueComments.length} issue + ${reviewComments.length} review), ${gitfixComments.length} with !gitfix`);
+                triggerComments: triggerComments.length
+            }, `Found ${allComments.length} comments (${issueComments.length} issue + ${reviewComments.length} review), ${triggerComments.length} potential trigger comments`);
 
             // Log comment details for debugging
-            if (allComments.length > 0 && gitfixComments.length === 0) {
+            if (allComments.length > 0 && triggerComments.length === 0) {
                 correlatedLogger.debug({
                     repository: repoFullName,
                     pullRequestNumber: pr.number,
@@ -272,16 +281,26 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                         type: c.pull_request_review_id ? 'review' : 'issue',
                         bodyPreview: c.body ? c.body.substring(0, 100) + (c.body.length > 100 ? '...' : '') : 'null'
                     }))
-                }, 'Comment details (no !gitfix found)');
+                }, 'Comment details (no trigger keywords found)');
             }
 
-            // Collect all unprocessed !gitfix comments for batch processing
+            // Collect all unprocessed trigger comments for batch processing
             const unprocessedComments = [];
             let selectedLlm = null;
 
             for (const comment of commentsByTime) {
                 const commentAuthor = comment.user.login;
-                if (comment.body && comment.body.includes('!gitfix')) {
+                let isTriggered = false;
+
+                if (comment.body) {
+                    if (PR_FOLLOWUP_TRIGGER_KEYWORDS.length > 0) {
+                        isTriggered = PR_FOLLOWUP_TRIGGER_KEYWORDS.some(keyword => comment.body.includes(keyword));
+                    } else {
+                        isTriggered = true;
+                    }
+                }
+
+                if (isTriggered) {
                     // 1. Check if author is the bot
                     if (GITHUB_BOT_USERNAME && commentAuthor === GITHUB_BOT_USERNAME) {
                         continue;
@@ -338,8 +357,14 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                         continue;
                     }
 
-                    const llmMatch = comment.body.match(/!gitfix:(\w+)/);
-                    const llm = llmMatch ? resolveModelAlias(llmMatch[1]) : null;
+                    let llm = null;
+                    if (PR_FOLLOWUP_TRIGGER_KEYWORDS.length > 0) {
+                        for (const keyword of PR_FOLLOWUP_TRIGGER_KEYWORDS) {
+                            const llmMatch = comment.body.match(new RegExp(`${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\w+)`));
+                            if (llmMatch) llm = resolveModelAlias(llmMatch[1]);
+                            if (llm) break;
+                        }
+                    }
                     
                     // Use the first specified LLM, or fallback to the last one found
                     if (llm && !selectedLlm) {
@@ -347,8 +372,15 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                     }
 
                     // For review comments, include the code context
-                    // Strip the !gitfix command from the body before processing
-                    let enhancedCommentBody = comment.body.replace(/!gitfix(:\w+)?/g, '').trim();
+                    // Strip the trigger keywords from the body before processing
+                    let enhancedCommentBody = comment.body;
+                    if (PR_FOLLOWUP_TRIGGER_KEYWORDS.length > 0) {
+                        for (const keyword of PR_FOLLOWUP_TRIGGER_KEYWORDS) {
+                            const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            enhancedCommentBody = enhancedCommentBody.replace(new RegExp(`${escapedKeyword}(:\\w+)?`, 'g'), '');
+                        }
+                    }
+                    enhancedCommentBody = enhancedCommentBody.trim();
 
                     if (comment.pull_request_review_id) {
                         // This is a PR review comment
@@ -758,6 +790,7 @@ async function startDaemon(options = {}) {
         botUsername: GITHUB_BOT_USERNAME || 'not configured',
         userWhitelist: GITHUB_USER_WHITELIST.length > 0 ? GITHUB_USER_WHITELIST : 'all users allowed',
         userBlacklist: GITHUB_USER_BLACKLIST.length > 0 ? GITHUB_USER_BLACKLIST : 'no users blocked',
+        prFollowupTriggerKeywords: PR_FOLLOWUP_TRIGGER_KEYWORDS.length > 0 ? PR_FOLLOWUP_TRIGGER_KEYWORDS : 'any comment triggers',
         resetPerformed: !!options.reset
     }, 'GitHub Issue Detection Daemon starting...');
 
@@ -840,6 +873,7 @@ Environment Variables:
   GITHUB_BOT_USERNAME        Bot username to exclude from PR comment monitoring
   GITHUB_USER_WHITELIST      Comma-separated list of allowed users for PR comments
   GITHUB_USER_BLACKLIST      Comma-separated list of excluded users for PR comments
+  PR_FOLLOWUP_TRIGGER_KEYWORDS  Comma-separated list of trigger keywords (default: !gitfix, empty = all comments)
 
 Examples:
   node src/daemon.js                Start the daemon normally
