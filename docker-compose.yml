@@ -22,6 +22,8 @@ services:
       - /tmp/git-processor:/tmp/git-processor
     env_file:
       - .env
+    environment:
+      - GITHUB_BOT_USERNAME=gitfixio[bot]
     depends_on:
       - redis
     networks:
