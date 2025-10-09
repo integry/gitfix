@@ -440,6 +440,25 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
 
             // If we have unprocessed comments, create a single batch job
             if (unprocessedComments.length > 0) {
+                // Check if a job for this PR is already active or waiting
+                const activeJobs = await issueQueue.getActive();
+                const waitingJobs = await issueQueue.getWaiting();
+                const existingJobs = [...activeJobs, ...waitingJobs];
+
+                const jobExists = existingJobs.some(job =>
+                    job.name === 'processPullRequestComment' &&
+                    job.data.pullRequestNumber === pr.number &&
+                    job.data.repoOwner === owner &&
+                    job.data.repoName === repo
+                );
+
+                if (jobExists) {
+                    correlatedLogger.info({
+                        pullRequestNumber: pr.number,
+                        repository: repoFullName
+                    }, 'A job for this PR is already active or waiting, skipping new job creation.');
+                    continue;
+                }
                 const jobData = {
                     pullRequestNumber: pr.number,
                     comments: unprocessedComments,  // Array of all comments to process
