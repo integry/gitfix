@@ -61,6 +61,14 @@ export const getTaskHistory = async (taskId) => {
   return response.json();
 };
 
+export const getTaskLiveDetails = async (taskId) => {
+  const response = await fetch(`${API_BASE_URL}/api/task/${taskId}/live-details`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
 export const getRepoConfig = async () => {
   const response = await fetch(`${API_BASE_URL}/api/config/repos`, {
     credentials: 'include'

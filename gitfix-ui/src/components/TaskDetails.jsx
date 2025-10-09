@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getTaskHistory } from '../api/gitfixApi';
+import { getTaskHistory, getTaskLiveDetails } from '../api/gitfixApi';
 
 const TaskDetails = () => {
   const { taskId } = useParams();
@@ -17,6 +17,7 @@ const TaskDetails = () => {
   const [searchMatches, setSearchMatches] = useState([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const logContentRef = useRef(null);
+  const [liveDetails, setLiveDetails] = useState({ todos: [], currentTask: null });
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -36,6 +37,28 @@ const TaskDetails = () => {
 
     fetchHistory();
   }, [taskId]);
+
+  useEffect(() => {
+    const isTaskActive = history.length > 0 && 
+      ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+        history[history.length - 1]?.state?.toUpperCase()
+      );
+
+    if (isTaskActive) {
+      const fetchLiveDetails = async () => {
+        try {
+          const data = await getTaskLiveDetails(taskId);
+          setLiveDetails(data);
+        } catch (err) {
+          console.error('Error fetching live task details:', err);
+        }
+      };
+
+      fetchLiveDetails();
+      const interval = setInterval(fetchLiveDetails, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [taskId, history]);
 
   useEffect(() => {
     if (selectedLogFile && searchQuery) {
@@ -231,6 +254,57 @@ const TaskDetails = () => {
           Back to Tasks
         </button>
       </div>
+
+      {liveDetails.todos.length > 0 && (
+        <div style={{ 
+          marginBottom: '1.5rem', 
+          padding: '1rem', 
+          backgroundColor: '#f0f9ff', 
+          borderRadius: '8px',
+          border: '2px solid #3b82f6'
+        }}>
+          <h4 style={{ marginTop: 0, color: '#1e40af', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '1.2rem' }}>⚡</span>
+            Live Task Progress
+          </h4>
+          {liveDetails.currentTask && (
+            <p style={{ 
+              marginBottom: '1rem', 
+              padding: '0.75rem', 
+              backgroundColor: '#dbeafe', 
+              borderRadius: '6px',
+              borderLeft: '4px solid #3b82f6'
+            }}>
+              <strong style={{ color: '#1e40af' }}>Current Task:</strong> {liveDetails.currentTask}
+            </p>
+          )}
+          <h5 style={{ marginTop: '1rem', marginBottom: '0.5rem', color: '#1e40af' }}>To-do List:</h5>
+          <ul style={{ listStyleType: 'none', paddingLeft: 0, margin: 0 }}>
+            {liveDetails.todos.map(todo => (
+              <li key={todo.id} style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                marginBottom: '0.5rem',
+                padding: '0.5rem',
+                backgroundColor: todo.status === 'in_progress' ? '#dbeafe' : 'transparent',
+                borderRadius: '4px',
+                transition: 'background-color 0.2s'
+              }}>
+                <span style={{ marginRight: '0.5rem', fontSize: '1.1rem' }}>
+                  {todo.status === 'completed' ? '✅' : todo.status === 'in_progress' ? '⏳' : '📋'}
+                </span>
+                <span style={{ 
+                  textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
+                  color: todo.status === 'completed' ? '#6b7280' : '#374151',
+                  fontWeight: todo.status === 'in_progress' ? 'bold' : 'normal'
+                }}>
+                  {todo.content}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {history.length === 0 ? (
         <p style={{ color: '#6b7280', textAlign: 'center' }}>No history found for this task</p>

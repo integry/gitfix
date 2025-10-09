@@ -564,6 +564,111 @@ app.get('/api/execution/:sessionId/logs/:type', ensureAuthenticated, async (req,
   }
 });
 
+app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    
+    // Get task history to extract sessionId
+    const stateKey = `worker:state:${taskId}`;
+    const stateData = await redisClient.get(stateKey);
+    
+    let sessionId = null;
+    let conversationId = null;
+    
+    // Try to get sessionId from state
+    if (stateData) {
+      try {
+        const state = JSON.parse(stateData);
+        if (state.history && Array.isArray(state.history)) {
+          for (const entry of state.history) {
+            if (entry.metadata?.sessionId) {
+              sessionId = entry.metadata.sessionId;
+              conversationId = entry.metadata.conversationId;
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing state data:', e);
+      }
+    }
+    
+    // If no sessionId in state, try to get it from job data
+    if (!sessionId && taskQueue) {
+      try {
+        const job = await taskQueue.getJob(taskId);
+        if (job && job.returnvalue?.claudeResult) {
+          sessionId = job.returnvalue.claudeResult.sessionId;
+          conversationId = job.returnvalue.claudeResult.conversationId;
+        }
+      } catch (e) {
+        console.error('Error getting job data:', e);
+      }
+    }
+    
+    if (!sessionId) {
+      return res.status(404).json({ error: 'Session ID not found for this task' });
+    }
+    
+    // Get log data from Redis
+    let logData = null;
+    const sessionKey = `execution:logs:session:${sessionId}`;
+    const logJson = await redisClient.get(sessionKey);
+    
+    if (logJson) {
+      logData = JSON.parse(logJson);
+    } else if (conversationId) {
+      const conversationKey = `execution:logs:conversation:${conversationId}`;
+      const conversationLogJson = await redisClient.get(conversationKey);
+      if (conversationLogJson) {
+        logData = JSON.parse(conversationLogJson);
+      }
+    }
+    
+    if (!logData || !logData.files || !logData.files.conversation) {
+      return res.status(404).json({ error: 'Conversation log not found for this task' });
+    }
+    
+    // Read the conversation log file
+    const fs = require('fs').promises;
+    const conversationPath = logData.files.conversation;
+    
+    try {
+      await fs.access(conversationPath);
+    } catch (err) {
+      return res.status(404).json({ error: 'Conversation log file no longer exists' });
+    }
+    
+    const conversationContent = await fs.readFile(conversationPath, 'utf8');
+    const conversation = JSON.parse(conversationContent);
+    
+    // Parse todos from conversation
+    let todos = [];
+    let currentTask = null;
+    
+    if (conversation.messages && Array.isArray(conversation.messages)) {
+      for (const message of conversation.messages) {
+        if (message.type === 'assistant' && message.message && message.message.content) {
+          for (const content of message.message.content) {
+            if (content.type === 'tool_use' && content.name === 'TodoWrite' && content.input && content.input.todos) {
+              todos = content.input.todos;
+              const inProgressTask = todos.find(t => t.status === 'in_progress');
+              if (inProgressTask) {
+                currentTask = inProgressTask.content;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    res.json({ todos, currentTask });
+  } catch (error) {
+    console.error('Error in /api/task/:taskId/live-details:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.post('/api/import-tasks', ensureAuthenticated, async (req, res) => {
   try {
     const { taskDescription, repository } = req.body;
