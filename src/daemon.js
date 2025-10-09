@@ -385,7 +385,7 @@ async function pollForPullRequestComments(octokit, repoFullName, correlationId) 
                     let llm = null;
                     if (PR_FOLLOWUP_TRIGGER_KEYWORDS.length > 0) {
                         for (const keyword of PR_FOLLOWUP_TRIGGER_KEYWORDS) {
-                            const llmMatch = comment.body.match(new RegExp(`${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\w+)`));
+                            const llmMatch = comment.body.match(new RegExp(`${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:([\\w.-]+)`));
                             if (llmMatch) llm = resolveModelAlias(llmMatch[1]);
                             if (llm) break;
                         }
