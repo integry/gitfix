@@ -262,7 +262,8 @@ async function processPullRequestCommentJob(job) {
         await stateManager.createTaskState(taskId, {
             number: pullRequestNumber,
             repoOwner,
-            repoName
+            repoName,
+            comments: job.data.comments
         }, correlationId);
     } catch (stateError) {
         correlatedLogger.warn({

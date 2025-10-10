@@ -343,7 +343,8 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
             repoOwner: state.issueRef.repoOwner,
             repoName: state.issueRef.repoName,
             number: state.issueRef.number,
-            type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue'
+            type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue',
+            comments: state.issueRef.comments
           };
         }
       } catch (e) {
@@ -363,7 +364,8 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
                 repoOwner: job.data.repoOwner,
                 repoName: job.data.repoName,
                 number: job.data.pullRequestNumber || job.data.number,
-                type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue'
+                type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue',
+                comments: job.data.comments
               };
             }
           }
