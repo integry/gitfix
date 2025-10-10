@@ -276,7 +276,7 @@ const TaskDetails = () => {
             >
               <div className="flex justify-between items-start mb-3">
                 <h4 className="font-semibold text-white capitalize text-lg">
-                  {item.event.replace(/_/g, ' ')}
+                  {item.event ? item.event.replace(/_/g, ' ') : item.state ? item.state.replace(/_/g, ' ') : 'Unknown Event'}
                 </h4>
                 <span className="text-sm text-gray-400">
                   {formatDate(item.timestamp)}
