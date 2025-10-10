@@ -502,9 +502,9 @@ ${commentHistory}
             `Comment by: @${c.author} (ID: ${c.id})`
         ).join('\n');
         
-        const commitMessage = `feat(ai): Apply follow-up changes from PR ${unprocessedComments.length > 1 ? 'comments' : 'comment'}
+        const commitMessage = `feat(ai): ${changesSummary ? changesSummary.split('\n')[0] : `Apply follow-up changes from PR comment`}
 
-${changesSummary ? changesSummary.split('\n')[0] : `Implemented changes requested by ${authorsText}`}${commitDetails}
+${changesSummary ? changesSummary : `Implemented changes requested by ${authorsText}`}${commitDetails}
 
 PR: #${pullRequestNumber}
 ${commentReferences}
