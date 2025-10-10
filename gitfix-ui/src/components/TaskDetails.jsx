@@ -240,9 +240,11 @@ const TaskDetails = () => {
   if (error) return <div className="text-red-400">Error loading task details: {error}</div>;
   if (!history || history.length === 0) return <div className="text-gray-400">No history found for task {taskId}</div>;
 
+  const historyItemWithPaths = history.find(item => item.promptPath || item.logsPath);
+
   return (
     <div className="border border-gray-700 rounded-lg p-6 bg-gray-800">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4">
         <h3 className="text-xl font-semibold text-white break-all">Task History: {taskId}</h3>
         <button
           className="px-4 py-2 bg-gray-700 text-gray-200 rounded-md hover:bg-gray-600 transition-colors"
@@ -251,6 +253,27 @@ const TaskDetails = () => {
           Back to Tasks
         </button>
       </div>
+
+      {historyItemWithPaths && (historyItemWithPaths.promptPath || historyItemWithPaths.logsPath) && (
+        <div className="mb-6 flex gap-2">
+          {historyItemWithPaths.promptPath && (
+            <button
+              onClick={() => fetchPrompt(historyItemWithPaths.promptPath)}
+              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
+            >
+              View Prompt
+            </button>
+          )}
+          {historyItemWithPaths.logsPath && (
+            <button
+              onClick={() => fetchLogFiles(historyItemWithPaths.logsPath)}
+              className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+            >
+              View Log Files
+            </button>
+          )}
+        </div>
+      )}
 
       {liveDetails.todos.length > 0 && history.length > 0 && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg border-2 border-blue-500">
