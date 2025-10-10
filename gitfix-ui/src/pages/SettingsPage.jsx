@@ -52,23 +52,40 @@ const SettingsPage = () => {
     loadKeywords();
   }, []);
 
-  const handleChange = (e) => {
+  const handleSettingChange = (e) => {
     const { name, value } = e.target;
-    setSettings(prev => ({ ...prev, [name]: value }));
+    setSettings(prev => ({
+      ...prev,
+      [name]: value
+    }));
   };
 
-  const handleSave = async () => {
-    setError(null);
-    setSuccess(null);
-    setSaving(true);
-
+  const handleSaveSettings = async () => {
     try {
-      const payload = {
-        worker_concurrency: parseInt(settings.worker_concurrency, 10) || 0,
-        github_user_whitelist: settings.github_user_whitelist.split(',').map(s => s.trim()).filter(Boolean)
+      setSaving(true);
+      setError(null);
+      setSuccess(null);
+
+      const updatedSettings = {
+        ...settings,
+        github_user_whitelist: settings.github_user_whitelist
+          .split(',')
+          .map(u => u.trim())
+          .filter(u => u.length > 0)
       };
-      await updateSettings(payload);
-      setSuccess('Settings updated successfully! Changes will be effective on next service restart/reload.');
+
+      // Convert worker_concurrency to number if provided
+      if (updatedSettings.worker_concurrency) {
+        updatedSettings.worker_concurrency = parseInt(updatedSettings.worker_concurrency);
+        if (isNaN(updatedSettings.worker_concurrency)) {
+          throw new Error('Worker concurrency must be a number');
+        }
+      } else {
+        delete updatedSettings.worker_concurrency;
+      }
+
+      await updateSettings(updatedSettings);
+      setSuccess('Settings updated successfully! The daemon will pick up changes within 5 minutes.');
     } catch (err) {
       setError(err.message || 'Failed to update settings');
     } finally {
@@ -77,23 +94,29 @@ const SettingsPage = () => {
   };
 
   const handleAddKeyword = () => {
-    if (newKeyword && !keywords.includes(newKeyword)) {
-      setKeywords([...keywords, newKeyword]);
-      setNewKeyword('');
+    if (!newKeyword) return;
+
+    if (keywords.includes(newKeyword)) {
+      alert(`Keyword "${newKeyword}" has already been added to the list.`);
+      return;
     }
+
+    setKeywords([...keywords, newKeyword]);
+    setNewKeyword('');
   };
 
-  const handleRemoveKeyword = (keywordToRemove) => {
-    setKeywords(keywords.filter(k => k !== keywordToRemove));
+  const handleRemoveKeyword = (keyword) => {
+    setKeywords(keywords.filter(k => k !== keyword));
   };
 
   const handleSaveKeywords = async () => {
-    setKeywordsError(null);
-    setKeywordsSuccess(null);
-    setKeywordsSaving(true);
     try {
+      setKeywordsSaving(true);
+      setKeywordsError(null);
+      setKeywordsSuccess(null);
+      
       await updateFollowupKeywords(keywords);
-      setKeywordsSuccess('Keywords updated successfully!');
+      setKeywordsSuccess('Keywords updated successfully! The daemon will pick up changes within 5 minutes.');
     } catch (err) {
       setKeywordsError(err.message || 'Failed to update keywords');
     } finally {
@@ -101,170 +124,162 @@ const SettingsPage = () => {
     }
   };
 
-  if (loading) {
-    return <div>Loading settings...</div>;
-  }
-
   return (
-    <div>
-      <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>GitFix Settings</h2>
-      <p style={{ color: '#9ca3af', marginBottom: '2rem' }}>
-        Configure system-wide settings. These settings from the config repository will override any values set in the '.env' file.
-      </p>
+    <div className="max-w-4xl">
+      <h2 className="text-white text-2xl font-semibold mb-8">Settings</h2>
+      
+      {/* General Settings Section */}
+      <div className="mb-8">
+        <h3 className="text-white text-xl font-semibold mb-4">General Settings</h3>
+        
+        {error && (
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+            {error}
+          </div>
+        )}
+        
+        {success && (
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+            {success}
+          </div>
+        )}
+        
+        {loading ? (
+          <p className="text-gray-400">Loading settings...</p>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-gray-400 mb-2" htmlFor="worker_concurrency">
+                Worker Concurrency
+              </label>
+              <input
+                type="number"
+                id="worker_concurrency"
+                name="worker_concurrency"
+                value={settings.worker_concurrency}
+                onChange={handleSettingChange}
+                placeholder="Number of concurrent workers (e.g., 2)"
+                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="mt-1 text-sm text-gray-500">
+                Controls how many issues can be processed simultaneously
+              </p>
+            </div>
 
-      <div style={{ marginBottom: '3rem' }}>
-        <h3 style={{ color: '#fff', fontSize: '1.25rem', marginBottom: '1rem' }}>PR Follow-up Trigger Keywords</h3>
-        <div style={{ backgroundColor: '#374151', padding: '1.5rem', borderRadius: '0.5rem' }}>
-          <p style={{ color: '#9ca3af', marginBottom: '1rem' }}>
-            Manage keywords that trigger AI follow-ups on pull request comments. If no keywords are specified, any comment from a whitelisted user will trigger a follow-up.
-          </p>
+            <div>
+              <label className="block text-gray-400 mb-2" htmlFor="github_user_whitelist">
+                GitHub User Whitelist
+              </label>
+              <textarea
+                id="github_user_whitelist"
+                name="github_user_whitelist"
+                value={settings.github_user_whitelist}
+                onChange={handleSettingChange}
+                rows={3}
+                placeholder="Comma-separated list of GitHub usernames (e.g., user1, user2)"
+                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+              />
+              <p className="mt-1 text-sm text-gray-500">
+                Only process issues from these GitHub users. Leave empty to process from all users.
+              </p>
+            </div>
 
-          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
-            <input
-              value={newKeyword}
-              onChange={(e) => setNewKeyword(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
-              placeholder="Enter new keyword (e.g., !gitfix)"
-              style={{
-                flex: 1,
-                padding: '0.5rem',
-                backgroundColor: '#1f2937',
-                color: '#fff',
-                border: '1px solid #4b5563',
-                borderRadius: '0.375rem',
-              }}
-            />
-            <button 
-              onClick={handleAddKeyword} 
-              style={{ 
-                backgroundColor: '#10B981', 
-                color: '#fff', 
-                border: 'none', 
-                padding: '0.5rem 1rem', 
-                borderRadius: '0.375rem', 
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
+            <button
+              onClick={handleSaveSettings}
+              disabled={saving}
+              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+                saving
+                  ? 'bg-gray-600 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+              }`}
             >
-              Add
+              {saving ? 'Saving...' : 'Save Settings'}
             </button>
           </div>
+        )}
+      </div>
 
-          {keywordsLoading ? <p style={{ color: '#9ca3af' }}>Loading keywords...</p> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
-              {keywords.map((keyword, index) => (
-                <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#4b5563', padding: '0.5rem 1rem', borderRadius: '0.375rem' }}>
-                  <span style={{ color: '#fff' }}>{keyword}</span>
-                  <button 
-                    onClick={() => handleRemoveKeyword(keyword)} 
-                    style={{ 
-                      backgroundColor: '#EF4444', 
-                      color: '#fff', 
-                      border: 'none', 
-                      padding: '0.25rem 0.75rem', 
-                      borderRadius: '0.375rem', 
-                      cursor: 'pointer',
-                      fontSize: '0.875rem'
-                    }}
+      {/* Follow-up Keywords Section */}
+      <div>
+        <h3 className="text-white text-xl font-semibold mb-4">Follow-up Keywords</h3>
+        <p className="text-gray-400 mb-4">
+          When these keywords are found in follow-up comments on issues with the 'AI' label, 
+          the bot will process them automatically.
+        </p>
+        
+        {keywordsError && (
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+            {keywordsError}
+          </div>
+        )}
+        
+        {keywordsSuccess && (
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+            {keywordsSuccess}
+          </div>
+        )}
+        
+        {keywordsLoading ? (
+          <p className="text-gray-400">Loading keywords...</p>
+        ) : (
+          <>
+            <div className="flex gap-4 mb-4">
+              <input
+                value={newKeyword}
+                onChange={(e) => setNewKeyword(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
+                placeholder="Add a keyword (e.g., GITFIX)"
+                className="flex-1 px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <button
+                onClick={handleAddKeyword}
+                disabled={!newKeyword || keywords.includes(newKeyword)}
+                className={`px-4 py-2 text-white font-medium rounded-md transition-colors ${
+                  !newKeyword || keywords.includes(newKeyword)
+                    ? 'bg-gray-600 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700 cursor-pointer'
+                }`}
+              >
+                Add Keyword
+              </button>
+            </div>
+
+            <div className="space-y-2 mb-4">
+              {keywords.map(keyword => (
+                <div
+                  key={keyword}
+                  className="flex items-center justify-between px-4 py-3 bg-gray-700 rounded-md"
+                >
+                  <span className="font-mono text-white">{keyword}</span>
+                  <button
+                    onClick={() => handleRemoveKeyword(keyword)}
+                    className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-white rounded-md font-medium transition-colors"
                   >
                     Remove
                   </button>
                 </div>
               ))}
-              {keywords.length === 0 && <p style={{ color: '#9ca3af', textAlign: 'center' }}>No keywords configured. All whitelisted user comments will trigger follow-ups.</p>}
+              {keywords.length === 0 && (
+                <p className="text-gray-400 text-center py-8">
+                  No keywords configured. Add a keyword to enable follow-up comment processing.
+                </p>
+              )}
             </div>
-          )}
-
-          <button 
-            onClick={handleSaveKeywords} 
-            disabled={keywordsSaving} 
-            style={{ 
-              backgroundColor: keywordsSaving ? '#6b7280' : '#3b82f6', 
-              color: '#fff', 
-              width: '100%', 
-              border: 'none', 
-              padding: '0.75rem', 
-              borderRadius: '0.375rem', 
-              cursor: keywordsSaving ? 'not-allowed' : 'pointer',
-              fontSize: '1rem',
-              fontWeight: 'bold'
-            }}
-          >
-            {keywordsSaving ? 'Saving...' : 'Save Keywords'}
-          </button>
-
-          {keywordsError && <p style={{ color: '#ef4444', marginTop: '1rem' }}>Error: {keywordsError}</p>}
-          {keywordsSuccess && <p style={{ color: '#10b981', marginTop: '1rem' }}>{keywordsSuccess}</p>}
-        </div>
+            
+            <button
+              onClick={handleSaveKeywords}
+              disabled={keywordsSaving || keywords.length === 0}
+              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+                keywordsSaving || keywords.length === 0
+                  ? 'bg-gray-600 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+              }`}
+            >
+              {keywordsSaving ? 'Saving...' : 'Save Keywords'}
+            </button>
+          </>
+        )}
       </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '600px' }}>
-        <div>
-          <label htmlFor='worker_concurrency' style={{ display: 'block', color: '#d1d5db', marginBottom: '0.5rem' }}>
-            Worker Concurrency
-          </label>
-          <input
-            type='number'
-            id='worker_concurrency'
-            name='worker_concurrency'
-            value={settings.worker_concurrency}
-            onChange={handleChange}
-            placeholder='e.g., 5'
-            style={{ width: '100%', padding: '0.5rem', backgroundColor: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '0.375rem' }}
-          />
-          <p style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.5rem' }}>
-            Number of jobs a worker can process concurrently.
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor='github_user_whitelist' style={{ display: 'block', color: '#d1d5db', marginBottom: '0.5rem' }}>
-            GitHub User Whitelist
-          </label>
-          <textarea
-            id='github_user_whitelist'
-            name='github_user_whitelist'
-            value={settings.github_user_whitelist}
-            onChange={handleChange}
-            placeholder='e.g., user1,user2,user3'
-            rows='3'
-            style={{ width: '100%', padding: '0.5rem', backgroundColor: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '0.375rem', fontFamily: 'monospace' }}
-          />
-          <p style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.5rem' }}>
-            Comma-separated list of GitHub usernames allowed to trigger actions via PR comments.
-          </p>
-        </div>
-
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            padding: '0.75rem 1.5rem',
-            backgroundColor: saving ? '#6b7280' : '#3b82f6',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '0.375rem',
-            cursor: saving ? 'not-allowed' : 'pointer',
-            fontSize: '1rem',
-            fontWeight: 'bold',
-            alignSelf: 'flex-start'
-          }}
-        >
-          {saving ? 'Saving...' : 'Save Settings'}
-        </button>
-      </div>
-
-      {error && (
-        <div style={{ color: '#ef4444', marginTop: '1rem', padding: '0.75rem', backgroundColor: '#7f1d1d', borderRadius: '0.375rem', border: '1px solid #991b1b' }}>
-          {error}
-        </div>
-      )}
-      
-      {success && (
-        <div style={{ color: '#10b981', marginTop: '1rem', padding: '0.75rem', backgroundColor: '#064e3b', borderRadius: '0.375rem', border: '1px solid #065f46' }}>
-          {success}
-        </div>
-      )}
     </div>
   );
 };
