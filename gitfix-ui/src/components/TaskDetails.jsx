@@ -342,46 +342,47 @@ const TaskDetails = () => {
                     )}
                   </div>
                 )}
-                {item.promptPath && (
-                  <div className="p-3 bg-gray-800 rounded-md">
-                    <div className="text-sm text-gray-300">
-                      <strong>Prompt Path:</strong> {formatPath(item.promptPath)}
-                    </div>
-                    <div className="mt-2">
-                      <button
-                        onClick={() => fetchPrompt(item.promptPath)}
-                        className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
-                      >
-                        View Prompt
-                      </button>
-                    </div>
+              </div>
+
+              {item.promptPath && (
+                <div className="mt-3 p-3 bg-gray-800 rounded-md">
+                  <div className="text-sm text-gray-300">
+                    <strong>Prompt Path:</strong> {formatPath(item.promptPath)}
                   </div>
-                )}
-                
-                {item.logsPath && (
-                  <div className="mt-2 flex gap-2">
+                  <div className="mt-2">
                     <button
-                      onClick={() => fetchLogFiles(item.logsPath)}
-                      className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+                      onClick={() => fetchPrompt(item.promptPath)}
+                      className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
                     >
-                      View Log Files
+                      View Prompt
                     </button>
                   </div>
-                )}
-                
-                {item.prUrl && (
-                  <div className="mt-2">
-                    <a
-                      href={item.prUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 underline"
-                    >
-                      View Pull Request
-                    </a>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
+              
+              {item.logsPath && (
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => fetchLogFiles(item.logsPath)}
+                    className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+                  >
+                    View Log Files
+                  </button>
+                </div>
+              )}
+              
+              {item.prUrl && (
+                <div className="mt-3">
+                  <a
+                    href={item.prUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:text-blue-300 underline"
+                  >
+                    View Pull Request
+                  </a>
+                </div>
+              )}
             </div>
           ))}
         </div>
