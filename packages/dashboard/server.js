@@ -604,103 +604,72 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
   try {
     const { taskId } = req.params;
     
-    // Get task history to extract sessionId
     const stateKey = `worker:state:${taskId}`;
     const stateData = await redisClient.get(stateKey);
     
-    let sessionId = null;
-    let conversationId = null;
+    if (!stateData) {
+      return res.json({ events: [], todos: [], currentTask: null });
+    }
+
+    const state = JSON.parse(stateData);
+    const claudeExecutionEntry = state.history.find(h => h.state === 'CLAUDE_EXECUTION' && h.metadata?.sessionId);
     
-    // Try to get sessionId from state
-    if (stateData) {
-      try {
-        const state = JSON.parse(stateData);
-        if (state.history && Array.isArray(state.history)) {
-          for (const entry of state.history) {
-            if (entry.metadata?.sessionId) {
-              sessionId = entry.metadata.sessionId;
-              conversationId = entry.metadata.conversationId;
-              break;
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Error parsing state data:', e);
-      }
+    if (!claudeExecutionEntry) {
+      return res.json({ events: [], todos: [], currentTask: null });
+    }
+
+    const { sessionId } = claudeExecutionEntry.metadata;
+    
+    const logKey = `execution:logs:session:${sessionId}`;
+    const logDataJson = await redisClient.get(logKey);
+    
+    if (!logDataJson) {
+      return res.json({ events: [], todos: [], currentTask: null });
     }
     
-    // If no sessionId in state, try to get it from job data
-    if (!sessionId && taskQueue) {
-      try {
-        const job = await taskQueue.getJob(taskId);
-        if (job && job.returnvalue?.claudeResult) {
-          sessionId = job.returnvalue.claudeResult.sessionId;
-          conversationId = job.returnvalue.claudeResult.conversationId;
-        }
-      } catch (e) {
-        console.error('Error getting job data:', e);
-      }
+    const logData = JSON.parse(logDataJson);
+    const conversationPath = logData.files?.conversation;
+
+    if (!conversationPath || !await fs.pathExists(conversationPath)) {
+      return res.json({ events: [], todos: [], currentTask: null });
     }
-    
-    if (!sessionId) {
-      return res.json({ todos: [], currentTask: null });
-    }
-    
-    // Get log data from Redis
-    let logData = null;
-    const sessionKey = `execution:logs:session:${sessionId}`;
-    const logJson = await redisClient.get(sessionKey);
-    
-    if (logJson) {
-      logData = JSON.parse(logJson);
-    } else if (conversationId) {
-      const conversationKey = `execution:logs:conversation:${conversationId}`;
-      const conversationLogJson = await redisClient.get(conversationKey);
-      if (conversationLogJson) {
-        logData = JSON.parse(conversationLogJson);
-      }
-    }
-    
-    if (!logData || !logData.files || !logData.files.conversation) {
-      return res.json({ todos: [], currentTask: null });
-    }
-    
-    // Read the conversation log file
-    const fs = require('fs').promises;
-    const conversationPath = logData.files.conversation;
-    
-    try {
-      await fs.access(conversationPath);
-    } catch (err) {
-      return res.json({ todos: [], currentTask: null });
-    }
-    
+
     const conversationContent = await fs.readFile(conversationPath, 'utf8');
     const conversation = JSON.parse(conversationContent);
     
-    // Parse todos from conversation
+    const events = [];
     let todos = [];
-    let currentTask = null;
     
     if (conversation.messages && Array.isArray(conversation.messages)) {
       for (const message of conversation.messages) {
-        if (message.type === 'assistant' && message.message && message.message.content) {
+        const timestamp = message.timestamp || new Date().toISOString();
+        if (message.type === 'assistant' && message.message?.content) {
           for (const content of message.message.content) {
-            if (content.type === 'tool_use' && content.name === 'TodoWrite' && content.input && content.input.todos) {
-              todos = content.input.todos;
-              const inProgressTask = todos.find(t => t.status === 'in_progress');
-              if (inProgressTask) {
-                currentTask = inProgressTask.content;
+            if (content.type === 'text') {
+              events.push({ type: 'thought', content: content.text, timestamp });
+            } else if (content.type === 'tool_use') {
+              events.push({ type: 'tool_use', toolName: content.name, input: content.input, id: content.id, timestamp });
+              if (content.name === 'TodoWrite' && content.input?.todos) {
+                todos = content.input.todos;
               }
+            }
+          }
+        } else if (message.type === 'user' && message.message?.content) {
+          for (const content of message.message.content) {
+            if (content.type === 'tool_result') {
+              events.push({ type: 'tool_result', toolUseId: content.tool_use_id, result: content.content, isError: content.is_error || false, timestamp });
             }
           }
         }
       }
     }
     
-    res.json({ todos, currentTask });
+    const inProgressTask = todos.find(t => t.status === 'in_progress');
+    const currentTask = inProgressTask ? inProgressTask.content : null;
+    
+    res.json({ events, todos, currentTask });
   } catch (error) {
-    console.error('Error in /api/task/:taskId/live-details:', error);
+    console.error(`Error in /api/task/:taskId/live-details:`, error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
