@@ -252,16 +252,20 @@ const TaskDetails = () => {
         </button>
       </div>
 
-      {liveDetails.todos.length > 0 && history.length > 0 && !['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase()) && (
+      {liveDetails.todos.length > 0 && history.length > 0 && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg border-2 border-blue-500">
-          <h4 className="mt-0 text-blue-900 flex items-center gap-2">
-            <span className="text-xl">⚡</span>
-            Live Task Progress
-          </h4>
-          {liveDetails.currentTask && (
-            <p className="mb-4 p-3 bg-blue-100 rounded-md border-l-4 border-blue-500">
-              <strong className="text-blue-900">Current Task:</strong> {liveDetails.currentTask}
-            </p>
+          {!['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase()) && (
+            <>
+              <h4 className="mt-0 text-blue-900 flex items-center gap-2">
+                <span className="text-xl">⚡</span>
+                Live Task Progress
+              </h4>
+              {liveDetails.currentTask && (
+                <p className="mb-4 p-3 bg-blue-100 rounded-md border-l-4 border-blue-500">
+                  <strong className="text-blue-900">Current Task:</strong> {liveDetails.currentTask}
+                </p>
+              )}
+            </>
           )}
           <h5 className="mt-4 mb-2 text-blue-900">To-do List:</h5>
           <ul className="list-none pl-0 m-0">
