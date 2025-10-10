@@ -27,6 +27,33 @@ const TaskDetails = () => {
         setLoading(true);
         const data = await getTaskHistory(taskId);
         setHistory(data.history || []);
+        
+        const isTaskActive = data.history && data.history.length > 0 && 
+          ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+            data.history[data.history.length - 1]?.state?.toUpperCase()
+          );
+        
+        if (isTaskActive) {
+          const interval = setInterval(async () => {
+            try {
+              const updatedData = await getTaskHistory(taskId);
+              setHistory(updatedData.history || []);
+              
+              const stillActive = updatedData.history && updatedData.history.length > 0 && 
+                ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+                  updatedData.history[updatedData.history.length - 1]?.state?.toUpperCase()
+                );
+              
+              if (!stillActive) {
+                clearInterval(interval);
+              }
+            } catch (err) {
+              console.error('Error polling task history:', err);
+            }
+          }, 3000);
+          
+          return () => clearInterval(interval);
+        }
       } catch (err) {
         setError(err.message);
         console.error('Error fetching task history:', err);
@@ -36,32 +63,14 @@ const TaskDetails = () => {
     };
 
     fetchHistory();
-    
-    // Poll history for running tasks
-    const isTaskActive = history.length > 0 && 
-      ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
-        history[history.length - 1]?.state?.toUpperCase()
-      );
-    
-    if (isTaskActive) {
-      const interval = setInterval(async () => {
-        try {
-          const data = await getTaskHistory(taskId);
-          setHistory(data.history || []);
-        } catch (err) {
-          console.error('Error polling task history:', err);
-        }
-      }, 3000);
-      
-      return () => clearInterval(interval);
-    }
-  }, [taskId, history]);
+  }, [taskId]);
 
   useEffect(() => {
-    const isTaskActive = history.length > 0 && 
-      ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
-        history[history.length - 1]?.state?.toUpperCase()
-      );
+    if (!taskId || history.length === 0) return;
+
+    const isTaskActive = ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+      history[history.length - 1]?.state?.toUpperCase()
+    );
 
     const fetchLiveDetails = async () => {
       try {
