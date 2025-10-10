@@ -397,8 +397,8 @@ const TaskDetails = () => {
                 </p>
               )}
               
-              <div className="mt-3 space-y-2">
-                {item.metadata && (
+              {item.metadata && (item.metadata.sessionId || item.metadata.conversationId || item.metadata.model || item.metadata.duration || item.metadata.conversationTurns || item.metadata.success !== undefined || item.metadata.pullRequest || item.metadata.githubComment) && (
+                <div className="mt-3 space-y-2">
                   <div className="p-3 bg-gray-800 rounded-md space-y-2">
                     {item.metadata.sessionId && (
                       <div className="text-sm text-gray-300">
@@ -455,8 +455,8 @@ const TaskDetails = () => {
                       </div>
                     )}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {item.metadata?.githubComment?.body && (
                 <div className="mt-3 p-3 bg-gray-900/50 rounded-md border border-gray-600">
@@ -464,27 +464,6 @@ const TaskDetails = () => {
                   <div className="text-sm text-gray-300 whitespace-pre-wrap">
                     {item.metadata.githubComment.body}
                   </div>
-                </div>
-              )}
-
-              {(item.promptPath || item.logsPath) && (
-                <div className="mt-3 flex gap-2">
-                  {item.promptPath && (
-                    <button
-                      onClick={() => fetchPrompt(item.promptPath)}
-                      className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
-                    >
-                      View Prompt
-                    </button>
-                  )}
-                  {item.logsPath && (
-                    <button
-                      onClick={() => fetchLogFiles(item.logsPath)}
-                      className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
-                    >
-                      View Log Files
-                    </button>
-                  )}
                 </div>
               )}
               
