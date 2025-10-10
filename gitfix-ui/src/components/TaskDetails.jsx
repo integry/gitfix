@@ -288,8 +288,60 @@ const TaskDetails = () => {
                   Error: {item.error}
                 </p>
               )}
+
+              {item.message && (
+                <p className="text-gray-300 mb-2">
+                  {item.message}
+                </p>
+              )}
               
               <div className="mt-3 space-y-2">
+                {item.metadata && (
+                  <div className="p-3 bg-gray-800 rounded-md space-y-2">
+                    {item.metadata.sessionId && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Session ID:</strong> <code className="bg-gray-900 px-2 py-1 rounded">{item.metadata.sessionId}</code>
+                      </div>
+                    )}
+                    {item.metadata.conversationId && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Conversation ID:</strong> <code className="bg-gray-900 px-2 py-1 rounded">{item.metadata.conversationId}</code>
+                      </div>
+                    )}
+                    {item.metadata.model && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Model:</strong> <span className="text-blue-400">{item.metadata.model}</span>
+                      </div>
+                    )}
+                    {item.metadata.duration && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Duration:</strong> {(item.metadata.duration / 1000).toFixed(2)}s
+                      </div>
+                    )}
+                    {item.metadata.conversationTurns && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Conversation Turns:</strong> {item.metadata.conversationTurns}
+                      </div>
+                    )}
+                    {item.metadata.success !== undefined && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Success:</strong> <span className={item.metadata.success ? 'text-green-400' : 'text-red-400'}>{item.metadata.success ? 'Yes' : 'No'}</span>
+                      </div>
+                    )}
+                    {item.metadata.pullRequest && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Pull Request:</strong> <a 
+                          href={item.metadata.pullRequest.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline ml-1"
+                        >
+                          #{item.metadata.pullRequest.number}
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {item.promptPath && (
                   <div className="p-3 bg-gray-800 rounded-md">
                     <div className="text-sm text-gray-300">
