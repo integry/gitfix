@@ -72,6 +72,13 @@ const TaskDetails = () => {
       history[history.length - 1]?.state?.toUpperCase()
     );
 
+    const isPRFollowupTask = taskId.startsWith('pr-comments-batch-');
+    const lastHistoryItem = history[history.length - 1];
+    const isPRTaskActive = isPRFollowupTask && lastHistoryItem?.state && 
+      !['COMPLETED', 'FAILED'].includes(lastHistoryItem.state.toUpperCase());
+
+    const shouldPoll = isTaskActive || isPRTaskActive;
+
     const fetchLiveDetails = async () => {
       try {
         const data = await getTaskLiveDetails(taskId);
@@ -83,7 +90,7 @@ const TaskDetails = () => {
 
     fetchLiveDetails();
 
-    if (isTaskActive) {
+    if (shouldPoll) {
       const interval = setInterval(fetchLiveDetails, 2000);
       return () => clearInterval(interval);
     }
