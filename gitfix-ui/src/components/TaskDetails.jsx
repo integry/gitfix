@@ -44,10 +44,18 @@ const TaskDetails = () => {
         history[history.length - 1]?.state?.toUpperCase()
       );
 
+    console.log('LiveDetails check:', {
+      historyLength: history.length,
+      lastState: history[history.length - 1]?.state,
+      isTaskActive
+    });
+
     if (isTaskActive) {
       const fetchLiveDetails = async () => {
         try {
+          console.log('Fetching live details for task:', taskId);
           const data = await getTaskLiveDetails(taskId);
+          console.log('Received live details:', data);
           setLiveDetails(data);
         } catch (err) {
           console.error('Error fetching live task details:', err);
@@ -57,6 +65,8 @@ const TaskDetails = () => {
       fetchLiveDetails();
       const interval = setInterval(fetchLiveDetails, 2000);
       return () => clearInterval(interval);
+    } else {
+      console.log('Task is not active, skipping live details fetch');
     }
   }, [taskId, history]);
 
