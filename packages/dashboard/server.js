@@ -324,10 +324,29 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
     const stateData = await redisClient.get(stateKey);
     
     let history = [];
+    let taskInfo = null;
     if (stateData) {
       try {
         const state = JSON.parse(stateData);
-        history = state.history || [];
+        history = (state.history || []).map(item => {
+          const enrichedItem = { ...item };
+          if (item.metadata?.sessionId) {
+            enrichedItem.promptPath = `/api/execution/${item.metadata.sessionId}/prompt`;
+            enrichedItem.logsPath = `/api/execution/${item.metadata.sessionId}/logs`;
+          }
+          return enrichedItem;
+        });
+        
+        // Extract task info from state
+        if (state.issueRef) {
+          taskInfo = {
+            repoOwner: state.issueRef.repoOwner,
+            repoName: state.issueRef.repoName,
+            number: state.issueRef.number,
+            type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue',
+            comments: state.issueRef.comments
+          };
+        }
       } catch (e) {
         console.error('Error parsing state data:', e);
       }
@@ -338,6 +357,18 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
       try {
         const job = await taskQueue.getJob(taskId);
         if (job) {
+          // Extract task info from job data if not already set
+          if (!taskInfo && job.data) {
+            if (job.data.repoOwner && job.data.repoName) {
+              taskInfo = {
+                repoOwner: job.data.repoOwner,
+                repoName: job.data.repoName,
+                number: job.data.pullRequestNumber || job.data.number,
+                type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue',
+                comments: job.data.comments
+              };
+            }
+          }
           // Create history from job lifecycle
           history = [];
           
@@ -361,18 +392,20 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
           if (job.returnvalue?.claudeResult) {
             const claudeResult = job.returnvalue.claudeResult;
             const claudeStartTime = job.processedOn ? new Date(job.processedOn).getTime() : job.timestamp;
-            
+
             history.push({
               state: 'CLAUDE_EXECUTION',
               timestamp: new Date(claudeStartTime + 1000).toISOString(), // 1 second after start
               message: `Claude AI processing started with model: ${job.returnvalue.modelName || 'claude'}`,
+              promptPath: `/api/execution/${claudeResult.sessionId}/prompt`,
+              logsPath: `/api/execution/${claudeResult.sessionId}/logs`,
               metadata: {
                 model: job.returnvalue.modelName,
                 sessionId: claudeResult.sessionId,
                 conversationId: claudeResult.conversationId
               }
             });
-            
+
             // Add Claude completion
             if (claudeResult.executionTime) {
               const claudeEndTime = claudeStartTime + claudeResult.executionTime;
@@ -380,6 +413,8 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
                 state: 'CLAUDE_COMPLETED',
                 timestamp: new Date(claudeEndTime).toISOString(),
                 message: claudeResult.success ? 'Claude execution completed successfully' : 'Claude execution failed',
+                promptPath: `/api/execution/${claudeResult.sessionId}/prompt`,
+                logsPath: `/api/execution/${claudeResult.sessionId}/logs`,
                 metadata: {
                   duration: claudeResult.executionTime,
                   success: claudeResult.success,
@@ -428,7 +463,8 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
     
     res.json({
       taskId,
-      history
+      history,
+      taskInfo
     });
   } catch (error) {
     console.error('Error in /api/task/:taskId/history:', error);
@@ -560,6 +596,111 @@ app.get('/api/execution/:sessionId/logs/:type', ensureAuthenticated, async (req,
     res.send(content);
   } catch (error) {
     console.error('Error in /api/execution/:sessionId/logs/:type:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    
+    // Get task history to extract sessionId
+    const stateKey = `worker:state:${taskId}`;
+    const stateData = await redisClient.get(stateKey);
+    
+    let sessionId = null;
+    let conversationId = null;
+    
+    // Try to get sessionId from state
+    if (stateData) {
+      try {
+        const state = JSON.parse(stateData);
+        if (state.history && Array.isArray(state.history)) {
+          for (const entry of state.history) {
+            if (entry.metadata?.sessionId) {
+              sessionId = entry.metadata.sessionId;
+              conversationId = entry.metadata.conversationId;
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing state data:', e);
+      }
+    }
+    
+    // If no sessionId in state, try to get it from job data
+    if (!sessionId && taskQueue) {
+      try {
+        const job = await taskQueue.getJob(taskId);
+        if (job && job.returnvalue?.claudeResult) {
+          sessionId = job.returnvalue.claudeResult.sessionId;
+          conversationId = job.returnvalue.claudeResult.conversationId;
+        }
+      } catch (e) {
+        console.error('Error getting job data:', e);
+      }
+    }
+    
+    if (!sessionId) {
+      return res.json({ todos: [], currentTask: null });
+    }
+    
+    // Get log data from Redis
+    let logData = null;
+    const sessionKey = `execution:logs:session:${sessionId}`;
+    const logJson = await redisClient.get(sessionKey);
+    
+    if (logJson) {
+      logData = JSON.parse(logJson);
+    } else if (conversationId) {
+      const conversationKey = `execution:logs:conversation:${conversationId}`;
+      const conversationLogJson = await redisClient.get(conversationKey);
+      if (conversationLogJson) {
+        logData = JSON.parse(conversationLogJson);
+      }
+    }
+    
+    if (!logData || !logData.files || !logData.files.conversation) {
+      return res.json({ todos: [], currentTask: null });
+    }
+    
+    // Read the conversation log file
+    const fs = require('fs').promises;
+    const conversationPath = logData.files.conversation;
+    
+    try {
+      await fs.access(conversationPath);
+    } catch (err) {
+      return res.json({ todos: [], currentTask: null });
+    }
+    
+    const conversationContent = await fs.readFile(conversationPath, 'utf8');
+    const conversation = JSON.parse(conversationContent);
+    
+    // Parse todos from conversation
+    let todos = [];
+    let currentTask = null;
+    
+    if (conversation.messages && Array.isArray(conversation.messages)) {
+      for (const message of conversation.messages) {
+        if (message.type === 'assistant' && message.message && message.message.content) {
+          for (const content of message.message.content) {
+            if (content.type === 'tool_use' && content.name === 'TodoWrite' && content.input && content.input.todos) {
+              todos = content.input.todos;
+              const inProgressTask = todos.find(t => t.status === 'in_progress');
+              if (inProgressTask) {
+                currentTask = inProgressTask.content;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    res.json({ todos, currentTask });
+  } catch (error) {
+    console.error('Error in /api/task/:taskId/live-details:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -255,6 +255,23 @@ async function processPullRequestCommentJob(job) {
         commentsCount: commentsToProcess.length
     }, `Processing PR comment${isBatchJob ? 's batch' : ''} job...`);
 
+    const taskId = job.id;
+    const stateManager = getStateManager();
+    
+    try {
+        await stateManager.createTaskState(taskId, {
+            number: pullRequestNumber,
+            repoOwner,
+            repoName,
+            comments: job.data.comments
+        }, correlationId);
+    } catch (stateError) {
+        correlatedLogger.warn({
+            taskId,
+            error: stateError.message
+        }, 'Failed to create initial task state, continuing anyway');
+    }
+
     let octokit;
     let localRepoPath;
     let worktreeInfo;
@@ -401,6 +418,11 @@ ${body}
         const githubToken = await octokit.auth();
         const repoUrl = getRepoUrl({ repoOwner, repoName });
 
+        // Update state to processing
+        await stateManager.updateTaskState(taskId, TaskStates.PROCESSING, {
+            reason: 'Starting PR comment processing'
+        });
+
         // Ensure we're in a valid git repository before proceeding
         await ensureGitRepository(correlatedLogger);
 
@@ -467,6 +489,29 @@ ${commentHistory}
             repoName 
         }, 'pr_comment', correlationId);
 
+        // Create log files and store in Redis for live-details API
+        await createLogFiles(claudeResult, { 
+            number: pullRequestNumber, 
+            repoOwner, 
+            repoName 
+        });
+
+        // Update task state with Claude execution result (including sessionId for live tracking)
+        await stateManager.updateTaskState(taskId, TaskStates.CLAUDE_EXECUTION, {
+            reason: 'Claude execution completed',
+            claudeResult: {
+                success: claudeResult.success,
+                sessionId: claudeResult.sessionId,
+                conversationId: claudeResult.conversationId,
+                executionTime: claudeResult.executionTime
+            },
+            historyMetadata: {
+                sessionId: claudeResult.sessionId,
+                conversationId: claudeResult.conversationId,
+                model: claudeResult.model
+            }
+        });
+
         if (!claudeResult.success) {
             throw new Error(`Claude execution failed: ${claudeResult.error || 'Unknown error'}`);
         }
@@ -518,6 +563,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             'Follow-up changes'
         );
 
+        let completionComment;
         if (commitResult) {
             await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
                 repoUrl,
@@ -566,7 +612,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 prCommentBody += `- Cost: $${cost.toFixed(2)}\n`;
             }
 
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            completionComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner,
                 repo: repoName,
                 issue_number: pullRequestNumber,
@@ -577,7 +623,8 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
 
             correlatedLogger.info({
                 pullRequestNumber,
-                commitHash: commitResult.commitHash
+                commitHash: commitResult.commitHash,
+                commentUrl: completionComment.data.html_url
             }, 'Successfully applied follow-up changes');
         } else {
             // No changes were necessary
@@ -599,7 +646,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 noChangesBody += `- Cost: $${analysisCost.toFixed(2)}\n`;
             }
             
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            completionComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner,
                 repo: repoName,
                 issue_number: pullRequestNumber,
@@ -608,6 +655,18 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
 
             // Keep the "starting work" comment for duplicate detection tracking
         }
+
+        // Update task state to completed
+        await stateManager.updateTaskState(taskId, TaskStates.COMPLETED, {
+            reason: 'PR comment processing completed successfully',
+            commitHash: commitResult?.commitHash,
+            historyMetadata: {
+                githubComment: {
+                    url: completionComment.data.html_url,
+                    body: completionComment.data.body
+                }
+            }
+        });
 
         return { 
             status: 'complete', 
@@ -655,6 +714,12 @@ The job has been automatically rescheduled and will restart ${readableResetTime}
         } else {
             // Handle all other errors
             handleError(error, 'Failed to process PR comment job', { correlationId });
+            
+            // Update task state to failed
+            await stateManager.updateTaskState(taskId, TaskStates.FAILED, {
+                reason: 'PR comment processing failed',
+                error: error.message
+            });
             
             // Record LLM metrics even if the job failed, as long as Claude was executed
             if (claudeResult) {
@@ -1203,6 +1268,22 @@ async function processGitHubIssueJob(job) {
                     created_at: currentIssueData.data.created_at,
                     updated_at: currentIssueData.data.updated_at,
                     user: currentIssueData.data.user
+                }
+            });
+            
+            // Update task state with Claude execution result (including sessionId for live tracking)
+            await stateManager.updateTaskState(taskId, TaskStates.CLAUDE_EXECUTION, {
+                reason: 'Claude execution completed',
+                claudeResult: {
+                    success: claudeResult.success,
+                    sessionId: claudeResult.sessionId,
+                    conversationId: claudeResult.conversationId,
+                    executionTime: claudeResult.executionTime
+                },
+                historyMetadata: {
+                    sessionId: claudeResult.sessionId,
+                    conversationId: claudeResult.conversationId,
+                    model: claudeResult.model
                 }
             });
             

@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getTaskHistory } from '../api/gitfixApi';
+import { getTaskHistory, getTaskLiveDetails, fetchPrompt as apiFetchPrompt, fetchLogFiles as apiFetchLogFiles, fetchLogFile as apiFetchLogFile } from '../api/gitfixApi';
 
 const TaskDetails = () => {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const [history, setHistory] = useState([]);
+  const [taskInfo, setTaskInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedPrompt, setSelectedPrompt] = useState(null);
@@ -17,6 +18,7 @@ const TaskDetails = () => {
   const [searchMatches, setSearchMatches] = useState([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const logContentRef = useRef(null);
+  const [liveDetails, setLiveDetails] = useState({ todos: [], currentTask: null });
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -26,6 +28,34 @@ const TaskDetails = () => {
         setLoading(true);
         const data = await getTaskHistory(taskId);
         setHistory(data.history || []);
+        setTaskInfo(data.taskInfo || null);
+        
+        const isTaskActive = data.history && data.history.length > 0 && 
+          ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+            data.history[data.history.length - 1]?.state?.toUpperCase()
+          );
+        
+        if (isTaskActive) {
+          const interval = setInterval(async () => {
+            try {
+              const updatedData = await getTaskHistory(taskId);
+              setHistory(updatedData.history || []);
+              
+              const stillActive = updatedData.history && updatedData.history.length > 0 && 
+                ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+                  updatedData.history[updatedData.history.length - 1]?.state?.toUpperCase()
+                );
+              
+              if (!stillActive) {
+                clearInterval(interval);
+              }
+            } catch (err) {
+              console.error('Error polling task history:', err);
+            }
+          }, 3000);
+          
+          return () => clearInterval(interval);
+        }
       } catch (err) {
         setError(err.message);
         console.error('Error fetching task history:', err);
@@ -36,6 +66,37 @@ const TaskDetails = () => {
 
     fetchHistory();
   }, [taskId]);
+
+  useEffect(() => {
+    if (!taskId || history.length === 0) return;
+
+    const isTaskActive = ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+      history[history.length - 1]?.state?.toUpperCase()
+    );
+
+    const isPRFollowupTask = taskId.startsWith('pr-comments-batch-');
+    const lastHistoryItem = history[history.length - 1];
+    const isPRTaskActive = isPRFollowupTask && lastHistoryItem?.state && 
+      !['COMPLETED', 'FAILED'].includes(lastHistoryItem.state.toUpperCase());
+
+    const shouldPoll = isTaskActive || isPRTaskActive;
+
+    const fetchLiveDetails = async () => {
+      try {
+        const data = await getTaskLiveDetails(taskId);
+        setLiveDetails(data);
+      } catch (err) {
+        console.error('Error fetching live task details:', err);
+      }
+    };
+
+    fetchLiveDetails();
+
+    if (shouldPoll) {
+      const interval = setInterval(fetchLiveDetails, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [taskId, history]);
 
   useEffect(() => {
     if (selectedLogFile && searchQuery) {
@@ -67,15 +128,17 @@ const TaskDetails = () => {
   const fetchPrompt = async (promptPath) => {
     try {
       setLoadingPrompt(true);
-      const promptResponse = await fetch(`http://localhost:3000${promptPath}`);
-      if (!promptResponse.ok) {
-        throw new Error('Failed to fetch prompt');
+      const promptData = await apiFetchPrompt(promptPath);
+      
+      try {
+        const parsed = JSON.parse(promptData);
+        setSelectedPrompt(parsed);
+      } catch {
+        setSelectedPrompt({ prompt: promptData });
       }
-      const promptData = await promptResponse.text();
-      setSelectedPrompt(promptData);
     } catch (err) {
       console.error('Error fetching prompt:', err);
-      setSelectedPrompt('Failed to load prompt content.');
+      setSelectedPrompt({ error: 'Failed to load prompt content.' });
     } finally {
       setLoadingPrompt(false);
     }
@@ -85,12 +148,26 @@ const TaskDetails = () => {
     try {
       setLoadingLogFile(true);
       setSelectedLogFile(null);
-      const logsResponse = await fetch(`http://localhost:3000${logsPath}`);
-      if (!logsResponse.ok) {
-        throw new Error('Failed to fetch log files');
+      console.log('Fetching log files from:', logsPath);
+      const logsData = await apiFetchLogFiles(logsPath);
+      console.log('Received log files data:', logsData);
+      
+      if (logsData.files) {
+        const transformedData = {
+          sessionId: logsData.sessionId,
+          logFiles: Object.entries(logsData.files).map(([type, path]) => ({
+            name: path.split('/').pop(),
+            path: `/api/execution/${logsData.sessionId}/logs/${type}`,
+            size: 0,
+            type: type
+          }))
+        };
+        console.log('Transformed log files:', transformedData);
+        setLogFiles(transformedData);
+      } else {
+        console.log('No files property in response, using logsData directly');
+        setLogFiles(logsData);
       }
-      const logsData = await logsResponse.json();
-      setLogFiles(logsData);
     } catch (err) {
       console.error('Error fetching log files:', err);
       setLogFiles({ error: 'Failed to load log files.' });
@@ -101,31 +178,20 @@ const TaskDetails = () => {
 
   const fetchLogFile = async (fileName) => {
     if (!logFiles?.logFiles) return;
-    
+
     try {
       setLoadingLogFile(true);
       const fileInfo = logFiles.logFiles.find(f => f.name === fileName);
       if (!fileInfo) {
         throw new Error('Log file not found');
       }
-      
-      const response = await fetch(`http://localhost:3000${fileInfo.path}`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch log file');
-      }
-      
-      let content;
+
+      const content = await apiFetchLogFile(fileInfo.path);
       const isJson = fileName.endsWith('.json');
-      
-      if (isJson) {
-        content = await response.json();
-      } else {
-        content = await response.text();
-      }
-      
+
       setSelectedLogFile({
         name: fileName,
-        content: content,
+        content: isJson ? JSON.parse(content) : content,
         isJson: isJson
       });
       setSearchQuery('');
@@ -194,9 +260,11 @@ const TaskDetails = () => {
   if (error) return <div className="text-red-400">Error loading task details: {error}</div>;
   if (!history || history.length === 0) return <div className="text-gray-400">No history found for task {taskId}</div>;
 
+  const historyItemWithPaths = history.find(item => item.promptPath || item.logsPath);
+
   return (
     <div className="border border-gray-700 rounded-lg p-6 bg-gray-800">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4">
         <h3 className="text-xl font-semibold text-white break-all">Task History: {taskId}</h3>
         <button
           className="px-4 py-2 bg-gray-700 text-gray-200 rounded-md hover:bg-gray-600 transition-colors"
@@ -205,6 +273,111 @@ const TaskDetails = () => {
           Back to Tasks
         </button>
       </div>
+
+      {taskInfo && (
+        <div className="mb-6 p-4 bg-gray-700/50 rounded-md border border-gray-600">
+          <div className="flex items-center gap-3">
+            <span className="text-gray-300 font-semibold">Repository:</span>
+            <a 
+              href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:text-blue-300 underline"
+            >
+              {taskInfo.repoOwner}/{taskInfo.repoName}
+            </a>
+            {taskInfo.type === 'pr-comment' && (
+              <>
+                <span className="text-gray-500">•</span>
+                <span className="text-gray-300 font-semibold">Pull Request:</span>
+                <a 
+                  href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}/pull/${taskInfo.number}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 underline"
+                >
+                  #{taskInfo.number}
+                </a>
+              </>
+            )}
+            {taskInfo.type === 'issue' && (
+              <>
+                <span className="text-gray-500">•</span>
+                <span className="text-gray-300 font-semibold">Issue:</span>
+                <a 
+                  href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}/issues/${taskInfo.number}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 underline"
+                >
+                  #{taskInfo.number}
+                </a>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {historyItemWithPaths && (historyItemWithPaths.promptPath || historyItemWithPaths.logsPath) && (
+        <div className="mb-6 flex gap-2">
+          {historyItemWithPaths.promptPath && (
+            <button
+              onClick={() => fetchPrompt(historyItemWithPaths.promptPath)}
+              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
+            >
+              View Prompt
+            </button>
+          )}
+          {historyItemWithPaths.logsPath && (
+            <button
+              onClick={() => fetchLogFiles(historyItemWithPaths.logsPath)}
+              className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+            >
+              View Log Files
+            </button>
+          )}
+        </div>
+      )}
+
+      {liveDetails.todos.length > 0 && history.length > 0 && (
+        <div className="mb-6 p-4 bg-blue-50 rounded-lg border-2 border-blue-500">
+          {!['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase()) && (
+            <>
+              <h4 className="mt-0 text-blue-900 flex items-center gap-2">
+                <span className="text-xl">⚡</span>
+                Live Task Progress
+              </h4>
+              {liveDetails.currentTask && (
+                <p className="mb-4 p-3 bg-blue-100 rounded-md border-l-4 border-blue-500">
+                  <strong className="text-blue-900">Current Task:</strong> {liveDetails.currentTask}
+                </p>
+              )}
+            </>
+          )}
+          <h5 className="mt-4 mb-2 text-blue-900">To-do List:</h5>
+          <ul className="list-none pl-0 m-0">
+            {liveDetails.todos.map(todo => (
+              <li 
+                key={todo.id} 
+                className={`flex items-center mb-2 p-2 rounded transition-colors ${
+                  todo.status === 'in_progress' ? 'bg-blue-100' : ''
+                }`}
+              >
+                <span className="mr-2 text-lg">
+                  {todo.status === 'completed' ? '✅' : todo.status === 'in_progress' ? '⏳' : '📋'}
+                </span>
+                <span className={`${
+                  todo.status === 'completed' ? 'line-through text-gray-500' : 'text-gray-700'
+                } ${
+                  todo.status === 'in_progress' ? 'font-bold' : 'font-normal'
+                }`}>
+                  {todo.content}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {history.length === 0 ? (
         <p className="text-gray-400 text-center">No history found for this task</p>
@@ -217,60 +390,113 @@ const TaskDetails = () => {
             >
               <div className="flex justify-between items-start mb-3">
                 <h4 className="font-semibold text-white capitalize text-lg">
-                  {item.event.replace(/_/g, ' ')}
+                  {item.event ? item.event.replace(/_/g, ' ') : item.state ? item.state.replace(/_/g, ' ') : 'Unknown Event'}
                 </h4>
                 <span className="text-sm text-gray-400">
                   {formatDate(item.timestamp)}
                 </span>
               </div>
               
+              {item.reason && (
+                <p className="text-gray-400 italic mb-2">
+                  {item.reason}
+                </p>
+              )}
+
               {item.error && (
                 <p className="my-2 text-red-400">
                   Error: {item.error}
                 </p>
               )}
+
+              {item.message && (
+                <p className="text-gray-300 mb-2">
+                  {item.message}
+                </p>
+              )}
               
-              <div className="mt-3 space-y-2">
-                {item.promptPath && (
-                  <div className="p-3 bg-gray-800 rounded-md">
-                    <div className="text-sm text-gray-300">
-                      <strong>Prompt Path:</strong> {formatPath(item.promptPath)}
-                    </div>
-                    <div className="mt-2">
-                      <button
-                        onClick={() => fetchPrompt(item.promptPath)}
-                        className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
-                      >
-                        View Prompt
-                      </button>
-                    </div>
+              {item.metadata && (item.metadata.sessionId || item.metadata.conversationId || item.metadata.model || item.metadata.duration || item.metadata.conversationTurns || item.metadata.success !== undefined || item.metadata.pullRequest || item.metadata.githubComment) && (
+                <div className="mt-3 space-y-2">
+                  <div className="p-3 bg-gray-800 rounded-md space-y-2">
+                    {item.metadata.sessionId && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Session ID:</strong> <code className="bg-gray-900 px-2 py-1 rounded">{item.metadata.sessionId}</code>
+                      </div>
+                    )}
+                    {item.metadata.conversationId && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Conversation ID:</strong> <code className="bg-gray-900 px-2 py-1 rounded">{item.metadata.conversationId}</code>
+                      </div>
+                    )}
+                    {item.metadata.model && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Model:</strong> <span className="text-blue-400">{item.metadata.model}</span>
+                      </div>
+                    )}
+                    {item.metadata.duration && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Duration:</strong> {(item.metadata.duration / 1000).toFixed(2)}s
+                      </div>
+                    )}
+                    {item.metadata.conversationTurns && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Conversation Turns:</strong> {item.metadata.conversationTurns}
+                      </div>
+                    )}
+                    {item.metadata.success !== undefined && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Success:</strong> <span className={item.metadata.success ? 'text-green-400' : 'text-red-400'}>{item.metadata.success ? 'Yes' : 'No'}</span>
+                      </div>
+                    )}
+                    {item.metadata.pullRequest && (
+                      <div className="text-sm text-gray-300">
+                        <strong>Pull Request:</strong> <a 
+                          href={item.metadata.pullRequest.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline ml-1"
+                        >
+                          #{item.metadata.pullRequest.number}
+                        </a>
+                      </div>
+                    )}
+                    {item.metadata.githubComment && (
+                      <div className="text-sm text-gray-300">
+                        <strong>GitHub Comment:</strong> <a 
+                          href={item.metadata.githubComment.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline ml-1"
+                        >
+                          View Comment
+                        </a>
+                      </div>
+                    )}
                   </div>
-                )}
-                
-                {item.logsPath && (
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      onClick={() => fetchLogFiles(item.logsPath)}
-                      className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
-                    >
-                      View Log Files
-                    </button>
+                </div>
+              )}
+
+              {item.metadata?.githubComment?.body && (
+                <div className="mt-3 p-3 bg-gray-900/50 rounded-md border border-gray-600">
+                  <div className="text-sm text-gray-400 mb-2 font-semibold">Comment Posted:</div>
+                  <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                    {item.metadata.githubComment.body}
                   </div>
-                )}
-                
-                {item.prUrl && (
-                  <div className="mt-2">
-                    <a
-                      href={item.prUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 underline"
-                    >
-                      View Pull Request
-                    </a>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
+              
+              {item.prUrl && (
+                <div className="mt-3">
+                  <a
+                    href={item.prUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:text-blue-300 underline"
+                  >
+                    View Pull Request
+                  </a>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -291,17 +517,64 @@ const TaskDetails = () => {
             <div className="flex-1 overflow-y-auto p-4">
               {loadingPrompt ? (
                 <div className="text-gray-400">Loading prompt...</div>
+              ) : selectedPrompt.error ? (
+                <div className="text-red-400">{selectedPrompt.error}</div>
               ) : (
-                <>
-                  {selectedPrompt.length > 5000 && (
-                    <div className="mt-2 text-amber-500">
-                      Large prompt: {selectedPrompt.length} characters
+                <div className="space-y-4">
+                  {(selectedPrompt.sessionId || selectedPrompt.model || selectedPrompt.timestamp || selectedPrompt.issueRef) && (
+                    <div className="bg-gray-900 rounded-md p-4 space-y-2">
+                      <h4 className="text-sm font-semibold text-gray-400 uppercase mb-3">Prompt Metadata</h4>
+                      {selectedPrompt.sessionId && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Session ID:</span>
+                          <code className="ml-2 bg-gray-800 px-2 py-1 rounded text-gray-300">{selectedPrompt.sessionId}</code>
+                        </div>
+                      )}
+                      {selectedPrompt.model && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Model:</span>
+                          <span className="ml-2 text-blue-400">{selectedPrompt.model}</span>
+                        </div>
+                      )}
+                      {selectedPrompt.timestamp && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Timestamp:</span>
+                          <span className="ml-2 text-gray-300">{new Date(selectedPrompt.timestamp).toLocaleString()}</span>
+                        </div>
+                      )}
+                      {selectedPrompt.isRetry !== undefined && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Is Retry:</span>
+                          <span className={`ml-2 ${selectedPrompt.isRetry ? 'text-amber-400' : 'text-gray-300'}`}>
+                            {selectedPrompt.isRetry ? 'Yes' : 'No'}
+                          </span>
+                        </div>
+                      )}
+                      {selectedPrompt.issueRef && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Issue Reference:</span>
+                          <div className="ml-2 mt-1 bg-gray-800 px-2 py-1 rounded text-gray-300 font-mono text-xs">
+                            {selectedPrompt.issueRef.repoOwner}/{selectedPrompt.issueRef.repoName} #{selectedPrompt.issueRef.number}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
-                  <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-gray-900 p-4 rounded-md">
-                    {selectedPrompt}
-                  </pre>
-                </>
+                  
+                  {selectedPrompt.prompt && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-400 uppercase mb-2">Prompt Content</h4>
+                      {selectedPrompt.prompt.length > 5000 && (
+                        <div className="mb-2 text-amber-500 text-sm">
+                          Large prompt: {selectedPrompt.prompt.length} characters
+                        </div>
+                      )}
+                      <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-gray-900 p-4 rounded-md">
+                        {selectedPrompt.prompt}
+                      </pre>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
