@@ -327,7 +327,14 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
     if (stateData) {
       try {
         const state = JSON.parse(stateData);
-        history = state.history || [];
+        history = (state.history || []).map(item => {
+          const enrichedItem = { ...item };
+          if (item.metadata?.sessionId) {
+            enrichedItem.promptPath = `/api/execution/${item.metadata.sessionId}/prompt`;
+            enrichedItem.logsPath = `/api/execution/${item.metadata.sessionId}/logs`;
+          }
+          return enrichedItem;
+        });
       } catch (e) {
         console.error('Error parsing state data:', e);
       }
