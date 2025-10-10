@@ -607,7 +607,7 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
     }
     
     if (!sessionId) {
-      return res.status(404).json({ error: 'Session ID not found for this task' });
+      return res.json({ todos: [], currentTask: null });
     }
     
     // Get log data from Redis
@@ -626,7 +626,7 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
     }
     
     if (!logData || !logData.files || !logData.files.conversation) {
-      return res.status(404).json({ error: 'Conversation log not found for this task' });
+      return res.json({ todos: [], currentTask: null });
     }
     
     // Read the conversation log file
@@ -636,7 +636,7 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
     try {
       await fs.access(conversationPath);
     } catch (err) {
-      return res.status(404).json({ error: 'Conversation log file no longer exists' });
+      return res.json({ todos: [], currentTask: null });
     }
     
     const conversationContent = await fs.readFile(conversationPath, 'utf8');
