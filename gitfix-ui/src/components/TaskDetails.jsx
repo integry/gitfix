@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getTaskHistory, getTaskLiveDetails } from '../api/gitfixApi';
+import { getTaskHistory, getTaskLiveDetails, fetchPrompt as apiFetchPrompt, fetchLogFiles as apiFetchLogFiles, fetchLogFile as apiFetchLogFile } from '../api/gitfixApi';
 
 const TaskDetails = () => {
   const { taskId } = useParams();
@@ -91,11 +91,7 @@ const TaskDetails = () => {
   const fetchPrompt = async (promptPath) => {
     try {
       setLoadingPrompt(true);
-      const promptResponse = await fetch(`http://localhost:3000${promptPath}`);
-      if (!promptResponse.ok) {
-        throw new Error('Failed to fetch prompt');
-      }
-      const promptData = await promptResponse.text();
+      const promptData = await apiFetchPrompt(promptPath);
       setSelectedPrompt(promptData);
     } catch (err) {
       console.error('Error fetching prompt:', err);
@@ -109,11 +105,7 @@ const TaskDetails = () => {
     try {
       setLoadingLogFile(true);
       setSelectedLogFile(null);
-      const logsResponse = await fetch(`http://localhost:3000${logsPath}`);
-      if (!logsResponse.ok) {
-        throw new Error('Failed to fetch log files');
-      }
-      const logsData = await logsResponse.json();
+      const logsData = await apiFetchLogFiles(logsPath);
       setLogFiles(logsData);
     } catch (err) {
       console.error('Error fetching log files:', err);
@@ -125,31 +117,20 @@ const TaskDetails = () => {
 
   const fetchLogFile = async (fileName) => {
     if (!logFiles?.logFiles) return;
-    
+
     try {
       setLoadingLogFile(true);
       const fileInfo = logFiles.logFiles.find(f => f.name === fileName);
       if (!fileInfo) {
         throw new Error('Log file not found');
       }
-      
-      const response = await fetch(`http://localhost:3000${fileInfo.path}`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch log file');
-      }
-      
-      let content;
+
+      const content = await apiFetchLogFile(fileInfo.path);
       const isJson = fileName.endsWith('.json');
-      
-      if (isJson) {
-        content = await response.json();
-      } else {
-        content = await response.text();
-      }
-      
+
       setSelectedLogFile({
         name: fileName,
-        content: content,
+        content: isJson ? JSON.parse(content) : content,
         isJson: isJson
       });
       setSearchQuery('');

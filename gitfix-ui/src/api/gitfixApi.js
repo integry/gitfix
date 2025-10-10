@@ -133,3 +133,27 @@ export const updateFollowupKeywords = async (keywords) => {
   await handleApiResponse(response);
   return response.json();
 };
+
+export const fetchPrompt = async (promptPath) => {
+  const response = await fetch(`${API_BASE_URL}${promptPath}`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.text();
+};
+
+export const fetchLogFiles = async (logsPath) => {
+  const response = await fetch(`${API_BASE_URL}${logsPath}`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const fetchLogFile = async (logFilePath) => {
+  const response = await fetch(`${API_BASE_URL}${logFilePath}`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.text();
+};
