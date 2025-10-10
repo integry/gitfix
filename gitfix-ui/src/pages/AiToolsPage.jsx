@@ -3,8 +3,8 @@ import React from 'react';
 const AiToolsPage = () => {
   return (
     <div>
-      <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>AI Tools</h2>
-      <p style={{ color: '#9ca3af' }}>Configure AI tools used for implementation.</p>
+      <h2 className="text-white text-2xl font-semibold mb-4">AI Tools</h2>
+      <p className="text-gray-400">Configure AI tools used for implementation.</p>
     </div>
   );
 };

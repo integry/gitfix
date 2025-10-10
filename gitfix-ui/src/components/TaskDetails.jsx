@@ -51,644 +51,368 @@ const TaskDetails = () => {
     }
   }, [searchQuery, selectedLogFile]);
 
-  const handleSearchChange = (e) => {
-    setSearchQuery(e.target.value);
-  };
-
   useEffect(() => {
     if (searchMatches.length > 0 && logContentRef.current) {
-      const marks = logContentRef.current.querySelectorAll('mark');
-      if (marks[currentMatchIndex]) {
-        marks.forEach((mark, index) => {
-          if (index === currentMatchIndex) {
-            mark.style.backgroundColor = '#fbbf24';
-            mark.style.fontWeight = 'bold';
-            mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } else {
-            mark.style.backgroundColor = '#fef3c7';
-            mark.style.fontWeight = 'normal';
-          }
-        });
+      const currentMatch = searchMatches[currentMatchIndex];
+      if (currentMatch) {
+        const highlightId = `match-${currentMatchIndex}`;
+        const element = document.getElementById(highlightId);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
       }
     }
   }, [currentMatchIndex, searchMatches]);
 
-  const fetchPrompt = async (sessionId, conversationId) => {
+  const fetchPrompt = async (promptPath) => {
     try {
       setLoadingPrompt(true);
-      const API_BASE_URL = 'https://api.gitfix.dev';
-      const response = await fetch(
-        `${API_BASE_URL}/api/execution/${sessionId}/prompt${conversationId ? `?conversationId=${conversationId}` : ''}`,
-        { credentials: 'include' }
-      );
-      
-      if (!response.ok) {
+      const promptResponse = await fetch(`http://localhost:3000${promptPath}`);
+      if (!promptResponse.ok) {
         throw new Error('Failed to fetch prompt');
       }
-      
-      const data = await response.json();
-      setSelectedPrompt(data);
+      const promptData = await promptResponse.text();
+      setSelectedPrompt(promptData);
     } catch (err) {
       console.error('Error fetching prompt:', err);
-      alert('Failed to fetch prompt: ' + err.message);
+      setSelectedPrompt('Failed to load prompt content.');
     } finally {
       setLoadingPrompt(false);
     }
   };
 
-  const fetchLogFiles = async (sessionId, conversationId) => {
+  const fetchLogFiles = async (logsPath) => {
     try {
-      const API_BASE_URL = 'https://api.gitfix.dev';
-      const response = await fetch(
-        `${API_BASE_URL}/api/execution/${sessionId}/logs${conversationId ? `?conversationId=${conversationId}` : ''}`,
-        { credentials: 'include' }
-      );
-      
-      if (!response.ok) {
-        if (response.status === 404) {
-          // Log files not found, but don't alert
-          return;
-        }
+      setLoadingLogFile(true);
+      setSelectedLogFile(null);
+      const logsResponse = await fetch(`http://localhost:3000${logsPath}`);
+      if (!logsResponse.ok) {
         throw new Error('Failed to fetch log files');
       }
-      
-      const data = await response.json();
-      setLogFiles(data);
+      const logsData = await logsResponse.json();
+      setLogFiles(logsData);
     } catch (err) {
       console.error('Error fetching log files:', err);
+      setLogFiles({ error: 'Failed to load log files.' });
+    } finally {
+      setLoadingLogFile(false);
     }
   };
 
-  const viewLogFile = async (sessionId, conversationId, type) => {
+  const fetchLogFile = async (fileName) => {
+    if (!logFiles?.logFiles) return;
+    
     try {
       setLoadingLogFile(true);
-      const API_BASE_URL = 'https://api.gitfix.dev';
-      const response = await fetch(
-        `${API_BASE_URL}/api/execution/${sessionId}/logs/${type}${conversationId ? `?conversationId=${conversationId}` : ''}`,
-        { credentials: 'include' }
-      );
+      const fileInfo = logFiles.logFiles.find(f => f.name === fileName);
+      if (!fileInfo) {
+        throw new Error('Log file not found');
+      }
       
+      const response = await fetch(`http://localhost:3000${fileInfo.path}`);
       if (!response.ok) {
         throw new Error('Failed to fetch log file');
       }
       
-      const contentType = response.headers.get('content-type');
       let content;
+      const isJson = fileName.endsWith('.json');
       
-      if (contentType?.includes('application/json')) {
+      if (isJson) {
         content = await response.json();
       } else {
         content = await response.text();
       }
       
       setSelectedLogFile({
-        type,
-        content,
-        isJson: contentType?.includes('application/json')
+        name: fileName,
+        content: content,
+        isJson: isJson
       });
+      setSearchQuery('');
     } catch (err) {
       console.error('Error fetching log file:', err);
-      alert('Failed to fetch log file: ' + err.message);
+      setSelectedLogFile({
+        name: fileName,
+        content: 'Failed to load log file content.',
+        isJson: false
+      });
     } finally {
       setLoadingLogFile(false);
     }
   };
 
-  const downloadLogFile = () => {
-    if (!selectedLogFile) return;
-    const content = selectedLogFile.isJson
-      ? JSON.stringify(selectedLogFile.content, null, 2)
-      : selectedLogFile.content;
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${taskId}-${selectedLogFile.type}.log`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleString();
   };
 
-  const getStateColor = (state) => {
-    switch (state) {
-      case 'COMPLETED':
-        return '#22c55e';
-      case 'FAILED':
-        return '#ef4444';
-      case 'PROCESSING':
-      case 'CLAUDE_EXECUTION':
-        return '#3b82f6';
-      case 'POST_PROCESSING':
-        return '#a855f7';
-      case 'PENDING':
-        return '#6b7280';
-      default:
-        return '#6b7280';
+  const formatPath = (path) => {
+    if (!path) return 'N/A';
+    // Extract the important part of the path (after /var/folders/)
+    const match = path.match(/\/tasks\/(.+)/);
+    return match ? match[1] : path;
+  };
+
+  const handleNextMatch = () => {
+    if (searchMatches.length > 0) {
+      setCurrentMatchIndex((prev) => (prev + 1) % searchMatches.length);
     }
   };
 
-  const formatTimestamp = (timestamp) => {
-    if (!timestamp) return 'N/A';
-    const date = new Date(timestamp);
-    return date.toLocaleString();
+  const handlePrevMatch = () => {
+    if (searchMatches.length > 0) {
+      setCurrentMatchIndex((prev) => (prev - 1 + searchMatches.length) % searchMatches.length);
+    }
   };
 
-  const formatDuration = (duration) => {
-    if (!duration) return 'N/A';
-    const minutes = Math.floor(duration / 60000);
-    const seconds = Math.floor((duration % 60000) / 1000);
-    return `${minutes}m ${seconds}s`;
+  const highlightContent = (content) => {
+    if (!searchQuery) return content;
+
+    const parts = content.split(new RegExp(`(${searchQuery})`, 'gi'));
+    let matchCount = 0;
+
+    return parts.map((part, index) => {
+      if (part.toLowerCase() === searchQuery.toLowerCase()) {
+        const isCurrentMatch = matchCount === currentMatchIndex;
+        matchCount++;
+        return (
+          <span
+            key={index}
+            id={`match-${matchCount - 1}`}
+            className={`${
+              isCurrentMatch ? 'bg-yellow-500 text-black' : 'bg-yellow-300 text-black'
+            } px-1 rounded`}
+          >
+            {part}
+          </span>
+        );
+      }
+      return part;
+    });
   };
 
-  if (loading) return <div>Loading task history...</div>;
-  if (error) return <div>Error loading task history: {error}</div>;
+  if (loading) return <div className="text-gray-400">Loading task details...</div>;
+  if (error) return <div className="text-red-400">Error loading task details: {error}</div>;
+  if (!history || history.length === 0) return <div className="text-gray-400">No history found for task {taskId}</div>;
 
   return (
-    <div style={{
-      border: '1px solid #e5e7eb',
-      borderRadius: '8px',
-      padding: '1.5rem',
-      backgroundColor: '#ffffff',
-      marginTop: '1rem'
-    }}>
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center',
-        marginBottom: '1rem'
-      }}>
-        <h3 style={{ wordBreak: 'break-all' }}>Task History: {taskId}</h3>
+    <div className="border border-gray-700 rounded-lg p-6 bg-gray-800">
+      <div className="flex justify-between items-center mb-6">
+        <h3 className="text-xl font-semibold text-white break-all">Task History: {taskId}</h3>
         <button
+          className="px-4 py-2 bg-gray-700 text-gray-200 rounded-md hover:bg-gray-600 transition-colors"
           onClick={() => navigate('/tasks')}
-          style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: '#6b7280',
-            color: '#ffffff',
-            borderRadius: '4px',
-            border: 'none',
-            cursor: 'pointer'
-          }}
         >
           Back to Tasks
         </button>
       </div>
 
       {history.length === 0 ? (
-        <p style={{ color: '#6b7280', textAlign: 'center' }}>No history found for this task</p>
+        <p className="text-gray-400 text-center">No history found for this task</p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {history.map((entry, index) => (
-            <div 
+        <div className="flex flex-col gap-4">
+          {history.map((item, index) => (
+            <div
               key={index}
-              style={{
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                padding: '1rem',
-                backgroundColor: '#f9fafb'
-              }}
+              className="border border-gray-700 rounded-md p-4 bg-gray-700/50"
             >
-              <div style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                marginBottom: '0.5rem'
-              }}>
-                <h4 style={{ 
-                  color: getStateColor(entry.state),
-                  margin: 0
-                }}>
-                  {entry.state || 'Unknown State'}
+              <div className="flex justify-between items-start mb-3">
+                <h4 className="font-semibold text-white capitalize text-lg">
+                  {item.event.replace(/_/g, ' ')}
                 </h4>
-                <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                  {formatTimestamp(entry.timestamp)}
+                <span className="text-sm text-gray-400">
+                  {formatDate(item.timestamp)}
                 </span>
               </div>
-
-              {entry.message && (
-                <p style={{ margin: '0.5rem 0', color: '#374151' }}>
-                  {entry.message}
+              
+              {item.error && (
+                <p className="my-2 text-red-400">
+                  Error: {item.error}
                 </p>
               )}
-
-              {entry.metadata && (
-                <div style={{ 
-                  marginTop: '0.5rem',
-                  fontSize: '0.875rem',
-                  color: '#6b7280'
-                }}>
-                  {entry.metadata.duration && (
-                    <div>Duration: {formatDuration(entry.metadata.duration)}</div>
-                  )}
-                  {entry.metadata.error && (
-                    <div style={{ 
-                      marginTop: '0.5rem',
-                      padding: '0.5rem',
-                      backgroundColor: '#fee2e2',
-                      borderRadius: '4px',
-                      color: '#991b1b'
-                    }}>
-                      Error: {entry.metadata.error}
+              
+              <div className="mt-3 space-y-2">
+                {item.promptPath && (
+                  <div className="p-3 bg-gray-800 rounded-md">
+                    <div className="text-sm text-gray-300">
+                      <strong>Prompt Path:</strong> {formatPath(item.promptPath)}
                     </div>
-                  )}
-                  {entry.metadata.claudeResult && (
-                    <div style={{ marginTop: '0.5rem' }}>
-                      <div>Claude Execution: {entry.metadata.claudeResult.success ? 'Success' : 'Failed'}</div>
-                      {entry.metadata.claudeResult.executionTime && (
-                        <div>Execution Time: {formatDuration(entry.metadata.claudeResult.executionTime)}</div>
-                      )}
-                      {entry.metadata.claudeResult.model && (
-                        <div>Model: {entry.metadata.claudeResult.model}</div>
-                      )}
-                    </div>
-                  )}
-                  {(entry.state === 'CLAUDE_EXECUTION' || entry.state === 'CLAUDE_COMPLETED') && 
-                   (entry.metadata?.sessionId || entry.metadata?.conversationId) && (
-                    <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+                    <div className="mt-2">
                       <button
-                        onClick={() => fetchPrompt(entry.metadata.sessionId, entry.metadata.conversationId)}
-                        style={{
-                          padding: '0.25rem 0.75rem',
-                          backgroundColor: '#3b82f6',
-                          color: '#ffffff',
-                          borderRadius: '4px',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '0.875rem'
-                        }}
-                        disabled={loadingPrompt}
+                        onClick={() => fetchPrompt(item.promptPath)}
+                        className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
                       >
-                        {loadingPrompt ? 'Loading...' : 'View Prompt'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          fetchLogFiles(entry.metadata.sessionId, entry.metadata.conversationId);
-                          // Store session info for later use
-                          window._currentSessionInfo = {
-                            sessionId: entry.metadata.sessionId,
-                            conversationId: entry.metadata.conversationId
-                          };
-                        }}
-                        style={{
-                          padding: '0.25rem 0.75rem',
-                          backgroundColor: '#10b981',
-                          color: '#ffffff',
-                          borderRadius: '4px',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '0.875rem'
-                        }}
-                      >
-                        View Logs
+                        View Prompt
                       </button>
                     </div>
-                  )}
-                  {entry.metadata.pullRequest && (
-                    <div style={{ marginTop: '0.5rem' }}>
-                      Pull Request: <a 
-                        href={entry.metadata.pullRequest.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: '#3b82f6', textDecoration: 'none' }}
-                      >
-                        #{entry.metadata.pullRequest.number}
-                      </a>
-                    </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                )}
+                
+                {item.logsPath && (
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={() => fetchLogFiles(item.logsPath)}
+                      className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+                    >
+                      View Log Files
+                    </button>
+                  </div>
+                )}
+                
+                {item.prUrl && (
+                  <div className="mt-2">
+                    <a
+                      href={item.prUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 underline"
+                    >
+                      View Pull Request
+                    </a>
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Prompt Modal */}
       {selectedPrompt && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: '#ffffff',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            maxWidth: '80%',
-            maxHeight: '80vh',
-            overflow: 'auto',
-            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)'
-          }}>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '1rem'
-            }}>
-              <h3 style={{ margin: 0 }}>LLM Prompt</h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg max-w-4xl w-full max-h-[80vh] flex flex-col border border-gray-700">
+            <div className="flex justify-between items-center p-4 border-b border-gray-700">
+              <h3 className="text-lg font-semibold text-white">LLM Prompt</h3>
               <button
+                className="text-gray-400 hover:text-gray-200 text-2xl leading-none"
                 onClick={() => setSelectedPrompt(null)}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#6b7280',
-                  color: '#ffffff',
-                  borderRadius: '4px',
-                  border: 'none',
-                  cursor: 'pointer'
-                }}
               >
-                Close
+                &times;
               </button>
             </div>
-            
-            <div style={{
-              marginBottom: '1rem',
-              fontSize: '0.875rem',
-              color: '#6b7280'
-            }}>
-              <div>Session ID: {selectedPrompt.sessionId}</div>
-              {selectedPrompt.conversationId && <div>Conversation ID: {selectedPrompt.conversationId}</div>}
-              <div>Model: {selectedPrompt.model}</div>
-              <div>Timestamp: {selectedPrompt.timestamp}</div>
-              {selectedPrompt.isRetry && (
-                <div style={{ marginTop: '0.5rem', color: '#f59e0b' }}>
-                  Retry: {selectedPrompt.retryReason || 'Yes'}
-                </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {loadingPrompt ? (
+                <div className="text-gray-400">Loading prompt...</div>
+              ) : (
+                <>
+                  {selectedPrompt.length > 5000 && (
+                    <div className="mt-2 text-amber-500">
+                      Large prompt: {selectedPrompt.length} characters
+                    </div>
+                  )}
+                  <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-gray-900 p-4 rounded-md">
+                    {selectedPrompt}
+                  </pre>
+                </>
               )}
             </div>
-            
-            <div style={{
-              backgroundColor: '#f3f4f6',
-              borderRadius: '4px',
-              padding: '1rem',
-              fontFamily: 'monospace',
-              fontSize: '0.875rem',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              overflowX: 'auto'
-            }}>
-              {selectedPrompt.prompt}
-            </div>
           </div>
         </div>
       )}
 
-      {/* Log Files Modal */}
       {logFiles && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: '#ffffff',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            maxWidth: '600px',
-            width: '90%',
-            maxHeight: '80vh',
-            overflow: 'auto',
-            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)'
-          }}>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '1rem'
-            }}>
-              <h3 style={{ margin: 0 }}>Log Files</h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg max-w-5xl w-full max-h-[80vh] flex flex-col border border-gray-700">
+            <div className="flex justify-between items-center p-4 border-b border-gray-700">
+              <h3 className="text-lg font-semibold text-white">Log Files</h3>
               <button
-                onClick={() => setLogFiles(null)}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#6b7280',
-                  color: '#ffffff',
-                  borderRadius: '4px',
-                  border: 'none',
-                  cursor: 'pointer'
+                className="text-gray-400 hover:text-gray-200 text-2xl leading-none"
+                onClick={() => {
+                  setLogFiles(null);
+                  setSelectedLogFile(null);
                 }}
               >
-                Close
+                &times;
               </button>
             </div>
-            
-            {logFiles.files && Object.keys(logFiles.files).length > 0 ? (
-              <div>
-                <p style={{ marginBottom: '1rem', color: '#6b7280' }}>
-                  Click on a log file to view its contents:
-                </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {Object.entries(logFiles.files).map(([type, path]) => (
-                    <button
-                      key={type}
-                      onClick={() => viewLogFile(
-                        window._currentSessionInfo?.sessionId,
-                        window._currentSessionInfo?.conversationId,
-                        type
-                      )}
-                      style={{
-                        padding: '0.75rem',
-                        backgroundColor: '#f3f4f6',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        transition: 'background-color 0.2s'
-                      }}
-                      onMouseEnter={(e) => e.target.style.backgroundColor = '#e5e7eb'}
-                      onMouseLeave={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-                      disabled={loadingLogFile}
-                    >
-                      <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
-                        {type === 'conversation' ? '💬 Conversation Log' : '📄 Raw Output'}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                        {path.split('/').pop()}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <p style={{ color: '#6b7280', textAlign: 'center' }}>
-                No log files available for this execution
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Log File Content Modal */}
-      {selectedLogFile && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1001
-        }}>
-          <div style={{
-            backgroundColor: '#ffffff',
-            borderRadius: '8px',
-            padding: '1.5rem',
-            maxWidth: '90%',
-            maxHeight: '90vh',
-            overflow: 'auto',
-            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)'
-          }}>
-            <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1rem',
-              marginBottom: '1rem'
-            }}>
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <h3 style={{ margin: 0 }}>
-                  {selectedLogFile.type === 'conversation' ? '💬 Conversation Log' : '📄 Raw Output'}
-                </h3>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button
-                    onClick={downloadLogFile}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      backgroundColor: '#10b981',
-                      color: '#ffffff',
-                      borderRadius: '4px',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Download
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedLogFile(null);
-                      setSearchQuery('');
-                      setSearchMatches([]);
-                      setCurrentMatchIndex(0);
-                    }}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      backgroundColor: '#6b7280',
-                      color: '#ffffff',
-                      borderRadius: '4px',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-              
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center',
-                gap: '0.5rem',
-                backgroundColor: '#f3f4f6',
-                borderRadius: '4px',
-                padding: '0.5rem'
-              }}>
-                <input
-                  type="text"
-                  placeholder="Search log..."
-                  value={searchQuery}
-                  onChange={handleSearchChange}
-                  style={{
-                    flex: 1,
-                    padding: '0.5rem',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '4px',
-                    fontSize: '0.875rem'
-                  }}
-                />
-                <button 
-                  onClick={() => setCurrentMatchIndex(Math.max(0, currentMatchIndex - 1))} 
-                  disabled={searchMatches.length === 0}
-                  style={{
-                    padding: '0.5rem 0.75rem',
-                    backgroundColor: searchMatches.length > 0 ? '#3b82f6' : '#9ca3af',
-                    color: '#ffffff',
-                    borderRadius: '4px',
-                    border: 'none',
-                    cursor: searchMatches.length > 0 ? 'pointer' : 'not-allowed',
-                    fontSize: '0.875rem'
-                  }}
-                >
-                  &lt;
-                </button>
-                <span style={{ 
-                  fontSize: '0.875rem', 
-                  color: '#6b7280',
-                  minWidth: '60px',
-                  textAlign: 'center'
-                }}>
-                  {searchMatches.length > 0 ? `${currentMatchIndex + 1} of ${searchMatches.length}` : '0 of 0'}
-                </span>
-                <button 
-                  onClick={() => setCurrentMatchIndex(Math.min(searchMatches.length - 1, currentMatchIndex + 1))} 
-                  disabled={searchMatches.length === 0}
-                  style={{
-                    padding: '0.5rem 0.75rem',
-                    backgroundColor: searchMatches.length > 0 ? '#3b82f6' : '#9ca3af',
-                    color: '#ffffff',
-                    borderRadius: '4px',
-                    border: 'none',
-                    cursor: searchMatches.length > 0 ? 'pointer' : 'not-allowed',
-                    fontSize: '0.875rem'
-                  }}
-                >
-                  &gt;
-                </button>
-              </div>
-            </div>
-            
-            <div 
-              ref={logContentRef}
-              style={{
-                backgroundColor: '#f3f4f6',
-                borderRadius: '4px',
-                padding: '1rem',
-                fontFamily: 'monospace',
-                fontSize: '0.875rem',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                overflowX: 'auto',
-                maxHeight: '70vh',
-                overflowY: 'auto'
-              }}
-            >
-              {searchQuery ? (
-                <div dangerouslySetInnerHTML={{
-                  __html: (selectedLogFile.isJson
-                    ? JSON.stringify(selectedLogFile.content, null, 2)
-                    : selectedLogFile.content
-                  ).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(new RegExp(searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), (match) => `<mark style="background-color: #fef3c7; padding: 0 2px; border-radius: 2px;">${match}</mark>`)
-                }} />
+            <div className="flex flex-1 overflow-hidden">
+              {logFiles.error ? (
+                <div className="p-4 text-red-400">{logFiles.error}</div>
+              ) : logFiles.logFiles && logFiles.logFiles.length > 0 ? (
+                <>
+                  <div className="w-1/3 border-r border-gray-700 p-4 overflow-y-auto">
+                    <p className="mb-4 text-gray-400">
+                      Select a log file to view:
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {logFiles.logFiles.map((file) => (
+                        <button
+                          key={file.name}
+                          onClick={() => fetchLogFile(file.name)}
+                          className={`text-left p-3 rounded-md transition-colors ${
+                            selectedLogFile?.name === file.name
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          <div className="font-medium mb-1">
+                            {file.name}
+                          </div>
+                          <div className="text-xs text-gray-400">
+                            {Math.round(file.size / 1024)} KB
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex-1 p-4 overflow-hidden flex flex-col">
+                    {selectedLogFile ? (
+                      <>
+                        <div className="flex justify-between items-center mb-4">
+                          <h3 className="text-lg font-semibold text-white">
+                            {selectedLogFile.name}
+                          </h3>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="Search..."
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              className="px-3 py-1 bg-gray-700 text-white rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            />
+                            {searchMatches.length > 0 && (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={handlePrevMatch}
+                                  className="px-2 py-1 bg-gray-700 text-white rounded-md text-sm hover:bg-gray-600"
+                                >
+                                  ← Prev
+                                </button>
+                                <span className="text-sm text-gray-400">
+                                  {currentMatchIndex + 1} / {searchMatches.length}
+                                </span>
+                                <button
+                                  onClick={handleNextMatch}
+                                  className="px-2 py-1 bg-gray-700 text-white rounded-md text-sm hover:bg-gray-600"
+                                >
+                                  Next →
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {loadingLogFile ? (
+                          <div className="text-gray-400">Loading log file...</div>
+                        ) : (
+                          <pre
+                            ref={logContentRef}
+                            className="whitespace-pre-wrap font-mono text-xs text-gray-300 bg-gray-900 p-4 rounded-md overflow-y-auto flex-1"
+                          >
+                            {selectedLogFile.isJson
+                              ? highlightContent(JSON.stringify(selectedLogFile.content, null, 2))
+                              : highlightContent(selectedLogFile.content)}
+                          </pre>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-gray-400 text-center">
+                        Select a log file to view its contents
+                      </p>
+                    )}
+                  </div>
+                </>
               ) : (
-                selectedLogFile.isJson
-                  ? JSON.stringify(selectedLogFile.content, null, 2)
-                  : selectedLogFile.content
+                <p className="p-4 text-gray-400 text-center">
+                  No log files found
+                </p>
               )}
             </div>
           </div>

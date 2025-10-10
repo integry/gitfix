@@ -27,11 +27,11 @@ const SystemStatus = () => {
   }, []);
 
   if (loading && !status) {
-    return <div className="status-container">Loading System Status...</div>;
+    return <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 min-w-[300px] text-gray-400">Loading System Status...</div>;
   }
 
   if (error) {
-    return <div className="status-container error">Error: {error}</div>;
+    return <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 min-w-[300px] text-red-400">Error: {error}</div>;
   }
 
   const getStatusColor = (status) => {
@@ -40,16 +40,16 @@ const SystemStatus = () => {
       case 'connected':
       case 'authenticated':
       case 'active':
-        return '#4ade80';
+        return '#10b981'; // green-500
       case 'stopped':
       case 'disconnected':
       case 'failed':
       case 'error':
-        return '#f87171';
+        return '#ef4444'; // red-500
       case 'idle':
-        return '#fbbf24';
+        return '#f59e0b'; // amber-500
       default:
-        return '#9ca3af';
+        return '#6b7280'; // gray-500
     }
   };
 
@@ -61,42 +61,36 @@ const SystemStatus = () => {
   };
 
   return (
-    <div className="status-container" style={{
-      border: '1px solid #e5e7eb',
-      borderRadius: '8px',
-      padding: '1.5rem',
-      backgroundColor: '#ffffff',
-      minWidth: '300px'
-    }}>
-      <h3>System Status</h3>
-      <div className="status-list">
-        <div className="status-item">
-          <span className="status-label">Daemon:</span>
-          <span className="status-value" style={{ color: getStatusColor(status?.daemon) }}>
+    <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 min-w-[300px]">
+      <h3 className="text-lg font-semibold text-white mb-6">System Status</h3>
+      <div className="flex flex-col gap-3">
+        <div className="flex justify-between items-center py-2 border-b border-gray-700">
+          <span className="font-medium text-gray-400">Daemon:</span>
+          <span className="font-semibold" style={{ color: getStatusColor(status?.daemon) }}>
             {status?.daemon || 'Unknown'}
           </span>
         </div>
-        <div className="status-item">
-          <span className="status-label">Workers:</span>
-          <span className="status-value">
+        <div className="flex justify-between items-center py-2 border-b border-gray-700">
+          <span className="font-medium text-gray-400">Workers:</span>
+          <span className="font-semibold text-gray-200">
             {getWorkerStatus()}
           </span>
         </div>
-        <div className="status-item">
-          <span className="status-label">Redis:</span>
-          <span className="status-value" style={{ color: getStatusColor(status?.redis) }}>
+        <div className="flex justify-between items-center py-2 border-b border-gray-700">
+          <span className="font-medium text-gray-400">Redis:</span>
+          <span className="font-semibold" style={{ color: getStatusColor(status?.redis) }}>
             {status?.redis || 'Unknown'}
           </span>
         </div>
-        <div className="status-item">
-          <span className="status-label">GitHub Auth:</span>
-          <span className="status-value" style={{ color: getStatusColor(status?.githubAuth) }}>
+        <div className="flex justify-between items-center py-2 border-b border-gray-700">
+          <span className="font-medium text-gray-400">GitHub Auth:</span>
+          <span className="font-semibold" style={{ color: getStatusColor(status?.githubAuth) }}>
             {status?.githubAuth || 'Unknown'}
           </span>
         </div>
-        <div className="status-item">
-          <span className="status-label">Claude Auth:</span>
-          <span className="status-value" style={{ color: getStatusColor(status?.claudeAuth) }}>
+        <div className="flex justify-between items-center py-2">
+          <span className="font-medium text-gray-400">Claude Auth:</span>
+          <span className="font-semibold" style={{ color: getStatusColor(status?.claudeAuth) }}>
             {status?.claudeAuth || 'Unknown'}
           </span>
         </div>
