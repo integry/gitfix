@@ -488,6 +488,13 @@ ${commentHistory}
             repoName 
         }, 'pr_comment', correlationId);
 
+        // Create log files and store in Redis for live-details API
+        await createLogFiles(claudeResult, { 
+            number: pullRequestNumber, 
+            repoOwner, 
+            repoName 
+        });
+
         // Update task state with Claude execution result (including sessionId for live tracking)
         await stateManager.updateTaskState(taskId, TaskStates.CLAUDE_EXECUTION, {
             reason: 'Claude execution completed',
