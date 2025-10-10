@@ -149,7 +149,21 @@ const TaskDetails = () => {
       setLoadingLogFile(true);
       setSelectedLogFile(null);
       const logsData = await apiFetchLogFiles(logsPath);
-      setLogFiles(logsData);
+      
+      if (logsData.files) {
+        const transformedData = {
+          sessionId: logsData.sessionId,
+          logFiles: Object.entries(logsData.files).map(([type, path]) => ({
+            name: path.split('/').pop(),
+            path: `/api/execution/${logsData.sessionId}/logs/${type}`,
+            size: 0,
+            type: type
+          }))
+        };
+        setLogFiles(transformedData);
+      } else {
+        setLogFiles(logsData);
+      }
     } catch (err) {
       console.error('Error fetching log files:', err);
       setLogFiles({ error: 'Failed to load log files.' });
