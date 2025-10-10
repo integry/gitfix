@@ -230,48 +230,33 @@ const TaskDetails = () => {
       </div>
 
       {liveDetails.todos.length > 0 && (
-        <div style={{ 
-          marginBottom: '1.5rem', 
-          padding: '1rem', 
-          backgroundColor: '#f0f9ff', 
-          borderRadius: '8px',
-          border: '2px solid #3b82f6'
-        }}>
-          <h4 style={{ marginTop: 0, color: '#1e40af', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ fontSize: '1.2rem' }}>⚡</span>
+        <div className="mb-6 p-4 bg-blue-50 rounded-lg border-2 border-blue-500">
+          <h4 className="mt-0 text-blue-900 flex items-center gap-2">
+            <span className="text-xl">⚡</span>
             Live Task Progress
           </h4>
           {liveDetails.currentTask && (
-            <p style={{ 
-              marginBottom: '1rem', 
-              padding: '0.75rem', 
-              backgroundColor: '#dbeafe', 
-              borderRadius: '6px',
-              borderLeft: '4px solid #3b82f6'
-            }}>
-              <strong style={{ color: '#1e40af' }}>Current Task:</strong> {liveDetails.currentTask}
+            <p className="mb-4 p-3 bg-blue-100 rounded-md border-l-4 border-blue-500">
+              <strong className="text-blue-900">Current Task:</strong> {liveDetails.currentTask}
             </p>
           )}
-          <h5 style={{ marginTop: '1rem', marginBottom: '0.5rem', color: '#1e40af' }}>To-do List:</h5>
-          <ul style={{ listStyleType: 'none', paddingLeft: 0, margin: 0 }}>
+          <h5 className="mt-4 mb-2 text-blue-900">To-do List:</h5>
+          <ul className="list-none pl-0 m-0">
             {liveDetails.todos.map(todo => (
-              <li key={todo.id} style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                marginBottom: '0.5rem',
-                padding: '0.5rem',
-                backgroundColor: todo.status === 'in_progress' ? '#dbeafe' : 'transparent',
-                borderRadius: '4px',
-                transition: 'background-color 0.2s'
-              }}>
-                <span style={{ marginRight: '0.5rem', fontSize: '1.1rem' }}>
+              <li 
+                key={todo.id} 
+                className={`flex items-center mb-2 p-2 rounded transition-colors ${
+                  todo.status === 'in_progress' ? 'bg-blue-100' : ''
+                }`}
+              >
+                <span className="mr-2 text-lg">
                   {todo.status === 'completed' ? '✅' : todo.status === 'in_progress' ? '⏳' : '📋'}
                 </span>
-                <span style={{ 
-                  textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
-                  color: todo.status === 'completed' ? '#6b7280' : '#374151',
-                  fontWeight: todo.status === 'in_progress' ? 'bold' : 'normal'
-                }}>
+                <span className={`${
+                  todo.status === 'completed' ? 'line-through text-gray-500' : 'text-gray-700'
+                } ${
+                  todo.status === 'in_progress' ? 'font-bold' : 'font-normal'
+                }`}>
                   {todo.content}
                 </span>
               </li>
