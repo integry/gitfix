@@ -660,9 +660,11 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
         await stateManager.updateTaskState(taskId, TaskStates.COMPLETED, {
             reason: 'PR comment processing completed successfully',
             commitHash: commitResult?.commitHash,
-            githubComment: {
-                url: completionComment.data.html_url,
-                body: completionComment.data.body
+            historyMetadata: {
+                githubComment: {
+                    url: completionComment.data.html_url,
+                    body: completionComment.data.body
+                }
             }
         });
 

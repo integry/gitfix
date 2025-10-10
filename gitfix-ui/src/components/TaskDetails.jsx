@@ -148,7 +148,9 @@ const TaskDetails = () => {
     try {
       setLoadingLogFile(true);
       setSelectedLogFile(null);
+      console.log('Fetching log files from:', logsPath);
       const logsData = await apiFetchLogFiles(logsPath);
+      console.log('Received log files data:', logsData);
       
       if (logsData.files) {
         const transformedData = {
@@ -160,8 +162,10 @@ const TaskDetails = () => {
             type: type
           }))
         };
+        console.log('Transformed log files:', transformedData);
         setLogFiles(transformedData);
       } else {
+        console.log('No files property in response, using logsData directly');
         setLogFiles(logsData);
       }
     } catch (err) {
