@@ -324,6 +324,7 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
     const stateData = await redisClient.get(stateKey);
     
     let history = [];
+    let taskInfo = null;
     if (stateData) {
       try {
         const state = JSON.parse(stateData);
@@ -335,6 +336,16 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
           }
           return enrichedItem;
         });
+        
+        // Extract task info from state
+        if (state.issueRef) {
+          taskInfo = {
+            repoOwner: state.issueRef.repoOwner,
+            repoName: state.issueRef.repoName,
+            number: state.issueRef.number,
+            type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue'
+          };
+        }
       } catch (e) {
         console.error('Error parsing state data:', e);
       }
@@ -345,6 +356,17 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
       try {
         const job = await taskQueue.getJob(taskId);
         if (job) {
+          // Extract task info from job data if not already set
+          if (!taskInfo && job.data) {
+            if (job.data.repoOwner && job.data.repoName) {
+              taskInfo = {
+                repoOwner: job.data.repoOwner,
+                repoName: job.data.repoName,
+                number: job.data.pullRequestNumber || job.data.number,
+                type: taskId.startsWith('pr-comments-batch-') ? 'pr-comment' : 'issue'
+              };
+            }
+          }
           // Create history from job lifecycle
           history = [];
           
@@ -439,7 +461,8 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
     
     res.json({
       taskId,
-      history
+      history,
+      taskInfo
     });
   } catch (error) {
     console.error('Error in /api/task/:taskId/history:', error);

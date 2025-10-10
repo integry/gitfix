@@ -6,6 +6,7 @@ const TaskDetails = () => {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const [history, setHistory] = useState([]);
+  const [taskInfo, setTaskInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedPrompt, setSelectedPrompt] = useState(null);
@@ -27,6 +28,7 @@ const TaskDetails = () => {
         setLoading(true);
         const data = await getTaskHistory(taskId);
         setHistory(data.history || []);
+        setTaskInfo(data.taskInfo || null);
         
         const isTaskActive = data.history && data.history.length > 0 && 
           ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
@@ -254,6 +256,50 @@ const TaskDetails = () => {
         </button>
       </div>
 
+      {taskInfo && (
+        <div className="mb-6 p-4 bg-gray-700/50 rounded-md border border-gray-600">
+          <div className="flex items-center gap-3">
+            <span className="text-gray-300 font-semibold">Repository:</span>
+            <a 
+              href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:text-blue-300 underline"
+            >
+              {taskInfo.repoOwner}/{taskInfo.repoName}
+            </a>
+            {taskInfo.type === 'pr-comment' && (
+              <>
+                <span className="text-gray-500">•</span>
+                <span className="text-gray-300 font-semibold">Pull Request:</span>
+                <a 
+                  href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}/pull/${taskInfo.number}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 underline"
+                >
+                  #{taskInfo.number}
+                </a>
+              </>
+            )}
+            {taskInfo.type === 'issue' && (
+              <>
+                <span className="text-gray-500">•</span>
+                <span className="text-gray-300 font-semibold">Issue:</span>
+                <a 
+                  href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}/issues/${taskInfo.number}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 underline"
+                >
+                  #{taskInfo.number}
+                </a>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {historyItemWithPaths && (historyItemWithPaths.promptPath || historyItemWithPaths.logsPath) && (
         <div className="mb-6 flex gap-2">
           {historyItemWithPaths.promptPath && (
@@ -333,6 +379,12 @@ const TaskDetails = () => {
                 </span>
               </div>
               
+              {item.reason && (
+                <p className="text-gray-400 italic mb-2">
+                  {item.reason}
+                </p>
+              )}
+
               {item.error && (
                 <p className="my-2 text-red-400">
                   Error: {item.error}
@@ -390,9 +442,30 @@ const TaskDetails = () => {
                         </a>
                       </div>
                     )}
+                    {item.metadata.githubComment && (
+                      <div className="text-sm text-gray-300">
+                        <strong>GitHub Comment:</strong> <a 
+                          href={item.metadata.githubComment.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline ml-1"
+                        >
+                          View Comment
+                        </a>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
+
+              {item.metadata?.githubComment?.body && (
+                <div className="mt-3 p-3 bg-gray-900/50 rounded-md border border-gray-600">
+                  <div className="text-sm text-gray-400 mb-2 font-semibold">Comment Posted:</div>
+                  <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                    {item.metadata.githubComment.body}
+                  </div>
+                </div>
+              )}
 
               {(item.promptPath || item.logsPath) && (
                 <div className="mt-3 flex gap-2">

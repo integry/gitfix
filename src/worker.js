@@ -562,6 +562,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             'Follow-up changes'
         );
 
+        let completionComment;
         if (commitResult) {
             await pushBranch(worktreeInfo.worktreePath, worktreeInfo.branchName, {
                 repoUrl,
@@ -610,7 +611,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 prCommentBody += `- Cost: $${cost.toFixed(2)}\n`;
             }
 
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            completionComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner,
                 repo: repoName,
                 issue_number: pullRequestNumber,
@@ -621,7 +622,8 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
 
             correlatedLogger.info({
                 pullRequestNumber,
-                commitHash: commitResult.commitHash
+                commitHash: commitResult.commitHash,
+                commentUrl: completionComment.data.html_url
             }, 'Successfully applied follow-up changes');
         } else {
             // No changes were necessary
@@ -643,7 +645,7 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
                 noChangesBody += `- Cost: $${analysisCost.toFixed(2)}\n`;
             }
             
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            completionComment = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner,
                 repo: repoName,
                 issue_number: pullRequestNumber,
@@ -656,7 +658,11 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
         // Update task state to completed
         await stateManager.updateTaskState(taskId, TaskStates.COMPLETED, {
             reason: 'PR comment processing completed successfully',
-            commitHash: commitResult?.commitHash
+            commitHash: commitResult?.commitHash,
+            githubComment: {
+                url: completionComment.data.html_url,
+                body: completionComment.data.body
+            }
         });
 
         return { 
