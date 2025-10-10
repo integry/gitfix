@@ -12,8 +12,8 @@ const TasksPage = () => {
         <TaskDetails />
       ) : (
         <>
-          <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>Tasks</h2>
-          <p style={{ color: '#9ca3af' }}>View all current and previous tasks.</p>
+          <h2 className="text-white text-2xl font-semibold mb-4">Tasks</h2>
+          <p className="text-gray-400 mb-4">View all current and previous tasks.</p>
           <TaskList />
         </>
       )}

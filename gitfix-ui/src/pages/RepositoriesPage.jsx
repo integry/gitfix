@@ -49,29 +49,29 @@ const RepositoriesPage = () => {
     setNewRepo('');
   };
 
-  const handleRemoveRepo = (repoNameToRemove) => {
-    if (window.confirm(`Are you sure you want to remove the repository "${repoNameToRemove}"?`)) {
-      setRepos(repos.filter(repo => repo.name !== repoNameToRemove));
-    }
+  const handleRemoveRepo = (repoName) => {
+    setRepos(repos.filter(r => r.name !== repoName));
   };
 
-  const handleToggleRepo = (repoNameToToggle) => {
-    setRepos(
-      repos.map(repo =>
-        repo.name === repoNameToToggle ? { ...repo, enabled: !repo.enabled } : repo
-      )
-    );
+  const handleToggleRepo = (repoName) => {
+    setRepos(repos.map(repo => 
+      repo.name === repoName 
+        ? { ...repo, enabled: !repo.enabled }
+        : repo
+    ));
   };
 
   const handleSave = async () => {
-    setError(null);
-    setSuccess(null);
-    setSaving(true);
-    
     try {
-      for (const repo of repos) {
-        if (!/^[a-zA-Z0-9\-_]+\/[a-zA-Z0-9\-_]+$/.test(repo.name)) {
-          throw new Error(`Invalid repository format: "${repo.name}"`);
+      setSaving(true);
+      setError(null);
+      setSuccess(null);
+      
+      // Validate that at least one repository is enabled
+      const enabledRepos = repos.filter(r => r.enabled);
+      if (enabledRepos.length === 0 && repos.length > 0) {
+        if (!window.confirm('No repositories are enabled. This will effectively disable GitFix monitoring. Continue?')) {
+          return;
         }
       }
       await updateRepoConfig(repos);
@@ -86,34 +86,26 @@ const RepositoriesPage = () => {
   if (loading && repos.length === 0) {
     return (
       <div>
-        <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>Repositories</h2>
-        <p style={{ color: '#9ca3af' }}>Loading repositories...</p>
+        <h2 className="text-white text-2xl font-semibold mb-4">Repositories</h2>
+        <p className="text-gray-400">Loading repositories...</p>
       </div>
     );
   }
 
   return (
     <div>
-      <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>Manage Monitored Repositories</h2>
-      <p style={{ color: '#9ca3af', marginBottom: '1rem' }}>
+      <h2 className="text-white text-2xl font-semibold mb-4">Manage Monitored Repositories</h2>
+      <p className="text-gray-400 mb-4">
         Add repositories to monitor, enable/disable them, or remove them from the list. Changes will be automatically picked up by the daemon within 5 minutes.
       </p>
       
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div className="flex gap-4 mb-6">
         <input
           list="available-repos"
           value={newRepo}
           onChange={(e) => setNewRepo(e.target.value)}
           placeholder="owner/repo or select from list"
-          style={{
-            flex: 1,
-            padding: '0.5rem',
-            backgroundColor: '#1f2937',
-            color: '#fff',
-            border: '1px solid #374151',
-            borderRadius: '0.375rem',
-            fontFamily: 'monospace'
-          }}
+          className="flex-1 px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
         />
         <datalist id="available-repos">
           {availableRepos
@@ -123,59 +115,38 @@ const RepositoriesPage = () => {
         <button
           onClick={handleAddRepo}
           disabled={!newRepo || repos.some(r => r.name === newRepo)}
-          style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: !newRepo || repos.some(r => r.name === newRepo) ? '#6b7280' : '#10B981',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '0.375rem',
-            cursor: !newRepo || repos.some(r => r.name === newRepo) ? 'not-allowed' : 'pointer',
-            fontSize: '0.9rem',
-            fontWeight: '500'
-          }}
+          className={`px-4 py-2 text-white font-medium rounded-md transition-colors ${
+            !newRepo || repos.some(r => r.name === newRepo)
+              ? 'bg-gray-600 cursor-not-allowed'
+              : 'bg-green-600 hover:bg-green-700 cursor-pointer'
+          }`}
         >
           Add Repository
         </button>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+      <div className="flex flex-col gap-2 mb-6">
         {repos.map(repo => (
           <div
             key={repo.name}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '0.75rem 1rem',
-              backgroundColor: '#374151',
-              borderRadius: '0.375rem',
-            }}
+            className="flex items-center justify-between px-4 py-3 bg-gray-700 rounded-md"
           >
-            <span style={{ fontFamily: 'monospace', color: '#fff', opacity: repo.enabled ? 1 : 0.5 }}>
+            <span className={`font-mono text-white ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
               {repo.name}
             </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#9ca3af' }}>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center cursor-pointer text-gray-400">
                 <input
                   type="checkbox"
                   checked={repo.enabled}
                   onChange={() => handleToggleRepo(repo.name)}
-                  style={{ marginRight: '0.5rem', height: '1rem', width: '1rem', cursor: 'pointer' }}
+                  className="mr-2 h-4 w-4 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 Enabled
               </label>
               <button
                 onClick={() => handleRemoveRepo(repo.name)}
-                style={{
-                  backgroundColor: '#EF4444',
-                  fontSize: '0.75rem',
-                  padding: '0.25rem 0.75rem',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '0.375rem',
-                  cursor: 'pointer',
-                  fontWeight: '500'
-                }}
+                className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-white rounded-md font-medium transition-colors"
               >
                 Remove
               </button>
@@ -183,7 +154,7 @@ const RepositoriesPage = () => {
           </div>
         ))}
         {repos.length === 0 && (
-          <p style={{ color: '#9ca3af', textAlign: 'center', padding: '2rem' }}>
+          <p className="text-gray-400 text-center py-8">
             No repositories configured. Add a repository to get started.
           </p>
         )}
@@ -192,42 +163,23 @@ const RepositoriesPage = () => {
       <button
         onClick={handleSave}
         disabled={saving || repos.length === 0}
-        style={{
-          padding: '0.75rem 1.5rem',
-          backgroundColor: saving || repos.length === 0 ? '#6b7280' : '#3b82f6',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '0.375rem',
-          cursor: saving || repos.length === 0 ? 'not-allowed' : 'pointer',
-          fontSize: '1rem',
-          fontWeight: 'bold'
-        }}
+        className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+          saving || repos.length === 0
+            ? 'bg-gray-600 cursor-not-allowed'
+            : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+        }`}
       >
-        {saving ? 'Saving...' : 'Save All Changes'}
+        {saving ? 'Saving...' : 'Save Changes'}
       </button>
       
       {error && (
-        <div style={{
-          color: '#ef4444',
-          marginTop: '1rem',
-          padding: '0.75rem',
-          backgroundColor: '#7f1d1d',
-          borderRadius: '0.375rem',
-          border: '1px solid #991b1b'
-        }}>
+        <div className="mt-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
           {error}
         </div>
       )}
       
       {success && (
-        <div style={{
-          color: '#10b981',
-          marginTop: '1rem',
-          padding: '0.75rem',
-          backgroundColor: '#064e3b',
-          borderRadius: '0.375rem',
-          border: '1px solid #065f46'
-        }}>
+        <div className="mt-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
           {success}
         </div>
       )}

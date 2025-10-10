@@ -6,14 +6,14 @@ import TaskList from './TaskList';
 const Dashboard = () => {
   return (
     <div>
-      <h2>System Overview</h2>
-      <div className="dashboard-grid">
+      <h2 className="text-2xl font-semibold text-white mb-6">System Overview</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         <SystemStatus />
         <TaskQueueStats />
       </div>
       
-      <div style={{ marginTop: '2rem' }}>
-        <h3>Recent Tasks</h3>
+      <div>
+        <h3 className="text-xl font-semibold text-white mb-4">Recent Tasks</h3>
         <TaskList
           limit={5}
           showViewAll={true}

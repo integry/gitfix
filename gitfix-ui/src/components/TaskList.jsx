@@ -30,15 +30,30 @@ const TaskList = ({ limit, showViewAll = false }) => {
   const getStatusColor = (status) => {
     switch (status) {
       case 'completed':
-        return '#22c55e';
+        return '#10b981';
       case 'failed':
         return '#ef4444';
       case 'active':
         return '#3b82f6';
       case 'waiting':
-        return '#a855f7';
+        return '#8b5cf6';
       default:
         return '#6b7280';
+    }
+  };
+
+  const getStatusDotClass = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-green-500';
+      case 'failed':
+        return 'bg-red-500';
+      case 'active':
+        return 'bg-blue-500 animate-pulse';
+      case 'waiting':
+        return 'bg-purple-500';
+      default:
+        return 'bg-gray-500';
     }
   };
 
@@ -63,118 +78,90 @@ const TaskList = ({ limit, showViewAll = false }) => {
     return `${minutes}m ${seconds}s${suffix}`;
   };
 
-  if (loading && tasks.length === 0) return <div>Loading tasks...</div>;
-  if (error) return <div>Error loading tasks: {error}</div>;
+  if (loading && tasks.length === 0) return <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 text-gray-400">Loading tasks...</div>;
+  if (error) return <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 text-red-400">Error loading tasks: {error}</div>;
 
   return (
-    <div style={{
-      border: '1px solid #e5e7eb',
-      borderRadius: '8px',
-      padding: '1.5rem',
-      backgroundColor: '#ffffff',
-      marginTop: '1rem'
-    }}>
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center',
-        marginBottom: '1rem'
-      }}>
-        <h3>Tasks</h3>
-        <select 
-          value={filter} 
-          onChange={(e) => setFilter(e.target.value)}
-          style={{
-            padding: '0.5rem',
-            borderRadius: '4px',
-            border: '1px solid #d1d5db',
-            backgroundColor: '#ffffff',
-            cursor: 'pointer'
-          }}
-        >
-          <option value="all">All Tasks</option>
-          <option value="active">Active</option>
-          <option value="completed">Completed</option>
-          <option value="failed">Failed</option>
-          <option value="waiting">Waiting</option>
-        </select>
-        {showViewAll && (
-          <Link to="/tasks" style={{ color: '#3b82f6', textDecoration: 'none' }}>
-            View All Tasks
-          </Link>
-        )}
+    <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 mt-4">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-semibold text-white">Tasks</h3>
+        <div className="flex items-center gap-4">
+          <select 
+            value={filter} 
+            onChange={(e) => setFilter(e.target.value)}
+            className="px-3 py-2 bg-gray-700 border border-gray-600 text-gray-200 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 cursor-pointer"
+          >
+            <option value="all">All Tasks</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="waiting">Waiting</option>
+          </select>
+          {showViewAll && (
+            <Link to="/tasks" className="text-blue-400 hover:text-blue-300 transition-colors">
+              View All Tasks
+            </Link>
+          )}
+        </div>
       </div>
 
       {tasks.length === 0 ? (
-        <p style={{ color: '#6b7280', textAlign: 'center' }}>No tasks found</p>
+        <p className="text-gray-400 text-center py-8">No tasks found</p>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div className="overflow-x-auto">
+          <table className="w-full">
             <thead>
-              <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Repository</th>
-                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Issue/Task</th>
-                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Status</th>
-                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Created</th>
-                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Duration</th>
-                <th style={{ padding: '0.75rem', textAlign: 'left' }}>Actions</th>
+              <tr className="border-b border-gray-700">
+                <th className="py-3 px-4 text-left text-sm font-medium text-gray-400 uppercase tracking-wider">Repository</th>
+                <th className="py-3 px-4 text-left text-sm font-medium text-gray-400 uppercase tracking-wider">Issue/Task</th>
+                <th className="py-3 px-4 text-left text-sm font-medium text-gray-400 uppercase tracking-wider">Status</th>
+                <th className="py-3 px-4 text-left text-sm font-medium text-gray-400 uppercase tracking-wider">Created</th>
+                <th className="py-3 px-4 text-left text-sm font-medium text-gray-400 uppercase tracking-wider">Duration</th>
+                <th className="py-3 px-4 text-left text-sm font-medium text-gray-400 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
-            <tbody>
-              {tasks.map((task) => (
+            <tbody className="divide-y divide-gray-700">
+              {tasks.map((task, index) => (
                 <tr 
                   key={task.id}
-                  style={{ 
-                    borderBottom: '1px solid #f3f4f6',
-                    cursor: 'pointer',
-                    ':hover': { backgroundColor: '#f9fafb' }
-                  }}
+                  className={`hover:bg-gray-700/50 transition-colors cursor-pointer ${
+                    index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-800/30'
+                  }`}
                 >
-                  <td style={{ padding: '0.75rem' }}>
+                  <td className="py-4 px-4 text-sm text-gray-300">
                     {task.repository || 'Unknown'}
                   </td>
-                  <td style={{ padding: '0.75rem' }}>
-                    <div style={{ fontWeight: '500' }}>
+                  <td className="py-4 px-4">
+                    <div className="font-medium text-gray-200">
                       {task.id.startsWith('pr-comments-batch') ? 
                         `PR #${task.issueNumber || 'N/A'} Comments` : 
                         task.issueNumber ? `Issue #${task.issueNumber}` : 'Task'
                       }
                     </div>
                     {task.title && (
-                      <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.25rem' }}>
+                      <div className="text-sm text-gray-400 mt-1">
                         {task.title.substring(0, 60)}
                         {task.title.length > 60 && '...'}
                       </div>
                     )}
                   </td>
-                  <td style={{ padding: '0.75rem' }}>
-                    <span style={{
-                      color: getStatusColor(task.status),
-                      fontWeight: '500',
-                      textTransform: 'capitalize'
-                    }}>
-                      {task.status}
-                    </span>
+                  <td className="py-4 px-4">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${getStatusDotClass(task.status)}`}></span>
+                      <span className="text-sm font-medium capitalize" style={{ color: getStatusColor(task.status) }}>
+                        {task.status}
+                      </span>
+                    </div>
                   </td>
-                  <td style={{ padding: '0.75rem', fontSize: '0.875rem' }}>
+                  <td className="py-4 px-4 text-sm text-gray-300">
                     {formatDate(task.createdAt)}
                   </td>
-                  <td style={{ padding: '0.75rem' }}>
+                  <td className="py-4 px-4 text-sm text-gray-300">
                     {formatDuration(task.processedAt || task.createdAt, task.completedAt, task.status)}
                   </td>
-                  <td style={{ padding: '0.75rem' }}>
+                  <td className="py-4 px-4">
                     <Link to={`/tasks/${task.id}`}>
-                      <button
-                        style={{
-                          padding: '0.25rem 0.75rem',
-                          backgroundColor: '#3b82f6',
-                          color: '#ffffff',
-                          borderRadius: '4px',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '0.875rem'
-                        }}
-                      >
+                      <button className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-md transition-colors">
                         View Details
                       </button>
                     </Link>
