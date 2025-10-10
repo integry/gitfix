@@ -361,18 +361,20 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
           if (job.returnvalue?.claudeResult) {
             const claudeResult = job.returnvalue.claudeResult;
             const claudeStartTime = job.processedOn ? new Date(job.processedOn).getTime() : job.timestamp;
-            
+
             history.push({
               state: 'CLAUDE_EXECUTION',
               timestamp: new Date(claudeStartTime + 1000).toISOString(), // 1 second after start
               message: `Claude AI processing started with model: ${job.returnvalue.modelName || 'claude'}`,
+              promptPath: `/api/execution/${claudeResult.sessionId}/prompt`,
+              logsPath: `/api/execution/${claudeResult.sessionId}/logs`,
               metadata: {
                 model: job.returnvalue.modelName,
                 sessionId: claudeResult.sessionId,
                 conversationId: claudeResult.conversationId
               }
             });
-            
+
             // Add Claude completion
             if (claudeResult.executionTime) {
               const claudeEndTime = claudeStartTime + claudeResult.executionTime;
@@ -380,6 +382,8 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
                 state: 'CLAUDE_COMPLETED',
                 timestamp: new Date(claudeEndTime).toISOString(),
                 message: claudeResult.success ? 'Claude execution completed successfully' : 'Claude execution failed',
+                promptPath: `/api/execution/${claudeResult.sessionId}/prompt`,
+                logsPath: `/api/execution/${claudeResult.sessionId}/logs`,
                 metadata: {
                   duration: claudeResult.executionTime,
                   success: claudeResult.success,
