@@ -360,30 +360,24 @@ const TaskDetails = () => {
                 )}
               </div>
 
-              {item.promptPath && (
-                <div className="mt-3 p-3 bg-gray-800 rounded-md">
-                  <div className="text-sm text-gray-300">
-                    <strong>Prompt Path:</strong> {formatPath(item.promptPath)}
-                  </div>
-                  <div className="mt-2">
+              {(item.promptPath || item.logsPath) && (
+                <div className="mt-3 flex gap-2">
+                  {item.promptPath && (
                     <button
                       onClick={() => fetchPrompt(item.promptPath)}
                       className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
                     >
                       View Prompt
                     </button>
-                  </div>
-                </div>
-              )}
-              
-              {item.logsPath && (
-                <div className="mt-3 flex gap-2">
-                  <button
-                    onClick={() => fetchLogFiles(item.logsPath)}
-                    className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
-                  >
-                    View Log Files
-                  </button>
+                  )}
+                  {item.logsPath && (
+                    <button
+                      onClick={() => fetchLogFiles(item.logsPath)}
+                      className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+                    >
+                      View Log Files
+                    </button>
+                  )}
                 </div>
               )}
               
