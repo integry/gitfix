@@ -503,6 +503,11 @@ ${commentHistory}
                 sessionId: claudeResult.sessionId,
                 conversationId: claudeResult.conversationId,
                 executionTime: claudeResult.executionTime
+            },
+            historyMetadata: {
+                sessionId: claudeResult.sessionId,
+                conversationId: claudeResult.conversationId,
+                model: claudeResult.model
             }
         });
 
