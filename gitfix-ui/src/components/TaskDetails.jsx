@@ -92,10 +92,16 @@ const TaskDetails = () => {
     try {
       setLoadingPrompt(true);
       const promptData = await apiFetchPrompt(promptPath);
-      setSelectedPrompt(promptData);
+      
+      try {
+        const parsed = JSON.parse(promptData);
+        setSelectedPrompt(parsed);
+      } catch {
+        setSelectedPrompt({ prompt: promptData });
+      }
     } catch (err) {
       console.error('Error fetching prompt:', err);
-      setSelectedPrompt('Failed to load prompt content.');
+      setSelectedPrompt({ error: 'Failed to load prompt content.' });
     } finally {
       setLoadingPrompt(false);
     }
@@ -385,17 +391,64 @@ const TaskDetails = () => {
             <div className="flex-1 overflow-y-auto p-4">
               {loadingPrompt ? (
                 <div className="text-gray-400">Loading prompt...</div>
+              ) : selectedPrompt.error ? (
+                <div className="text-red-400">{selectedPrompt.error}</div>
               ) : (
-                <>
-                  {selectedPrompt.length > 5000 && (
-                    <div className="mt-2 text-amber-500">
-                      Large prompt: {selectedPrompt.length} characters
+                <div className="space-y-4">
+                  {(selectedPrompt.sessionId || selectedPrompt.model || selectedPrompt.timestamp || selectedPrompt.issueRef) && (
+                    <div className="bg-gray-900 rounded-md p-4 space-y-2">
+                      <h4 className="text-sm font-semibold text-gray-400 uppercase mb-3">Prompt Metadata</h4>
+                      {selectedPrompt.sessionId && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Session ID:</span>
+                          <code className="ml-2 bg-gray-800 px-2 py-1 rounded text-gray-300">{selectedPrompt.sessionId}</code>
+                        </div>
+                      )}
+                      {selectedPrompt.model && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Model:</span>
+                          <span className="ml-2 text-blue-400">{selectedPrompt.model}</span>
+                        </div>
+                      )}
+                      {selectedPrompt.timestamp && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Timestamp:</span>
+                          <span className="ml-2 text-gray-300">{new Date(selectedPrompt.timestamp).toLocaleString()}</span>
+                        </div>
+                      )}
+                      {selectedPrompt.isRetry !== undefined && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Is Retry:</span>
+                          <span className={`ml-2 ${selectedPrompt.isRetry ? 'text-amber-400' : 'text-gray-300'}`}>
+                            {selectedPrompt.isRetry ? 'Yes' : 'No'}
+                          </span>
+                        </div>
+                      )}
+                      {selectedPrompt.issueRef && (
+                        <div className="text-sm">
+                          <span className="text-gray-400">Issue Reference:</span>
+                          <div className="ml-2 mt-1 bg-gray-800 px-2 py-1 rounded text-gray-300 font-mono text-xs">
+                            {selectedPrompt.issueRef.repoOwner}/{selectedPrompt.issueRef.repoName} #{selectedPrompt.issueRef.number}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
-                  <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-gray-900 p-4 rounded-md">
-                    {selectedPrompt}
-                  </pre>
-                </>
+                  
+                  {selectedPrompt.prompt && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-400 uppercase mb-2">Prompt Content</h4>
+                      {selectedPrompt.prompt.length > 5000 && (
+                        <div className="mb-2 text-amber-500 text-sm">
+                          Large prompt: {selectedPrompt.prompt.length} characters
+                        </div>
+                      )}
+                      <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-gray-900 p-4 rounded-md">
+                        {selectedPrompt.prompt}
+                      </pre>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
