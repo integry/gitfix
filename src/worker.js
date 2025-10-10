@@ -1206,6 +1206,22 @@ async function processGitHubIssueJob(job) {
                 }
             });
             
+            // Update task state with Claude execution result (including sessionId for live tracking)
+            await stateManager.updateTaskState(taskId, TaskStates.CLAUDE_EXECUTION, {
+                reason: 'Claude execution completed',
+                claudeResult: {
+                    success: claudeResult.success,
+                    sessionId: claudeResult.sessionId,
+                    conversationId: claudeResult.conversationId,
+                    executionTime: claudeResult.executionTime
+                },
+                historyMetadata: {
+                    sessionId: claudeResult.sessionId,
+                    conversationId: claudeResult.conversationId,
+                    model: claudeResult.model
+                }
+            });
+            
             // Record LLM metrics for issue processing
             await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId);
             

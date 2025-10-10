@@ -36,7 +36,26 @@ const TaskDetails = () => {
     };
 
     fetchHistory();
-  }, [taskId]);
+    
+    // Poll history for running tasks
+    const isTaskActive = history.length > 0 && 
+      ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
+        history[history.length - 1]?.state?.toUpperCase()
+      );
+    
+    if (isTaskActive) {
+      const interval = setInterval(async () => {
+        try {
+          const data = await getTaskHistory(taskId);
+          setHistory(data.history || []);
+        } catch (err) {
+          console.error('Error polling task history:', err);
+        }
+      }, 3000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [taskId, history]);
 
   useEffect(() => {
     const isTaskActive = history.length > 0 && 
