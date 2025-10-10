@@ -255,6 +255,22 @@ async function processPullRequestCommentJob(job) {
         commentsCount: commentsToProcess.length
     }, `Processing PR comment${isBatchJob ? 's batch' : ''} job...`);
 
+    const taskId = job.id;
+    const stateManager = getStateManager();
+    
+    try {
+        await stateManager.createTaskState(taskId, {
+            number: pullRequestNumber,
+            repoOwner,
+            repoName
+        }, correlationId);
+    } catch (stateError) {
+        correlatedLogger.warn({
+            taskId,
+            error: stateError.message
+        }, 'Failed to create initial task state, continuing anyway');
+    }
+
     let octokit;
     let localRepoPath;
     let worktreeInfo;
@@ -401,6 +417,11 @@ ${body}
         const githubToken = await octokit.auth();
         const repoUrl = getRepoUrl({ repoOwner, repoName });
 
+        // Update state to processing
+        await stateManager.updateTaskState(taskId, TaskStates.PROCESSING, {
+            reason: 'Starting PR comment processing'
+        });
+
         // Ensure we're in a valid git repository before proceeding
         await ensureGitRepository(correlatedLogger);
 
@@ -466,6 +487,17 @@ ${commentHistory}
             repoOwner, 
             repoName 
         }, 'pr_comment', correlationId);
+
+        // Update task state with Claude execution result (including sessionId for live tracking)
+        await stateManager.updateTaskState(taskId, TaskStates.CLAUDE_EXECUTION, {
+            reason: 'Claude execution completed',
+            claudeResult: {
+                success: claudeResult.success,
+                sessionId: claudeResult.sessionId,
+                conversationId: claudeResult.conversationId,
+                executionTime: claudeResult.executionTime
+            }
+        });
 
         if (!claudeResult.success) {
             throw new Error(`Claude execution failed: ${claudeResult.error || 'Unknown error'}`);
@@ -609,6 +641,12 @@ Model: ${claudeResult.model || llm || DEFAULT_MODEL_NAME}`;
             // Keep the "starting work" comment for duplicate detection tracking
         }
 
+        // Update task state to completed
+        await stateManager.updateTaskState(taskId, TaskStates.COMPLETED, {
+            reason: 'PR comment processing completed successfully',
+            commitHash: commitResult?.commitHash
+        });
+
         return { 
             status: 'complete', 
             commit: commitResult?.commitHash,
@@ -655,6 +693,12 @@ The job has been automatically rescheduled and will restart ${readableResetTime}
         } else {
             // Handle all other errors
             handleError(error, 'Failed to process PR comment job', { correlationId });
+            
+            // Update task state to failed
+            await stateManager.updateTaskState(taskId, TaskStates.FAILED, {
+                reason: 'PR comment processing failed',
+                error: error.message
+            });
             
             // Record LLM metrics even if the job failed, as long as Claude was executed
             if (claudeResult) {

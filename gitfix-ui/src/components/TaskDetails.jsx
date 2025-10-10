@@ -252,7 +252,7 @@ const TaskDetails = () => {
         </button>
       </div>
 
-      {liveDetails.todos.length > 0 && (
+      {liveDetails.todos.length > 0 && history.length > 0 && !['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase()) && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg border-2 border-blue-500">
           <h4 className="mt-0 text-blue-900 flex items-center gap-2">
             <span className="text-xl">⚡</span>
