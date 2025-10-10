@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './components/Dashboard'
@@ -7,8 +7,31 @@ import TasksPage from './pages/TasksPage'
 import AiToolsPage from './pages/AiToolsPage'
 import SettingsPage from './pages/SettingsPage'
 import './App.css'
+import { getSystemStatus } from './api/gitfixApi'
 
 function App() {
+  useEffect(() => {
+    const favicon = document.getElementById('favicon');
+    const defaultFavicon = '/vite.svg';
+    const loadingFavicon = '/vite-loading.svg';
+
+    const updateFavicon = async () => {
+      try {
+        const status = await getSystemStatus();
+        const isTaskRunning = status.workers.some(w => w.status === 'active');
+        favicon.href = isTaskRunning ? loadingFavicon : defaultFavicon;
+      } catch (error) {
+        console.error('Failed to update favicon:', error);
+        favicon.href = defaultFavicon;
+      }
+    };
+
+    updateFavicon();
+    const interval = setInterval(updateFavicon, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <Router>
       <Routes>
