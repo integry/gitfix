@@ -18,7 +18,7 @@ const TaskDetails = () => {
   const [searchMatches, setSearchMatches] = useState([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const logContentRef = useRef(null);
-  const [liveDetails, setLiveDetails] = useState({ todos: [], currentTask: null });
+  const [liveDetails, setLiveDetails] = useState({ events: [], todos: [], currentTask: null });
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -70,31 +70,25 @@ const TaskDetails = () => {
   useEffect(() => {
     if (!taskId || history.length === 0) return;
 
-    const isTaskActive = ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
-      history[history.length - 1]?.state?.toUpperCase()
-    );
-
-    const isPRFollowupTask = taskId.startsWith('pr-comments-batch-');
     const lastHistoryItem = history[history.length - 1];
-    const isPRTaskActive = isPRFollowupTask && lastHistoryItem?.state && 
-      !['COMPLETED', 'FAILED'].includes(lastHistoryItem.state.toUpperCase());
+    const isTaskActive = lastHistoryItem && !['COMPLETED', 'FAILED'].includes(lastHistoryItem.state?.toUpperCase());
 
-    const shouldPoll = isTaskActive || isPRTaskActive;
+    if (isTaskActive) {
+      const fetchLiveDetails = async () => {
+        try {
+          const data = await getTaskLiveDetails(taskId);
+          setLiveDetails(data);
+        } catch (err) {
+          console.error('Error fetching live task details:', err);
+        }
+      };
 
-    const fetchLiveDetails = async () => {
-      try {
-        const data = await getTaskLiveDetails(taskId);
-        setLiveDetails(data);
-      } catch (err) {
-        console.error('Error fetching live task details:', err);
-      }
-    };
+      fetchLiveDetails();
+      const interval = setInterval(fetchLiveDetails, 3000);
 
-    fetchLiveDetails();
-
-    if (shouldPoll) {
-      const interval = setInterval(fetchLiveDetails, 2000);
       return () => clearInterval(interval);
+    } else if (liveDetails.events.length > 0) {
+      setLiveDetails({ events: [], todos: [], currentTask: null });
     }
   }, [taskId, history]);
 
@@ -376,6 +370,39 @@ const TaskDetails = () => {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {liveDetails.events.length > 0 && history.length > 0 && !['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase()) && (
+        <div className="mb-6">
+          <h4 className="text-lg font-semibold text-white mb-4">Live Event Stream</h4>
+          <div className="space-y-4">
+            {liveDetails.events.map((event, index) => (
+              <div key={index} className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-lg">
+                  {event.type === 'thought' && '🧠'}
+                  {event.type === 'tool_use' && '🛠️'}
+                  {event.type === 'tool_result' && (event.isError ? '❌' : '✅')}
+                </div>
+                <div className="flex-1 pt-1">
+                  {event.type === 'thought' && <p className="text-gray-300 italic">"{event.content}"</p>}
+                  {event.type === 'tool_use' && (
+                    <div className="text-sm">
+                      <p className="font-semibold text-gray-200">Tool: <span className="font-mono bg-gray-900 px-2 py-1 rounded">{event.toolName}</span></p>
+                      {event.input?.file_path && <p className="text-gray-400 mt-1">File: <span className="font-mono">{event.input.file_path}</span></p>}
+                      {event.input?.command && <p className="text-gray-400 mt-1">Command: <code className="bg-gray-900 p-1 rounded font-mono text-xs">{event.input.command}</code></p>}
+                    </div>
+                  )}
+                  {event.type === 'tool_result' && (
+                    <div className={`text-sm p-2 rounded ${event.isError ? 'bg-red-900/20' : 'bg-gray-800/50'}`}>
+                      <p className={`font-semibold ${event.isError ? 'text-red-400' : 'text-green-400'}`}>Tool Result {event.isError ? '(Error)' : '(Success)'}</p>
+                      <pre className="whitespace-pre-wrap font-mono text-xs text-gray-400 mt-1 max-h-40 overflow-y-auto">{event.result}</pre>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

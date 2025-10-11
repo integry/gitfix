@@ -479,7 +479,86 @@ ${commentHistory}
             githubToken: githubToken.token,
             customPrompt: prompt,
             branchName: worktreeInfo.branchName,
-            modelName: llm || DEFAULT_MODEL_NAME
+            modelName: llm || DEFAULT_MODEL_NAME,
+            onSessionId: async (sessionId, conversationId) => {
+                try {
+                    // Update state immediately when sessionId is detected
+                    await stateManager.updateTaskState(taskId, TaskStates.CLAUDE_EXECUTION, {
+                        reason: 'Claude execution started',
+                        claudeResult: {
+                            sessionId,
+                            conversationId
+                        },
+                        historyMetadata: {
+                            sessionId,
+                            conversationId
+                        }
+                    });
+                    
+                    // Store placeholder log file path in Redis for live-details API
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const logDir = '/tmp/claude-logs';
+                    
+                    // Ensure log directory exists
+                    await fs.ensureDir(logDir);
+                    
+                    const filePrefix = `issue-${pullRequestNumber}-${timestamp}`;
+                    const conversationPath = `${logDir}/${filePrefix}-conversation.json`;
+                    
+                    // Create placeholder conversation file with initial structure
+                    const placeholderConversation = {
+                        sessionId: sessionId,
+                        conversationId: conversationId,
+                        timestamp: new Date().toISOString(),
+                        issueNumber: pullRequestNumber,
+                        repository: `${repoOwner}/${repoName}`,
+                        messages: [],
+                        _streaming: true
+                    };
+                    await fs.writeFile(conversationPath, JSON.stringify(placeholderConversation, null, 2));
+                    
+                    const redis = new Redis({
+                        host: process.env.REDIS_HOST || 'redis',
+                        port: process.env.REDIS_PORT || 6379
+                    });
+                    
+                    const logData = {
+                        files: {
+                            conversation: conversationPath
+                        },
+                        issueNumber: pullRequestNumber,
+                        repository: `${repoOwner}/${repoName}`,
+                        timestamp: timestamp,
+                        sessionId: sessionId,
+                        conversationId: conversationId
+                    };
+                    
+                    if (sessionId) {
+                        const sessionKey = `execution:logs:session:${sessionId}`;
+                        await redis.set(sessionKey, JSON.stringify(logData), 'EX', 86400 * 30);
+                    }
+                    
+                    if (conversationId) {
+                        const conversationKey = `execution:logs:conversation:${conversationId}`;
+                        await redis.set(conversationKey, JSON.stringify(logData), 'EX', 86400 * 30);
+                    }
+                    
+                    await redis.quit();
+                    
+                    correlatedLogger.info({
+                        taskId,
+                        sessionId,
+                        conversationId,
+                        conversationPath
+                    }, 'Updated task state with sessionId for live tracking');
+                } catch (error) {
+                    correlatedLogger.warn({
+                        error: error.message,
+                        taskId,
+                        sessionId
+                    }, 'Failed to update task state with early sessionId');
+                }
+            }
         });
 
         // Record LLM metrics for PR comment processing
@@ -1268,6 +1347,85 @@ async function processGitHubIssueJob(job) {
                     created_at: currentIssueData.data.created_at,
                     updated_at: currentIssueData.data.updated_at,
                     user: currentIssueData.data.user
+                },
+                onSessionId: async (sessionId, conversationId) => {
+                    try {
+                        // Update state immediately when sessionId is detected
+                        await stateManager.updateTaskState(taskId, TaskStates.CLAUDE_EXECUTION, {
+                            reason: 'Claude execution started',
+                            claudeResult: {
+                                sessionId,
+                                conversationId
+                            },
+                            historyMetadata: {
+                                sessionId,
+                                conversationId
+                            }
+                        });
+                        
+                        // Store placeholder log file path in Redis for live-details API
+                        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                        const logDir = '/tmp/claude-logs';
+                        
+                        // Ensure log directory exists
+                        await fs.ensureDir(logDir);
+                        
+                        const filePrefix = `issue-${issueRef.number}-${timestamp}`;
+                        const conversationPath = `${logDir}/${filePrefix}-conversation.json`;
+                        
+                        // Create placeholder conversation file with initial structure
+                        const placeholderConversation = {
+                            sessionId: sessionId,
+                            conversationId: conversationId,
+                            timestamp: new Date().toISOString(),
+                            issueNumber: issueRef.number,
+                            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+                            messages: [],
+                            _streaming: true
+                        };
+                        await fs.writeFile(conversationPath, JSON.stringify(placeholderConversation, null, 2));
+                        
+                        const redis = new Redis({
+                            host: process.env.REDIS_HOST || 'redis',
+                            port: process.env.REDIS_PORT || 6379
+                        });
+                        
+                        const logData = {
+                            files: {
+                                conversation: conversationPath
+                            },
+                            issueNumber: issueRef.number,
+                            repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+                            timestamp: timestamp,
+                            sessionId: sessionId,
+                            conversationId: conversationId
+                        };
+                        
+                        if (sessionId) {
+                            const sessionKey = `execution:logs:session:${sessionId}`;
+                            await redis.set(sessionKey, JSON.stringify(logData), 'EX', 86400 * 30);
+                        }
+                        
+                        if (conversationId) {
+                            const conversationKey = `execution:logs:conversation:${conversationId}`;
+                            await redis.set(conversationKey, JSON.stringify(logData), 'EX', 86400 * 30);
+                        }
+                        
+                        await redis.quit();
+                        
+                        correlatedLogger.info({
+                            taskId,
+                            sessionId,
+                            conversationId,
+                            conversationPath
+                        }, 'Updated task state with sessionId for live tracking');
+                    } catch (error) {
+                        correlatedLogger.warn({
+                            error: error.message,
+                            taskId,
+                            sessionId
+                        }, 'Failed to update task state with early sessionId');
+                    }
                 }
             });
             

@@ -149,9 +149,10 @@ ${taskDescription}
  * @param {string} options.branchName - The specific branch name to use (optional)
  * @param {string} options.modelName - The AI model being used (optional)
  * @param {Object} options.issueDetails - Pre-fetched issue details (optional)
+ * @param {Function} options.onSessionId - Callback called when sessionId is detected (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, issueDetails }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, issueDetails, onSessionId }) {
     const startTime = Date.now();
 
     logger.info({
@@ -343,7 +344,8 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
         // Execute Docker command
         const result = await executeDockerCommand('docker', dockerArgs, {
             timeout: CLAUDE_TIMEOUT_MS,
-            cwd: worktreePath
+            cwd: worktreePath,
+            onSessionId
         });
 
         const executionTime = Date.now() - startTime;
@@ -622,7 +624,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
  */
 function executeDockerCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const { timeout = 300000, cwd } = options;
+        const { timeout = 300000, cwd, onSessionId } = options;
 
         const child = spawn(command, args, {
             cwd,
@@ -632,6 +634,7 @@ function executeDockerCommand(command, args, options = {}) {
         let stdout = '';
         let stderr = '';
         let timedOut = false;
+        let sessionIdDetected = false;
 
         // Set up timeout
         const timeoutHandle = setTimeout(() => {
@@ -646,9 +649,29 @@ function executeDockerCommand(command, args, options = {}) {
             }, 5000);
         }, timeout);
 
-        // Collect output
+        // Collect output and detect sessionId early
         child.stdout.on('data', (data) => {
-            stdout += data.toString();
+            const chunk = data.toString();
+            stdout += chunk;
+            
+            // Try to detect sessionId in the stream as early as possible
+            if (!sessionIdDetected && onSessionId) {
+                const lines = chunk.split('\n');
+                for (const line of lines) {
+                    if (line.trim()) {
+                        try {
+                            const jsonLine = JSON.parse(line);
+                            if (jsonLine.session_id) {
+                                sessionIdDetected = true;
+                                onSessionId(jsonLine.session_id, jsonLine.conversation_id);
+                                break;
+                            }
+                        } catch (e) {
+                            // Not JSON, skip
+                        }
+                    }
+                }
+            }
         });
 
         child.stderr.on('data', (data) => {
