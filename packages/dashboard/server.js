@@ -653,12 +653,47 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
     }
 
     const logData = JSON.parse(logDataJson);
-    const conversationPath = logData.files?.conversation;
+    let conversationPath = logData.files?.conversation;
 
-    console.log(`[live-details] conversationPath: ${conversationPath}`);
+    // For running tasks, the conversation file path may have changed since it was stored in Redis
+    // Find the latest conversation file for this sessionId
+    if (conversationPath) {
+      const path = require('path');
+      const logDir = path.dirname(conversationPath);
+      const basename = path.basename(conversationPath);
+      // Extract issue number from filename (e.g., "issue-367-2025-10-12T09-47-48-972Z-conversation.json")
+      const issueMatch = basename.match(/^(issue-\d+)-.*-conversation\.json$/);
+
+      if (issueMatch) {
+        const issuePrefix = issueMatch[1]; // e.g., "issue-367"
+        try {
+          // Find all conversation files for this issue
+          const files = await fs.readdir(logDir);
+          const conversationFiles = files
+            .filter(f => f.startsWith(issuePrefix) && f.endsWith('-conversation.json'))
+            .map(f => path.join(logDir, f))
+            .sort()
+            .reverse(); // Most recent first
+
+          // Use the most recent file that has content
+          for (const filePath of conversationFiles) {
+            try {
+              const stats = await fs.stat(filePath);
+              if (stats.size > 300) { // Files with content are larger than empty placeholder (202 bytes)
+                conversationPath = filePath;
+                break;
+              }
+            } catch (e) {
+              // Skip files we can't access
+            }
+          }
+        } catch (e) {
+          console.error(`[live-details] Error finding latest conversation file:`, e);
+        }
+      }
+    }
 
     const pathExists = conversationPath ? await fs.pathExists(conversationPath) : false;
-    console.log(`[live-details] conversationPath exists: ${pathExists}`);
 
     if (!conversationPath || !pathExists) {
       console.log('[live-details] Conversation file not found');
@@ -670,7 +705,7 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
     
     const events = [];
     let todos = [];
-    
+
     if (conversation.messages && Array.isArray(conversation.messages)) {
       for (const message of conversation.messages) {
         const timestamp = message.timestamp || new Date().toISOString();
