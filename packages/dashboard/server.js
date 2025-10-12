@@ -602,35 +602,66 @@ app.get('/api/execution/:sessionId/logs/:type', ensureAuthenticated, async (req,
 
 app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) => {
   try {
-    const { taskId } = req.params;
-    
+    const { taskId: jobId } = req.params;
+
+    // Compute the actual worker state taskId from the jobId
+    // For regular issues: jobId format is "issue-{owner}-{repo}-{number}-{model}-{timestamp}"
+    //                     taskId format is "{owner}-{repo}-{number}-{model}"
+    // For PR comments: jobId format is "pr-comments-batch-{owner}-{repo}-{number}-{timestamp}"
+    //                  taskId is the same as jobId
+    let taskId = jobId;
+    if (jobId.startsWith('issue-')) {
+      // Remove "issue-" prefix and timestamp suffix
+      const parts = jobId.replace(/^issue-/, '').split('-');
+      // Last part is timestamp, remove it
+      parts.pop();
+      taskId = parts.join('-');
+    }
+
+    console.log(`[live-details] jobId: ${jobId}, taskId: ${taskId}`);
+
     const stateKey = `worker:state:${taskId}`;
     const stateData = await redisClient.get(stateKey);
-    
+
+    console.log(`[live-details] stateKey: ${stateKey}, hasData: ${!!stateData}`);
+
     if (!stateData) {
+      console.log('[live-details] No state data found');
       return res.json({ events: [], todos: [], currentTask: null });
     }
 
     const state = JSON.parse(stateData);
-    const claudeExecutionEntry = state.history.find(h => h.state === 'CLAUDE_EXECUTION' && h.metadata?.sessionId);
-    
+    const claudeExecutionEntry = state.history.find(h => h.state === 'claude_execution' && h.metadata?.sessionId);
+
+    console.log(`[live-details] Found claudeExecutionEntry: ${!!claudeExecutionEntry}, sessionId: ${claudeExecutionEntry?.metadata?.sessionId}`);
+
     if (!claudeExecutionEntry) {
+      console.log('[live-details] No claude_execution entry with sessionId');
       return res.json({ events: [], todos: [], currentTask: null });
     }
 
     const { sessionId } = claudeExecutionEntry.metadata;
-    
+
     const logKey = `execution:logs:session:${sessionId}`;
     const logDataJson = await redisClient.get(logKey);
-    
+
+    console.log(`[live-details] logKey: ${logKey}, hasLogData: ${!!logDataJson}`);
+
     if (!logDataJson) {
+      console.log('[live-details] No log data found in Redis');
       return res.json({ events: [], todos: [], currentTask: null });
     }
-    
+
     const logData = JSON.parse(logDataJson);
     const conversationPath = logData.files?.conversation;
 
-    if (!conversationPath || !await fs.pathExists(conversationPath)) {
+    console.log(`[live-details] conversationPath: ${conversationPath}`);
+
+    const pathExists = conversationPath ? await fs.pathExists(conversationPath) : false;
+    console.log(`[live-details] conversationPath exists: ${pathExists}`);
+
+    if (!conversationPath || !pathExists) {
+      console.log('[live-details] Conversation file not found');
       return res.json({ events: [], todos: [], currentTask: null });
     }
 
@@ -666,7 +697,9 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
     
     const inProgressTask = todos.find(t => t.status === 'in_progress');
     const currentTask = inProgressTask ? inProgressTask.content : null;
-    
+
+    console.log(`[live-details] Returning: ${events.length} events, ${todos.length} todos, currentTask: ${currentTask ? 'yes' : 'no'}`);
+
     res.json({ events, todos, currentTask });
   } catch (error) {
     console.error(`Error in /api/task/:taskId/live-details:`, error);
