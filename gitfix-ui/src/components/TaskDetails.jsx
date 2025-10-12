@@ -423,7 +423,9 @@ const TaskDetails = () => {
                     {event.type === 'tool_result' && (
                       <div className={`text-sm p-2 rounded ${event.isError ? 'bg-red-900/20' : 'bg-gray-800/50'}`}>
                         <p className={`font-semibold ${event.isError ? 'text-red-400' : 'text-green-400'}`}>Tool Result {event.isError ? '(Error)' : '(Success)'}</p>
-                        <pre className="whitespace-pre-wrap font-mono text-xs text-gray-400 mt-1 max-h-40 overflow-y-auto">{event.result}</pre>
+                        <pre className="whitespace-pre-wrap font-mono text-xs text-gray-400 mt-1 max-h-40 overflow-y-auto">
+                          {typeof event.result === 'string' ? event.result : JSON.stringify(event.result, null, 2)}
+                        </pre>
                       </div>
                     )}
                   </div>
