@@ -600,6 +600,135 @@ app.get('/api/execution/:sessionId/logs/:type', ensureAuthenticated, async (req,
   }
 });
 
+app.get('/api/task/:taskId/docker-info', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskId: jobId } = req.params;
+
+    // Compute the actual worker state taskId from the jobId
+    let taskId = jobId;
+    if (jobId.startsWith('issue-')) {
+      const parts = jobId.replace(/^issue-/, '').split('-');
+      parts.pop();
+      taskId = parts.join('-');
+    }
+
+    const stateKey = `worker:state:${taskId}`;
+    const stateData = await redisClient.get(stateKey);
+
+    if (!stateData) {
+      return res.status(404).json({ error: 'Task state not found' });
+    }
+
+    const state = JSON.parse(stateData);
+    const claudeExecutionEntry = state.history.find(h => h.state === 'claude_execution' && h.metadata?.containerId);
+
+    if (!claudeExecutionEntry || !claudeExecutionEntry.metadata?.containerId) {
+      return res.status(404).json({ error: 'No Docker container info available for this task' });
+    }
+
+    const { containerId, containerName } = claudeExecutionEntry.metadata;
+
+    // Check if container is still running
+    const { execSync } = require('child_process');
+    let containerStatus = 'unknown';
+    let containerInfo = null;
+
+    try {
+      const statusOutput = execSync(
+        `docker ps -a --filter "id=${containerId}" --format "{{.Status}}"`,
+        { encoding: 'utf8', timeout: 5000 }
+      ).trim();
+      
+      if (statusOutput) {
+        containerStatus = statusOutput.includes('Up') ? 'running' : 'stopped';
+        containerInfo = {
+          id: containerId,
+          name: containerName,
+          status: containerStatus,
+          logsAvailable: true
+        };
+      } else {
+        containerInfo = {
+          id: containerId,
+          name: containerName,
+          status: 'removed',
+          logsAvailable: false
+        };
+      }
+    } catch (err) {
+      console.error('Error checking container status:', err);
+      containerInfo = {
+        id: containerId,
+        name: containerName,
+        status: 'error',
+        logsAvailable: false,
+        error: err.message
+      };
+    }
+
+    res.json(containerInfo);
+  } catch (error) {
+    console.error('Error in /api/task/:taskId/docker-info:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/task/:taskId/docker-logs', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskId: jobId } = req.params;
+    const { tail = '100', follow = 'false' } = req.query;
+
+    // Compute the actual worker state taskId from the jobId
+    let taskId = jobId;
+    if (jobId.startsWith('issue-')) {
+      const parts = jobId.replace(/^issue-/, '').split('-');
+      parts.pop();
+      taskId = parts.join('-');
+    }
+
+    const stateKey = `worker:state:${taskId}`;
+    const stateData = await redisClient.get(stateKey);
+
+    if (!stateData) {
+      return res.status(404).json({ error: 'Task state not found' });
+    }
+
+    const state = JSON.parse(stateData);
+    const claudeExecutionEntry = state.history.find(h => h.state === 'claude_execution' && h.metadata?.containerId);
+
+    if (!claudeExecutionEntry || !claudeExecutionEntry.metadata?.containerId) {
+      return res.status(404).json({ error: 'No Docker container info available for this task' });
+    }
+
+    const { containerId } = claudeExecutionEntry.metadata;
+
+    // Get docker logs
+    const { execSync } = require('child_process');
+    try {
+      const tailNum = parseInt(tail) || 100;
+      const logsOutput = execSync(
+        `docker logs --tail ${tailNum} ${containerId}`,
+        { encoding: 'utf8', timeout: 10000, maxBuffer: 10 * 1024 * 1024 }
+      );
+      
+      res.setHeader('Content-Type', 'text/plain');
+      res.send(logsOutput);
+    } catch (err) {
+      // Container might be removed
+      if (err.message.includes('No such container')) {
+        return res.status(404).json({ 
+          error: 'Container no longer exists (already removed)',
+          containerId 
+        });
+      }
+      throw err;
+    }
+  } catch (error) {
+    console.error('Error in /api/task/:taskId/docker-logs:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
 app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) => {
   try {
     const { taskId: jobId } = req.params;

@@ -558,6 +558,25 @@ ${commentHistory}
                         sessionId
                     }, 'Failed to update task state with early sessionId');
                 }
+            },
+            onContainerId: async (containerId, containerName) => {
+                try {
+                    // Update state with container info for Docker log access
+                    await stateManager.updateHistoryMetadata(taskId, 'claude_execution', {
+                        containerId,
+                        containerName
+                    });
+                    logger.info({ 
+                        taskId, 
+                        containerId, 
+                        containerName 
+                    }, 'Docker container info added to task state');
+                } catch (err) {
+                    logger.warn({ 
+                        taskId, 
+                        error: err.message 
+                    }, 'Failed to update state with container info');
+                }
             }
         });
 
@@ -1425,6 +1444,25 @@ async function processGitHubIssueJob(job) {
                             taskId,
                             sessionId
                         }, 'Failed to update task state with early sessionId');
+                    }
+                },
+                onContainerId: async (containerId, containerName) => {
+                    try {
+                        // Update state with container info for Docker log access
+                        await stateManager.updateHistoryMetadata(taskId, 'claude_execution', {
+                            containerId,
+                            containerName
+                        });
+                        correlatedLogger.info({ 
+                            taskId, 
+                            containerId, 
+                            containerName 
+                        }, 'Docker container info added to task state');
+                    } catch (err) {
+                        correlatedLogger.warn({ 
+                            taskId, 
+                            error: err.message 
+                        }, 'Failed to update state with container info');
                     }
                 }
             });

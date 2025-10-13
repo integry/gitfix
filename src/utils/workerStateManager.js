@@ -211,6 +211,52 @@ export class WorkerStateManager {
     }
 
     /**
+     * Updates metadata for a specific history entry
+     * @param {string} taskId - Task identifier
+     * @param {string} historyState - State name to find in history
+     * @param {object} metadata - Metadata to merge
+     * @returns {Promise<object>} Updated state
+     */
+    async updateHistoryMetadata(taskId, historyState, metadata = {}) {
+        const key = this.getTaskKey(taskId);
+        const stateJson = await this.redis.get(key);
+        
+        if (!stateJson) {
+            throw new Error(`Task state not found for taskId: ${taskId}`);
+        }
+        
+        const state = JSON.parse(stateJson);
+        
+        // Find the history entry with the specified state (most recent one)
+        const historyIndex = state.history.findLastIndex(h => h.state === historyState);
+        
+        if (historyIndex >= 0) {
+            // Merge new metadata with existing metadata
+            state.history[historyIndex].metadata = {
+                ...state.history[historyIndex].metadata,
+                ...metadata
+            };
+            
+            state.updatedAt = new Date().toISOString();
+            await this.redis.setex(key, this.stateExpiry, JSON.stringify(state));
+            
+            const correlatedLogger = logger.withCorrelation(state.correlationId);
+            correlatedLogger.debug({
+                taskId,
+                historyState,
+                metadata
+            }, 'Updated history metadata');
+        } else {
+            logger.warn({
+                taskId,
+                historyState
+            }, 'Could not find history entry to update metadata');
+        }
+        
+        return state;
+    }
+
+    /**
      * Marks task as failed
      * @param {string} taskId - Task identifier
      * @param {Error} error - Error that caused failure

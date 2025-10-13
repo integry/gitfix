@@ -150,9 +150,10 @@ ${taskDescription}
  * @param {string} options.modelName - The AI model being used (optional)
  * @param {Object} options.issueDetails - Pre-fetched issue details (optional)
  * @param {Function} options.onSessionId - Callback called when sessionId is detected (optional)
+ * @param {Function} options.onContainerId - Callback called when container ID is detected (optional)
  * @returns {Promise<Object>} Claude execution result
  */
-export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, issueDetails, onSessionId }) {
+export async function executeClaudeCode({ worktreePath, issueRef, githubToken, customPrompt, isRetry = false, retryReason, branchName, modelName, issueDetails, onSessionId, onContainerId }) {
     const startTime = Date.now();
 
     logger.info({
@@ -345,7 +346,9 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
         const result = await executeDockerCommand('docker', dockerArgs, {
             timeout: CLAUDE_TIMEOUT_MS,
             cwd: worktreePath,
-            onSessionId
+            onSessionId,
+            onContainerId,
+            worktreePath
         });
 
         const executionTime = Date.now() - startTime;
@@ -624,7 +627,7 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
  */
 function executeDockerCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
-        const { timeout = 300000, cwd, onSessionId } = options;
+        const { timeout = 300000, cwd, onSessionId, onContainerId, worktreePath } = options;
 
         const child = spawn(command, args, {
             cwd,
@@ -635,6 +638,7 @@ function executeDockerCommand(command, args, options = {}) {
         let stderr = '';
         let timedOut = false;
         let sessionIdDetected = false;
+        let containerIdDetected = false;
 
         // Set up timeout
         const timeoutHandle = setTimeout(() => {
@@ -648,6 +652,36 @@ function executeDockerCommand(command, args, options = {}) {
                 }
             }, 5000);
         }, timeout);
+
+        // If this is a docker run command and we have a callback, detect the container ID
+        if (command === 'docker' && args[0] === 'run' && onContainerId && worktreePath) {
+            // Give the container a moment to start
+            setTimeout(async () => {
+                if (!containerIdDetected) {
+                    try {
+                        // Find container by the mounted worktree path
+                        const { execSync } = await import('child_process');
+                        const containersOutput = execSync(
+                            `docker ps --filter "volume=${worktreePath}" --format "{{.ID}}:{{.Names}}" --latest`,
+                            { encoding: 'utf8', timeout: 5000 }
+                        ).trim();
+                        
+                        if (containersOutput) {
+                            const [containerId, containerName] = containersOutput.split(':');
+                            containerIdDetected = true;
+                            onContainerId(containerId, containerName);
+                            logger.debug({
+                                containerId,
+                                containerName,
+                                worktreePath
+                            }, 'Detected Docker container ID for Claude execution');
+                        }
+                    } catch (err) {
+                        logger.debug({ error: err.message }, 'Failed to detect container ID');
+                    }
+                }
+            }, 2000); // Wait 2 seconds for container to start
+        }
 
         // Collect output and detect sessionId early
         child.stdout.on('data', (data) => {
