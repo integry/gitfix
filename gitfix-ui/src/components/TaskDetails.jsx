@@ -18,7 +18,8 @@ const TaskDetails = () => {
   const [searchMatches, setSearchMatches] = useState([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const logContentRef = useRef(null);
-  const [liveDetails, setLiveDetails] = useState({ todos: [], currentTask: null });
+  const [liveDetails, setLiveDetails] = useState({ events: [], todos: [], currentTask: null });
+  const [eventsCollapsed, setEventsCollapsed] = useState(true);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -70,16 +71,8 @@ const TaskDetails = () => {
   useEffect(() => {
     if (!taskId || history.length === 0) return;
 
-    const isTaskActive = ['PROCESSING', 'CLAUDE_EXECUTION', 'POST_PROCESSING'].includes(
-      history[history.length - 1]?.state?.toUpperCase()
-    );
-
-    const isPRFollowupTask = taskId.startsWith('pr-comments-batch-');
     const lastHistoryItem = history[history.length - 1];
-    const isPRTaskActive = isPRFollowupTask && lastHistoryItem?.state && 
-      !['COMPLETED', 'FAILED'].includes(lastHistoryItem.state.toUpperCase());
-
-    const shouldPoll = isTaskActive || isPRTaskActive;
+    const isTaskActive = lastHistoryItem && !['COMPLETED', 'FAILED'].includes(lastHistoryItem.state?.toUpperCase());
 
     const fetchLiveDetails = async () => {
       try {
@@ -90,10 +83,12 @@ const TaskDetails = () => {
       }
     };
 
+    // Always fetch live details at least once (for both active and completed tasks)
     fetchLiveDetails();
 
-    if (shouldPoll) {
-      const interval = setInterval(fetchLiveDetails, 2000);
+    // Only poll for updates if task is active
+    if (isTaskActive) {
+      const interval = setInterval(fetchLiveDetails, 3000);
       return () => clearInterval(interval);
     }
   }, [taskId, history]);
@@ -341,7 +336,7 @@ const TaskDetails = () => {
 
       {liveDetails.todos.length > 0 && history.length > 0 && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg border-2 border-blue-500">
-          {!['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase()) && (
+          {!['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase()) ? (
             <>
               <h4 className="mt-0 text-blue-900 flex items-center gap-2">
                 <span className="text-xl">⚡</span>
@@ -353,6 +348,11 @@ const TaskDetails = () => {
                 </p>
               )}
             </>
+          ) : (
+            <h4 className="mt-0 text-blue-900 flex items-center gap-2">
+              <span className="text-xl">📋</span>
+              Task Execution History
+            </h4>
           )}
           <h5 className="mt-4 mb-2 text-blue-900">To-do List:</h5>
           <ul className="list-none pl-0 m-0">
@@ -376,6 +376,63 @@ const TaskDetails = () => {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {liveDetails.events.length > 0 && history.length > 0 && (
+        <div className="mb-6">
+          <div
+            className="flex items-center justify-between cursor-pointer p-4 bg-gray-700/30 rounded-lg hover:bg-gray-700/50 transition-colors"
+            onClick={() => setEventsCollapsed(!eventsCollapsed)}
+          >
+            <h4 className="text-lg font-semibold text-white flex items-center gap-3">
+              <span>{eventsCollapsed ? '▶' : '▼'}</span>
+              <span>
+                {!['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase())
+                  ? 'Live Event Stream'
+                  : 'Execution Event Log'}
+              </span>
+              <span className="text-sm font-normal text-gray-400">({liveDetails.events.length} events)</span>
+            </h4>
+            {eventsCollapsed && liveDetails.currentTask && (
+              <div className="text-sm text-gray-300 italic">
+                Currently: {liveDetails.currentTask}
+              </div>
+            )}
+          </div>
+          {!eventsCollapsed && (
+            <div className="mt-4 space-y-4">
+              {liveDetails.events.map((event, index) => (
+                <div key={index} className="flex items-start gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-lg">
+                    {event.type === 'thought' && '🧠'}
+                    {event.type === 'tool_use' && '🛠️'}
+                    {event.type === 'tool_result' && (event.isError ? '❌' : '✅')}
+                  </div>
+                  <div className="flex-1 pt-1">
+                    {event.type === 'thought' && (
+                      <div className="text-gray-300 italic whitespace-pre-wrap">{event.content}</div>
+                    )}
+                    {event.type === 'tool_use' && (
+                      <div className="text-sm">
+                        <p className="font-semibold text-gray-200">Tool: <span className="font-mono bg-gray-900 px-2 py-1 rounded">{event.toolName}</span></p>
+                        {event.input?.file_path && <p className="text-gray-400 mt-1">File: <span className="font-mono">{event.input.file_path}</span></p>}
+                        {event.input?.command && <p className="text-gray-400 mt-1">Command: <code className="bg-gray-900 p-1 rounded font-mono text-xs">{event.input.command}</code></p>}
+                      </div>
+                    )}
+                    {event.type === 'tool_result' && (
+                      <div className={`text-sm p-2 rounded ${event.isError ? 'bg-red-900/20' : 'bg-gray-800/50'}`}>
+                        <p className={`font-semibold ${event.isError ? 'text-red-400' : 'text-green-400'}`}>Tool Result {event.isError ? '(Error)' : '(Success)'}</p>
+                        <pre className="whitespace-pre-wrap font-mono text-xs text-gray-400 mt-1 max-h-40 overflow-y-auto">
+                          {typeof event.result === 'string' ? event.result : JSON.stringify(event.result, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

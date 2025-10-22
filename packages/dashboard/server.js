@@ -600,107 +600,236 @@ app.get('/api/execution/:sessionId/logs/:type', ensureAuthenticated, async (req,
   }
 });
 
-app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) => {
+app.get('/api/task/:taskId/docker-info', ensureAuthenticated, async (req, res) => {
   try {
-    const { taskId } = req.params;
-    
-    // Get task history to extract sessionId
+    const { taskId: jobId } = req.params;
+
+    // Compute the actual worker state taskId from the jobId
+    let taskId = jobId;
+    if (jobId.startsWith('issue-')) {
+      const parts = jobId.replace(/^issue-/, '').split('-');
+      parts.pop();
+      taskId = parts.join('-');
+    }
+
     const stateKey = `worker:state:${taskId}`;
     const stateData = await redisClient.get(stateKey);
-    
-    let sessionId = null;
-    let conversationId = null;
-    
-    // Try to get sessionId from state
-    if (stateData) {
-      try {
-        const state = JSON.parse(stateData);
-        if (state.history && Array.isArray(state.history)) {
-          for (const entry of state.history) {
-            if (entry.metadata?.sessionId) {
-              sessionId = entry.metadata.sessionId;
-              conversationId = entry.metadata.conversationId;
-              break;
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Error parsing state data:', e);
-      }
+
+    if (!stateData) {
+      return res.status(404).json({ error: 'Task state not found' });
     }
-    
-    // If no sessionId in state, try to get it from job data
-    if (!sessionId && taskQueue) {
-      try {
-        const job = await taskQueue.getJob(taskId);
-        if (job && job.returnvalue?.claudeResult) {
-          sessionId = job.returnvalue.claudeResult.sessionId;
-          conversationId = job.returnvalue.claudeResult.conversationId;
-        }
-      } catch (e) {
-        console.error('Error getting job data:', e);
-      }
+
+    const state = JSON.parse(stateData);
+    const claudeExecutionEntry = state.history.find(h => h.state === 'claude_execution' && h.metadata?.containerId);
+
+    if (!claudeExecutionEntry || !claudeExecutionEntry.metadata?.containerId) {
+      return res.status(404).json({ error: 'No Docker container info available for this task' });
     }
-    
-    if (!sessionId) {
-      return res.json({ todos: [], currentTask: null });
-    }
-    
-    // Get log data from Redis
-    let logData = null;
-    const sessionKey = `execution:logs:session:${sessionId}`;
-    const logJson = await redisClient.get(sessionKey);
-    
-    if (logJson) {
-      logData = JSON.parse(logJson);
-    } else if (conversationId) {
-      const conversationKey = `execution:logs:conversation:${conversationId}`;
-      const conversationLogJson = await redisClient.get(conversationKey);
-      if (conversationLogJson) {
-        logData = JSON.parse(conversationLogJson);
-      }
-    }
-    
-    if (!logData || !logData.files || !logData.files.conversation) {
-      return res.json({ todos: [], currentTask: null });
-    }
-    
-    // Read the conversation log file
-    const fs = require('fs').promises;
-    const conversationPath = logData.files.conversation;
-    
+
+    const { containerId, containerName } = claudeExecutionEntry.metadata;
+
+    // Check if container is still running
+    const { execSync } = require('child_process');
+    let containerStatus = 'unknown';
+    let containerInfo = null;
+
     try {
-      await fs.access(conversationPath);
+      const statusOutput = execSync(
+        `docker ps -a --filter "id=${containerId}" --format "{{.Status}}"`,
+        { encoding: 'utf8', timeout: 5000 }
+      ).trim();
+      
+      if (statusOutput) {
+        containerStatus = statusOutput.includes('Up') ? 'running' : 'stopped';
+        containerInfo = {
+          id: containerId,
+          name: containerName,
+          status: containerStatus,
+          logsAvailable: true
+        };
+      } else {
+        containerInfo = {
+          id: containerId,
+          name: containerName,
+          status: 'removed',
+          logsAvailable: false
+        };
+      }
     } catch (err) {
-      return res.json({ todos: [], currentTask: null });
+      console.error('Error checking container status:', err);
+      containerInfo = {
+        id: containerId,
+        name: containerName,
+        status: 'error',
+        logsAvailable: false,
+        error: err.message
+      };
     }
-    
-    const conversationContent = await fs.readFile(conversationPath, 'utf8');
-    const conversation = JSON.parse(conversationContent);
-    
-    // Parse todos from conversation
+
+    res.json(containerInfo);
+  } catch (error) {
+    console.error('Error in /api/task/:taskId/docker-info:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/task/:taskId/docker-logs', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskId: jobId } = req.params;
+    const { tail = '100', follow = 'false' } = req.query;
+
+    // Compute the actual worker state taskId from the jobId
+    let taskId = jobId;
+    if (jobId.startsWith('issue-')) {
+      const parts = jobId.replace(/^issue-/, '').split('-');
+      parts.pop();
+      taskId = parts.join('-');
+    }
+
+    const stateKey = `worker:state:${taskId}`;
+    const stateData = await redisClient.get(stateKey);
+
+    if (!stateData) {
+      return res.status(404).json({ error: 'Task state not found' });
+    }
+
+    const state = JSON.parse(stateData);
+    const claudeExecutionEntry = state.history.find(h => h.state === 'claude_execution' && h.metadata?.containerId);
+
+    if (!claudeExecutionEntry || !claudeExecutionEntry.metadata?.containerId) {
+      return res.status(404).json({ error: 'No Docker container info available for this task' });
+    }
+
+    const { containerId } = claudeExecutionEntry.metadata;
+
+    // Get docker logs
+    const { execSync } = require('child_process');
+    try {
+      const tailNum = parseInt(tail) || 100;
+      const logsOutput = execSync(
+        `docker logs --tail ${tailNum} ${containerId}`,
+        { encoding: 'utf8', timeout: 10000, maxBuffer: 10 * 1024 * 1024 }
+      );
+      
+      res.setHeader('Content-Type', 'text/plain');
+      res.send(logsOutput);
+    } catch (err) {
+      // Container might be removed
+      if (err.message.includes('No such container')) {
+        return res.status(404).json({ 
+          error: 'Container no longer exists (already removed)',
+          containerId 
+        });
+      }
+      throw err;
+    }
+  } catch (error) {
+    console.error('Error in /api/task/:taskId/docker-logs:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) => {
+  try {
+    const { taskId: jobId } = req.params;
+
+    // Compute the actual worker state taskId from the jobId
+    // For regular issues: jobId format is "issue-{owner}-{repo}-{number}-{model}-{timestamp}"
+    //                     taskId format is "{owner}-{repo}-{number}-{model}"
+    // For PR comments: jobId format is "pr-comments-batch-{owner}-{repo}-{number}-{timestamp}"
+    //                  taskId is the same as jobId
+    let taskId = jobId;
+    if (jobId.startsWith('issue-')) {
+      // Remove "issue-" prefix and timestamp suffix
+      const parts = jobId.replace(/^issue-/, '').split('-');
+      // Last part is timestamp, remove it
+      parts.pop();
+      taskId = parts.join('-');
+    }
+
+    console.log(`[live-details] jobId: ${jobId}, taskId: ${taskId}`);
+
+    const stateKey = `worker:state:${taskId}`;
+    const stateData = await redisClient.get(stateKey);
+
+    console.log(`[live-details] stateKey: ${stateKey}, hasData: ${!!stateData}`);
+
+    if (!stateData) {
+      console.log('[live-details] No state data found');
+      return res.json({ events: [], todos: [], currentTask: null });
+    }
+
+    const state = JSON.parse(stateData);
+    const claudeExecutionEntry = state.history.find(h => h.state === 'claude_execution' && h.metadata?.sessionId);
+
+    console.log(`[live-details] Found claudeExecutionEntry: ${!!claudeExecutionEntry}, sessionId: ${claudeExecutionEntry?.metadata?.sessionId}`);
+
+    if (!claudeExecutionEntry) {
+      console.log('[live-details] No claude_execution entry with sessionId');
+      return res.json({ events: [], todos: [], currentTask: null });
+    }
+
+    const { sessionId } = claudeExecutionEntry.metadata;
+
+    console.log(`[live-details] sessionId: ${sessionId}`);
+
+    // For running tasks, read from the actual .claude conversation file
+    // Claude stores conversation files in ~/.claude/projects/-home-node-workspace/{sessionId}.jsonl
+    const os = require('os');
+    const claudeConversationPath = path.join(os.homedir(), '.claude', 'projects', '-home-node-workspace', `${sessionId}.jsonl`);
+
+    console.log(`[live-details] Checking Claude conversation path: ${claudeConversationPath}`);
+
+    const pathExists = await fs.pathExists(claudeConversationPath);
+
+    if (!pathExists) {
+      console.log('[live-details] Claude conversation file not found');
+      return res.json({ events: [], todos: [], currentTask: null });
+    }
+
+    // Read and parse the JSONL file (each line is a JSON object)
+    const conversationContent = await fs.readFile(claudeConversationPath, 'utf8');
+    const lines = conversationContent.trim().split('\n').filter(line => line.trim());
+
+    const events = [];
     let todos = [];
-    let currentTask = null;
-    
-    if (conversation.messages && Array.isArray(conversation.messages)) {
-      for (const message of conversation.messages) {
-        if (message.type === 'assistant' && message.message && message.message.content) {
+
+    for (const line of lines) {
+      try {
+        const message = JSON.parse(line);
+        const timestamp = message.timestamp || new Date().toISOString();
+
+        if (message.type === 'assistant' && message.message?.content) {
           for (const content of message.message.content) {
-            if (content.type === 'tool_use' && content.name === 'TodoWrite' && content.input && content.input.todos) {
-              todos = content.input.todos;
-              const inProgressTask = todos.find(t => t.status === 'in_progress');
-              if (inProgressTask) {
-                currentTask = inProgressTask.content;
+            if (content.type === 'text') {
+              events.push({ type: 'thought', content: content.text, timestamp });
+            } else if (content.type === 'tool_use') {
+              events.push({ type: 'tool_use', toolName: content.name, input: content.input, id: content.id, timestamp });
+              if (content.name === 'TodoWrite' && content.input?.todos) {
+                todos = content.input.todos;
               }
             }
           }
+        } else if (message.type === 'user' && message.message?.content) {
+          for (const content of message.message.content) {
+            if (content.type === 'tool_result') {
+              events.push({ type: 'tool_result', toolUseId: content.tool_use_id, result: content.content, isError: content.is_error || false, timestamp });
+            }
+          }
         }
+      } catch (parseError) {
+        console.error(`[live-details] Error parsing line:`, parseError);
       }
     }
     
-    res.json({ todos, currentTask });
+    const inProgressTask = todos.find(t => t.status === 'in_progress');
+    const currentTask = inProgressTask ? inProgressTask.content : null;
+
+    console.log(`[live-details] Returning: ${events.length} events, ${todos.length} todos, currentTask: ${currentTask ? 'yes' : 'no'}`);
+
+    res.json({ events, todos, currentTask });
   } catch (error) {
-    console.error('Error in /api/task/:taskId/live-details:', error);
+    console.error(`Error in /api/task/:taskId/live-details:`, error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
