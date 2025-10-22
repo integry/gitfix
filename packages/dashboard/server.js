@@ -771,73 +771,34 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
 
     const { sessionId } = claudeExecutionEntry.metadata;
 
-    const logKey = `execution:logs:session:${sessionId}`;
-    const logDataJson = await redisClient.get(logKey);
+    console.log(`[live-details] sessionId: ${sessionId}`);
 
-    console.log(`[live-details] logKey: ${logKey}, hasLogData: ${!!logDataJson}`);
+    // For running tasks, read from the actual .claude conversation file
+    // Claude stores conversation files in ~/.claude/projects/-home-node-workspace/{sessionId}.jsonl
+    const os = require('os');
+    const claudeConversationPath = path.join(os.homedir(), '.claude', 'projects', '-home-node-workspace', `${sessionId}.jsonl`);
 
-    if (!logDataJson) {
-      console.log('[live-details] No log data found in Redis');
+    console.log(`[live-details] Checking Claude conversation path: ${claudeConversationPath}`);
+
+    const pathExists = await fs.pathExists(claudeConversationPath);
+
+    if (!pathExists) {
+      console.log('[live-details] Claude conversation file not found');
       return res.json({ events: [], todos: [], currentTask: null });
     }
 
-    const logData = JSON.parse(logDataJson);
-    let conversationPath = logData.files?.conversation;
+    // Read and parse the JSONL file (each line is a JSON object)
+    const conversationContent = await fs.readFile(claudeConversationPath, 'utf8');
+    const lines = conversationContent.trim().split('\n').filter(line => line.trim());
 
-    // For running tasks, the conversation file path may have changed since it was stored in Redis
-    // Find the latest conversation file for this sessionId
-    if (conversationPath) {
-      const path = require('path');
-      const logDir = path.dirname(conversationPath);
-      const basename = path.basename(conversationPath);
-      // Extract issue number from filename (e.g., "issue-367-2025-10-12T09-47-48-972Z-conversation.json")
-      const issueMatch = basename.match(/^(issue-\d+)-.*-conversation\.json$/);
-
-      if (issueMatch) {
-        const issuePrefix = issueMatch[1]; // e.g., "issue-367"
-        try {
-          // Find all conversation files for this issue
-          const files = await fs.readdir(logDir);
-          const conversationFiles = files
-            .filter(f => f.startsWith(issuePrefix) && f.endsWith('-conversation.json'))
-            .map(f => path.join(logDir, f))
-            .sort()
-            .reverse(); // Most recent first
-
-          // Use the most recent file that has content
-          for (const filePath of conversationFiles) {
-            try {
-              const stats = await fs.stat(filePath);
-              if (stats.size > 300) { // Files with content are larger than empty placeholder (202 bytes)
-                conversationPath = filePath;
-                break;
-              }
-            } catch (e) {
-              // Skip files we can't access
-            }
-          }
-        } catch (e) {
-          console.error(`[live-details] Error finding latest conversation file:`, e);
-        }
-      }
-    }
-
-    const pathExists = conversationPath ? await fs.pathExists(conversationPath) : false;
-
-    if (!conversationPath || !pathExists) {
-      console.log('[live-details] Conversation file not found');
-      return res.json({ events: [], todos: [], currentTask: null });
-    }
-
-    const conversationContent = await fs.readFile(conversationPath, 'utf8');
-    const conversation = JSON.parse(conversationContent);
-    
     const events = [];
     let todos = [];
 
-    if (conversation.messages && Array.isArray(conversation.messages)) {
-      for (const message of conversation.messages) {
+    for (const line of lines) {
+      try {
+        const message = JSON.parse(line);
         const timestamp = message.timestamp || new Date().toISOString();
+
         if (message.type === 'assistant' && message.message?.content) {
           for (const content of message.message.content) {
             if (content.type === 'text') {
@@ -856,6 +817,8 @@ app.get('/api/task/:taskId/live-details', ensureAuthenticated, async (req, res) 
             }
           }
         }
+      } catch (parseError) {
+        console.error(`[live-details] Error parsing line:`, parseError);
       }
     }
     
