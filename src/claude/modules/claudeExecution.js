@@ -1,0 +1,499 @@
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
+import logger from '../../utils/logger.js';
+import { getDefaultModel } from '../../config/modelAliases.js';
+import { generateClaudePrompt } from './promptGeneration.js';
+import { executeDockerCommand } from './dockerOperations.js';
+
+// Configuration from environment variables
+const CLAUDE_DOCKER_IMAGE = process.env.CLAUDE_DOCKER_IMAGE || 'claude-code-processor:latest';
+const CLAUDE_CONFIG_PATH = process.env.CLAUDE_CONFIG_PATH || path.join(os.homedir(), '.claude');
+const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '1000', 10);
+const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10); // 5 minutes
+
+/**
+ * Custom error for Claude usage limits.
+ * This allows the worker to catch this specific error and requeue the job.
+ */
+export class UsageLimitError extends Error {
+  constructor(message, resetTimestamp) {
+    super(message);
+    this.name = 'UsageLimitError';
+    this.resetTimestamp = resetTimestamp; // UNIX timestamp (seconds)
+    this.retryable = true;
+  }
+}
+
+/**
+ * Executes Claude Code in a Docker container
+ * @param {Object} params - Execution parameters
+ * @returns {Promise<Object>} Execution result
+ */
+export async function executeClaudeCode(params) {
+    const {
+        worktreePath,
+        issueRef,
+        githubToken,
+        customPrompt,
+        isRetry = false,
+        retryReason,
+        branchName,
+        modelName,
+        issueDetails,
+        onSessionId,
+        onContainerId
+    } = params;
+    
+    const startTime = Date.now();
+
+    logger.info({
+        issueNumber: issueRef.number,
+        repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
+        worktreePath,
+        dockerImage: CLAUDE_DOCKER_IMAGE,
+        isRetry,
+        retryReason
+    }, isRetry ? 'Starting Claude Code execution (RETRY)...' : 'Starting Claude Code execution...');
+
+    let worktreeGitContent = null;
+    let mainRepoPath = null;
+
+    try {
+        // Generate the prompt for Claude
+        const basePrompt = customPrompt || generateClaudePrompt(issueRef, branchName, modelName, issueDetails);
+
+        // Add critical safety instructions to prevent git repository corruption
+        const prompt = `${basePrompt}
+
+**CRITICAL GIT SAFETY RULES:**
+- NEVER run 'rm .git' or delete the .git file/directory
+- NEVER run 'git init' in the workspace - this is already a git repository
+- If you encounter git errors, report them but DO NOT attempt to reinitialize the repository
+- The workspace is a git worktree linked to the main repository
+- Only make changes to the specific files mentioned in the issue/request
+- If git commands fail, describe the error but do not try destructive recovery methods
+- NOTE: You may encounter permission errors when trying to commit - this is expected
+- The system will automatically commit your changes after you complete the modifications`;
+
+        logger.debug({
+            issueNumber: issueRef.number,
+            promptLength: prompt.length,
+            hasSafetyRules: prompt.includes('CRITICAL GIT SAFETY RULES'),
+            isCustomPrompt: !!customPrompt
+        }, 'Generated Claude prompt with safety rules');
+
+        if (isRetry) {
+            logger.info({
+                issueNumber: issueRef.number,
+                retryReason,
+                promptLength: prompt.length
+            }, 'Using enhanced prompt for retry execution');
+        }
+
+        // Ensure worktree files are owned by UID 1000 (node user in container)
+        try {
+            await executeDockerCommand('sudo', ['chown', '-R', '1000:1000', worktreePath], {
+                timeout: 10000 // 10 seconds should be enough
+            });
+            logger.debug({
+                issueNumber: issueRef.number,
+                worktreePath
+            }, 'Set worktree ownership to UID 1000 for container compatibility');
+        } catch (chownError) {
+            logger.warn({
+                issueNumber: issueRef.number,
+                worktreePath,
+                error: chownError.message
+            }, 'Failed to set worktree ownership - container may have permission issues');
+        }
+
+        // Verify worktree .git file before Docker execution
+        const worktreeGitPath = path.join(worktreePath, '.git');
+
+        try {
+            if (fs.existsSync(worktreeGitPath)) {
+                const stats = fs.statSync(worktreeGitPath);
+                if (stats.isFile()) {
+                    worktreeGitContent = fs.readFileSync(worktreeGitPath, 'utf8').trim();
+                    const gitdirMatch = worktreeGitContent.match(/gitdir:\s*(.+)/);
+                    if (gitdirMatch) {
+                        mainRepoPath = gitdirMatch[1].trim();
+                    }
+                    logger.debug({
+                        issueNumber: issueRef.number,
+                        worktreeGitPath,
+                        worktreeGitContent,
+                        mainRepoPath,
+                        mainRepoExists: mainRepoPath ? fs.existsSync(mainRepoPath) : false
+                    }, 'Verified worktree .git file structure');
+                } else {
+                    logger.error({
+                        issueNumber: issueRef.number,
+                        worktreeGitPath,
+                        isDirectory: stats.isDirectory()
+                    }, 'CRITICAL: Worktree .git is a directory, not a file! This will cause git init disasters');
+                }
+            } else {
+                logger.warn({
+                    issueNumber: issueRef.number,
+                    worktreeGitPath
+                }, 'Worktree .git file not found - this may cause issues');
+            }
+        } catch (verifyError) {
+            logger.error({
+                issueNumber: issueRef.number,
+                error: verifyError.message
+            }, 'Failed to verify worktree structure');
+        }
+
+        // Construct Docker run command
+        const dockerArgs = [
+            'run',
+            '--rm',
+            '--security-opt', 'no-new-privileges',
+            // Remove cap-drop ALL to allow chown
+            '--cap-add', 'CHOWN',
+            '--network', 'bridge', // Restrict network access
+
+            // Run as root initially to fix permissions, then drop to node user
+            '--user', '0:0',
+
+            // Mount the worktree as the workspace with proper ownership
+            '-v', `${worktreePath}:/home/node/workspace:rw`,
+
+            // Mount the git-processor base directory that contains both clones and worktrees
+            // This ensures worktree .git files can reference the main repository
+            '-v', '/tmp/git-processor:/tmp/git-processor:rw',
+
+            // Mount the claude-logs directory for log persistence across containers
+            '-v', '/tmp/claude-logs:/tmp/claude-logs:rw',
+
+            // Mount the actual Claude config directory directly (read-write so Claude can create project dirs)
+            '-v', `${CLAUDE_CONFIG_PATH}:/home/node/.claude:rw`,
+            // Also mount .claude.json if it exists
+            ...(fs.existsSync(path.join(os.homedir(), '.claude.json')) ?
+                ['-v', `${path.join(os.homedir(), '.claude.json')}:/home/node/.claude.json:rw`] : []),
+
+            // Pass GitHub token as environment variable
+            '-e', `GH_TOKEN=${githubToken}`,
+
+            // Set working directory
+            '-w', '/home/node/workspace',
+
+            // Use the Claude Code Docker image
+            CLAUDE_DOCKER_IMAGE,
+
+            // Execute Claude Code CLI with the generated prompt
+            'claude',
+            '-p', prompt,
+            '--max-turns', CLAUDE_MAX_TURNS.toString(),
+            '--output-format', 'stream-json',
+            '--verbose',
+            '--dangerously-skip-permissions'
+        ];
+
+        // Add model specification if provided
+        if (modelName) {
+            dockerArgs.splice(-6, 0, '--model', modelName);
+            logger.info({
+                issueNumber: issueRef.number,
+                requestedModel: modelName
+            }, 'Using specific model for Claude Code execution');
+        } else {
+            logger.debug({
+                issueNumber: issueRef.number
+            }, 'No model specified, Claude Code will use default');
+        }
+
+        // Log Docker mount details for debugging
+        const mounts = [];
+        for (let i = 0; i < dockerArgs.length; i++) {
+            if (dockerArgs[i] === '-v' && i + 1 < dockerArgs.length) {
+                const [source, dest] = dockerArgs[i + 1].split(':');
+                mounts.push({
+                    source,
+                    destination: dest,
+                    sourceExists: fs.existsSync(source),
+                    sourceType: fs.existsSync(source) ? (fs.statSync(source).isDirectory() ? 'directory' : 'file') : 'missing'
+                });
+            }
+        }
+
+        logger.debug({
+            issueNumber: issueRef.number,
+            dockerArgs: dockerArgs, // Show full command
+            mounts,
+            workDir: '/home/node/workspace',
+            modelName: modelName || 'default',
+            promptLength: prompt.length,
+            promptPreview: prompt.substring(0, 200) + '...'
+        }, 'Executing Docker command for Claude Code with detailed mount info');
+
+        // Execute Docker command with enhanced parsing
+        const result = await executeClaudeCodeInDocker(dockerArgs, {
+            timeout: CLAUDE_TIMEOUT_MS,
+            cwd: worktreePath,
+            onSessionId,
+            onContainerId,
+            worktreePath,
+            issueRef
+        });
+
+        const executionTime = Date.now() - startTime;
+
+        // Parse the execution result
+        return parseClaudeResult(result, {
+            executionTime,
+            issueRef,
+            worktreePath,
+            worktreeGitContent,
+            mainRepoPath
+        });
+
+    } catch (error) {
+        logger.error({
+            issueNumber: issueRef.number,
+            error: error.message,
+            stack: error.stack,
+            worktreePath
+        }, 'Claude Code execution failed');
+        
+        throw error;
+    }
+}
+
+/**
+ * Executes Claude Code in Docker with enhanced output handling
+ * @private
+ */
+async function executeClaudeCodeInDocker(dockerArgs, options) {
+    let containerId = null;
+    let containerName = null;
+    let sessionId = null;
+    let conversationId = null;
+    let rawOutput = '';
+    let jsonEvents = [];
+    let conversationLog = [];
+    let modifiedFiles = [];
+    let suggestedCommitMessage = null;
+    let summary = null;
+    let model = null;
+    let finalResult = null;
+
+    const result = await executeDockerCommand('docker', dockerArgs, {
+        ...options,
+        onStdout: (data) => {
+            rawOutput += data;
+
+            // Parse container info if available
+            if (!containerId && data.includes('Container ID:')) {
+                const match = data.match(/Container ID:\s*(\S+)/);
+                if (match) {
+                    containerId = match[1];
+                    logger.debug({ containerId }, 'Detected container ID from output');
+                    if (options.onContainerId) {
+                        options.onContainerId(containerId, containerName);
+                    }
+                }
+            }
+
+            // Parse container name if available
+            if (!containerName && data.includes('Container name:')) {
+                const match = data.match(/Container name:\s*(\S+)/);
+                if (match) {
+                    containerName = match[1];
+                    logger.debug({ containerName }, 'Detected container name from output');
+                }
+            }
+
+            // Try to parse streaming JSON events
+            const lines = data.split('\n');
+            for (const line of lines) {
+                const trimmedLine = line.trim();
+                if (!trimmedLine || !trimmedLine.startsWith('{')) continue;
+
+                try {
+                    const event = JSON.parse(trimmedLine);
+                    jsonEvents.push(event);
+
+                    // Extract session ID from start event
+                    if (event.type === 'start' && event.data?.sessionId) {
+                        sessionId = event.data.sessionId;
+                        conversationId = event.data.conversationId || event.data.conversationLogId || event.data.conversationLog?.conversation_id || null;
+                        logger.info({
+                            sessionId,
+                            conversationId,
+                            issueNumber: options.issueRef.number
+                        }, 'Claude Code session started');
+
+                        if (options.onSessionId && sessionId) {
+                            options.onSessionId(sessionId, conversationId);
+                        }
+                    }
+
+                    // Track conversation messages
+                    if (event.type === 'message' && event.data) {
+                        conversationLog.push(event.data);
+                    }
+
+                    // Extract model information
+                    if ((event.type === 'start' || event.type === 'model') && event.data?.model) {
+                        model = event.data.model;
+                    }
+
+                    // Track file modifications
+                    if (event.type === 'file_write' || event.type === 'file_edit') {
+                        const filePath = event.data?.path || event.data?.file_path;
+                        if (filePath && !modifiedFiles.includes(filePath)) {
+                            modifiedFiles.push(filePath);
+                        }
+                    }
+
+                    // Extract completion information
+                    if (event.type === 'completion' || event.type === 'end') {
+                        if (event.data) {
+                            finalResult = event.data;
+                            
+                            // Extract suggested commit message if present
+                            if (event.data.suggestedCommitMessage) {
+                                suggestedCommitMessage = event.data.suggestedCommitMessage;
+                            }
+                            
+                            // Extract summary
+                            if (event.data.summary || event.data.result) {
+                                summary = event.data.summary || event.data.result;
+                            }
+                        }
+                    }
+
+                } catch (parseError) {
+                    // Not JSON or malformed, ignore
+                }
+            }
+        },
+        onStderr: (data) => {
+            logger.debug({
+                issueNumber: options.issueRef.number,
+                stderr: data
+            }, 'Claude Code stderr output');
+        }
+    });
+
+    return {
+        ...result,
+        rawOutput,
+        jsonEvents,
+        sessionId,
+        conversationId,
+        conversationLog,
+        modifiedFiles,
+        suggestedCommitMessage,
+        summary,
+        model,
+        finalResult,
+        containerId,
+        containerName
+    };
+}
+
+/**
+ * Parses Claude execution result
+ * @private
+ */
+function parseClaudeResult(result, context) {
+    const {
+        executionTime,
+        issueRef,
+        worktreePath,
+        worktreeGitContent,
+        mainRepoPath
+    } = context;
+
+    logger.info({
+        issueNumber: issueRef.number,
+        exitCode: result.exitCode,
+        success: result.success,
+        outputLength: result.rawOutput?.length || 0,
+        jsonEventsCount: result.jsonEvents?.length || 0,
+        conversationTurns: result.conversationLog?.length || 0,
+        modifiedFilesCount: result.modifiedFiles?.length || 0,
+        sessionId: result.sessionId,
+        conversationId: result.conversationId
+    }, 'Claude Code execution completed');
+
+    // Check for usage limit errors
+    if (result.rawOutput && result.rawOutput.includes('usage limit')) {
+        const resetMatch = result.rawOutput.match(/reset[s]?\s+(?:at|in)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/i) ||
+                          result.rawOutput.match(/limit.*?reset[s]?\s+(?:at|in)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/i);
+        let resetTimestamp = null;
+        
+        if (resetMatch) {
+            try {
+                resetTimestamp = Math.floor(new Date(resetMatch[1]).getTime() / 1000);
+            } catch (e) {
+                logger.warn({ error: e.message }, 'Failed to parse reset timestamp');
+            }
+        }
+        
+        throw new UsageLimitError('Claude usage limit exceeded', resetTimestamp);
+    }
+
+    // Check for permission errors that indicate worktree issues
+    if (result.rawOutput && result.rawOutput.includes('Permission denied') && 
+        result.rawOutput.includes('.git')) {
+        logger.warn({
+            issueNumber: issueRef.number,
+            worktreePath,
+            outputSample: result.rawOutput.substring(0, 500)
+        }, 'Permission error detected - worktree may have permission issues');
+    }
+
+    // Verify worktree integrity after execution
+    if (worktreeGitContent) {
+        const worktreeGitPath = path.join(worktreePath, '.git');
+        try {
+            if (fs.existsSync(worktreeGitPath)) {
+                const currentContent = fs.readFileSync(worktreeGitPath, 'utf8').trim();
+                if (currentContent !== worktreeGitContent) {
+                    logger.error({
+                        issueNumber: issueRef.number,
+                        originalContent: worktreeGitContent,
+                        currentContent: currentContent
+                    }, 'CRITICAL: Worktree .git file was modified during execution!');
+                }
+            } else {
+                logger.error({
+                    issueNumber: issueRef.number,
+                    worktreePath
+                }, 'CRITICAL: Worktree .git file was deleted during execution!');
+            }
+        } catch (verifyError) {
+            logger.error({
+                issueNumber: issueRef.number,
+                error: verifyError.message
+            }, 'Failed to verify worktree integrity after execution');
+        }
+    }
+
+    return {
+        success: result.success,
+        exitCode: result.exitCode,
+        output: {
+            rawOutput: result.rawOutput,
+            stderr: result.stderr,
+            jsonEvents: result.jsonEvents
+        },
+        logs: result.rawOutput,
+        executionTime,
+        sessionId: result.sessionId,
+        conversationId: result.conversationId,
+        conversationLog: result.conversationLog,
+        modifiedFiles: result.modifiedFiles,
+        suggestedCommitMessage: result.suggestedCommitMessage,
+        summary: result.summary,
+        model: result.model || getDefaultModel(),
+        finalResult: result.finalResult,
+        error: result.success ? null : (result.stderr || 'Unknown error')
+    };
+}
