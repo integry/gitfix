@@ -1,10 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { getQueueStats } from '../api/gitfixApi';
 
-const TaskQueueStats = () => {
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+interface QueueStats {
+  active: number;
+  waiting: number;
+  completed: number;
+  failed: number;
+}
+
+const TaskQueueStats: React.FC = () => {
+  const [stats, setStats] = useState<QueueStats | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -34,7 +41,7 @@ const TaskQueueStats = () => {
     return <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 min-w-[300px] text-red-400">Error: {error}</div>;
   }
 
-  const getStatColor = (type, value) => {
+  const getStatColor = (type: string, value: number): string => {
     if (type === 'failed' && value > 0) return '#ef4444';
     if (type === 'active' && value > 0) return '#10b981';
     if (type === 'waiting' && value > 10) return '#f59e0b';

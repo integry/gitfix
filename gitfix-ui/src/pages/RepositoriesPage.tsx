@@ -1,14 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { getRepoConfig, updateRepoConfig, getAvailableGithubRepos } from '../api/gitfixApi';
 
-const RepositoriesPage = () => {
-  const [repos, setRepos] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
-  const [newRepo, setNewRepo] = useState('');
-  const [availableRepos, setAvailableRepos] = useState([]);
+interface Repo {
+  name: string;
+  enabled: boolean;
+}
+
+const RepositoriesPage: React.FC = () => {
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [newRepo, setNewRepo] = useState<string>('');
+  const [availableRepos, setAvailableRepos] = useState<string[]>([]);
 
   useEffect(() => {
     loadRepos();
@@ -22,7 +27,7 @@ const RepositoriesPage = () => {
       const data = await getRepoConfig();
       setRepos(data.repos_to_monitor || []);
     } catch (err) {
-      setError(err.message || 'Failed to load repositories');
+      setError((err as Error).message || 'Failed to load repositories');
     } finally {
       setLoading(false);
     }
@@ -49,11 +54,11 @@ const RepositoriesPage = () => {
     setNewRepo('');
   };
 
-  const handleRemoveRepo = (repoName) => {
+  const handleRemoveRepo = (repoName: string) => {
     setRepos(repos.filter(r => r.name !== repoName));
   };
 
-  const handleToggleRepo = (repoName) => {
+  const handleToggleRepo = (repoName: string) => {
     setRepos(repos.map(repo => 
       repo.name === repoName 
         ? { ...repo, enabled: !repo.enabled }
@@ -77,7 +82,7 @@ const RepositoriesPage = () => {
       await updateRepoConfig(repos);
       setSuccess('Repository list updated successfully! The daemon will pick up changes within 5 minutes.');
     } catch (err) {
-      setError(err.message || 'Failed to update repository list');
+      setError((err as Error).message || 'Failed to update repository list');
     } finally {
       setSaving(false);
     }
