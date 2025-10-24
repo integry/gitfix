@@ -208,9 +208,9 @@ async function startDaemon(options = {}) {
                 daemonId,
                 JSON.stringify(heartbeat)
             );
-            
-            await heartbeatRedis.sadd('system:status:daemons', daemonId);
-            
+
+            // Note: We only use hset for the hash, no need for sadd
+
             logger.debug({ daemonId }, 'Heartbeat sent');
         } catch (error) {
             logger.error({ error: error.message }, 'Failed to send heartbeat');
@@ -254,7 +254,7 @@ async function startDaemon(options = {}) {
         clearInterval(heartbeatInterval);
         
         // Remove daemon from status tracking
-        await heartbeatRedis.srem('system:status:daemons', daemonId);
+        await heartbeatRedis.hdel('system:status:daemons', daemonId);
         
         // Close Redis connections
         await heartbeatRedis.quit();
