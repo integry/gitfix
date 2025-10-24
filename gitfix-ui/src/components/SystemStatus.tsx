@@ -1,10 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { getSystemStatus } from '../api/gitfixApi';
 
-const SystemStatus = () => {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+interface Worker {
+  id: number;
+  status: string;
+}
+
+interface SystemStatusData {
+  daemon: string;
+  workers: Worker[];
+  redis: string;
+  githubAuth: string;
+  claudeAuth: string;
+}
+
+const SystemStatus: React.FC = () => {
+  const [status, setStatus] = useState<SystemStatusData | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -34,7 +47,7 @@ const SystemStatus = () => {
     return <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 min-w-[300px] text-red-400">Error: {error}</div>;
   }
 
-  const getStatusColor = (status) => {
+  const getStatusColor = (status?: string): string => {
     switch (status?.toLowerCase()) {
       case 'running':
       case 'connected':
@@ -55,7 +68,7 @@ const SystemStatus = () => {
 
   const getWorkerStatus = () => {
     if (!status?.workers || status.workers.length === 0) return 'No workers';
-    const activeCount = status.workers.filter(w => w.status === 'active').length;
+    const activeCount = status.workers.filter((w: Worker) => w.status === 'active').length;
     const totalCount = status.workers.length;
     return `${activeCount}/${totalCount} active`;
   };

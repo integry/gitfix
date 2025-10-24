@@ -1,21 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords } from '../api/gitfixApi';
 
-const SettingsPage = () => {
-  const [settings, setSettings] = useState({
+interface Settings {
+  worker_concurrency: string;
+  github_user_whitelist: string;
+}
+
+const SettingsPage: React.FC = () => {
+  const [settings, setSettings] = useState<Settings>({
     worker_concurrency: '',
     github_user_whitelist: ''
   });
-  const [keywords, setKeywords] = useState([]);
-  const [newKeyword, setNewKeyword] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [keywordsLoading, setKeywordsLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [keywordsSaving, setKeywordsSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
-  const [keywordsError, setKeywordsError] = useState(null);
-  const [keywordsSuccess, setKeywordsSuccess] = useState(null);
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [newKeyword, setNewKeyword] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(true);
+  const [keywordsLoading, setKeywordsLoading] = useState<boolean>(true);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [keywordsSaving, setKeywordsSaving] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [keywordsError, setKeywordsError] = useState<string | null>(null);
+  const [keywordsSuccess, setKeywordsSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -28,7 +33,7 @@ const SettingsPage = () => {
           github_user_whitelist: (data.github_user_whitelist || []).join(', ')
         });
       } catch (err) {
-        setError(err.message || 'Failed to load settings');
+        setError((err as Error).message || 'Failed to load settings');
       } finally {
         setLoading(false);
       }
@@ -44,7 +49,7 @@ const SettingsPage = () => {
         const data = await getFollowupKeywords();
         setKeywords(data.followup_keywords || []);
       } catch (err) {
-        setKeywordsError(err.message || 'Failed to load keywords');
+        setKeywordsError((err as Error).message || 'Failed to load keywords');
       } finally {
         setKeywordsLoading(false);
       }
@@ -52,7 +57,7 @@ const SettingsPage = () => {
     loadKeywords();
   }, []);
 
-  const handleSettingChange = (e) => {
+  const handleSettingChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setSettings(prev => ({
       ...prev,
@@ -87,7 +92,7 @@ const SettingsPage = () => {
       await updateSettings(updatedSettings);
       setSuccess('Settings updated successfully! The daemon will pick up changes within 5 minutes.');
     } catch (err) {
-      setError(err.message || 'Failed to update settings');
+      setError((err as Error).message || 'Failed to update settings');
     } finally {
       setSaving(false);
     }
@@ -105,7 +110,7 @@ const SettingsPage = () => {
     setNewKeyword('');
   };
 
-  const handleRemoveKeyword = (keyword) => {
+  const handleRemoveKeyword = (keyword: string) => {
     setKeywords(keywords.filter(k => k !== keyword));
   };
 
@@ -118,7 +123,7 @@ const SettingsPage = () => {
       await updateFollowupKeywords(keywords);
       setKeywordsSuccess('Keywords updated successfully! The daemon will pick up changes within 5 minutes.');
     } catch (err) {
-      setKeywordsError(err.message || 'Failed to update keywords');
+      setKeywordsError((err as Error).message || 'Failed to update keywords');
     } finally {
       setKeywordsSaving(false);
     }
@@ -227,7 +232,7 @@ const SettingsPage = () => {
               <input
                 value={newKeyword}
                 onChange={(e) => setNewKeyword(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
+                onKeyPress={(e: React.KeyboardEvent) => e.key === 'Enter' && handleAddKeyword()}
                 placeholder="Add a keyword (e.g., GITFIX)"
                 className="flex-1 px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />

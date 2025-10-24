@@ -1,21 +1,41 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { getTasks } from '../api/gitfixApi';
 
-const TaskList = ({ limit, showViewAll = false }) => {
-  const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [filter, setFilter] = useState('all');
+interface Task {
+  id: string;
+  repository?: string;
+  issueNumber?: number;
+  title?: string;
+  status: string;
+  createdAt: string;
+  processedAt?: string;
+  completedAt?: string;
+}
+
+interface TaskListProps {
+  limit: number;
+  showViewAll?: boolean;
+}
+
+interface LoadConfig {
+  setLoadingState?: boolean;
+}
+
+const TaskList: React.FC<TaskListProps> = ({ limit, showViewAll = false }) => {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<string>('all');
 
   useEffect(() => {
-    const fetchTasks = async (loadConfig) => {
+    const fetchTasks = async (loadConfig?: LoadConfig) => {
       try {
         setLoading(loadConfig?.setLoadingState ?? true);
         const data = await getTasks(filter, limit);
         setTasks(data.tasks || []);
       } catch (err) {
-        setError(err.message);
+        setError((err as Error).message);
         console.error('Error fetching tasks:', err);
       } finally {
         setLoading(false);
@@ -27,7 +47,7 @@ const TaskList = ({ limit, showViewAll = false }) => {
     return () => clearInterval(interval);
   }, [filter, limit]);
 
-  const getStatusColor = (status) => {
+  const getStatusColor = (status: string): string => {
     switch (status) {
       case 'completed':
         return '#10b981';
@@ -42,7 +62,7 @@ const TaskList = ({ limit, showViewAll = false }) => {
     }
   };
 
-  const getStatusDotClass = (status) => {
+  const getStatusDotClass = (status: string): string => {
     switch (status) {
       case 'completed':
         return 'bg-green-500';
@@ -57,13 +77,13 @@ const TaskList = ({ limit, showViewAll = false }) => {
     }
   };
 
-  const formatDate = (dateString) => {
+  const formatDate = (dateString: string | undefined): string => {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
     return date.toLocaleString();
   };
 
-  const formatDuration = (startTime, endTime, status) => {
+  const formatDuration = (startTime: string | undefined, endTime: string | undefined, status: string): string => {
     if (!startTime) return 'N/A';
     
     // For active tasks, calculate duration from start time to now

@@ -1,25 +1,25 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getTaskHistory, getTaskLiveDetails, fetchPrompt as apiFetchPrompt, fetchLogFiles as apiFetchLogFiles, fetchLogFile as apiFetchLogFile } from '../api/gitfixApi';
 
-const TaskDetails = () => {
+const TaskDetails: React.FC = () => {
   const { taskId } = useParams();
   const navigate = useNavigate();
-  const [history, setHistory] = useState([]);
-  const [taskInfo, setTaskInfo] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [selectedPrompt, setSelectedPrompt] = useState(null);
-  const [loadingPrompt, setLoadingPrompt] = useState(false);
-  const [logFiles, setLogFiles] = useState(null);
-  const [selectedLogFile, setSelectedLogFile] = useState(null);
-  const [loadingLogFile, setLoadingLogFile] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchMatches, setSearchMatches] = useState([]);
-  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
-  const logContentRef = useRef(null);
-  const [liveDetails, setLiveDetails] = useState({ events: [], todos: [], currentTask: null });
-  const [eventsCollapsed, setEventsCollapsed] = useState(true);
+  const [history, setHistory] = useState<any[]>([]);
+  const [taskInfo, setTaskInfo] = useState<any>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedPrompt, setSelectedPrompt] = useState<any>(null);
+  const [loadingPrompt, setLoadingPrompt] = useState<boolean>(false);
+  const [logFiles, setLogFiles] = useState<any>(null);
+  const [selectedLogFile, setSelectedLogFile] = useState<any>(null);
+  const [loadingLogFile, setLoadingLogFile] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchMatches, setSearchMatches] = useState<any[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState<number>(0);
+  const logContentRef = useRef<HTMLPreElement | null>(null);
+  const [liveDetails, setLiveDetails] = useState<{ events: any[]; todos: any[]; currentTask: any }>({ events: [], todos: [], currentTask: null });
+  const [eventsCollapsed, setEventsCollapsed] = useState<boolean>(true);
 
   useEffect(() => {
     const fetchHistory = async () => {

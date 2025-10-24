@@ -1,6 +1,6 @@
 import React from 'react';
 
-const AiToolsPage = () => {
+const AiToolsPage: React.FC = () => {
   return (
     <div>
       <h2 className="text-white text-2xl font-semibold mb-4">AI Tools</h2>
