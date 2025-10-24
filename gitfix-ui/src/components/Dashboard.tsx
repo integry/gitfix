@@ -3,7 +3,7 @@ import SystemStatus from './SystemStatus';
 import TaskQueueStats from './TaskQueueStats';
 import TaskList from './TaskList';
 
-const Dashboard = () => {
+const Dashboard: React.FC = () => {
   return (
     <div>
       <h2 className="text-2xl font-semibold text-white mb-6">System Overview</h2>
