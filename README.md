@@ -6,6 +6,7 @@ A production-ready automated system that monitors GitHub issues, uses Anthropic'
 
 ### ✅ Complete End-to-End Automation
 - **Issue Detection**: Automatic monitoring of GitHub repositories for AI-eligible issues
+- **Multiple Primary Labels**: Support for multiple trigger labels (e.g., 'AI', 'gitfix') with dynamic state label generation
 - **Model-Specific Processing**: Support for multiple Claude models (sonnet, opus) with dedicated job queues
 - **Deterministic Git Workflow**: Reliable 3-phase workflow separating AI implementation from git operations
 - **Automatic PR Creation**: Direct GitHub API integration with proper issue linking
@@ -34,6 +35,14 @@ A production-ready automated system that monitors GitHub issues, uses Anthropic'
 - **Error Recovery**: Comprehensive retry mechanisms with exponential backoff
 - **GitHub API Integration**: Direct API calls with timing fixes and proper error handling
 - **State Management**: Redis-based job state tracking with correlation IDs for debugging
+
+### ✅ Dynamic Label System
+- **Multiple Primary Labels**: Configure multiple labels to trigger processing (e.g., 'AI', 'gitfix', 'automation')
+- **Automatic State Labels**: State labels are dynamically generated based on the triggering label:
+  - Issue with 'AI' label → Uses 'AI-processing', 'AI-done', 'AI-failed-*' labels
+  - Issue with 'gitfix' label → Uses 'gitfix-processing', 'gitfix-done', 'gitfix-failed-*' labels
+- **Correct Label Attribution**: Each issue is tracked with labels specific to its trigger, avoiding conflicts
+- **Flexible Configuration**: Add or remove primary labels via environment variables or UI without code changes
 
 ## Prerequisites
 
@@ -83,9 +92,9 @@ Create a GitHub App with the following permissions:
    POLLING_INTERVAL_MS=60000
    
    # Issue Detection Configuration
-   AI_PRIMARY_TAG=AI
-   AI_EXCLUDE_TAGS_PROCESSING=AI-processing
-   AI_EXCLUDE_TAGS_DONE=AI-done
+   PRIMARY_PROCESSING_LABELS=AI,gitfix
+   # Note: State labels (-processing, -done, -failed-*) are now automatically 
+   # generated based on the specific primary label that triggered processing
    
    # Model-Specific Configuration
    MODEL_LABELS_SONNET=llm-claude-sonnet

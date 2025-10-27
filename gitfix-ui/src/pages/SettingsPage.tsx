@@ -1,38 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords, getPrLabel, updatePrLabel, getAiPrimaryTag, updateAiPrimaryTag } from '../api/gitfixApi';
+import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords, getPrLabel, updatePrLabel, getPrimaryProcessingLabels, updatePrimaryProcessingLabels } from '../api/gitfixApi';
 
 interface Settings {
   worker_concurrency: string;
   github_user_whitelist: string;
   pr_label: string;
-  ai_primary_tag: string;
 }
 
 const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<Settings>({
     worker_concurrency: '',
     github_user_whitelist: '',
-    pr_label: '',
-    ai_primary_tag: ''
+    pr_label: ''
   });
   const [keywords, setKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState<string>('');
+  const [primaryLabels, setPrimaryLabels] = useState<string[]>([]);
+  const [newPrimaryLabel, setNewPrimaryLabel] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [keywordsLoading, setKeywordsLoading] = useState<boolean>(true);
   const [prLabelLoading, setPrLabelLoading] = useState<boolean>(true);
-  const [aiPrimaryTagLoading, setAiPrimaryTagLoading] = useState<boolean>(true);
+  const [primaryLabelsLoading, setPrimaryLabelsLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [keywordsSaving, setKeywordsSaving] = useState<boolean>(false);
   const [prLabelSaving, setPrLabelSaving] = useState<boolean>(false);
-  const [aiPrimaryTagSaving, setAiPrimaryTagSaving] = useState<boolean>(false);
+  const [primaryLabelsSaving, setPrimaryLabelsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [keywordsError, setKeywordsError] = useState<string | null>(null);
   const [keywordsSuccess, setKeywordsSuccess] = useState<string | null>(null);
   const [prLabelError, setPrLabelError] = useState<string | null>(null);
   const [prLabelSuccess, setPrLabelSuccess] = useState<string | null>(null);
-  const [aiPrimaryTagError, setAiPrimaryTagError] = useState<string | null>(null);
-  const [aiPrimaryTagSuccess, setAiPrimaryTagSuccess] = useState<string | null>(null);
+  const [primaryLabelsError, setPrimaryLabelsError] = useState<string | null>(null);
+  const [primaryLabelsSuccess, setPrimaryLabelsSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -86,19 +86,19 @@ const SettingsPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const loadAiPrimaryTag = async () => {
+    const loadPrimaryProcessingLabels = async () => {
       try {
-        setAiPrimaryTagLoading(true);
-        setAiPrimaryTagError(null);
-        const data = await getAiPrimaryTag();
-        setSettings(prev => ({ ...prev, ai_primary_tag: data.ai_primary_tag || 'AI' }));
+        setPrimaryLabelsLoading(true);
+        setPrimaryLabelsError(null);
+        const data = await getPrimaryProcessingLabels();
+        setPrimaryLabels(data.primary_processing_labels || ['AI']);
       } catch (err) {
-        setAiPrimaryTagError((err as Error).message || 'Failed to load AI primary tag');
+        setPrimaryLabelsError((err as Error).message || 'Failed to load primary processing labels');
       } finally {
-        setAiPrimaryTagLoading(false);
+        setPrimaryLabelsLoading(false);
       }
     };
-    loadAiPrimaryTag();
+    loadPrimaryProcessingLabels();
   }, []);
 
   const handleSettingChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -155,7 +155,27 @@ const SettingsPage: React.FC = () => {
   };
 
   const handleRemoveKeyword = (keyword: string) => {
-    setKeywords(keywords.filter(k => k !== keyword));
+    if (confirm(`Are you sure you want to remove the keyword "${keyword}"?`)) {
+      setKeywords(keywords.filter(k => k !== keyword));
+    }
+  };
+
+  const handleAddPrimaryLabel = () => {
+    if (!newPrimaryLabel) return;
+
+    if (primaryLabels.includes(newPrimaryLabel)) {
+      alert(`Label "${newPrimaryLabel}" has already been added to the list.`);
+      return;
+    }
+
+    setPrimaryLabels([...primaryLabels, newPrimaryLabel]);
+    setNewPrimaryLabel('');
+  };
+
+  const handleRemovePrimaryLabel = (label: string) => {
+    if (confirm(`Are you sure you want to remove the label "${label}"?`)) {
+      setPrimaryLabels(primaryLabels.filter(l => l !== label));
+    }
   };
 
   const handleSaveKeywords = async () => {
@@ -193,23 +213,23 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleSaveAiPrimaryTag = async () => {
+  const handleSavePrimaryProcessingLabels = async () => {
     try {
-      setAiPrimaryTagSaving(true);
-      setAiPrimaryTagError(null);
-      setAiPrimaryTagSuccess(null);
+      setPrimaryLabelsSaving(true);
+      setPrimaryLabelsError(null);
+      setPrimaryLabelsSuccess(null);
 
-      if (!settings.ai_primary_tag || settings.ai_primary_tag.trim() === '') {
-        setAiPrimaryTagError('AI Primary Tag cannot be empty');
+      if (primaryLabels.length === 0) {
+        setPrimaryLabelsError('At least one primary processing label is required');
         return;
       }
 
-      await updateAiPrimaryTag(settings.ai_primary_tag.trim());
-      setAiPrimaryTagSuccess('AI Primary Tag updated successfully! The daemon will pick up changes within 5 minutes.');
+      await updatePrimaryProcessingLabels(primaryLabels);
+      setPrimaryLabelsSuccess('Primary Processing Labels updated successfully! The daemon will pick up changes within 5 minutes.');
     } catch (err) {
-      setAiPrimaryTagError((err as Error).message || 'Failed to update AI primary tag');
+      setPrimaryLabelsError((err as Error).message || 'Failed to update primary processing labels');
     } finally {
-      setAiPrimaryTagSaving(false);
+      setPrimaryLabelsSaving(false);
     }
   };
 
@@ -346,61 +366,90 @@ const SettingsPage: React.FC = () => {
         )}
       </div>
 
-      {/* AI Primary Tag Section */}
+      {/* Primary Processing Labels Section */}
       <div className="mb-8">
-        <h3 className="text-white text-xl font-semibold mb-4">AI Primary Tag</h3>
+        <h3 className="text-white text-xl font-semibold mb-4">Primary Processing Labels</h3>
         <p className="text-gray-400 mb-4">
-          Configure the primary label that GitFix uses to identify issues for processing. 
-          This setting is mandatory and must be set.
+          Configure multiple primary labels that GitFix uses to identify issues for processing. 
+          Issues with any of these labels will be automatically processed. State labels (-processing, -done) 
+          are dynamically generated based on the specific label found on each issue.
         </p>
         
-        {aiPrimaryTagError && (
+        {primaryLabelsError && (
           <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
-            {aiPrimaryTagError}
+            {primaryLabelsError}
           </div>
         )}
         
-        {aiPrimaryTagSuccess && (
+        {primaryLabelsSuccess && (
           <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
-            {aiPrimaryTagSuccess}
+            {primaryLabelsSuccess}
           </div>
         )}
         
-        {aiPrimaryTagLoading ? (
-          <p className="text-gray-400">Loading AI primary tag...</p>
+        {primaryLabelsLoading ? (
+          <p className="text-gray-400">Loading primary processing labels...</p>
         ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-gray-400 mb-2" htmlFor="ai_primary_tag">
-                AI Primary Tag <span className="text-red-500">*</span>
-              </label>
+          <>
+            <div className="flex gap-4 mb-4">
               <input
-                type="text"
-                id="ai_primary_tag"
-                name="ai_primary_tag"
-                value={settings.ai_primary_tag}
-                onChange={handleSettingChange}
-                placeholder="e.g., AI"
-                required
-                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                value={newPrimaryLabel}
+                onChange={(e) => setNewPrimaryLabel(e.target.value)}
+                onKeyPress={(e: React.KeyboardEvent) => e.key === 'Enter' && handleAddPrimaryLabel()}
+                placeholder="Add a label (e.g., AI, gitfix)"
+                className="flex-1 px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
-              <p className="mt-1 text-sm text-gray-500">
-                Issues with this label will be automatically processed by GitFix
-              </p>
+              <button
+                onClick={handleAddPrimaryLabel}
+                disabled={!newPrimaryLabel || primaryLabels.includes(newPrimaryLabel)}
+                className={`px-4 py-2 text-white font-medium rounded-md transition-colors ${
+                  !newPrimaryLabel || primaryLabels.includes(newPrimaryLabel)
+                    ? 'bg-gray-600 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700 cursor-pointer'
+                }`}
+              >
+                Add Label
+              </button>
             </div>
 
+            <div className="space-y-2 mb-4">
+              {primaryLabels.map(label => (
+                <div
+                  key={label}
+                  className="flex items-center justify-between px-4 py-3 bg-gray-700 rounded-md"
+                >
+                  <span className="font-mono text-white">{label}</span>
+                  <button
+                    onClick={() => handleRemovePrimaryLabel(label)}
+                    className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-white rounded-md font-medium transition-colors"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              {primaryLabels.length === 0 && (
+                <p className="text-gray-400 text-center py-8">
+                  No labels configured. Add at least one label to enable issue processing.
+                </p>
+              )}
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Issues with any of these labels will be processed. For each label, state labels will be 
+              automatically generated (e.g., "AI-processing", "AI-done", "gitfix-processing", "gitfix-done")
+            </p>
+            
             <button
-              onClick={handleSaveAiPrimaryTag}
-              disabled={aiPrimaryTagSaving || !settings.ai_primary_tag || settings.ai_primary_tag.trim() === ''}
+              onClick={handleSavePrimaryProcessingLabels}
+              disabled={primaryLabelsSaving || primaryLabels.length === 0}
               className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
-                aiPrimaryTagSaving || !settings.ai_primary_tag || settings.ai_primary_tag.trim() === ''
+                primaryLabelsSaving || primaryLabels.length === 0
                   ? 'bg-gray-600 cursor-not-allowed'
                   : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
               }`}
             >
-              {aiPrimaryTagSaving ? 'Saving...' : 'Save AI Primary Tag'}
+              {primaryLabelsSaving ? 'Saving...' : 'Save Primary Processing Labels'}
             </button>
-          </div>
+          </>
         )}
       </div>
 
