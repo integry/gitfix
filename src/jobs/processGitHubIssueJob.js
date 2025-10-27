@@ -28,10 +28,8 @@ import Redis from 'ioredis';
 import { getDefaultModel } from '../config/modelAliases.js';
 import { issueQueue } from '../queue/taskQueue.js';
 import { ErrorCategories } from '../utils/errorHandler.js';
-import { loadAiPrimaryTag, loadPrLabel } from '../config/configRepoManager.js';
+import { loadAiPrimaryTag, loadPrLabel, loadPrimaryProcessingLabels } from '../config/configRepoManager.js';
 
-const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
-const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
 async function getAiPrimaryTag() {
@@ -43,6 +41,22 @@ async function getAiPrimaryTag() {
         logger.warn({ error: error.message }, 'Failed to load AI primary tag from config, using fallback');
     }
     return process.env.AI_PRIMARY_TAG || 'AI';
+}
+
+async function getPrimaryProcessingLabels() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            return await loadPrimaryProcessingLabels();
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load primary processing labels from config, using fallback');
+    }
+    
+    if (process.env.PRIMARY_PROCESSING_LABELS) {
+        return process.env.PRIMARY_PROCESSING_LABELS.split(',').map(l => l.trim()).filter(l => l);
+    }
+    
+    return [process.env.AI_PRIMARY_TAG || 'AI'];
 }
 
 async function getPrLabel() {
@@ -65,7 +79,11 @@ async function processGitHubIssueJob(job) {
     const correlatedLogger = logger.withCorrelation(correlationId);
     const stateManager = getStateManager();
     
-    const AI_PRIMARY_TAG = await getAiPrimaryTag();
+    const primaryProcessingLabels = await getPrimaryProcessingLabels();
+    const triggeringLabel = issueRef.triggeringLabel || primaryProcessingLabels[0] || 'AI';
+    const AI_PROCESSING_TAG = `${triggeringLabel}-processing`;
+    const AI_DONE_TAG = `${triggeringLabel}-done`;
+    const AI_PRIMARY_TAG = triggeringLabel;
     const PR_LABEL = await getPrLabel();
     
     const modelName = issueRef.modelName || 'default';

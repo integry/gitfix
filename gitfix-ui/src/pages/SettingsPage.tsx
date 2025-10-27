@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords, getPrLabel, updatePrLabel, getAiPrimaryTag, updateAiPrimaryTag } from '../api/gitfixApi';
+import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords, getPrLabel, updatePrLabel, getAiPrimaryTag, updateAiPrimaryTag, getPrimaryProcessingLabels, updatePrimaryProcessingLabels } from '../api/gitfixApi';
 
 interface Settings {
   worker_concurrency: string;
   github_user_whitelist: string;
   pr_label: string;
   ai_primary_tag: string;
+  primary_processing_labels: string;
 }
 
 const SettingsPage: React.FC = () => {
@@ -13,7 +14,8 @@ const SettingsPage: React.FC = () => {
     worker_concurrency: '',
     github_user_whitelist: '',
     pr_label: '',
-    ai_primary_tag: ''
+    ai_primary_tag: '',
+    primary_processing_labels: ''
   });
   const [keywords, setKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState<string>('');
@@ -21,10 +23,12 @@ const SettingsPage: React.FC = () => {
   const [keywordsLoading, setKeywordsLoading] = useState<boolean>(true);
   const [prLabelLoading, setPrLabelLoading] = useState<boolean>(true);
   const [aiPrimaryTagLoading, setAiPrimaryTagLoading] = useState<boolean>(true);
+  const [primaryLabelsLoading, setPrimaryLabelsLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [keywordsSaving, setKeywordsSaving] = useState<boolean>(false);
   const [prLabelSaving, setPrLabelSaving] = useState<boolean>(false);
   const [aiPrimaryTagSaving, setAiPrimaryTagSaving] = useState<boolean>(false);
+  const [primaryLabelsSaving, setPrimaryLabelsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [keywordsError, setKeywordsError] = useState<string | null>(null);
@@ -33,6 +37,8 @@ const SettingsPage: React.FC = () => {
   const [prLabelSuccess, setPrLabelSuccess] = useState<string | null>(null);
   const [aiPrimaryTagError, setAiPrimaryTagError] = useState<string | null>(null);
   const [aiPrimaryTagSuccess, setAiPrimaryTagSuccess] = useState<string | null>(null);
+  const [primaryLabelsError, setPrimaryLabelsError] = useState<string | null>(null);
+  const [primaryLabelsSuccess, setPrimaryLabelsSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -99,6 +105,25 @@ const SettingsPage: React.FC = () => {
       }
     };
     loadAiPrimaryTag();
+  }, []);
+
+  useEffect(() => {
+    const loadPrimaryProcessingLabels = async () => {
+      try {
+        setPrimaryLabelsLoading(true);
+        setPrimaryLabelsError(null);
+        const data = await getPrimaryProcessingLabels();
+        setSettings(prev => ({ 
+          ...prev, 
+          primary_processing_labels: (data.primary_processing_labels || ['AI']).join(', ')
+        }));
+      } catch (err) {
+        setPrimaryLabelsError((err as Error).message || 'Failed to load primary processing labels');
+      } finally {
+        setPrimaryLabelsLoading(false);
+      }
+    };
+    loadPrimaryProcessingLabels();
   }, []);
 
   const handleSettingChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -210,6 +235,36 @@ const SettingsPage: React.FC = () => {
       setAiPrimaryTagError((err as Error).message || 'Failed to update AI primary tag');
     } finally {
       setAiPrimaryTagSaving(false);
+    }
+  };
+
+  const handleSavePrimaryProcessingLabels = async () => {
+    try {
+      setPrimaryLabelsSaving(true);
+      setPrimaryLabelsError(null);
+      setPrimaryLabelsSuccess(null);
+
+      if (!settings.primary_processing_labels || settings.primary_processing_labels.trim() === '') {
+        setPrimaryLabelsError('Primary Processing Labels cannot be empty');
+        return;
+      }
+
+      const labels = settings.primary_processing_labels
+        .split(',')
+        .map(l => l.trim())
+        .filter(l => l.length > 0);
+
+      if (labels.length === 0) {
+        setPrimaryLabelsError('At least one primary processing label is required');
+        return;
+      }
+
+      await updatePrimaryProcessingLabels(labels);
+      setPrimaryLabelsSuccess('Primary Processing Labels updated successfully! The daemon will pick up changes within 5 minutes.');
+    } catch (err) {
+      setPrimaryLabelsError((err as Error).message || 'Failed to update primary processing labels');
+    } finally {
+      setPrimaryLabelsSaving(false);
     }
   };
 
@@ -346,12 +401,72 @@ const SettingsPage: React.FC = () => {
         )}
       </div>
 
-      {/* AI Primary Tag Section */}
+      {/* Primary Processing Labels Section */}
       <div className="mb-8">
-        <h3 className="text-white text-xl font-semibold mb-4">AI Primary Tag</h3>
+        <h3 className="text-white text-xl font-semibold mb-4">Primary Processing Labels</h3>
         <p className="text-gray-400 mb-4">
-          Configure the primary label that GitFix uses to identify issues for processing. 
-          This setting is mandatory and must be set.
+          Configure multiple primary labels that GitFix uses to identify issues for processing. 
+          Issues with any of these labels will be automatically processed. State labels (-processing, -done) 
+          are dynamically generated based on the specific label found on each issue.
+        </p>
+        
+        {primaryLabelsError && (
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+            {primaryLabelsError}
+          </div>
+        )}
+        
+        {primaryLabelsSuccess && (
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+            {primaryLabelsSuccess}
+          </div>
+        )}
+        
+        {primaryLabelsLoading ? (
+          <p className="text-gray-400">Loading primary processing labels...</p>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-gray-400 mb-2" htmlFor="primary_processing_labels">
+                Primary Processing Labels <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                id="primary_processing_labels"
+                name="primary_processing_labels"
+                value={settings.primary_processing_labels}
+                onChange={handleSettingChange}
+                rows={3}
+                placeholder="Comma-separated list of labels (e.g., AI, gitfix, automation)"
+                required
+                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+              />
+              <p className="mt-1 text-sm text-gray-500">
+                Issues with any of these labels will be processed. For each label, state labels will be 
+                automatically generated (e.g., "AI-processing", "AI-done", "gitfix-processing", "gitfix-done")
+              </p>
+            </div>
+
+            <button
+              onClick={handleSavePrimaryProcessingLabels}
+              disabled={primaryLabelsSaving || !settings.primary_processing_labels || settings.primary_processing_labels.trim() === ''}
+              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+                primaryLabelsSaving || !settings.primary_processing_labels || settings.primary_processing_labels.trim() === ''
+                  ? 'bg-gray-600 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+              }`}
+            >
+              {primaryLabelsSaving ? 'Saving...' : 'Save Primary Processing Labels'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* AI Primary Tag Section (Deprecated) */}
+      <div className="mb-8">
+        <h3 className="text-white text-xl font-semibold mb-4">AI Primary Tag (Deprecated)</h3>
+        <p className="text-gray-400 mb-4">
+          <span className="text-yellow-500">⚠️ This setting is deprecated.</span> Please use "Primary Processing Labels" above instead. 
+          This setting is kept for backward compatibility only.
         </p>
         
         {aiPrimaryTagError && (

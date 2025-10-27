@@ -1183,6 +1183,60 @@ app.post('/api/config/ai-primary-tag', ensureAuthenticated, async (req, res) => 
   }
 });
 
+app.get('/api/config/primary-processing-labels', ensureAuthenticated, async (req, res) => {
+  try {
+    const primaryLabels = await configRepoManager.loadPrimaryProcessingLabels();
+    res.json({ primary_processing_labels: primaryLabels });
+  } catch (error) {
+    console.error('Error in /api/config/primary-processing-labels GET:', error);
+    res.status(500).json({ error: 'Failed to load primary processing labels' });
+  }
+});
+
+app.post('/api/config/primary-processing-labels', ensureAuthenticated, async (req, res) => {
+  const lockKey = 'config:primary-processing-labels:lock';
+  const lockValue = `${Date.now()}-${Math.random()}`;
+  const lockTimeout = 30;
+
+  try {
+    const { primary_processing_labels } = req.body;
+
+    if (!Array.isArray(primary_processing_labels) || primary_processing_labels.length === 0) {
+      return res.status(400).json({ error: 'primary_processing_labels must be a non-empty array' });
+    }
+
+    const labels = primary_processing_labels.map(l => String(l).trim()).filter(l => l.length > 0);
+    if (labels.length === 0) {
+      return res.status(400).json({ error: 'At least one valid label is required' });
+    }
+
+    const acquired = await redisClient.set(lockKey, lockValue, {
+      NX: true,
+      EX: lockTimeout
+    });
+
+    if (!acquired) {
+      return res.status(409).json({ error: 'Configuration is being updated. Please try again.' });
+    }
+
+    try {
+      await configRepoManager.savePrimaryProcessingLabels(
+        labels,
+        `Update primary processing labels via UI by ${req.user.username}`
+      );
+      res.json({ success: true, primary_processing_labels: labels });
+    } finally {
+      const currentLockValue = await redisClient.get(lockKey);
+      if (currentLockValue === lockValue) {
+        await redisClient.del(lockKey);
+      }
+    }
+  } catch (error) {
+    console.error('Error in /api/config/primary-processing-labels POST:', error);
+    res.status(500).json({ error: 'Failed to update primary processing labels' });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });

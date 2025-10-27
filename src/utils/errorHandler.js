@@ -18,20 +18,28 @@ export const ErrorCategories = {
 };
 
 /**
- * Failure labels for GitHub issues
+ * Generates a failure label based on triggering label and error category
+ * @param {string} triggeringLabel - The primary label that triggered processing
+ * @param {string} errorCategory - The error category
+ * @returns {string} The failure label
  */
-const FailureLabels = {
-    [ErrorCategories.GITHUB_API]: 'AI-failed-github-api',
-    [ErrorCategories.CLAUDE_EXECUTION]: 'AI-failed-claude',
-    [ErrorCategories.GIT_OPERATION]: 'AI-failed-git',
-    [ErrorCategories.DOCKER_OPERATION]: 'AI-failed-docker',
-    [ErrorCategories.REDIS_OPERATION]: 'AI-failed-redis',
-    [ErrorCategories.POST_PROCESSING]: 'AI-failed-post-processing',
-    [ErrorCategories.AUTHENTICATION]: 'AI-failed-auth',
-    [ErrorCategories.NETWORK]: 'AI-failed-network',
-    [ErrorCategories.VALIDATION]: 'AI-failed-validation',
-    [ErrorCategories.UNKNOWN]: 'AI-failed'
-};
+function generateFailureLabel(triggeringLabel, errorCategory) {
+    const categorySuffix = {
+        [ErrorCategories.GITHUB_API]: 'github-api',
+        [ErrorCategories.CLAUDE_EXECUTION]: 'claude',
+        [ErrorCategories.GIT_OPERATION]: 'git',
+        [ErrorCategories.DOCKER_OPERATION]: 'docker',
+        [ErrorCategories.REDIS_OPERATION]: 'redis',
+        [ErrorCategories.POST_PROCESSING]: 'post-processing',
+        [ErrorCategories.AUTHENTICATION]: 'auth',
+        [ErrorCategories.NETWORK]: 'network',
+        [ErrorCategories.VALIDATION]: 'validation',
+        [ErrorCategories.UNKNOWN]: ''
+    };
+    
+    const suffix = categorySuffix[errorCategory] || '';
+    return suffix ? `${triggeringLabel}-failed-${suffix}` : `${triggeringLabel}-failed`;
+}
 
 /**
  * Categorizes an error based on its properties
@@ -169,20 +177,19 @@ async function handleIssueFailure(issueRef, errorCategory, originalError, correl
     
     try {
         const octokit = await getAuthenticatedOctokit();
-        const failureLabel = FailureLabels[errorCategory] || FailureLabels[ErrorCategories.UNKNOWN];
         
-        // Remove processing tag and add failure tag
-        const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
+        const triggeringLabel = issueRef.triggeringLabel || process.env.AI_PRIMARY_TAG || 'AI';
+        const processingTag = `${triggeringLabel}-processing`;
+        const failureLabel = generateFailureLabel(triggeringLabel, errorCategory);
         
         try {
             await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
                 owner: issueRef.repoOwner,
                 repo: issueRef.repoName,
                 issue_number: issueRef.number,
-                name: AI_PROCESSING_TAG,
+                name: processingTag,
             });
         } catch (removeError) {
-            // Ignore errors when removing labels that don't exist
             correlatedLogger.debug({
                 issueNumber: issueRef.number,
                 repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
@@ -190,7 +197,6 @@ async function handleIssueFailure(issueRef, errorCategory, originalError, correl
             }, 'Could not remove processing tag (may not exist)');
         }
         
-        // Add failure tag
         await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
             owner: issueRef.repoOwner,
             repo: issueRef.repoName,
@@ -198,7 +204,6 @@ async function handleIssueFailure(issueRef, errorCategory, originalError, correl
             labels: [failureLabel],
         });
         
-        // Add failure comment
         const failureComment = `🚨 **AI Processing Failed**
 
 **Error Category:** ${errorCategory}
@@ -222,7 +227,8 @@ This issue has been marked as failed and moved to the Dead Letter Queue for manu
             issueNumber: issueRef.number,
             repository: `${issueRef.repoOwner}/${issueRef.repoName}`,
             failureLabel,
-            errorCategory
+            errorCategory,
+            triggeringLabel
         }, 'Updated issue with failure tags and comment');
         
     } catch (tagError) {

@@ -6,7 +6,7 @@ import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
-import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings, loadAiPrimaryTag } from './config/configRepoManager.js';
+import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings, loadAiPrimaryTag, loadPrimaryProcessingLabels } from './config/configRepoManager.js';
 
 // Create Redis client for activity logging
 const redisClient = new Redis({
@@ -20,8 +20,7 @@ const redisClient = new Redis({
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000', 10);
 let AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
-const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
-const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
+let primaryProcessingLabels = [];
 const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
@@ -104,6 +103,24 @@ async function loadAiPrimaryTagFromConfig() {
     }
 }
 
+async function loadPrimaryProcessingLabelsFromConfig() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            primaryProcessingLabels = await loadPrimaryProcessingLabels();
+            logger.info({ primary_processing_labels: primaryProcessingLabels }, 'Successfully loaded primary_processing_labels from config repo');
+        } else if (process.env.PRIMARY_PROCESSING_LABELS) {
+            primaryProcessingLabels = process.env.PRIMARY_PROCESSING_LABELS.split(',').map(l => l.trim()).filter(l => l);
+            logger.info({ primary_processing_labels: primaryProcessingLabels }, 'Using primary_processing_labels from environment variable');
+        } else {
+            primaryProcessingLabels = [AI_PRIMARY_TAG];
+            logger.info({ primary_processing_labels: primaryProcessingLabels }, 'Using AI_PRIMARY_TAG as default primary processing label');
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load primary_processing_labels from config, using default');
+        primaryProcessingLabels = [AI_PRIMARY_TAG || 'AI'];
+    }
+}
+
 const getReposFromEnv = () => {
     if (!GITHUB_REPOS_TO_MONITOR) {
         return [];
@@ -131,24 +148,36 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
         return [];
     }
 
+    const allExcludeLabels = [];
+    for (const label of primaryProcessingLabels) {
+        allExcludeLabels.push(`${label}-processing`);
+        allExcludeLabels.push(`${label}-done`);
+    }
+
     // Use retry wrapper for GitHub API calls
     const fetchWithRetry = () => withRetry(
         async () => {
-            // Use the issues API instead of the deprecated search API
-            // First, get all open issues with the primary AI tag
-            const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', {
-                owner,
-                repo,
-                state: 'open',
-                labels: AI_PRIMARY_TAG,
-                per_page: 100,
-                sort: 'created',
-                direction: 'desc'
-            });
+            const allIssues = [];
             
-            // Filter out issues that have exclusion labels or are pull requests
-            const filteredIssues = issues.filter(issue => {
-                // Exclude pull requests - they're handled by PR comment monitoring
+            for (const primaryLabel of primaryProcessingLabels) {
+                const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', {
+                    owner,
+                    repo,
+                    state: 'open',
+                    labels: primaryLabel,
+                    per_page: 100,
+                    sort: 'created',
+                    direction: 'desc'
+                });
+                
+                for (const issue of issues) {
+                    if (!allIssues.find(i => i.id === issue.id)) {
+                        allIssues.push(issue);
+                    }
+                }
+            }
+            
+            const filteredIssues = allIssues.filter(issue => {
                 if (issue.pull_request) {
                     return false;
                 }
@@ -156,22 +185,20 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
                 const labelNames = issue.labels.map(label =>
                     typeof label === 'string' ? label : label.name
                 );
-                // Exclude if it has any of the exclusion tags
-                return !labelNames.includes(AI_EXCLUDE_TAGS_PROCESSING) &&
-                       !labelNames.includes(AI_DONE_TAG);
+                
+                return !allExcludeLabels.some(excludeLabel => labelNames.includes(excludeLabel));
             });
             
-            const pullRequestCount = issues.filter(issue => issue.pull_request).length;
+            const pullRequestCount = allIssues.filter(issue => issue.pull_request).length;
 
             correlatedLogger.debug({
                 repo: repoFullName,
-                totalIssues: issues.length,
+                totalIssues: allIssues.length,
                 pullRequests: pullRequestCount,
                 filteredIssues: filteredIssues.length,
-                excludedLabels: [AI_EXCLUDE_TAGS_PROCESSING, AI_DONE_TAG]
+                excludedLabels: allExcludeLabels
             }, 'Filtered issues (excluding PRs and labels)');
             
-            // Return in the same format as search API for compatibility
             return { data: { items: filteredIssues } };
         },
         { ...retryConfigs.githubApi, correlationId },
@@ -564,13 +591,16 @@ async function pollForIssues() {
             
             if (issues.length > 0) {
                 for (const issue of issues) {
+                    const triggeringLabel = primaryProcessingLabels.find(pl => issue.labels.includes(pl)) || primaryProcessingLabels[0];
+                    
                     correlatedLogger.info({ 
                         issueId: issue.id, 
                         issueNumber: issue.number, 
                         issueTitle: issue.title, 
                         issueUrl: issue.url,
                         repository: repoFullName,
-                        targetModels: issue.targetModels
+                        targetModels: issue.targetModels,
+                        triggeringLabel: triggeringLabel
                     }, 'Detected eligible issue');
                     
                     // Create separate jobs for each target model
@@ -601,7 +631,8 @@ async function pollForIssues() {
                             issueId: issue.id,
                             issueNumber: issue.number,
                             repository: repoFullName,
-                            modelName: modelName
+                            modelName: modelName,
+                            triggeringLabel: triggeringLabel
                         }, `Enqueueing job for model: ${modelName}`);
 
                         try {
@@ -613,6 +644,7 @@ async function pollForIssues() {
                                 repoName: issue.repoName,
                                 number: issue.number,
                                 modelName: modelName,
+                                triggeringLabel: triggeringLabel,
                                 correlationId: generateCorrelationId() // Each job gets its own correlation ID
                             };
                             
@@ -754,47 +786,40 @@ async function resetIssueLabels() {
             logger.info({ repository: repoFullName }, 'Checking for issues with processing labels...');
 
             try {
-                // Get issues with processing labels using the issues API (never remove AI-done labels!)
-                const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', {
-                    owner,
-                    repo,
-                    state: 'open',
-                    labels: AI_EXCLUDE_TAGS_PROCESSING,
-                    per_page: 100
-                });
-
-                for (const issue of issues) {
-                    const labelsToRemove = [];
-                    const currentLabels = issue.labels.map(label => label.name);
+                for (const primaryLabel of primaryProcessingLabels) {
+                    const processingLabel = `${primaryLabel}-processing`;
                     
-                    // ONLY remove AI-processing labels, NEVER remove AI-done labels
-                    if (currentLabels.includes(AI_EXCLUDE_TAGS_PROCESSING)) {
-                        labelsToRemove.push(AI_EXCLUDE_TAGS_PROCESSING);
-                    }
-                    // Removed AI_DONE_TAG removal - completed issues should keep their AI-done labels
+                    const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', {
+                        owner,
+                        repo,
+                        state: 'open',
+                        labels: processingLabel,
+                        per_page: 100
+                    });
 
-                    if (labelsToRemove.length > 0) {
-                        logger.info({
-                            repository: repoFullName,
-                            issueNumber: issue.number,
-                            labelsToRemove
-                        }, 'Removing AI-processing labels from issue (preserving AI-done labels)');
+                    for (const issue of issues) {
+                        const currentLabels = issue.labels.map(label => label.name);
+                        
+                        if (currentLabels.includes(processingLabel)) {
+                            logger.info({
+                                repository: repoFullName,
+                                issueNumber: issue.number,
+                                labelToRemove: processingLabel
+                            }, 'Removing processing label from issue (preserving done labels)');
 
-                        for (const label of labelsToRemove) {
                             await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
                                 owner,
                                 repo,
                                 issue_number: issue.number,
-                                name: label
+                                name: processingLabel
                             });
+                            totalReset++;
                         }
-                        totalReset++;
                     }
                 }
 
                 logger.info({
-                    repository: repoFullName,
-                    issuesFound: searchResponse.data.items.length
+                    repository: repoFullName
                 }, 'Processed repository for label reset');
 
             } catch (repoError) {
@@ -823,6 +848,7 @@ async function startDaemon(options = {}) {
     await loadReposFromConfig();
     await loadSettingsFromConfig();
     await loadAiPrimaryTagFromConfig();
+    await loadPrimaryProcessingLabelsFromConfig();
     await detectBotUsername();
 
     const repos = getRepos();
@@ -873,9 +899,7 @@ async function startDaemon(options = {}) {
     logger.info({
         repositories: repos,
         pollingInterval: POLLING_INTERVAL_MS,
-        primaryTag: AI_PRIMARY_TAG,
-        excludeProcessingTag: AI_EXCLUDE_TAGS_PROCESSING,
-        excludeDoneTag: AI_DONE_TAG,
+        primaryProcessingLabels: primaryProcessingLabels,
         modelLabelPattern: MODEL_LABEL_PATTERN,
         defaultModelName: DEFAULT_MODEL_NAME,
         botUsername: GITHUB_BOT_USERNAME || 'not configured',
@@ -899,6 +923,7 @@ async function startDaemon(options = {}) {
                 await loadReposFromConfig();
                 await loadSettingsFromConfig();
                 await loadAiPrimaryTagFromConfig();
+                await loadPrimaryProcessingLabelsFromConfig();
             }
         } catch (error) {
             logger.error({ error: error.message }, 'Failed to reload config');
