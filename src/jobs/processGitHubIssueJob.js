@@ -33,6 +33,7 @@ const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
+const PR_LABEL = process.env.PR_LABEL || 'gitfix';
 
 const REQUEUE_BUFFER_MS = parseInt(process.env.REQUEUE_BUFFER_MS || (5 * 60 * 1000), 10);
 const REQUEUE_JITTER_MS = parseInt(process.env.REQUEUE_JITTER_MS || (2 * 60 * 1000), 10);
@@ -579,6 +580,13 @@ ${completionComment}
                         prNumber: prResponse.data.number,
                         prUrl: prResponse.data.html_url
                     }, 'PR created successfully');
+
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        issue_number: prResponse.data.number,
+                        labels: [PR_LABEL]
+                    });
 
                     postProcessingResult = {
                         success: true,

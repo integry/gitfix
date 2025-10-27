@@ -194,6 +194,53 @@ export async function loadSettings() {
     }
 }
 
+export async function loadPrLabel() {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        const prLabel = config.pr_label || process.env.PR_LABEL || 'gitfix';
+        
+        logger.info({ pr_label: prLabel }, 'Successfully loaded PR label');
+        return prLabel;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to load PR label from config');
+        throw error;
+    }
+}
+
+export async function savePrLabel(prLabel, commitMessage = 'Update PR label via UI') {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        config.pr_label = prLabel;
+        
+        await fs.writeJson(CONFIG_FILE_PATH, config, { spaces: 2 });
+
+        const git = simpleGit(LOCAL_CONFIG_PATH);
+
+        try {
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+        } catch (e) {
+        }
+
+        await git.add('config.json');
+        await git.commit(commitMessage);
+
+        const authToken = await getGitHubInstallationToken();
+        const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
+        await git.push(authenticatedUrl, 'main');
+        
+        logger.info({ pr_label: prLabel }, 'Successfully saved and pushed PR label');
+        return true;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to save PR label');
+        throw error;
+    }
+}
+
 export async function saveSettings(settings, commitMessage = 'Update settings via UI') {
     try {
         await cloneOrPullConfigRepo();
