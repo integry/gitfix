@@ -31,15 +31,35 @@ import {
 } from './utils/prValidation.js';
 import Redis from 'ioredis';
 import { getDefaultModel } from './config/modelAliases.js';
-import { loadSettings } from './config/configRepoManager.js';
+import { loadSettings, loadAiPrimaryTag, loadPrLabel } from './config/configRepoManager.js';
 import { processGitHubIssueJob } from './jobs/processGitHubIssueJob.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
-const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
-const PR_LABEL = process.env.PR_LABEL || 'gitfix';
+
+async function getAiPrimaryTag() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            return await loadAiPrimaryTag();
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load AI primary tag from config, using fallback');
+    }
+    return process.env.AI_PRIMARY_TAG || 'AI';
+}
+
+async function getPrLabel() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            return await loadPrLabel();
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load PR label from config, using fallback');
+    }
+    return process.env.PR_LABEL || 'gitfix';
+}
 
 // Buffer to add AFTER the reset timestamp to ensure limit is reset
 const REQUEUE_BUFFER_MS = parseInt(process.env.REQUEUE_BUFFER_MS || (5 * 60 * 1000), 10); // 5 minutes buffer
@@ -71,6 +91,8 @@ async function processPullRequestCommentJob(job) {
         correlationId
     } = job.data;
     const correlatedLogger = logger.withCorrelation(correlationId);
+    
+    const PR_LABEL = await getPrLabel();
     
     // Check if this is a batch job or single comment job
     const isBatchJob = !!comments && Array.isArray(comments);

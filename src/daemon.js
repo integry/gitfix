@@ -6,7 +6,7 @@ import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
-import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings } from './config/configRepoManager.js';
+import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings, loadAiPrimaryTag } from './config/configRepoManager.js';
 
 // Create Redis client for activity logging
 const redisClient = new Redis({
@@ -19,7 +19,7 @@ const redisClient = new Redis({
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000', 10);
-const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
+let AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
@@ -89,6 +89,21 @@ async function loadSettingsFromConfig() {
     }
 }
 
+async function loadAiPrimaryTagFromConfig() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            AI_PRIMARY_TAG = await loadAiPrimaryTag();
+            logger.info({ ai_primary_tag: AI_PRIMARY_TAG }, 'Successfully loaded ai_primary_tag from config repo');
+        } else if (process.env.AI_PRIMARY_TAG) {
+            AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG;
+            logger.info({ ai_primary_tag: AI_PRIMARY_TAG }, 'Using ai_primary_tag from environment variable');
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load ai_primary_tag from config, using default or environment variable');
+        AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
+    }
+}
+
 const getReposFromEnv = () => {
     if (!GITHUB_REPOS_TO_MONITOR) {
         return [];
@@ -131,22 +146,30 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
                 direction: 'desc'
             });
             
-            // Filter out issues that have exclusion labels
+            // Filter out issues that have exclusion labels or are pull requests
             const filteredIssues = issues.filter(issue => {
-                const labelNames = issue.labels.map(label => 
+                // Exclude pull requests - they're handled by PR comment monitoring
+                if (issue.pull_request) {
+                    return false;
+                }
+
+                const labelNames = issue.labels.map(label =>
                     typeof label === 'string' ? label : label.name
                 );
                 // Exclude if it has any of the exclusion tags
-                return !labelNames.includes(AI_EXCLUDE_TAGS_PROCESSING) && 
+                return !labelNames.includes(AI_EXCLUDE_TAGS_PROCESSING) &&
                        !labelNames.includes(AI_DONE_TAG);
             });
             
-            correlatedLogger.debug({ 
-                repo: repoFullName, 
+            const pullRequestCount = issues.filter(issue => issue.pull_request).length;
+
+            correlatedLogger.debug({
+                repo: repoFullName,
                 totalIssues: issues.length,
+                pullRequests: pullRequestCount,
                 filteredIssues: filteredIssues.length,
                 excludedLabels: [AI_EXCLUDE_TAGS_PROCESSING, AI_DONE_TAG]
-            }, 'Filtered issues by labels');
+            }, 'Filtered issues (excluding PRs and labels)');
             
             // Return in the same format as search API for compatibility
             return { data: { items: filteredIssues } };
@@ -777,6 +800,7 @@ async function resetIssueLabels() {
 async function startDaemon(options = {}) {
     await loadReposFromConfig();
     await loadSettingsFromConfig();
+    await loadAiPrimaryTagFromConfig();
     await detectBotUsername();
 
     const repos = getRepos();
@@ -852,6 +876,7 @@ async function startDaemon(options = {}) {
             if (process.env.CONFIG_REPO) {
                 await loadReposFromConfig();
                 await loadSettingsFromConfig();
+                await loadAiPrimaryTagFromConfig();
             }
         } catch (error) {
             logger.error({ error: error.message }, 'Failed to reload config');

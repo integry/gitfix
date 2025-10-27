@@ -1,32 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords, getPrLabel, updatePrLabel } from '../api/gitfixApi';
+import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeywords, getPrLabel, updatePrLabel, getAiPrimaryTag, updateAiPrimaryTag } from '../api/gitfixApi';
 
 interface Settings {
   worker_concurrency: string;
   github_user_whitelist: string;
   pr_label: string;
+  ai_primary_tag: string;
 }
 
 const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<Settings>({
     worker_concurrency: '',
     github_user_whitelist: '',
-    pr_label: ''
+    pr_label: '',
+    ai_primary_tag: ''
   });
   const [keywords, setKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [keywordsLoading, setKeywordsLoading] = useState<boolean>(true);
   const [prLabelLoading, setPrLabelLoading] = useState<boolean>(true);
+  const [aiPrimaryTagLoading, setAiPrimaryTagLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [keywordsSaving, setKeywordsSaving] = useState<boolean>(false);
   const [prLabelSaving, setPrLabelSaving] = useState<boolean>(false);
+  const [aiPrimaryTagSaving, setAiPrimaryTagSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [keywordsError, setKeywordsError] = useState<string | null>(null);
   const [keywordsSuccess, setKeywordsSuccess] = useState<string | null>(null);
   const [prLabelError, setPrLabelError] = useState<string | null>(null);
   const [prLabelSuccess, setPrLabelSuccess] = useState<string | null>(null);
+  const [aiPrimaryTagError, setAiPrimaryTagError] = useState<string | null>(null);
+  const [aiPrimaryTagSuccess, setAiPrimaryTagSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -77,6 +83,22 @@ const SettingsPage: React.FC = () => {
       }
     };
     loadPrLabel();
+  }, []);
+
+  useEffect(() => {
+    const loadAiPrimaryTag = async () => {
+      try {
+        setAiPrimaryTagLoading(true);
+        setAiPrimaryTagError(null);
+        const data = await getAiPrimaryTag();
+        setSettings(prev => ({ ...prev, ai_primary_tag: data.ai_primary_tag || 'AI' }));
+      } catch (err) {
+        setAiPrimaryTagError((err as Error).message || 'Failed to load AI primary tag');
+      } finally {
+        setAiPrimaryTagLoading(false);
+      }
+    };
+    loadAiPrimaryTag();
   }, []);
 
   const handleSettingChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -168,6 +190,26 @@ const SettingsPage: React.FC = () => {
       setPrLabelError((err as Error).message || 'Failed to update PR label');
     } finally {
       setPrLabelSaving(false);
+    }
+  };
+
+  const handleSaveAiPrimaryTag = async () => {
+    try {
+      setAiPrimaryTagSaving(true);
+      setAiPrimaryTagError(null);
+      setAiPrimaryTagSuccess(null);
+
+      if (!settings.ai_primary_tag || settings.ai_primary_tag.trim() === '') {
+        setAiPrimaryTagError('AI Primary Tag cannot be empty');
+        return;
+      }
+
+      await updateAiPrimaryTag(settings.ai_primary_tag.trim());
+      setAiPrimaryTagSuccess('AI Primary Tag updated successfully! The daemon will pick up changes within 5 minutes.');
+    } catch (err) {
+      setAiPrimaryTagError((err as Error).message || 'Failed to update AI primary tag');
+    } finally {
+      setAiPrimaryTagSaving(false);
     }
   };
 
@@ -304,11 +346,69 @@ const SettingsPage: React.FC = () => {
         )}
       </div>
 
+      {/* AI Primary Tag Section */}
+      <div className="mb-8">
+        <h3 className="text-white text-xl font-semibold mb-4">AI Primary Tag</h3>
+        <p className="text-gray-400 mb-4">
+          Configure the primary label that GitFix uses to identify issues for processing. 
+          This setting is mandatory and must be set.
+        </p>
+        
+        {aiPrimaryTagError && (
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+            {aiPrimaryTagError}
+          </div>
+        )}
+        
+        {aiPrimaryTagSuccess && (
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+            {aiPrimaryTagSuccess}
+          </div>
+        )}
+        
+        {aiPrimaryTagLoading ? (
+          <p className="text-gray-400">Loading AI primary tag...</p>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-gray-400 mb-2" htmlFor="ai_primary_tag">
+                AI Primary Tag <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                id="ai_primary_tag"
+                name="ai_primary_tag"
+                value={settings.ai_primary_tag}
+                onChange={handleSettingChange}
+                placeholder="e.g., AI"
+                required
+                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="mt-1 text-sm text-gray-500">
+                Issues with this label will be automatically processed by GitFix
+              </p>
+            </div>
+
+            <button
+              onClick={handleSaveAiPrimaryTag}
+              disabled={aiPrimaryTagSaving || !settings.ai_primary_tag || settings.ai_primary_tag.trim() === ''}
+              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+                aiPrimaryTagSaving || !settings.ai_primary_tag || settings.ai_primary_tag.trim() === ''
+                  ? 'bg-gray-600 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+              }`}
+            >
+              {aiPrimaryTagSaving ? 'Saving...' : 'Save AI Primary Tag'}
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Follow-up Keywords Section */}
       <div>
         <h3 className="text-white text-xl font-semibold mb-4">Follow-up Keywords</h3>
         <p className="text-gray-400 mb-4">
-          When these keywords are found in follow-up comments on issues with the 'AI' label, 
+          When these keywords are found in follow-up comments on issues with the configured AI primary label, 
           the bot will process them automatically.
         </p>
         

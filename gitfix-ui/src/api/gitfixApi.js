@@ -176,3 +176,22 @@ export const updatePrLabel = async (prLabel) => {
   await handleApiResponse(response);
   return response.json();
 };
+
+export const getAiPrimaryTag = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/ai-primary-tag`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updateAiPrimaryTag = async (aiPrimaryTag) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/ai-primary-tag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ai_primary_tag: aiPrimaryTag }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
