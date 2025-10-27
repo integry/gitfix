@@ -16,7 +16,7 @@ export async function cloneOrPullConfigRepo() {
         if (await fs.pathExists(LOCAL_CONFIG_PATH)) {
             const git = simpleGit(LOCAL_CONFIG_PATH);
             try {
-                await git.pull();
+                await git.pull('origin', 'main');
                 logger.debug('Config repository pulled successfully');
             } catch (pullError) {
                 // If pull fails (e.g., no remote branch yet), that's okay - we'll handle it in ensureConfigRepoExists
