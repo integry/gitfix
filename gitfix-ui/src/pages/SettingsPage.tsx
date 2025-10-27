@@ -4,12 +4,14 @@ import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeyword
 interface Settings {
   worker_concurrency: string;
   github_user_whitelist: string;
+  pr_label: string;
 }
 
 const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<Settings>({
     worker_concurrency: '',
-    github_user_whitelist: ''
+    github_user_whitelist: '',
+    pr_label: ''
   });
   const [keywords, setKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState<string>('');
@@ -30,7 +32,8 @@ const SettingsPage: React.FC = () => {
         const data = await getSettings();
         setSettings({
           worker_concurrency: data.worker_concurrency || '',
-          github_user_whitelist: (data.github_user_whitelist || []).join(', ')
+          github_user_whitelist: (data.github_user_whitelist || []).join(', '),
+          pr_label: data.pr_label || ''
         });
       } catch (err) {
         setError((err as Error).message || 'Failed to load settings');
@@ -71,12 +74,18 @@ const SettingsPage: React.FC = () => {
       setError(null);
       setSuccess(null);
 
+      // Validate pr_label is provided
+      if (!settings.pr_label || !settings.pr_label.trim()) {
+        throw new Error('PR Label is required');
+      }
+
       const updatedSettings = {
         ...settings,
         github_user_whitelist: settings.github_user_whitelist
           .split(',')
           .map(u => u.trim())
-          .filter(u => u.length > 0)
+          .filter(u => u.length > 0),
+        pr_label: settings.pr_label.trim()
       };
 
       // Convert worker_concurrency to number if provided
@@ -186,6 +195,25 @@ const SettingsPage: React.FC = () => {
               />
               <p className="mt-1 text-sm text-gray-500">
                 Only process issues from these GitHub users. Leave empty to process from all users.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-gray-400 mb-2" htmlFor="pr_label">
+                PR Label <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                id="pr_label"
+                name="pr_label"
+                value={settings.pr_label}
+                onChange={handleSettingChange}
+                placeholder="Label for PRs (e.g., gitfix)"
+                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              />
+              <p className="mt-1 text-sm text-gray-500">
+                Label to add to all PRs created by the bot. Follow-up comments will only be processed on PRs with this label.
               </p>
             </div>
 

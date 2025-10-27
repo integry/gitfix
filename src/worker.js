@@ -35,6 +35,24 @@ const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
 
+/**
+ * Gets the PR label from settings or environment variable
+ * @returns {Promise<string>} PR label
+ */
+async function getPRLabel() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            const settings = await loadSettings();
+            if (settings.pr_label && typeof settings.pr_label === 'string') {
+                return settings.pr_label;
+            }
+        }
+    } catch (error) {
+        logger.debug({ error: error.message }, 'Failed to load PR label from config, using environment variable');
+    }
+    return process.env.PR_LABEL || 'gitfix';
+}
+
 // Buffer to add AFTER the reset timestamp to ensure limit is reset
 const REQUEUE_BUFFER_MS = parseInt(process.env.REQUEUE_BUFFER_MS || (5 * 60 * 1000), 10); // 5 minutes buffer
 // Jitter to prevent thundering herd if multiple jobs reset at the same time
@@ -297,6 +315,28 @@ async function processPullRequestCommentJob(job) {
             { ...retryConfigs.githubApi, correlationId },
             'get_authenticated_octokit'
         );
+
+        // Check if PR has the required label
+        const prData = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+            owner: repoOwner,
+            repo: repoName,
+            pull_number: pullRequestNumber
+        });
+
+        const requiredLabel = await getPRLabel();
+        const hasRequiredLabel = prData.data.labels.some(label => label.name === requiredLabel);
+        if (!hasRequiredLabel) {
+            correlatedLogger.info({
+                pullRequestNumber,
+                requiredLabel
+            }, 'PR does not have required label, skipping follow-up comment processing');
+            
+            return { 
+                status: 'skipped', 
+                reason: 'missing_required_label',
+                pullRequestNumber 
+            };
+        }
 
         // Check if comments have already been processed
         const botUsername = process.env.GITHUB_BOT_USERNAME || 'github-actions[bot]';
@@ -1645,6 +1685,15 @@ ${completionComment}
                         prNumber: prResponse.data.number,
                         prUrl: prResponse.data.html_url
                     }, 'PR created successfully');
+
+                    // Add the PR label
+                    const prLabel = await getPRLabel();
+                    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                        owner: issueRef.repoOwner,
+                        repo: issueRef.repoName,
+                        issue_number: prResponse.data.number,
+                        labels: [prLabel]
+                    });
 
                     postProcessingResult = {
                         success: true,
