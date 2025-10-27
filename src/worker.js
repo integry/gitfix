@@ -1050,7 +1050,8 @@ Examples:
 async function startWorker(options = {}) {
     const workerId = `worker:${generateCorrelationId()}`;
     let workerConcurrency = parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
-    
+    let aiPrimaryTag = 'AI';
+
     try {
         if (process.env.CONFIG_REPO) {
             const settings = await loadSettings();
@@ -1064,11 +1065,18 @@ async function startWorker(options = {}) {
     } catch (error) {
         logger.warn({ error: error.message }, 'Failed to load settings from config, using environment variable for worker_concurrency');
     }
-    
+
+    // Load AI primary tag
+    try {
+        aiPrimaryTag = await getAiPrimaryTag();
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load AI primary tag, using default');
+    }
+
     logger.info({
         queue: GITHUB_ISSUE_QUEUE_NAME,
         processingTag: AI_PROCESSING_TAG,
-        primaryTag: AI_PRIMARY_TAG,
+        primaryTag: aiPrimaryTag,
         doneTag: AI_DONE_TAG,
         concurrency: workerConcurrency,
         resetPerformed: options.reset || false

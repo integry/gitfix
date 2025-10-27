@@ -575,13 +575,35 @@ async function pollForIssues() {
                     
                     // Create separate jobs for each target model
                     for (const modelName of issue.targetModels) {
-                        correlatedLogger.info({ 
-                            issueId: issue.id, 
-                            issueNumber: issue.number, 
+                        // Check if a job for this issue is already active or waiting
+                        const activeJobs = await issueQueue.getActive();
+                        const waitingJobs = await issueQueue.getWaiting();
+                        const existingJobs = [...activeJobs, ...waitingJobs];
+
+                        const jobExists = existingJobs.some(job =>
+                            job.name === 'processGitHubIssue' &&
+                            job.data.number === issue.number &&
+                            job.data.repoOwner === issue.repoOwner &&
+                            job.data.repoName === issue.repoName &&
+                            job.data.modelName === modelName
+                        );
+
+                        if (jobExists) {
+                            correlatedLogger.debug({
+                                issueNumber: issue.number,
+                                repository: repoFullName,
+                                modelName: modelName
+                            }, 'A job for this issue is already active or waiting, skipping duplicate');
+                            continue;
+                        }
+
+                        correlatedLogger.info({
+                            issueId: issue.id,
+                            issueNumber: issue.number,
                             repository: repoFullName,
                             modelName: modelName
                         }, `Enqueueing job for model: ${modelName}`);
-                        
+
                         try {
                             // Include timestamp in jobId to allow reprocessing after AI-done label removal
                             const timestamp = Date.now();
