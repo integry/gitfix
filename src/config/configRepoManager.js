@@ -16,11 +16,17 @@ export async function cloneOrPullConfigRepo() {
         if (await fs.pathExists(LOCAL_CONFIG_PATH)) {
             const git = simpleGit(LOCAL_CONFIG_PATH);
             try {
-                await git.pull();
-                logger.debug('Config repository pulled successfully');
+                // Update remote URL with fresh token before pulling
+                await git.remote(['set-url', 'origin', authenticatedUrl]);
+                // Fetch latest changes and reset to match remote (discard any local changes)
+                // This ensures the local config always matches the remote
+                await git.fetch('origin', 'main');
+                await git.reset(['--hard', 'origin/main']);
+                logger.info('Config repository updated successfully');
             } catch (pullError) {
-                // If pull fails (e.g., no remote branch yet), that's okay - we'll handle it in ensureConfigRepoExists
-                logger.debug({ error: pullError.message }, 'Pull failed, repository may be empty');
+                // If pull fails (e.g., no remote branch yet, auth issues, conflicts), log a warning
+                // but continue - we'll use the existing local config
+                logger.warn({ error: pullError.message }, 'Failed to pull config repository, using local version. Check authentication or network connectivity.');
             }
         } else {
             try {
