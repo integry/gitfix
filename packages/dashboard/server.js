@@ -61,37 +61,12 @@ app.get('/api/status', ensureAuthenticated, async (req, res) => {
       await redisClient.ping();
       status.redis = 'connected';
       
-      // Check daemon status from hash
-      const daemonStatuses = await redisClient.hGetAll('system:status:daemons');
-      let daemonRunning = false;
-      for (const [daemonId, statusStr] of Object.entries(daemonStatuses)) {
-        try {
-          const daemonStatus = JSON.parse(statusStr);
-          if (daemonStatus.timestamp && Date.now() - daemonStatus.timestamp < 120000) {
-            daemonRunning = true;
-            break;
-          }
-        } catch (e) {
-          // Skip invalid entries
-        }
-      }
-      status.daemon = daemonRunning ? 'running' : 'stopped';
-
-      // Check worker status from hash
-      const workerStatuses = await redisClient.hGetAll('system:status:workers');
-      let activeWorkerCount = 0;
-      for (const [workerId, statusStr] of Object.entries(workerStatuses)) {
-        try {
-          const workerStatus = JSON.parse(statusStr);
-          if (workerStatus.timestamp && Date.now() - workerStatus.timestamp < 120000) {
-            activeWorkerCount++;
-          }
-        } catch (e) {
-          // Skip invalid entries
-        }
-      }
-      status.worker = activeWorkerCount > 0 ? 'running' : 'stopped';
-      status.workerCount = activeWorkerCount;
+      const daemonHeartbeat = await redisClient.get('system:status:daemon');
+      status.daemon = (daemonHeartbeat && Date.now() - parseInt(daemonHeartbeat) < 120000) ? 'running' : 'stopped';
+      
+      const activeWorkers = await redisClient.sCard('system:status:workers');
+      status.worker = activeWorkers > 0 ? 'running' : 'stopped';
+      status.workerCount = activeWorkers;
       
       // Check GitHub authentication - verify GitHub App is configured
       const githubAppConfigured = process.env.GH_APP_ID && 
