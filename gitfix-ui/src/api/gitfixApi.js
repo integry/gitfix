@@ -134,6 +134,25 @@ export const updateFollowupKeywords = async (keywords) => {
   return response.json();
 };
 
+export const getPrLabel = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/pr-label`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updatePrLabel = async (prLabel) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/pr-label`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pr_label: prLabel }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
 export const fetchPrompt = async (promptPath) => {
   const response = await fetch(`${API_BASE_URL}${promptPath}`, {
     credentials: 'include'

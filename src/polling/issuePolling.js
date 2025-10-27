@@ -19,9 +19,10 @@ const redisClient = new Redis({
  * Polls all configured repositories for issues that need processing
  * @param {Array<string>} repos - List of repository full names to poll
  * @param {Array<string>} githubUserWhitelist - List of allowed GitHub users
+ * @param {string} prLabel - PR label to filter by
  * @returns {Promise<Array>} Array of detected issues
  */
-export async function pollForIssues(repos, githubUserWhitelist = []) {
+export async function pollForIssues(repos, githubUserWhitelist = [], prLabel = 'gitfix') {
     const correlationId = generateCorrelationId();
     const correlatedLogger = logger.withCorrelation(correlationId);
     
@@ -135,7 +136,7 @@ export async function pollForIssues(repos, githubUserWhitelist = []) {
             }
             
             // Poll for PR comments after processing issues
-            await pollForPullRequestComments(octokit, repoFullName, correlationId, githubUserWhitelist);
+            await pollForPullRequestComments(octokit, repoFullName, correlationId, githubUserWhitelist, prLabel);
             
         } catch (error) {
             handleError(error, `Error polling repository ${repoFullName}`, { correlationId });

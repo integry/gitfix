@@ -1,5 +1,5 @@
 import logger from '../utils/logger.js';
-import { loadMonitoredRepos, loadSettings } from '../config/configRepoManager.js';
+import { loadMonitoredRepos, loadSettings, loadPrLabel } from '../config/configRepoManager.js';
 
 /**
  * Loads repository configuration from either config repo or environment variables
@@ -25,11 +25,12 @@ export async function loadReposFromConfig() {
 }
 
 /**
- * Loads settings from config repository including user whitelist
- * @returns {Promise<Object>} Settings object with github_user_whitelist
+ * Loads settings from config repository including user whitelist and PR label
+ * @returns {Promise<Object>} Settings object with github_user_whitelist and pr_label
  */
 export async function loadSettingsFromConfig() {
     let githubUserWhitelist = [];
+    let prLabel = process.env.PR_LABEL || 'gitfix';
     
     try {
         if (process.env.CONFIG_REPO) {
@@ -42,13 +43,21 @@ export async function loadSettingsFromConfig() {
                 githubUserWhitelist = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
                 logger.info({ whitelist: githubUserWhitelist }, 'Using github_user_whitelist from environment variable');
             }
+            
+            // Load PR label from config
+            try {
+                prLabel = await loadPrLabel();
+                logger.info({ pr_label: prLabel }, 'Successfully loaded pr_label from config repo');
+            } catch (error) {
+                logger.warn({ error: error.message }, 'Failed to load pr_label from config, using environment variable or default');
+            }
         }
     } catch (error) {
         logger.warn({ error: error.message }, 'Failed to load settings from config, using environment variable');
         githubUserWhitelist = (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u);
     }
     
-    return { github_user_whitelist: githubUserWhitelist };
+    return { github_user_whitelist: githubUserWhitelist, pr_label: prLabel };
 }
 
 /**

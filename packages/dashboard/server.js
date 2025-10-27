@@ -935,6 +935,55 @@ app.post('/api/config/followup-keywords', ensureAuthenticated, async (req, res) 
   }
 });
 
+app.get('/api/config/pr-label', ensureAuthenticated, async (req, res) => {
+  try {
+    const prLabel = await configRepoManager.loadPrLabel();
+    res.json({ pr_label: prLabel });
+  } catch (error) {
+    console.error('Error in /api/config/pr-label GET:', error);
+    res.status(500).json({ error: 'Failed to load PR label' });
+  }
+});
+
+app.post('/api/config/pr-label', ensureAuthenticated, async (req, res) => {
+  const lockKey = 'config:pr-label:lock';
+  const lockValue = `${Date.now()}-${Math.random()}`;
+  const lockTimeout = 30;
+
+  try {
+    const { pr_label } = req.body;
+
+    if (!pr_label || typeof pr_label !== 'string' || pr_label.trim() === '') {
+      return res.status(400).json({ error: 'pr_label must be a non-empty string' });
+    }
+
+    const acquired = await redisClient.set(lockKey, lockValue, {
+      NX: true,
+      EX: lockTimeout
+    });
+
+    if (!acquired) {
+      return res.status(409).json({ error: 'Configuration is being updated. Please try again.' });
+    }
+
+    try {
+      await configRepoManager.savePrLabel(
+        pr_label.trim(),
+        `Update PR label via UI by ${req.user.username}`
+      );
+      res.json({ success: true, pr_label: pr_label.trim() });
+    } finally {
+      const currentLockValue = await redisClient.get(lockKey);
+      if (currentLockValue === lockValue) {
+        await redisClient.del(lockKey);
+      }
+    }
+  } catch (error) {
+    console.error('Error in /api/config/pr-label POST:', error);
+    res.status(500).json({ error: 'Failed to update PR label' });
+  }
+});
+
 app.get('/api/config/repos', ensureAuthenticated, async (req, res) => {
   try {
     await configRepoManager.cloneOrPullConfigRepo();

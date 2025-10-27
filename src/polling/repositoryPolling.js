@@ -13,6 +13,7 @@ const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel()
 const GITHUB_BOT_USERNAME = process.env.GITHUB_BOT_USERNAME;
 const GITHUB_USER_BLACKLIST = (process.env.GITHUB_USER_BLACKLIST || '').split(',').filter(u => u);
 const PR_FOLLOWUP_TRIGGER_KEYWORDS = (process.env.PR_FOLLOWUP_TRIGGER_KEYWORDS !== undefined ? process.env.PR_FOLLOWUP_TRIGGER_KEYWORDS : '').split(',').filter(k => k.trim()).map(k => k.trim());
+const PR_LABEL = process.env.PR_LABEL || 'gitfix';
 
 /**
  * Fetches issues from a specific repository that match the criteria
@@ -122,13 +123,17 @@ export async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
  * @param {string} repoFullName - Repository in format "owner/repo"
  * @param {string} correlationId - Correlation ID for tracking
  * @param {Array<string>} githubUserWhitelist - List of allowed GitHub users
+ * @param {string} prLabel - PR label to filter by (default from env or 'gitfix')
  */
-export async function pollForPullRequestComments(octokit, repoFullName, correlationId, githubUserWhitelist = []) {
+export async function pollForPullRequestComments(octokit, repoFullName, correlationId, githubUserWhitelist = [], prLabel = null) {
     // If no trigger keywords are configured, skip PR comment polling entirely
     if (PR_FOLLOWUP_TRIGGER_KEYWORDS.length === 0) {
         logger.debug({ repoFullName }, 'PR comment polling is disabled (no trigger keywords configured)');
         return;
     }
+
+    // Use provided prLabel or fallback to environment variable or default
+    const effectivePrLabel = prLabel || PR_LABEL;
 
     const correlatedLogger = logger.withCorrelation(correlationId);
     const [owner, repo] = repoFullName.split('/');
@@ -143,7 +148,8 @@ export async function pollForPullRequestComments(octokit, repoFullName, correlat
         triggerKeywords: PR_FOLLOWUP_TRIGGER_KEYWORDS,
         userBlacklist: GITHUB_USER_BLACKLIST,
         userWhitelist: githubUserWhitelist || [],
-        botUsername: GITHUB_BOT_USERNAME
+        botUsername: GITHUB_BOT_USERNAME,
+        prLabel: effectivePrLabel
     }, 'Polling for PR comments');
 
     try {
@@ -166,6 +172,20 @@ export async function pollForPullRequestComments(octokit, repoFullName, correlat
 
         for (const pr of botPRs) {
             try {
+                // Check if PR has the required label
+                const prLabels = pr.labels.map(label => 
+                    typeof label === 'string' ? label : label.name
+                );
+                
+                if (!prLabels.includes(effectivePrLabel)) {
+                    correlatedLogger.debug({
+                        pullRequestNumber: pr.number,
+                        prLabels,
+                        requiredLabel: effectivePrLabel
+                    }, 'Skipping PR without required label');
+                    continue;
+                }
+                
                 // Fetch all issue comments (general comments on the PR)
                 const comments = await octokit.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                     owner,

@@ -18,6 +18,7 @@ const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI
 let monitoredRepos = [];
 let GITHUB_USER_WHITELIST = [];
 let GITHUB_BOT_USERNAME = null;
+let PR_LABEL = 'gitfix';
 
 /**
  * Clears all queue data from Redis
@@ -151,6 +152,7 @@ async function startDaemon(options = {}) {
     monitoredRepos = await loadReposFromConfig();
     const settings = await loadSettingsFromConfig();
     GITHUB_USER_WHITELIST = settings.github_user_whitelist || [];
+    PR_LABEL = settings.pr_label || 'gitfix';
     
     // Auto-detect bot username
     const octokit = await getAuthenticatedOctokit();
@@ -169,7 +171,8 @@ async function startDaemon(options = {}) {
         primaryTag: AI_PRIMARY_TAG,
         excludeTags: [AI_EXCLUDE_TAGS_PROCESSING, AI_DONE_TAG],
         botUsername: GITHUB_BOT_USERNAME,
-        userWhitelist: GITHUB_USER_WHITELIST
+        userWhitelist: GITHUB_USER_WHITELIST,
+        prLabel: PR_LABEL
     }, 'Daemon configuration');
 
     // Reset queues if requested
@@ -227,12 +230,13 @@ async function startDaemon(options = {}) {
     const runPollingCycle = async () => {
         try {
             await sendHeartbeat(); // Send heartbeat before each polling cycle
-            await pollForIssues(repos, GITHUB_USER_WHITELIST);
+            await pollForIssues(repos, GITHUB_USER_WHITELIST, PR_LABEL);
             
             // Reload configuration periodically
             monitoredRepos = await loadReposFromConfig();
             const settings = await loadSettingsFromConfig();
             GITHUB_USER_WHITELIST = settings.github_user_whitelist || [];
+            PR_LABEL = settings.pr_label || 'gitfix';
             
         } catch (error) {
             handleError(error, 'Error in polling cycle');
