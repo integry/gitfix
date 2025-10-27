@@ -146,22 +146,30 @@ async function fetchIssuesForRepo(octokit, repoFullName, correlationId) {
                 direction: 'desc'
             });
             
-            // Filter out issues that have exclusion labels
+            // Filter out issues that have exclusion labels or are pull requests
             const filteredIssues = issues.filter(issue => {
-                const labelNames = issue.labels.map(label => 
+                // Exclude pull requests - they're handled by PR comment monitoring
+                if (issue.pull_request) {
+                    return false;
+                }
+
+                const labelNames = issue.labels.map(label =>
                     typeof label === 'string' ? label : label.name
                 );
                 // Exclude if it has any of the exclusion tags
-                return !labelNames.includes(AI_EXCLUDE_TAGS_PROCESSING) && 
+                return !labelNames.includes(AI_EXCLUDE_TAGS_PROCESSING) &&
                        !labelNames.includes(AI_DONE_TAG);
             });
             
-            correlatedLogger.debug({ 
-                repo: repoFullName, 
+            const pullRequestCount = issues.filter(issue => issue.pull_request).length;
+
+            correlatedLogger.debug({
+                repo: repoFullName,
                 totalIssues: issues.length,
+                pullRequests: pullRequestCount,
                 filteredIssues: filteredIssues.length,
                 excludedLabels: [AI_EXCLUDE_TAGS_PROCESSING, AI_DONE_TAG]
-            }, 'Filtered issues by labels');
+            }, 'Filtered issues (excluding PRs and labels)');
             
             // Return in the same format as search API for compatibility
             return { data: { items: filteredIssues } };
