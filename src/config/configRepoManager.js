@@ -278,7 +278,7 @@ export async function loadAiPrimaryTag() {
         await cloneOrPullConfigRepo();
         
         const config = await fs.readJson(CONFIG_FILE_PATH);
-        const aiPrimaryTag = config.ai_primary_tag !== undefined ? config.ai_primary_tag : (process.env.AI_PRIMARY_TAG || 'AI');
+        const aiPrimaryTag = config.ai_primary_tag || 'AI';
         
         logger.info({ ai_primary_tag: aiPrimaryTag }, 'Successfully loaded AI primary tag');
         return aiPrimaryTag;
