@@ -1058,11 +1058,13 @@ app.get('/api/config/settings', ensureAuthenticated, async (req, res) => {
     const settings = await configRepoManager.loadSettings();
     const envDefaults = {
       worker_concurrency: parseInt(process.env.WORKER_CONCURRENCY || '5', 10),
-      github_user_whitelist: (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u.trim())
+      github_user_whitelist: (process.env.GITHUB_USER_WHITELIST || '').split(',').filter(u => u.trim()),
+      pr_label: process.env.PR_LABEL || 'gitfix'
     };
     const mergedSettings = {
       worker_concurrency: settings.worker_concurrency || envDefaults.worker_concurrency,
-      github_user_whitelist: settings.github_user_whitelist || envDefaults.github_user_whitelist
+      github_user_whitelist: settings.github_user_whitelist || envDefaults.github_user_whitelist,
+      pr_label: settings.pr_label || envDefaults.pr_label
     };
     res.json(mergedSettings);
   } catch (error) {

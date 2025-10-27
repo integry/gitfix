@@ -3,6 +3,7 @@ import { withRetry, retryConfigs } from '../utils/retryHandler.js';
 import { handleError } from '../utils/errorHandler.js';
 import { issueQueue } from '../queue/taskQueue.js';
 import { resolveModelAlias, getDefaultModel } from '../config/modelAliases.js';
+import { loadSettings } from '../config/configRepoManager.js';
 
 // Configuration from environment variables
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
@@ -147,6 +148,10 @@ export async function pollForPullRequestComments(octokit, repoFullName, correlat
     }, 'Polling for PR comments');
 
     try {
+        // Load settings to get PR label
+        const settings = await loadSettings();
+        const prLabel = settings.pr_label || process.env.PR_LABEL || 'gitfix';
+        
         // Get all open PRs created by our bot
         const prs = await octokit.paginate('GET /repos/{owner}/{repo}/pulls', {
             owner,
@@ -155,14 +160,19 @@ export async function pollForPullRequestComments(octokit, repoFullName, correlat
             per_page: 100
         });
 
-        // Filter PRs to only those created by the bot
-        const botPRs = prs.filter(pr => pr.user.login === GITHUB_BOT_USERNAME);
+        // Filter PRs to only those created by the bot AND have the PR label
+        const botPRs = prs.filter(pr => {
+            const isBot = pr.user.login === GITHUB_BOT_USERNAME;
+            const hasLabel = pr.labels && pr.labels.some(label => label.name === prLabel);
+            return isBot && hasLabel;
+        });
         
         correlatedLogger.info({ 
             repository: repoFullName, 
             totalPRs: prs.length,
-            botPRs: botPRs.length 
-        }, 'Found bot-created PRs');
+            botPRs: botPRs.length,
+            prLabel: prLabel
+        }, 'Found bot-created PRs with PR label');
 
         for (const pr of botPRs) {
             try {

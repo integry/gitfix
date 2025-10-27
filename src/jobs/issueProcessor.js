@@ -27,6 +27,7 @@ import {
     createLogFiles, 
     generateCompletionComment 
 } from '../utils/workerUtils.js';
+import { loadSettings } from '../config/configRepoManager.js';
 
 // Configuration
 const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
@@ -741,6 +742,31 @@ ${completionComment}
                 prNumber: prResponse.data.number,
                 prUrl: prResponse.data.html_url
             }, 'PR created successfully');
+
+            // Add the PR label
+            try {
+                const settings = await loadSettings();
+                const prLabel = settings.pr_label || process.env.PR_LABEL || 'gitfix';
+                
+                await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                    owner: issueRef.repoOwner,
+                    repo: issueRef.repoName,
+                    issue_number: prResponse.data.number,
+                    labels: [prLabel]
+                });
+                
+                logger.info({
+                    jobId,
+                    prNumber: prResponse.data.number,
+                    label: prLabel
+                }, 'Added PR label successfully');
+            } catch (labelError) {
+                logger.warn({
+                    jobId,
+                    prNumber: prResponse.data.number,
+                    error: labelError.message
+                }, 'Failed to add PR label, continuing anyway');
+            }
 
             postProcessingResult = {
                 success: true,

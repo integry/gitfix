@@ -4,12 +4,14 @@ import { getSettings, updateSettings, getFollowupKeywords, updateFollowupKeyword
 interface Settings {
   worker_concurrency: string;
   github_user_whitelist: string;
+  pr_label: string;
 }
 
 const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<Settings>({
     worker_concurrency: '',
-    github_user_whitelist: ''
+    github_user_whitelist: '',
+    pr_label: ''
   });
   const [keywords, setKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState<string>('');
@@ -30,7 +32,8 @@ const SettingsPage: React.FC = () => {
         const data = await getSettings();
         setSettings({
           worker_concurrency: data.worker_concurrency || '',
-          github_user_whitelist: (data.github_user_whitelist || []).join(', ')
+          github_user_whitelist: (data.github_user_whitelist || []).join(', '),
+          pr_label: data.pr_label || ''
         });
       } catch (err) {
         setError((err as Error).message || 'Failed to load settings');
@@ -71,12 +74,18 @@ const SettingsPage: React.FC = () => {
       setError(null);
       setSuccess(null);
 
+      // Validate pr_label
+      if (!settings.pr_label || !settings.pr_label.trim()) {
+        throw new Error('PR Label is required');
+      }
+
       const updatedSettings = {
         ...settings,
         github_user_whitelist: settings.github_user_whitelist
           .split(',')
           .map(u => u.trim())
-          .filter(u => u.length > 0)
+          .filter(u => u.length > 0),
+        pr_label: settings.pr_label.trim()
       };
 
       // Convert worker_concurrency to number if provided
@@ -189,11 +198,30 @@ const SettingsPage: React.FC = () => {
               </p>
             </div>
 
+            <div>
+              <label className="block text-gray-400 mb-2" htmlFor="pr_label">
+                PR Label <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                id="pr_label"
+                name="pr_label"
+                value={settings.pr_label}
+                onChange={handleSettingChange}
+                placeholder="e.g., gitfix"
+                required
+                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="mt-1 text-sm text-gray-500">
+                Label to add to PRs created by the bot. Only PRs with this label will be monitored for follow-up comments.
+              </p>
+            </div>
+
             <button
               onClick={handleSaveSettings}
-              disabled={saving}
+              disabled={saving || !settings.pr_label}
               className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
-                saving
+                saving || !settings.pr_label
                   ? 'bg-gray-600 cursor-not-allowed'
                   : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
               }`}
