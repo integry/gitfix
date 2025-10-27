@@ -19,7 +19,7 @@ const redisClient = new Redis({
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000', 10);
-const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
+const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG;
 const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';

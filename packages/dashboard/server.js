@@ -1134,6 +1134,55 @@ app.post('/api/config/pr-label', ensureAuthenticated, async (req, res) => {
   }
 });
 
+app.get('/api/config/ai-primary-tag', ensureAuthenticated, async (req, res) => {
+  try {
+    const aiPrimaryTag = await configRepoManager.loadAiPrimaryTag();
+    res.json({ ai_primary_tag: aiPrimaryTag });
+  } catch (error) {
+    console.error('Error in /api/config/ai-primary-tag GET:', error);
+    res.status(500).json({ error: 'Failed to load AI primary tag' });
+  }
+});
+
+app.post('/api/config/ai-primary-tag', ensureAuthenticated, async (req, res) => {
+  const lockKey = 'config:ai-primary-tag:lock';
+  const lockValue = `${Date.now()}-${Math.random()}`;
+  const lockTimeout = 30;
+
+  try {
+    const { ai_primary_tag } = req.body;
+
+    if (!ai_primary_tag || typeof ai_primary_tag !== 'string' || ai_primary_tag.trim() === '') {
+      return res.status(400).json({ error: 'ai_primary_tag must be a non-empty string' });
+    }
+
+    const acquired = await redisClient.set(lockKey, lockValue, {
+      NX: true,
+      EX: lockTimeout
+    });
+
+    if (!acquired) {
+      return res.status(409).json({ error: 'Configuration is being updated. Please try again.' });
+    }
+
+    try {
+      await configRepoManager.saveAiPrimaryTag(
+        ai_primary_tag.trim(),
+        `Update AI primary tag via UI by ${req.user.username}`
+      );
+      res.json({ success: true, ai_primary_tag: ai_primary_tag.trim() });
+    } finally {
+      const currentLockValue = await redisClient.get(lockKey);
+      if (currentLockValue === lockValue) {
+        await redisClient.del(lockKey);
+      }
+    }
+  } catch (error) {
+    console.error('Error in /api/config/ai-primary-tag POST:', error);
+    res.status(500).json({ error: 'Failed to update AI primary tag' });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
