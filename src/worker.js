@@ -39,6 +39,7 @@ const AI_PROCESSING_TAG = process.env.AI_PROCESSING_TAG || 'AI-processing';
 const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const DEFAULT_MODEL_NAME = process.env.DEFAULT_CLAUDE_MODEL || getDefaultModel();
+const PR_LABEL = process.env.PR_LABEL || 'gitfix';
 
 // Buffer to add AFTER the reset timestamp to ensure limit is reset
 const REQUEUE_BUFFER_MS = parseInt(process.env.REQUEUE_BUFFER_MS || (5 * 60 * 1000), 10); // 5 minutes buffer
@@ -129,6 +130,28 @@ async function processPullRequestCommentJob(job) {
             { ...retryConfigs.githubApi, correlationId },
             'get_authenticated_octokit'
         );
+
+        // Check if PR has the required label
+        const prData = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+            owner: repoOwner,
+            repo: repoName,
+            pull_number: pullRequestNumber
+        });
+        
+        const hasRequiredLabel = prData.data.labels.some(label => label.name === PR_LABEL);
+        
+        if (!hasRequiredLabel) {
+            correlatedLogger.info({
+                pullRequestNumber,
+                requiredLabel: PR_LABEL
+            }, 'PR does not have the required label, skipping follow-up comment processing');
+            
+            return { 
+                status: 'skipped', 
+                reason: 'missing_required_label',
+                pullRequestNumber 
+            };
+        }
 
         // Check if comments have already been processed
         const botUsername = process.env.GITHUB_BOT_USERNAME || 'github-actions[bot]';
