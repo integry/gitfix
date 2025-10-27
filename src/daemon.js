@@ -6,7 +6,7 @@ import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
-import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings } from './config/configRepoManager.js';
+import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings, loadAiPrimaryTag } from './config/configRepoManager.js';
 
 // Create Redis client for activity logging
 const redisClient = new Redis({
@@ -19,7 +19,7 @@ const redisClient = new Redis({
 // Configuration from environment variables
 const GITHUB_REPOS_TO_MONITOR = process.env.GITHUB_REPOS_TO_MONITOR;
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || '60000', 10);
-const AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
+let AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
 const AI_EXCLUDE_TAGS_PROCESSING = process.env.AI_EXCLUDE_TAGS_PROCESSING || 'AI-processing';
 const AI_DONE_TAG = process.env.AI_DONE_TAG || 'AI-done';
 const MODEL_LABEL_PATTERN = process.env.MODEL_LABEL_PATTERN || '^llm-claude-(.+)$';
@@ -86,6 +86,21 @@ async function loadSettingsFromConfig() {
         }
     } catch (error) {
         logger.warn({ error: error.message }, 'Failed to load settings from config, using environment variable');
+    }
+}
+
+async function loadAiPrimaryTagFromConfig() {
+    try {
+        if (process.env.CONFIG_REPO) {
+            AI_PRIMARY_TAG = await loadAiPrimaryTag();
+            logger.info({ ai_primary_tag: AI_PRIMARY_TAG }, 'Successfully loaded ai_primary_tag from config repo');
+        } else if (process.env.AI_PRIMARY_TAG) {
+            AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG;
+            logger.info({ ai_primary_tag: AI_PRIMARY_TAG }, 'Using ai_primary_tag from environment variable');
+        }
+    } catch (error) {
+        logger.warn({ error: error.message }, 'Failed to load ai_primary_tag from config, using default or environment variable');
+        AI_PRIMARY_TAG = process.env.AI_PRIMARY_TAG || 'AI';
     }
 }
 
@@ -777,6 +792,7 @@ async function resetIssueLabels() {
 async function startDaemon(options = {}) {
     await loadReposFromConfig();
     await loadSettingsFromConfig();
+    await loadAiPrimaryTagFromConfig();
     await detectBotUsername();
 
     const repos = getRepos();
@@ -852,6 +868,7 @@ async function startDaemon(options = {}) {
             if (process.env.CONFIG_REPO) {
                 await loadReposFromConfig();
                 await loadSettingsFromConfig();
+                await loadAiPrimaryTagFromConfig();
             }
         } catch (error) {
             logger.error({ error: error.message }, 'Failed to reload config');

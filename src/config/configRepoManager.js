@@ -199,7 +199,7 @@ export async function loadPrLabel() {
         await cloneOrPullConfigRepo();
         
         const config = await fs.readJson(CONFIG_FILE_PATH);
-        const prLabel = config.pr_label || process.env.PR_LABEL || 'gitfix';
+        const prLabel = config.pr_label !== undefined ? config.pr_label : (process.env.PR_LABEL || 'gitfix');
         
         logger.info({ pr_label: prLabel }, 'Successfully loaded PR label');
         return prLabel;
@@ -278,7 +278,7 @@ export async function loadAiPrimaryTag() {
         await cloneOrPullConfigRepo();
         
         const config = await fs.readJson(CONFIG_FILE_PATH);
-        const aiPrimaryTag = config.ai_primary_tag || process.env.AI_PRIMARY_TAG || 'AI';
+        const aiPrimaryTag = config.ai_primary_tag !== undefined ? config.ai_primary_tag : (process.env.AI_PRIMARY_TAG || 'AI');
         
         logger.info({ ai_primary_tag: aiPrimaryTag }, 'Successfully loaded AI primary tag');
         return aiPrimaryTag;
