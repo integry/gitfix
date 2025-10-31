@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { getQueueStats } from '../api/gitfixApi';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,6 +14,7 @@ interface NavItem {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
+  const [activeTaskCount, setActiveTaskCount] = useState<number>(0);
 
   const navigation: NavItem[] = [
     { name: 'Dashboard', href: '/', icon: HomeIcon },
@@ -23,6 +25,22 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   ];
 
   const isActive = (path: string): boolean => location.pathname === path;
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const data = await getQueueStats();
+        setActiveTaskCount(data.active || 0);
+      } catch (err) {
+        console.error('Error fetching queue stats for layout:', err);
+        setActiveTaskCount(0);
+      }
+    };
+
+    fetchStats();
+    const interval = setInterval(fetchStats, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="flex min-h-screen bg-gray-900">
@@ -44,6 +62,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             >
               <item.icon className="w-5 h-5 mr-3" />
               {item.name}
+              {item.name === 'Tasks' && activeTaskCount > 0 && (
+                <span className="ml-auto inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-500 text-xs font-semibold text-white">
+                  {activeTaskCount}
+                </span>
+              )}
             </Link>
           ))}
         </nav>

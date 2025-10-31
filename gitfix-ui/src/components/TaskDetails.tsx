@@ -20,6 +20,7 @@ const TaskDetails: React.FC = () => {
   const logContentRef = useRef<HTMLPreElement | null>(null);
   const [liveDetails, setLiveDetails] = useState<{ events: any[]; todos: any[]; currentTask: any }>({ events: [], todos: [], currentTask: null });
   const [eventsCollapsed, setEventsCollapsed] = useState<boolean>(true);
+  const [lastThought, setLastThought] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -92,6 +93,15 @@ const TaskDetails: React.FC = () => {
       return () => clearInterval(interval);
     }
   }, [taskId, history]);
+
+  useEffect(() => {
+    if (liveDetails.events.length > 0) {
+      const lastThoughtEvent = [...liveDetails.events].reverse().find(e => e.type === 'thought');
+      setLastThought(lastThoughtEvent?.content ?? null);
+    } else {
+      setLastThought(null);
+    }
+  }, [liveDetails]);
 
   useEffect(() => {
     if (selectedLogFile && searchQuery) {
@@ -394,9 +404,9 @@ const TaskDetails: React.FC = () => {
               </span>
               <span className="text-sm font-normal text-gray-400">({liveDetails.events.length} events)</span>
             </h4>
-            {eventsCollapsed && liveDetails.currentTask && (
+            {eventsCollapsed && lastThought && (
               <div className="text-sm text-gray-300 italic">
-                Currently: {liveDetails.currentTask}
+                Thinking: {lastThought.substring(0, 100)}{lastThought.length > 100 ? '...' : ''}
               </div>
             )}
           </div>

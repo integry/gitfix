@@ -157,3 +157,60 @@ export const fetchLogFile = async (logFilePath) => {
   await handleApiResponse(response);
   return response.text();
 };
+
+export const getPrLabel = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/pr-label`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updatePrLabel = async (prLabel) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/pr-label`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pr_label: prLabel }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const getAiPrimaryTag = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/ai-primary-tag`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updateAiPrimaryTag = async (aiPrimaryTag) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/ai-primary-tag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ai_primary_tag: aiPrimaryTag }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const getPrimaryProcessingLabels = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/config/primary-processing-labels`, {
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};
+
+export const updatePrimaryProcessingLabels = async (primaryLabels) => {
+  const response = await fetch(`${API_BASE_URL}/api/config/primary-processing-labels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ primary_processing_labels: primaryLabels }),
+    credentials: 'include'
+  });
+  await handleApiResponse(response);
+  return response.json();
+};

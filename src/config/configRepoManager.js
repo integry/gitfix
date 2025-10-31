@@ -16,11 +16,17 @@ export async function cloneOrPullConfigRepo() {
         if (await fs.pathExists(LOCAL_CONFIG_PATH)) {
             const git = simpleGit(LOCAL_CONFIG_PATH);
             try {
-                await git.pull();
-                logger.debug('Config repository pulled successfully');
+                // Update remote URL with fresh token before pulling
+                await git.remote(['set-url', 'origin', authenticatedUrl]);
+                // Fetch latest changes and reset to match remote (discard any local changes)
+                // This ensures the local config always matches the remote
+                await git.fetch('origin', 'main');
+                await git.reset(['--hard', 'origin/main']);
+                logger.info('Config repository updated successfully');
             } catch (pullError) {
-                // If pull fails (e.g., no remote branch yet), that's okay - we'll handle it in ensureConfigRepoExists
-                logger.debug({ error: pullError.message }, 'Pull failed, repository may be empty');
+                // If pull fails (e.g., no remote branch yet, auth issues, conflicts), log a warning
+                // but continue - we'll use the existing local config
+                logger.warn({ error: pullError.message }, 'Failed to pull config repository, using local version. Check authentication or network connectivity.');
             }
         } else {
             try {
@@ -194,6 +200,53 @@ export async function loadSettings() {
     }
 }
 
+export async function loadPrLabel() {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        const prLabel = config.pr_label !== undefined ? config.pr_label : (process.env.PR_LABEL || 'gitfix');
+        
+        logger.info({ pr_label: prLabel }, 'Successfully loaded PR label');
+        return prLabel;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to load PR label from config');
+        throw error;
+    }
+}
+
+export async function savePrLabel(prLabel, commitMessage = 'Update PR label via UI') {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        config.pr_label = prLabel;
+        
+        await fs.writeJson(CONFIG_FILE_PATH, config, { spaces: 2 });
+
+        const git = simpleGit(LOCAL_CONFIG_PATH);
+
+        try {
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+        } catch (e) {
+        }
+
+        await git.add('config.json');
+        await git.commit(commitMessage);
+
+        const authToken = await getGitHubInstallationToken();
+        const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
+        await git.push(authenticatedUrl, 'main');
+        
+        logger.info({ pr_label: prLabel }, 'Successfully saved and pushed PR label');
+        return true;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to save PR label');
+        throw error;
+    }
+}
+
 export async function saveSettings(settings, commitMessage = 'Update settings via UI') {
     try {
         await cloneOrPullConfigRepo();
@@ -222,6 +275,112 @@ export async function saveSettings(settings, commitMessage = 'Update settings vi
         return true;
     } catch (error) {
         logger.error({ error: error.message }, 'Failed to save settings');
+        throw error;
+    }
+}
+
+export async function loadAiPrimaryTag() {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        const aiPrimaryTag = config.ai_primary_tag !== undefined ? config.ai_primary_tag : (process.env.AI_PRIMARY_TAG || 'AI');
+        
+        logger.info({ ai_primary_tag: aiPrimaryTag }, 'Successfully loaded AI primary tag');
+        return aiPrimaryTag;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to load AI primary tag from config');
+        throw error;
+    }
+}
+
+export async function saveAiPrimaryTag(aiPrimaryTag, commitMessage = 'Update AI primary tag via UI') {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        config.ai_primary_tag = aiPrimaryTag;
+        
+        await fs.writeJson(CONFIG_FILE_PATH, config, { spaces: 2 });
+
+        const git = simpleGit(LOCAL_CONFIG_PATH);
+
+        try {
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+        } catch (e) {
+        }
+
+        await git.add('config.json');
+        await git.commit(commitMessage);
+
+        const authToken = await getGitHubInstallationToken();
+        const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
+        await git.push(authenticatedUrl, 'main');
+        
+        logger.info({ ai_primary_tag: aiPrimaryTag }, 'Successfully saved and pushed AI primary tag');
+        return true;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to save AI primary tag');
+        throw error;
+    }
+}
+
+export async function loadPrimaryProcessingLabels() {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        let primaryLabels = config.primary_processing_labels;
+        
+        if (primaryLabels && Array.isArray(primaryLabels)) {
+            logger.info({ primary_processing_labels: primaryLabels }, 'Successfully loaded primary processing labels');
+            return primaryLabels;
+        }
+        
+        const envLabels = process.env.PRIMARY_PROCESSING_LABELS;
+        if (envLabels) {
+            primaryLabels = envLabels.split(',').map(l => l.trim()).filter(l => l);
+            logger.info({ primary_processing_labels: primaryLabels }, 'Using primary processing labels from environment');
+            return primaryLabels;
+        }
+        
+        logger.info('No primary processing labels found, using default: [AI]');
+        return ['AI'];
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to load primary processing labels from config');
+        throw error;
+    }
+}
+
+export async function savePrimaryProcessingLabels(primaryLabels, commitMessage = 'Update primary processing labels via UI') {
+    try {
+        await cloneOrPullConfigRepo();
+        
+        const config = await fs.readJson(CONFIG_FILE_PATH);
+        config.primary_processing_labels = Array.isArray(primaryLabels) ? primaryLabels : primaryLabels.split(',').map(l => l.trim()).filter(l => l);
+        
+        await fs.writeJson(CONFIG_FILE_PATH, config, { spaces: 2 });
+
+        const git = simpleGit(LOCAL_CONFIG_PATH);
+
+        try {
+            await git.addConfig('user.email', 'gitfix@example.com');
+            await git.addConfig('user.name', 'GitFix Bot');
+        } catch (e) {
+        }
+
+        await git.add('config.json');
+        await git.commit(commitMessage);
+
+        const authToken = await getGitHubInstallationToken();
+        const authenticatedUrl = CONFIG_REPO_URL.replace('https://', `https://x-access-token:${authToken}@`);
+        await git.push(authenticatedUrl, 'main');
+        
+        logger.info({ primary_processing_labels: config.primary_processing_labels }, 'Successfully saved and pushed primary processing labels');
+        return true;
+    } catch (error) {
+        logger.error({ error: error.message }, 'Failed to save primary processing labels');
         throw error;
     }
 }
