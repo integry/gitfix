@@ -6,6 +6,7 @@ import { getAuthenticatedOctokit } from './auth/githubAuth.js';
 import { withErrorHandling, handleError, ErrorCategories } from './utils/errorHandler.js';
 import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { getStateManager, TaskStates } from './utils/workerStateManager.js';
+import { db, isEnabled as isDbEnabled } from './db/postgres.js';
 import { 
     ensureRepoCloned, 
     createWorktreeForIssue,

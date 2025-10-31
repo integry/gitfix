@@ -38,7 +38,7 @@ services:
     container_name: gitfix-daemon
     command: npm run daemon
     volumes:
-      - .:/usr/src/app
+      - ./logs:/usr/src/app/logs
       - /tmp/git-processor:/tmp/git-processor
     env_file:
       - .env
@@ -59,7 +59,8 @@ services:
     container_name: gitfix-worker
     command: npm run worker
     volumes:
-      - .:/usr/src/app
+      - ./logs:/usr/src/app/logs
+      - ./repos:/usr/src/app/repos
       - /tmp/git-processor:/tmp/git-processor
       - ~/.claude:/root/.claude
       - /var/run/docker.sock:/var/run/docker.sock
@@ -95,7 +96,6 @@ services:
     ports:
       - '4000:4000'
     volumes:
-      - .:/usr/src/app
       - ~/.claude:/root/.claude:ro
       - /tmp/claude-logs:/tmp/claude-logs:ro
     env_file:
