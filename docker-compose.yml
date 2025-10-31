@@ -11,6 +11,26 @@ services:
     networks:
       - gitfix-net
 
+  db:
+    image: postgres:15-alpine
+    container_name: gitfix-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - '5433:5432'
+    networks:
+      - gitfix-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   daemon:
     build:
       context: .
@@ -25,7 +45,10 @@ services:
     environment:
       - GITHUB_BOT_USERNAME=gitfixio[bot]
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      db:
+        condition: service_healthy
     networks:
       - gitfix-net
 
@@ -44,7 +67,10 @@ services:
     env_file:
       - .env
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      db:
+        condition: service_healthy
     networks:
       - gitfix-net
 
@@ -77,7 +103,10 @@ services:
     environment:
       - CONFIG_REPO_PATH=/tmp/config_repo
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      db:
+        condition: service_healthy
     networks:
       - gitfix-net
 
@@ -87,3 +116,4 @@ networks:
 
 volumes:
   redis_data:
+  postgres_data:

@@ -360,7 +360,7 @@ ${commentHistory}
             number: pullRequestNumber, 
             repoOwner, 
             repoName 
-        }, 'pr_comment', correlationId);
+        }, 'pr_comment', correlationId, taskId);
 
         await createLogFiles(claudeResult, { 
             number: pullRequestNumber, 
@@ -577,7 +577,7 @@ The job has been automatically rescheduled and will restart ${readableResetTime}
                         number: pullRequestNumber, 
                         repoOwner, 
                         repoName 
-                    }, 'pr_comment', correlationId);
+                    }, 'pr_comment', correlationId, taskId);
                     correlatedLogger.info({
                         correlationId,
                         pullRequestNumber

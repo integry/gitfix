@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import logger from './logger.js';
+import { db, isEnabled as isDbEnabled } from '../db/postgres.js';
 
 // Redis configuration
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
@@ -18,8 +19,9 @@ const connectionOptions = {
  * @param {Object} issueRef - Issue reference
  * @param {string} jobType - Type of job (issue or pr_comment)
  * @param {string} correlationId - Correlation ID for tracking
+ * @param {string} taskId - Task identifier for database persistence
  */
-export async function recordLLMMetrics(claudeResult, issueRef, jobType = 'issue', correlationId) {
+export async function recordLLMMetrics(claudeResult, issueRef, jobType = 'issue', correlationId, taskId = null) {
     const metricsRedis = new Redis(connectionOptions);
     
     try {
@@ -143,6 +145,72 @@ export async function recordLLMMetrics(claudeResult, issueRef, jobType = 'issue'
             executionTimeSec,
             numTurns
         }, 'LLM metrics recorded');
+        
+        if (isDbEnabled && db && taskId) {
+            try {
+                const executionData = {
+                    task_id: taskId,
+                    session_id: sessionId,
+                    conversation_id: conversationId,
+                    start_time: new Date(Date.now() - executionTimeMs).toISOString(),
+                    end_time: new Date().toISOString(),
+                    duration_ms: executionTimeMs,
+                    model_name: model,
+                    success: success,
+                    num_turns: numTurns,
+                    cost_usd: costUsd,
+                    error_message: !success ? (claudeResult?.error || 'Unknown error') : null,
+                    prompt_length: null,
+                    output_length: null
+                };
+                
+                const [insertedExecution] = await db('llm_executions')
+                    .insert(executionData)
+                    .returning('execution_id');
+                
+                const executionId = insertedExecution.execution_id;
+                
+                if (claudeResult.conversationLog && Array.isArray(claudeResult.conversationLog)) {
+                    const detailsArray = [];
+                    claudeResult.conversationLog.forEach((step, index) => {
+                        const detail = {
+                            execution_id: executionId,
+                            sequence_number: index,
+                            event_timestamp: step.timestamp || new Date().toISOString(),
+                            event_type: step.type || 'unknown',
+                            content: step.content ? JSON.stringify(step.content) : null,
+                            duration_ms: step.duration || null,
+                            token_count_input: step.inputTokens || null,
+                            token_count_output: step.outputTokens || null,
+                            cost_usd: step.cost || null,
+                            is_error: step.isError || false,
+                            tool_name: step.toolName || null,
+                            tool_input: step.toolInput ? JSON.stringify(step.toolInput) : null,
+                            tool_use_id: step.toolUseId || null,
+                            metadata: step.metadata ? JSON.stringify(step.metadata) : null
+                        };
+                        detailsArray.push(detail);
+                    });
+                    
+                    if (detailsArray.length > 0) {
+                        await db('llm_execution_details').insert(detailsArray);
+                    }
+                }
+                
+                logger.debug({
+                    correlationId,
+                    taskId,
+                    executionId
+                }, 'LLM metrics persisted to database');
+            } catch (error) {
+                logger.error({
+                    error: error.message,
+                    stack: error.stack,
+                    correlationId,
+                    taskId
+                }, 'Failed to persist LLM metrics to database');
+            }
+        }
         
     } catch (error) {
         logger.error({
