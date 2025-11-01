@@ -316,6 +316,28 @@ console.log(config.github.appId);
 console.log(config.logging.level);
 ```
 
+## Web Management UI
+
+GitFix includes a React-based web dashboard for monitoring and managing the system. The UI provides:
+
+- **Real-time Monitoring**: View system status, worker health, Redis connection, and GitHub authentication
+- **Queue Metrics**: Track active, waiting, completed, and failed tasks
+- **Auto-refresh**: Dashboard updates every 5 seconds
+- **Responsive Design**: Works on desktop and mobile devices
+
+### Accessing the UI
+
+When using Docker Compose, the UI is available at `http://localhost:5173`
+
+For development:
+```bash
+cd gitfix-ui
+npm install
+npm run dev
+```
+
+See [`gitfix-ui/README.md`](gitfix-ui/README.md) and [`docs/WEB_UI_INTEGRATION.md`](docs/WEB_UI_INTEGRATION.md) for more details.
+
 ## Docker Compose Setup
 
 The project includes a complete Docker Compose configuration for running all services in containers. This simplifies development and deployment by managing GitFix, Redis, and the UI in a unified environment.
