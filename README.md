@@ -348,6 +348,56 @@ These commands use the `scripts/compose.sh` script which wraps Docker Compose op
 
 All services are configured in `docker-compose.yml` with proper networking and volume management.
 
+## Web UI
+
+GitFix includes a React-based web management interface for monitoring and controlling the system. The UI provides real-time visibility into system health, worker status, and task queue metrics.
+
+### Features
+
+- **System Status Monitoring**: Real-time status of daemon, workers, Redis connection, and GitHub authentication
+- **Task Queue Statistics**: View active, waiting, completed, and failed job counts
+- **Task List**: Browse and monitor all tasks with filtering and search capabilities
+- **Task Details**: View detailed information about individual tasks and their execution
+- **Repository Management**: Monitor configured repositories and their processing status
+- **Auto-refresh**: Dashboard updates every 5 seconds for live monitoring
+
+### Running the UI
+
+#### With Docker Compose (Recommended)
+The UI is automatically started when using Docker Compose:
+
+```bash
+npm run compose:up
+```
+
+Access the UI at: http://localhost:5173
+
+#### Standalone Development Mode
+```bash
+cd gitfix-ui
+npm install
+npm run dev
+```
+
+#### Production Build
+```bash
+cd gitfix-ui
+npm run build
+```
+
+Static files will be generated in `gitfix-ui/dist/` and can be served by any web server.
+
+### UI Components
+
+- **Dashboard**: Overview of system status and queue statistics
+- **Tasks Page**: Complete task list with filtering and search
+- **Task Details**: Detailed view of individual task execution and logs
+- **Repositories Page**: Monitor configured repositories
+- **Settings Page**: System configuration and preferences
+- **AI Tools Page**: Manage AI model configuration and settings
+
+For detailed UI integration information, see `docs/WEB_UI_INTEGRATION.md`.
+
 ## Redis Setup
 
 The task queue requires Redis. Install and start Redis:
