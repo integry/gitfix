@@ -316,6 +316,40 @@ console.log(config.github.appId);
 console.log(config.logging.level);
 ```
 
+## Web Management UI
+
+GitFix includes a web-based management interface for monitoring and managing the system. The UI is a React application built with Vite that provides real-time visibility into system operations.
+
+### Features
+
+- **System Status Monitoring**: Real-time status of daemon, workers, Redis connection, and GitHub authentication
+- **Task Queue Statistics**: View active, waiting, completed, and failed job counts
+- **Auto-refresh**: Dashboard updates every 5 seconds
+- **Responsive Design**: Works on desktop and mobile devices
+
+### Running the UI
+
+The UI can be run standalone or as part of the Docker Compose stack:
+
+**Standalone Development:**
+```bash
+cd gitfix-ui
+npm install
+npm run dev
+```
+Access at: http://localhost:5173
+
+**Production Build:**
+```bash
+cd gitfix-ui
+npm run build
+```
+
+**With Docker Compose:**
+The UI is automatically included when running the full stack (see Docker Compose Setup below).
+
+For more details, see the [Web UI Integration Guide](docs/WEB_UI_INTEGRATION.md).
+
 ## Docker Compose Setup
 
 The project includes a complete Docker Compose configuration for running all services in containers. This simplifies development and deployment by managing GitFix, Redis, and the UI in a unified environment.
