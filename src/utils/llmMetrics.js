@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import logger from './logger.js';
+import { db, isEnabled as isDbEnabled } from '../db/postgres.js';
 
 // Redis configuration
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
@@ -18,10 +19,21 @@ const connectionOptions = {
  * @param {Object} issueRef - Issue reference
  * @param {string} jobType - Type of job (issue or pr_comment)
  * @param {string} correlationId - Correlation ID for tracking
+ * @param {string} taskId - Task identifier for database persistence
  */
-export async function recordLLMMetrics(claudeResult, issueRef, jobType = 'issue', correlationId) {
+export async function recordLLMMetrics(claudeResult, issueRef, jobType = 'issue', correlationId, taskId = null) {
     const metricsRedis = new Redis(connectionOptions);
-    
+
+    // DEBUG: Log function entry
+    logger.info({
+        correlationId,
+        taskId,
+        hasClaudeResult: !!claudeResult,
+        hasConversationLog: !!claudeResult?.conversationLog,
+        conversationLogType: Array.isArray(claudeResult?.conversationLog) ? 'array' : typeof claudeResult?.conversationLog,
+        conversationLogLength: claudeResult?.conversationLog?.length || 0
+    }, 'DEBUG: recordLLMMetrics called');
+
     try {
         const timestamp = new Date().toISOString();
         const dateKey = timestamp.split('T')[0];
@@ -143,6 +155,144 @@ export async function recordLLMMetrics(claudeResult, issueRef, jobType = 'issue'
             executionTimeSec,
             numTurns
         }, 'LLM metrics recorded');
+
+        // Debug: log conversationLog structure
+        if (claudeResult.conversationLog && claudeResult.conversationLog.length > 0) {
+            logger.info({
+                correlationId,
+                taskId,
+                conversationLogLength: claudeResult.conversationLog.length,
+                firstItemKeys: Object.keys(claudeResult.conversationLog[0]),
+                firstItemSample: JSON.stringify(claudeResult.conversationLog[0]).substring(0, 300)
+            }, 'DEBUG: ConversationLog structure');
+        }
+
+        if (isDbEnabled && db && taskId) {
+            try {
+                const executionData = {
+                    task_id: taskId,
+                    session_id: sessionId,
+                    conversation_id: conversationId,
+                    start_time: new Date(Date.now() - executionTimeMs).toISOString(),
+                    end_time: new Date().toISOString(),
+                    duration_ms: executionTimeMs,
+                    model_name: model,
+                    success: success,
+                    num_turns: numTurns,
+                    cost_usd: costUsd,
+                    error_message: !success ? (claudeResult?.error || 'Unknown error') : null,
+                    prompt_length: null,
+                    output_length: null
+                };
+                
+                const [insertedExecution] = await db('llm_executions')
+                    .insert(executionData)
+                    .returning('execution_id');
+                
+                const executionId = insertedExecution.execution_id;
+                
+                if (claudeResult.conversationLog && Array.isArray(claudeResult.conversationLog)) {
+                    // Debug: log first item structure
+                    if (claudeResult.conversationLog.length > 0) {
+                        logger.debug({
+                            correlationId,
+                            taskId,
+                            sampleKeys: Object.keys(claudeResult.conversationLog[0]),
+                            sampleItem: JSON.stringify(claudeResult.conversationLog[0]).substring(0, 200)
+                        }, 'ConversationLog sample structure');
+                    }
+
+                    // Calculate total tokens for cost distribution
+                    let totalTokens = 0;
+                    claudeResult.conversationLog.forEach((step) => {
+                        const inputTokens = step.message?.usage?.input_tokens || 0;
+                        const outputTokens = step.message?.usage?.output_tokens || 0;
+                        totalTokens += inputTokens + outputTokens;
+                    });
+
+                    const detailsArray = [];
+                    claudeResult.conversationLog.forEach((step, index) => {
+                        // Extract tool usage information from message content if it's a tool_use
+                        let toolName = null;
+                        let toolInput = null;
+                        let toolUseId = null;
+
+                        if (step.message?.content && Array.isArray(step.message.content)) {
+                            const toolUse = step.message.content.find(block => block.type === 'tool_use');
+                            if (toolUse) {
+                                toolName = toolUse.name;
+                                toolInput = toolUse.input;
+                                toolUseId = toolUse.id;
+                            }
+                        }
+
+                        // Calculate proportional cost for this message
+                        const messageTokens = (step.message?.usage?.input_tokens || 0) + (step.message?.usage?.output_tokens || 0);
+                        const messageCost = totalTokens > 0 && costUsd > 0
+                            ? (messageTokens / totalTokens) * costUsd
+                            : null;
+
+                        // Calculate duration since previous message
+                        let durationMs = null;
+                        if (index > 0 && step.timestamp && claudeResult.conversationLog[index - 1].timestamp) {
+                            const currentTime = new Date(step.timestamp).getTime();
+                            const previousTime = new Date(claudeResult.conversationLog[index - 1].timestamp).getTime();
+                            durationMs = currentTime - previousTime;
+                        }
+
+                        const detail = {
+                            execution_id: executionId,
+                            sequence_number: index,
+                            event_timestamp: step.timestamp || new Date().toISOString(),
+                            event_type: step.type || 'unknown',
+                            content: step.message ? JSON.stringify(step.message) : null,
+                            duration_ms: durationMs,
+                            token_count_input: step.message?.usage?.input_tokens || null,
+                            token_count_output: step.message?.usage?.output_tokens || null,
+                            cost_usd: messageCost,
+                            is_error: step.isError || false,
+                            tool_name: toolName,
+                            tool_input: toolInput ? JSON.stringify(toolInput) : null,
+                            tool_use_id: toolUseId,
+                            metadata: step.metadata ? JSON.stringify(step.metadata) : null
+                        };
+                        detailsArray.push(detail);
+                    });
+
+                    if (detailsArray.length > 0) {
+                        // Debug: log first detail before insert
+                        logger.info({
+                            correlationId,
+                            taskId,
+                            sampleDetail: {
+                                sequence: detailsArray[0].sequence_number,
+                                type: detailsArray[0].event_type,
+                                hasContent: !!detailsArray[0].content,
+                                contentPreview: detailsArray[0].content?.substring(0, 100),
+                                inputTokens: detailsArray[0].token_count_input,
+                                outputTokens: detailsArray[0].token_count_output,
+                                toolName: detailsArray[0].tool_name
+                            }
+                        }, 'DEBUG: Sample detail before insert');
+
+                        await db('llm_execution_details').insert(detailsArray);
+                    }
+                }
+                
+                logger.debug({
+                    correlationId,
+                    taskId,
+                    executionId
+                }, 'LLM metrics persisted to database');
+            } catch (error) {
+                logger.error({
+                    error: error.message,
+                    stack: error.stack,
+                    correlationId,
+                    taskId
+                }, 'Failed to persist LLM metrics to database');
+            }
+        }
         
     } catch (error) {
         logger.error({

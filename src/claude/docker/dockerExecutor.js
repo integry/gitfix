@@ -17,6 +17,7 @@ export function executeDockerCommand(command, args, options = {}) {
         let timedOut = false;
         let sessionIdDetected = false;
         let containerIdDetected = false;
+        const messageTimestamps = new Map(); // Track timestamps for conversation messages
 
         const timeoutHandle = setTimeout(() => {
             timedOut = true;
@@ -58,21 +59,30 @@ export function executeDockerCommand(command, args, options = {}) {
 
         child.stdout.on('data', (data) => {
             const chunk = data.toString();
+            const receiveTimestamp = new Date().toISOString();
             stdout += chunk;
-            
-            if (!sessionIdDetected && onSessionId) {
-                const lines = chunk.split('\n');
-                for (const line of lines) {
-                    if (line.trim()) {
-                        try {
-                            const jsonLine = JSON.parse(line);
-                            if (jsonLine.session_id) {
-                                sessionIdDetected = true;
-                                onSessionId(jsonLine.session_id, jsonLine.conversation_id);
-                                break;
-                            }
-                        } catch (e) {
+
+            // Parse lines and capture timestamps
+            const lines = chunk.split('\n');
+            for (const line of lines) {
+                if (line.trim()) {
+                    try {
+                        const jsonLine = JSON.parse(line);
+
+                        // Capture timestamp for conversation messages
+                        if (jsonLine.type === 'assistant' || jsonLine.type === 'user') {
+                            // Use message ID as key if available, otherwise use a combination of type and content hash
+                            const messageKey = jsonLine.message?.id ||
+                                `${jsonLine.type}-${JSON.stringify(jsonLine).substring(0, 100)}`;
+                            messageTimestamps.set(messageKey, receiveTimestamp);
                         }
+
+                        if (!sessionIdDetected && onSessionId && jsonLine.session_id) {
+                            sessionIdDetected = true;
+                            onSessionId(jsonLine.session_id, jsonLine.conversation_id);
+                        }
+                    } catch (e) {
+                        // Not JSON, skip
                     }
                 }
             }
@@ -93,7 +103,8 @@ export function executeDockerCommand(command, args, options = {}) {
             resolve({
                 exitCode,
                 stdout,
-                stderr
+                stderr,
+                messageTimestamps // Include captured timestamps
             });
         });
 

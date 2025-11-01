@@ -470,7 +470,7 @@ async function processGitHubIssueJob(job) {
                 }
             });
             
-            await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId);
+            await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId, taskId);
             
             correlatedLogger.info({
                 jobId,
@@ -1106,7 +1106,7 @@ The job has been automatically rescheduled and will restart ${readableResetTime}
             
             if (claudeResult) {
                 try {
-                    await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId);
+                    await recordLLMMetrics(claudeResult, issueRef, 'issue', correlationId, taskId);
                     correlatedLogger.info({
                         correlationId,
                         issueNumber: issueRef.number
