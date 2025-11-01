@@ -273,9 +273,17 @@ export async function executeClaudeCode({ worktreePath, issueRef, githubToken, c
                 try {
                     const jsonLine = JSON.parse(line);
 
-                    // Collect conversation messages
+                    // Collect conversation messages with timestamps
                     if (jsonLine.type === 'user' || jsonLine.type === 'assistant') {
-                        claudeOutput.conversationLog.push(jsonLine);
+                        // Look up timestamp captured during streaming
+                        const messageKey = jsonLine.message?.id ||
+                            `${jsonLine.type}-${JSON.stringify(jsonLine).substring(0, 100)}`;
+                        const timestamp = result.messageTimestamps?.get(messageKey);
+
+                        claudeOutput.conversationLog.push({
+                            ...jsonLine,
+                            timestamp: timestamp || new Date().toISOString() // Use captured timestamp or fallback
+                        });
 
                         // Extract model from assistant messages
                         if (jsonLine.type === 'assistant' && jsonLine.message?.model) {
