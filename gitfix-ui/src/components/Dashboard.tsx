@@ -6,14 +6,14 @@ import TaskList from './TaskList';
 const Dashboard: React.FC = () => {
   return (
     <div>
-      <h2 className="text-2xl font-semibold text-white mb-6">System Overview</h2>
+      <h2 className="text-2xl font-semibold text-brand-text-light mb-6">System Overview</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         <SystemStatus />
         <TaskQueueStats />
       </div>
       
       <div>
-        <h3 className="text-xl font-semibold text-white mb-4">Recent Tasks</h3>
+        <h3 className="text-xl font-semibold text-brand-text-light mb-4">Recent Tasks</h3>
         <TaskList
           limit={5}
           showViewAll={true}
