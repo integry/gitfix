@@ -235,30 +235,30 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="max-w-4xl">
-      <h2 className="text-white text-2xl font-semibold mb-8">Settings</h2>
+      <h2 className="text-brand-text-light text-2xl font-semibold mb-8">Settings</h2>
       
       {/* General Settings Section */}
       <div className="mb-8">
-        <h3 className="text-white text-xl font-semibold mb-4">General Settings</h3>
+        <h3 className="text-brand-text-light text-xl font-semibold mb-4">General Settings</h3>
         
         {error && (
-          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-brand-red">
             {error}
           </div>
         )}
         
         {success && (
-          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-brand-green">
             {success}
           </div>
         )}
         
         {loading ? (
-          <p className="text-gray-400">Loading settings...</p>
+          <p className="text-brand-text-dim">Loading settings...</p>
         ) : (
           <div className="space-y-4">
             <div>
-              <label className="block text-gray-400 mb-2" htmlFor="worker_concurrency">
+              <label className="block text-brand-text-dim mb-2" htmlFor="worker_concurrency">
                 Worker Concurrency
               </label>
               <input
@@ -268,7 +268,7 @@ const SettingsPage: React.FC = () => {
                 value={settings.worker_concurrency}
                 onChange={handleSettingChange}
                 placeholder="Number of concurrent workers (e.g., 2)"
-                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-3 py-2 bg-brand-component text-brand-text-light border border-brand-border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               <p className="mt-1 text-sm text-gray-500">
                 Controls how many issues can be processed simultaneously
@@ -276,7 +276,7 @@ const SettingsPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-gray-400 mb-2" htmlFor="github_user_whitelist">
+              <label className="block text-brand-text-dim mb-2" htmlFor="github_user_whitelist">
                 GitHub User Whitelist
               </label>
               <textarea
@@ -286,7 +286,7 @@ const SettingsPage: React.FC = () => {
                 onChange={handleSettingChange}
                 rows={3}
                 placeholder="Comma-separated list of GitHub usernames (e.g., user1, user2)"
-                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+                className="w-full px-3 py-2 bg-brand-component text-brand-text-light border border-brand-border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
               />
               <p className="mt-1 text-sm text-gray-500">
                 Only process issues from these GitHub users. Leave empty to process from all users.
@@ -296,10 +296,10 @@ const SettingsPage: React.FC = () => {
             <button
               onClick={handleSaveSettings}
               disabled={saving}
-              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+              className={`px-6 py-3 text-brand-text-light font-medium rounded-md transition-colors ${
                 saving
                   ? 'bg-gray-600 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+                  : 'bg-brand-accent hover:bg-brand-accent-hover cursor-pointer'
               }`}
             >
               {saving ? 'Saving...' : 'Save Settings'}
@@ -310,30 +310,30 @@ const SettingsPage: React.FC = () => {
 
       {/* PR Label Section */}
       <div className="mb-8">
-        <h3 className="text-white text-xl font-semibold mb-4">PR Label</h3>
-        <p className="text-gray-400 mb-4">
+        <h3 className="text-brand-text-light text-xl font-semibold mb-4">PR Label</h3>
+        <p className="text-brand-text-dim mb-4">
           Configure the label that will be automatically added to all PRs created by GitFix. 
           Only PRs with this label will be monitored for follow-up comments.
         </p>
         
         {prLabelError && (
-          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-brand-red">
             {prLabelError}
           </div>
         )}
         
         {prLabelSuccess && (
-          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-brand-green">
             {prLabelSuccess}
           </div>
         )}
         
         {prLabelLoading ? (
-          <p className="text-gray-400">Loading PR label...</p>
+          <p className="text-brand-text-dim">Loading PR label...</p>
         ) : (
           <div className="space-y-4">
             <div>
-              <label className="block text-gray-400 mb-2" htmlFor="pr_label">
+              <label className="block text-brand-text-dim mb-2" htmlFor="pr_label">
                 PR Label <span className="text-red-500">*</span>
               </label>
               <input
@@ -344,7 +344,7 @@ const SettingsPage: React.FC = () => {
                 onChange={handleSettingChange}
                 placeholder="e.g., gitfix"
                 required
-                className="w-full px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-3 py-2 bg-brand-component text-brand-text-light border border-brand-border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               <p className="mt-1 text-sm text-gray-500">
                 This label will be added to all PRs created by GitFix and used to filter follow-up comments
@@ -354,10 +354,10 @@ const SettingsPage: React.FC = () => {
             <button
               onClick={handleSavePrLabel}
               disabled={prLabelSaving || !settings.pr_label || settings.pr_label.trim() === ''}
-              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+              className={`px-6 py-3 text-brand-text-light font-medium rounded-md transition-colors ${
                 prLabelSaving || !settings.pr_label || settings.pr_label.trim() === ''
                   ? 'bg-gray-600 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+                  : 'bg-brand-accent hover:bg-brand-accent-hover cursor-pointer'
               }`}
             >
               {prLabelSaving ? 'Saving...' : 'Save PR Label'}
@@ -368,27 +368,27 @@ const SettingsPage: React.FC = () => {
 
       {/* Primary Processing Labels Section */}
       <div className="mb-8">
-        <h3 className="text-white text-xl font-semibold mb-4">Primary Processing Labels</h3>
-        <p className="text-gray-400 mb-4">
+        <h3 className="text-brand-text-light text-xl font-semibold mb-4">Primary Processing Labels</h3>
+        <p className="text-brand-text-dim mb-4">
           Configure multiple primary labels that GitFix uses to identify issues for processing. 
           Issues with any of these labels will be automatically processed. State labels (-processing, -done) 
           are dynamically generated based on the specific label found on each issue.
         </p>
         
         {primaryLabelsError && (
-          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-brand-red">
             {primaryLabelsError}
           </div>
         )}
         
         {primaryLabelsSuccess && (
-          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-brand-green">
             {primaryLabelsSuccess}
           </div>
         )}
         
         {primaryLabelsLoading ? (
-          <p className="text-gray-400">Loading primary processing labels...</p>
+          <p className="text-brand-text-dim">Loading primary processing labels...</p>
         ) : (
           <>
             <div className="flex gap-4 mb-4">
@@ -397,12 +397,12 @@ const SettingsPage: React.FC = () => {
                 onChange={(e) => setNewPrimaryLabel(e.target.value)}
                 onKeyPress={(e: React.KeyboardEvent) => e.key === 'Enter' && handleAddPrimaryLabel()}
                 placeholder="Add a label (e.g., AI, gitfix)"
-                className="flex-1 px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="flex-1 px-3 py-2 bg-brand-component text-brand-text-light border border-brand-border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               <button
                 onClick={handleAddPrimaryLabel}
                 disabled={!newPrimaryLabel || primaryLabels.includes(newPrimaryLabel)}
-                className={`px-4 py-2 text-white font-medium rounded-md transition-colors ${
+                className={`px-4 py-2 text-brand-text-light font-medium rounded-md transition-colors ${
                   !newPrimaryLabel || primaryLabels.includes(newPrimaryLabel)
                     ? 'bg-gray-600 cursor-not-allowed'
                     : 'bg-green-600 hover:bg-green-700 cursor-pointer'
@@ -416,19 +416,19 @@ const SettingsPage: React.FC = () => {
               {primaryLabels.map(label => (
                 <div
                   key={label}
-                  className="flex items-center justify-between px-4 py-3 bg-gray-700 rounded-md"
+                  className="flex items-center justify-between px-4 py-3 bg-brand-border rounded-md"
                 >
-                  <span className="font-mono text-white">{label}</span>
+                  <span className="font-mono text-brand-text-light">{label}</span>
                   <button
                     onClick={() => handleRemovePrimaryLabel(label)}
-                    className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-white rounded-md font-medium transition-colors"
+                    className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-brand-text-light rounded-md font-medium transition-colors"
                   >
                     Remove
                   </button>
                 </div>
               ))}
               {primaryLabels.length === 0 && (
-                <p className="text-gray-400 text-center py-8">
+                <p className="text-brand-text-dim text-center py-8">
                   No labels configured. Add at least one label to enable issue processing.
                 </p>
               )}
@@ -441,10 +441,10 @@ const SettingsPage: React.FC = () => {
             <button
               onClick={handleSavePrimaryProcessingLabels}
               disabled={primaryLabelsSaving || primaryLabels.length === 0}
-              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+              className={`px-6 py-3 text-brand-text-light font-medium rounded-md transition-colors ${
                 primaryLabelsSaving || primaryLabels.length === 0
                   ? 'bg-gray-600 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+                  : 'bg-brand-accent hover:bg-brand-accent-hover cursor-pointer'
               }`}
             >
               {primaryLabelsSaving ? 'Saving...' : 'Save Primary Processing Labels'}
@@ -455,26 +455,26 @@ const SettingsPage: React.FC = () => {
 
       {/* Follow-up Keywords Section */}
       <div>
-        <h3 className="text-white text-xl font-semibold mb-4">Follow-up Keywords</h3>
-        <p className="text-gray-400 mb-4">
+        <h3 className="text-brand-text-light text-xl font-semibold mb-4">Follow-up Keywords</h3>
+        <p className="text-brand-text-dim mb-4">
           When these keywords are found in follow-up comments on issues with the configured AI primary label, 
           the bot will process them automatically.
         </p>
         
         {keywordsError && (
-          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+          <div className="mb-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-brand-red">
             {keywordsError}
           </div>
         )}
         
         {keywordsSuccess && (
-          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+          <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-brand-green">
             {keywordsSuccess}
           </div>
         )}
         
         {keywordsLoading ? (
-          <p className="text-gray-400">Loading keywords...</p>
+          <p className="text-brand-text-dim">Loading keywords...</p>
         ) : (
           <>
             <div className="flex gap-4 mb-4">
@@ -483,12 +483,12 @@ const SettingsPage: React.FC = () => {
                 onChange={(e) => setNewKeyword(e.target.value)}
                 onKeyPress={(e: React.KeyboardEvent) => e.key === 'Enter' && handleAddKeyword()}
                 placeholder="Add a keyword (e.g., GITFIX)"
-                className="flex-1 px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="flex-1 px-3 py-2 bg-brand-component text-brand-text-light border border-brand-border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               <button
                 onClick={handleAddKeyword}
                 disabled={!newKeyword || keywords.includes(newKeyword)}
-                className={`px-4 py-2 text-white font-medium rounded-md transition-colors ${
+                className={`px-4 py-2 text-brand-text-light font-medium rounded-md transition-colors ${
                   !newKeyword || keywords.includes(newKeyword)
                     ? 'bg-gray-600 cursor-not-allowed'
                     : 'bg-green-600 hover:bg-green-700 cursor-pointer'
@@ -502,19 +502,19 @@ const SettingsPage: React.FC = () => {
               {keywords.map(keyword => (
                 <div
                   key={keyword}
-                  className="flex items-center justify-between px-4 py-3 bg-gray-700 rounded-md"
+                  className="flex items-center justify-between px-4 py-3 bg-brand-border rounded-md"
                 >
-                  <span className="font-mono text-white">{keyword}</span>
+                  <span className="font-mono text-brand-text-light">{keyword}</span>
                   <button
                     onClick={() => handleRemoveKeyword(keyword)}
-                    className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-white rounded-md font-medium transition-colors"
+                    className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-brand-text-light rounded-md font-medium transition-colors"
                   >
                     Remove
                   </button>
                 </div>
               ))}
               {keywords.length === 0 && (
-                <p className="text-gray-400 text-center py-8">
+                <p className="text-brand-text-dim text-center py-8">
                   No keywords configured. Add a keyword to enable follow-up comment processing.
                 </p>
               )}
@@ -523,10 +523,10 @@ const SettingsPage: React.FC = () => {
             <button
               onClick={handleSaveKeywords}
               disabled={keywordsSaving || keywords.length === 0}
-              className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+              className={`px-6 py-3 text-brand-text-light font-medium rounded-md transition-colors ${
                 keywordsSaving || keywords.length === 0
                   ? 'bg-gray-600 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+                  : 'bg-brand-accent hover:bg-brand-accent-hover cursor-pointer'
               }`}
             >
               {keywordsSaving ? 'Saving...' : 'Save Keywords'}

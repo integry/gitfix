@@ -91,16 +91,16 @@ const RepositoriesPage: React.FC = () => {
   if (loading && repos.length === 0) {
     return (
       <div>
-        <h2 className="text-white text-2xl font-semibold mb-4">Repositories</h2>
-        <p className="text-gray-400">Loading repositories...</p>
+        <h2 className="text-brand-text-light text-2xl font-semibold mb-4">Repositories</h2>
+        <p className="text-brand-text-dim">Loading repositories...</p>
       </div>
     );
   }
 
   return (
     <div>
-      <h2 className="text-white text-2xl font-semibold mb-4">Manage Monitored Repositories</h2>
-      <p className="text-gray-400 mb-4">
+      <h2 className="text-brand-text-light text-2xl font-semibold mb-4">Manage Monitored Repositories</h2>
+      <p className="text-brand-text-dim mb-4">
         Add repositories to monitor, enable/disable them, or remove them from the list. Changes will be automatically picked up by the daemon within 5 minutes.
       </p>
       
@@ -110,7 +110,7 @@ const RepositoriesPage: React.FC = () => {
           value={newRepo}
           onChange={(e) => setNewRepo(e.target.value)}
           placeholder="owner/repo or select from list"
-          className="flex-1 px-3 py-2 bg-gray-800 text-white border border-gray-700 rounded-md font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          className="flex-1 px-3 py-2 bg-brand-component text-brand-text-light border border-brand-border rounded-md font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
         />
         <datalist id="available-repos">
           {availableRepos
@@ -120,7 +120,7 @@ const RepositoriesPage: React.FC = () => {
         <button
           onClick={handleAddRepo}
           disabled={!newRepo || repos.some(r => r.name === newRepo)}
-          className={`px-4 py-2 text-white font-medium rounded-md transition-colors ${
+          className={`px-4 py-2 text-brand-text-light font-medium rounded-md transition-colors ${
             !newRepo || repos.some(r => r.name === newRepo)
               ? 'bg-gray-600 cursor-not-allowed'
               : 'bg-green-600 hover:bg-green-700 cursor-pointer'
@@ -134,13 +134,13 @@ const RepositoriesPage: React.FC = () => {
         {repos.map(repo => (
           <div
             key={repo.name}
-            className="flex items-center justify-between px-4 py-3 bg-gray-700 rounded-md"
+            className="flex items-center justify-between px-4 py-3 bg-brand-border rounded-md"
           >
-            <span className={`font-mono text-white ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
+            <span className={`font-mono text-brand-text-light ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
               {repo.name}
             </span>
             <div className="flex items-center gap-4">
-              <label className="flex items-center cursor-pointer text-gray-400">
+              <label className="flex items-center cursor-pointer text-brand-text-dim">
                 <input
                   type="checkbox"
                   checked={repo.enabled}
@@ -151,7 +151,7 @@ const RepositoriesPage: React.FC = () => {
               </label>
               <button
                 onClick={() => handleRemoveRepo(repo.name)}
-                className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-white rounded-md font-medium transition-colors"
+                className="bg-red-600 hover:bg-red-700 text-xs px-3 py-1 text-brand-text-light rounded-md font-medium transition-colors"
               >
                 Remove
               </button>
@@ -159,7 +159,7 @@ const RepositoriesPage: React.FC = () => {
           </div>
         ))}
         {repos.length === 0 && (
-          <p className="text-gray-400 text-center py-8">
+          <p className="text-brand-text-dim text-center py-8">
             No repositories configured. Add a repository to get started.
           </p>
         )}
@@ -168,23 +168,23 @@ const RepositoriesPage: React.FC = () => {
       <button
         onClick={handleSave}
         disabled={saving || repos.length === 0}
-        className={`px-6 py-3 text-white font-medium rounded-md transition-colors ${
+        className={`px-6 py-3 text-brand-text-light font-medium rounded-md transition-colors ${
           saving || repos.length === 0
             ? 'bg-gray-600 cursor-not-allowed'
-            : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+            : 'bg-brand-accent hover:bg-brand-accent-hover cursor-pointer'
         }`}
       >
         {saving ? 'Saving...' : 'Save Changes'}
       </button>
       
       {error && (
-        <div className="mt-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-red-400">
+        <div className="mt-4 p-4 bg-red-900/20 border border-red-700 rounded-md text-brand-red">
           {error}
         </div>
       )}
       
       {success && (
-        <div className="mt-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-green-400">
+        <div className="mt-4 p-4 bg-green-900/20 border border-green-700 rounded-md text-brand-green">
           {success}
         </div>
       )}

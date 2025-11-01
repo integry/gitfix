@@ -261,18 +261,18 @@ const TaskDetails: React.FC = () => {
     });
   };
 
-  if (loading) return <div className="text-gray-400">Loading task details...</div>;
-  if (error) return <div className="text-red-400">Error loading task details: {error}</div>;
-  if (!history || history.length === 0) return <div className="text-gray-400">No history found for task {taskId}</div>;
+  if (loading) return <div className="text-brand-text-dim">Loading task details...</div>;
+  if (error) return <div className="text-brand-red">Error loading task details: {error}</div>;
+  if (!history || history.length === 0) return <div className="text-brand-text-dim">No history found for task {taskId}</div>;
 
   const historyItemWithPaths = history.find(item => item.promptPath || item.logsPath);
 
   return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-800">
+    <div className="border border-brand-border rounded-lg p-6 bg-brand-component">
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-xl font-semibold text-white break-all">Task History: {taskId}</h3>
+        <h3 className="text-xl font-semibold text-brand-text-light break-all">Task History: {taskId}</h3>
         <button
-          className="px-4 py-2 bg-gray-700 text-gray-200 rounded-md hover:bg-gray-600 transition-colors"
+          className="px-4 py-2 bg-brand-border text-brand-text-light rounded-md hover:bg-brand-border/70 transition-colors"
           onClick={() => navigate('/tasks')}
         >
           Back to Tasks
@@ -280,26 +280,26 @@ const TaskDetails: React.FC = () => {
       </div>
 
       {taskInfo && (
-        <div className="mb-6 p-4 bg-gray-700/50 rounded-md border border-gray-600">
+        <div className="mb-6 p-4 bg-brand-border/50 rounded-md border border-brand-border">
           <div className="flex items-center gap-3">
-            <span className="text-gray-300 font-semibold">Repository:</span>
+            <span className="text-brand-text-light font-semibold">Repository:</span>
             <a 
               href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-400 hover:text-blue-300 underline"
+              className="text-brand-accent hover:text-brand-accent-hover underline"
             >
               {taskInfo.repoOwner}/{taskInfo.repoName}
             </a>
             {taskInfo.type === 'pr-comment' && (
               <>
                 <span className="text-gray-500">•</span>
-                <span className="text-gray-300 font-semibold">Pull Request:</span>
+                <span className="text-brand-text-light font-semibold">Pull Request:</span>
                 <a 
                   href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}/pull/${taskInfo.number}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-400 hover:text-blue-300 underline"
+                  className="text-brand-accent hover:text-brand-accent-hover underline"
                 >
                   #{taskInfo.number}
                 </a>
@@ -308,12 +308,12 @@ const TaskDetails: React.FC = () => {
             {taskInfo.type === 'issue' && (
               <>
                 <span className="text-gray-500">•</span>
-                <span className="text-gray-300 font-semibold">Issue:</span>
+                <span className="text-brand-text-light font-semibold">Issue:</span>
                 <a 
                   href={`https://github.com/${taskInfo.repoOwner}/${taskInfo.repoName}/issues/${taskInfo.number}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-400 hover:text-blue-300 underline"
+                  className="text-brand-accent hover:text-brand-accent-hover underline"
                 >
                   #{taskInfo.number}
                 </a>
@@ -328,7 +328,7 @@ const TaskDetails: React.FC = () => {
           {historyItemWithPaths.promptPath && (
             <button
               onClick={() => fetchPrompt(historyItemWithPaths.promptPath)}
-              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
+              className="px-3 py-1.5 bg-brand-accent text-brand-text-light text-sm rounded-md hover:bg-brand-accent-hover transition-colors"
             >
               View Prompt
             </button>
@@ -336,7 +336,7 @@ const TaskDetails: React.FC = () => {
           {historyItemWithPaths.logsPath && (
             <button
               onClick={() => fetchLogFiles(historyItemWithPaths.logsPath)}
-              className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+              className="px-3 py-1.5 bg-green-600 text-brand-text-light text-sm rounded-md hover:bg-green-700 transition-colors"
             >
               View Log Files
             </button>
@@ -392,20 +392,20 @@ const TaskDetails: React.FC = () => {
       {liveDetails.events.length > 0 && history.length > 0 && (
         <div className="mb-6">
           <div
-            className="flex items-center justify-between cursor-pointer p-4 bg-gray-700/30 rounded-lg hover:bg-gray-700/50 transition-colors"
+            className="flex items-center justify-between cursor-pointer p-4 bg-brand-border/30 rounded-lg hover:bg-brand-border/50 transition-colors"
             onClick={() => setEventsCollapsed(!eventsCollapsed)}
           >
-            <h4 className="text-lg font-semibold text-white flex items-center gap-3">
+            <h4 className="text-lg font-semibold text-brand-text-light flex items-center gap-3">
               <span>{eventsCollapsed ? '▶' : '▼'}</span>
               <span>
                 {!['COMPLETED', 'FAILED'].includes(history[history.length - 1]?.state?.toUpperCase())
                   ? 'Live Event Stream'
                   : 'Execution Event Log'}
               </span>
-              <span className="text-sm font-normal text-gray-400">({liveDetails.events.length} events)</span>
+              <span className="text-sm font-normal text-brand-text-dim">({liveDetails.events.length} events)</span>
             </h4>
             {eventsCollapsed && lastThought && (
-              <div className="text-sm text-gray-300 italic">
+              <div className="text-sm text-brand-text-light italic">
                 Thinking: {lastThought.substring(0, 100)}{lastThought.length > 100 ? '...' : ''}
               </div>
             )}
@@ -414,26 +414,26 @@ const TaskDetails: React.FC = () => {
             <div className="mt-4 space-y-4">
               {liveDetails.events.map((event, index) => (
                 <div key={index} className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-lg">
+                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-brand-border flex items-center justify-center text-lg">
                     {event.type === 'thought' && '🧠'}
                     {event.type === 'tool_use' && '🛠️'}
                     {event.type === 'tool_result' && (event.isError ? '❌' : '✅')}
                   </div>
                   <div className="flex-1 pt-1">
                     {event.type === 'thought' && (
-                      <div className="text-gray-300 italic whitespace-pre-wrap">{event.content}</div>
+                      <div className="text-brand-text-light italic whitespace-pre-wrap">{event.content}</div>
                     )}
                     {event.type === 'tool_use' && (
                       <div className="text-sm">
-                        <p className="font-semibold text-gray-200">Tool: <span className="font-mono bg-gray-900 px-2 py-1 rounded">{event.toolName}</span></p>
-                        {event.input?.file_path && <p className="text-gray-400 mt-1">File: <span className="font-mono">{event.input.file_path}</span></p>}
-                        {event.input?.command && <p className="text-gray-400 mt-1">Command: <code className="bg-gray-900 p-1 rounded font-mono text-xs">{event.input.command}</code></p>}
+                        <p className="font-semibold text-brand-text-light">Tool: <span className="font-mono bg-brand-dark px-2 py-1 rounded">{event.toolName}</span></p>
+                        {event.input?.file_path && <p className="text-brand-text-dim mt-1">File: <span className="font-mono">{event.input.file_path}</span></p>}
+                        {event.input?.command && <p className="text-brand-text-dim mt-1">Command: <code className="bg-brand-dark p-1 rounded font-mono text-xs">{event.input.command}</code></p>}
                       </div>
                     )}
                     {event.type === 'tool_result' && (
-                      <div className={`text-sm p-2 rounded ${event.isError ? 'bg-red-900/20' : 'bg-gray-800/50'}`}>
-                        <p className={`font-semibold ${event.isError ? 'text-red-400' : 'text-green-400'}`}>Tool Result {event.isError ? '(Error)' : '(Success)'}</p>
-                        <pre className="whitespace-pre-wrap font-mono text-xs text-gray-400 mt-1 max-h-40 overflow-y-auto">
+                      <div className={`text-sm p-2 rounded ${event.isError ? 'bg-red-900/20' : 'bg-brand-component/50'}`}>
+                        <p className={`font-semibold ${event.isError ? 'text-brand-red' : 'text-brand-green'}`}>Tool Result {event.isError ? '(Error)' : '(Success)'}</p>
+                        <pre className="whitespace-pre-wrap font-mono text-xs text-brand-text-dim mt-1 max-h-40 overflow-y-auto">
                           {typeof event.result === 'string' ? event.result : JSON.stringify(event.result, null, 2)}
                         </pre>
                       </div>
@@ -447,93 +447,93 @@ const TaskDetails: React.FC = () => {
       )}
 
       {history.length === 0 ? (
-        <p className="text-gray-400 text-center">No history found for this task</p>
+        <p className="text-brand-text-dim text-center">No history found for this task</p>
       ) : (
         <div className="flex flex-col gap-4">
           {history.map((item, index) => (
             <div
               key={index}
-              className="border border-gray-700 rounded-md p-4 bg-gray-700/50"
+              className="border border-brand-border rounded-md p-4 bg-brand-border/50"
             >
               <div className="flex justify-between items-start mb-3">
-                <h4 className="font-semibold text-white capitalize text-lg">
+                <h4 className="font-semibold text-brand-text-light capitalize text-lg">
                   {item.event ? item.event.replace(/_/g, ' ') : item.state ? item.state.replace(/_/g, ' ') : 'Unknown Event'}
                 </h4>
-                <span className="text-sm text-gray-400">
+                <span className="text-sm text-brand-text-dim">
                   {formatDate(item.timestamp)}
                 </span>
               </div>
               
               {item.reason && (
-                <p className="text-gray-400 italic mb-2">
+                <p className="text-brand-text-dim italic mb-2">
                   {item.reason}
                 </p>
               )}
 
               {item.error && (
-                <p className="my-2 text-red-400">
+                <p className="my-2 text-brand-red">
                   Error: {item.error}
                 </p>
               )}
 
               {item.message && (
-                <p className="text-gray-300 mb-2">
+                <p className="text-brand-text-light mb-2">
                   {item.message}
                 </p>
               )}
               
               {item.metadata && (item.metadata.sessionId || item.metadata.conversationId || item.metadata.model || item.metadata.duration || item.metadata.conversationTurns || item.metadata.success !== undefined || item.metadata.pullRequest || item.metadata.githubComment) && (
                 <div className="mt-3 space-y-2">
-                  <div className="p-3 bg-gray-800 rounded-md space-y-2">
+                  <div className="p-3 bg-brand-component rounded-md space-y-2">
                     {item.metadata.sessionId && (
-                      <div className="text-sm text-gray-300">
-                        <strong>Session ID:</strong> <code className="bg-gray-900 px-2 py-1 rounded">{item.metadata.sessionId}</code>
+                      <div className="text-sm text-brand-text-light">
+                        <strong>Session ID:</strong> <code className="bg-brand-dark px-2 py-1 rounded">{item.metadata.sessionId}</code>
                       </div>
                     )}
                     {item.metadata.conversationId && (
-                      <div className="text-sm text-gray-300">
-                        <strong>Conversation ID:</strong> <code className="bg-gray-900 px-2 py-1 rounded">{item.metadata.conversationId}</code>
+                      <div className="text-sm text-brand-text-light">
+                        <strong>Conversation ID:</strong> <code className="bg-brand-dark px-2 py-1 rounded">{item.metadata.conversationId}</code>
                       </div>
                     )}
                     {item.metadata.model && (
-                      <div className="text-sm text-gray-300">
-                        <strong>Model:</strong> <span className="text-blue-400">{item.metadata.model}</span>
+                      <div className="text-sm text-brand-text-light">
+                        <strong>Model:</strong> <span className="text-brand-accent">{item.metadata.model}</span>
                       </div>
                     )}
                     {item.metadata.duration && (
-                      <div className="text-sm text-gray-300">
+                      <div className="text-sm text-brand-text-light">
                         <strong>Duration:</strong> {(item.metadata.duration / 1000).toFixed(2)}s
                       </div>
                     )}
                     {item.metadata.conversationTurns && (
-                      <div className="text-sm text-gray-300">
+                      <div className="text-sm text-brand-text-light">
                         <strong>Conversation Turns:</strong> {item.metadata.conversationTurns}
                       </div>
                     )}
                     {item.metadata.success !== undefined && (
-                      <div className="text-sm text-gray-300">
-                        <strong>Success:</strong> <span className={item.metadata.success ? 'text-green-400' : 'text-red-400'}>{item.metadata.success ? 'Yes' : 'No'}</span>
+                      <div className="text-sm text-brand-text-light">
+                        <strong>Success:</strong> <span className={item.metadata.success ? 'text-brand-green' : 'text-brand-red'}>{item.metadata.success ? 'Yes' : 'No'}</span>
                       </div>
                     )}
                     {item.metadata.pullRequest && (
-                      <div className="text-sm text-gray-300">
+                      <div className="text-sm text-brand-text-light">
                         <strong>Pull Request:</strong> <a 
                           href={item.metadata.pullRequest.url} 
                           target="_blank" 
                           rel="noopener noreferrer"
-                          className="text-blue-400 hover:text-blue-300 underline ml-1"
+                          className="text-brand-accent hover:text-brand-accent-hover underline ml-1"
                         >
                           #{item.metadata.pullRequest.number}
                         </a>
                       </div>
                     )}
                     {item.metadata.githubComment && (
-                      <div className="text-sm text-gray-300">
+                      <div className="text-sm text-brand-text-light">
                         <strong>GitHub Comment:</strong> <a 
                           href={item.metadata.githubComment.url} 
                           target="_blank" 
                           rel="noopener noreferrer"
-                          className="text-blue-400 hover:text-blue-300 underline ml-1"
+                          className="text-brand-accent hover:text-brand-accent-hover underline ml-1"
                         >
                           View Comment
                         </a>
@@ -544,9 +544,9 @@ const TaskDetails: React.FC = () => {
               )}
 
               {item.metadata?.githubComment?.body && (
-                <div className="mt-3 p-3 bg-gray-900/50 rounded-md border border-gray-600">
-                  <div className="text-sm text-gray-400 mb-2 font-semibold">Comment Posted:</div>
-                  <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                <div className="mt-3 p-3 bg-brand-dark/50 rounded-md border border-brand-border">
+                  <div className="text-sm text-brand-text-dim mb-2 font-semibold">Comment Posted:</div>
+                  <div className="text-sm text-brand-text-light whitespace-pre-wrap">
                     {item.metadata.githubComment.body}
                   </div>
                 </div>
@@ -558,7 +558,7 @@ const TaskDetails: React.FC = () => {
                     href={item.prUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 underline"
+                    className="text-brand-accent hover:text-brand-accent-hover underline"
                   >
                     View Pull Request
                   </a>
@@ -571,11 +571,11 @@ const TaskDetails: React.FC = () => {
 
       {selectedPrompt && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg max-w-4xl w-full max-h-[80vh] flex flex-col border border-gray-700">
-            <div className="flex justify-between items-center p-4 border-b border-gray-700">
-              <h3 className="text-lg font-semibold text-white">LLM Prompt</h3>
+          <div className="bg-brand-component rounded-lg max-w-4xl w-full max-h-[80vh] flex flex-col border border-brand-border">
+            <div className="flex justify-between items-center p-4 border-b border-brand-border">
+              <h3 className="text-lg font-semibold text-brand-text-light">LLM Prompt</h3>
               <button
-                className="text-gray-400 hover:text-gray-200 text-2xl leading-none"
+                className="text-brand-text-dim hover:text-brand-text-light text-2xl leading-none"
                 onClick={() => setSelectedPrompt(null)}
               >
                 &times;
@@ -583,44 +583,44 @@ const TaskDetails: React.FC = () => {
             </div>
             <div className="flex-1 overflow-y-auto p-4">
               {loadingPrompt ? (
-                <div className="text-gray-400">Loading prompt...</div>
+                <div className="text-brand-text-dim">Loading prompt...</div>
               ) : selectedPrompt.error ? (
-                <div className="text-red-400">{selectedPrompt.error}</div>
+                <div className="text-brand-red">{selectedPrompt.error}</div>
               ) : (
                 <div className="space-y-4">
                   {(selectedPrompt.sessionId || selectedPrompt.model || selectedPrompt.timestamp || selectedPrompt.issueRef) && (
-                    <div className="bg-gray-900 rounded-md p-4 space-y-2">
-                      <h4 className="text-sm font-semibold text-gray-400 uppercase mb-3">Prompt Metadata</h4>
+                    <div className="bg-brand-dark rounded-md p-4 space-y-2">
+                      <h4 className="text-sm font-semibold text-brand-text-dim uppercase mb-3">Prompt Metadata</h4>
                       {selectedPrompt.sessionId && (
                         <div className="text-sm">
-                          <span className="text-gray-400">Session ID:</span>
-                          <code className="ml-2 bg-gray-800 px-2 py-1 rounded text-gray-300">{selectedPrompt.sessionId}</code>
+                          <span className="text-brand-text-dim">Session ID:</span>
+                          <code className="ml-2 bg-brand-component px-2 py-1 rounded text-brand-text-light">{selectedPrompt.sessionId}</code>
                         </div>
                       )}
                       {selectedPrompt.model && (
                         <div className="text-sm">
-                          <span className="text-gray-400">Model:</span>
-                          <span className="ml-2 text-blue-400">{selectedPrompt.model}</span>
+                          <span className="text-brand-text-dim">Model:</span>
+                          <span className="ml-2 text-brand-accent">{selectedPrompt.model}</span>
                         </div>
                       )}
                       {selectedPrompt.timestamp && (
                         <div className="text-sm">
-                          <span className="text-gray-400">Timestamp:</span>
-                          <span className="ml-2 text-gray-300">{new Date(selectedPrompt.timestamp).toLocaleString()}</span>
+                          <span className="text-brand-text-dim">Timestamp:</span>
+                          <span className="ml-2 text-brand-text-light">{new Date(selectedPrompt.timestamp).toLocaleString()}</span>
                         </div>
                       )}
                       {selectedPrompt.isRetry !== undefined && (
                         <div className="text-sm">
-                          <span className="text-gray-400">Is Retry:</span>
-                          <span className={`ml-2 ${selectedPrompt.isRetry ? 'text-amber-400' : 'text-gray-300'}`}>
+                          <span className="text-brand-text-dim">Is Retry:</span>
+                          <span className={`ml-2 ${selectedPrompt.isRetry ? 'text-amber-400' : 'text-brand-text-light'}`}>
                             {selectedPrompt.isRetry ? 'Yes' : 'No'}
                           </span>
                         </div>
                       )}
                       {selectedPrompt.issueRef && (
                         <div className="text-sm">
-                          <span className="text-gray-400">Issue Reference:</span>
-                          <div className="ml-2 mt-1 bg-gray-800 px-2 py-1 rounded text-gray-300 font-mono text-xs">
+                          <span className="text-brand-text-dim">Issue Reference:</span>
+                          <div className="ml-2 mt-1 bg-brand-component px-2 py-1 rounded text-brand-text-light font-mono text-xs">
                             {selectedPrompt.issueRef.repoOwner}/{selectedPrompt.issueRef.repoName} #{selectedPrompt.issueRef.number}
                           </div>
                         </div>
@@ -630,13 +630,13 @@ const TaskDetails: React.FC = () => {
                   
                   {selectedPrompt.prompt && (
                     <div>
-                      <h4 className="text-sm font-semibold text-gray-400 uppercase mb-2">Prompt Content</h4>
+                      <h4 className="text-sm font-semibold text-brand-text-dim uppercase mb-2">Prompt Content</h4>
                       {selectedPrompt.prompt.length > 5000 && (
                         <div className="mb-2 text-amber-500 text-sm">
                           Large prompt: {selectedPrompt.prompt.length} characters
                         </div>
                       )}
-                      <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-gray-900 p-4 rounded-md">
+                      <pre className="whitespace-pre-wrap font-mono text-sm text-brand-text-light bg-brand-dark p-4 rounded-md">
                         {selectedPrompt.prompt}
                       </pre>
                     </div>
@@ -650,11 +650,11 @@ const TaskDetails: React.FC = () => {
 
       {logFiles && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg max-w-5xl w-full max-h-[80vh] flex flex-col border border-gray-700">
-            <div className="flex justify-between items-center p-4 border-b border-gray-700">
-              <h3 className="text-lg font-semibold text-white">Log Files</h3>
+          <div className="bg-brand-component rounded-lg max-w-5xl w-full max-h-[80vh] flex flex-col border border-brand-border">
+            <div className="flex justify-between items-center p-4 border-b border-brand-border">
+              <h3 className="text-lg font-semibold text-brand-text-light">Log Files</h3>
               <button
-                className="text-gray-400 hover:text-gray-200 text-2xl leading-none"
+                className="text-brand-text-dim hover:text-brand-text-light text-2xl leading-none"
                 onClick={() => {
                   setLogFiles(null);
                   setSelectedLogFile(null);
@@ -665,11 +665,11 @@ const TaskDetails: React.FC = () => {
             </div>
             <div className="flex flex-1 overflow-hidden">
               {logFiles.error ? (
-                <div className="p-4 text-red-400">{logFiles.error}</div>
+                <div className="p-4 text-brand-red">{logFiles.error}</div>
               ) : logFiles.logFiles && logFiles.logFiles.length > 0 ? (
                 <>
-                  <div className="w-1/3 border-r border-gray-700 p-4 overflow-y-auto">
-                    <p className="mb-4 text-gray-400">
+                  <div className="w-1/3 border-r border-brand-border p-4 overflow-y-auto">
+                    <p className="mb-4 text-brand-text-dim">
                       Select a log file to view:
                     </p>
                     <div className="flex flex-col gap-2">
@@ -679,14 +679,14 @@ const TaskDetails: React.FC = () => {
                           onClick={() => fetchLogFile(file.name)}
                           className={`text-left p-3 rounded-md transition-colors ${
                             selectedLogFile?.name === file.name
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                              ? 'bg-brand-accent text-brand-text-light'
+                              : 'bg-brand-border text-brand-text-light hover:bg-gray-600'
                           }`}
                         >
                           <div className="font-medium mb-1">
                             {file.name}
                           </div>
-                          <div className="text-xs text-gray-400">
+                          <div className="text-xs text-brand-text-dim">
                             {Math.round(file.size / 1024)} KB
                           </div>
                         </button>
@@ -697,7 +697,7 @@ const TaskDetails: React.FC = () => {
                     {selectedLogFile ? (
                       <>
                         <div className="flex justify-between items-center mb-4">
-                          <h3 className="text-lg font-semibold text-white">
+                          <h3 className="text-lg font-semibold text-brand-text-light">
                             {selectedLogFile.name}
                           </h3>
                           <div className="flex gap-2">
@@ -706,22 +706,22 @@ const TaskDetails: React.FC = () => {
                               placeholder="Search..."
                               value={searchQuery}
                               onChange={(e) => setSearchQuery(e.target.value)}
-                              className="px-3 py-1 bg-gray-700 text-white rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                              className="px-3 py-1 bg-brand-border text-brand-text-light rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
                             />
                             {searchMatches.length > 0 && (
                               <div className="flex items-center gap-2">
                                 <button
                                   onClick={handlePrevMatch}
-                                  className="px-2 py-1 bg-gray-700 text-white rounded-md text-sm hover:bg-gray-600"
+                                  className="px-2 py-1 bg-brand-border text-brand-text-light rounded-md text-sm hover:bg-gray-600"
                                 >
                                   ← Prev
                                 </button>
-                                <span className="text-sm text-gray-400">
+                                <span className="text-sm text-brand-text-dim">
                                   {currentMatchIndex + 1} / {searchMatches.length}
                                 </span>
                                 <button
                                   onClick={handleNextMatch}
-                                  className="px-2 py-1 bg-gray-700 text-white rounded-md text-sm hover:bg-gray-600"
+                                  className="px-2 py-1 bg-brand-border text-brand-text-light rounded-md text-sm hover:bg-gray-600"
                                 >
                                   Next →
                                 </button>
@@ -730,11 +730,11 @@ const TaskDetails: React.FC = () => {
                           </div>
                         </div>
                         {loadingLogFile ? (
-                          <div className="text-gray-400">Loading log file...</div>
+                          <div className="text-brand-text-dim">Loading log file...</div>
                         ) : (
                           <pre
                             ref={logContentRef}
-                            className="whitespace-pre-wrap font-mono text-xs text-gray-300 bg-gray-900 p-4 rounded-md overflow-y-auto flex-1"
+                            className="whitespace-pre-wrap font-mono text-xs text-brand-text-light bg-brand-dark p-4 rounded-md overflow-y-auto flex-1"
                           >
                             {selectedLogFile.isJson
                               ? highlightContent(JSON.stringify(selectedLogFile.content, null, 2))
@@ -743,14 +743,14 @@ const TaskDetails: React.FC = () => {
                         )}
                       </>
                     ) : (
-                      <p className="text-gray-400 text-center">
+                      <p className="text-brand-text-dim text-center">
                         Select a log file to view its contents
                       </p>
                     )}
                   </div>
                 </>
               ) : (
-                <p className="p-4 text-gray-400 text-center">
+                <p className="p-4 text-brand-text-dim text-center">
                   No log files found
                 </p>
               )}
