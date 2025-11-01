@@ -43,11 +43,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   }, []);
 
   return (
-    <div className="flex min-h-screen bg-gray-900">
+    <div className="flex min-h-screen bg-brand-dark">
       {/* Sidebar */}
-      <aside className="w-60 bg-gray-800 py-6 border-r border-gray-700">
-        <div className="px-4 mb-8">
-          <h2 className="text-white text-xl font-bold">GitFix</h2>
+      <aside className="w-60 bg-brand-component py-6 border-r border-brand-border">
+        <div className="px-4 mb-8 flex items-center">
+          <img src="/logo-and-name.png" alt="GitFix" className="h-10 w-auto" />
         </div>
         <nav className="flex flex-col gap-1">
           {navigation.map((item) => (
@@ -56,14 +56,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               to={item.href}
               className={`flex items-center px-4 py-3 text-sm font-medium transition-all duration-200 ${
                 isActive(item.href)
-                  ? 'bg-blue-600/20 text-blue-400 border-r-2 border-blue-400'
-                  : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                  ? 'bg-brand-accent/20 text-brand-accent border-r-2 border-brand-accent'
+                  : 'text-brand-text-dim hover:bg-brand-border hover:text-brand-text-light'
               }`}
             >
               <item.icon className="w-5 h-5 mr-3" />
               {item.name}
               {item.name === 'Tasks' && activeTaskCount > 0 && (
-                <span className="ml-auto inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-500 text-xs font-semibold text-white">
+                <span className="ml-auto inline-flex items-center justify-center h-5 w-5 rounded-full bg-brand-accent text-xs font-semibold text-white">
                   {activeTaskCount}
                 </span>
               )}
@@ -74,7 +74,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col">
-        <main className="flex-1 p-8 overflow-y-auto bg-gray-900">
+        <main className="flex-1 p-8 overflow-y-auto bg-brand-dark">
           {children}
         </main>
       </div>
