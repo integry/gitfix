@@ -10,6 +10,8 @@ const { getLLMMetricsSummary, getLLMMetricsByCorrelationId } = require('./llmMet
 
 let generateCorrelationId;
 let configRepoManager;
+let db = null;
+let isDbEnabled = false;
 
 const app = express();
 const PORT = process.env.DASHBOARD_API_PORT || 4000;
@@ -319,12 +321,70 @@ app.get('/api/task/:taskId/history', ensureAuthenticated, async (req, res) => {
   try {
     const { taskId } = req.params;
     
-    // First try to get history from worker state
+    let history = [];
+    let taskInfo = null;
+    
+    // Try PostgreSQL first if enabled
+    if (isDbEnabled && db) {
+      try {
+        console.log(`Fetching task history from PostgreSQL for taskId: ${taskId}`);
+        const task = await db('tasks').where({ task_id: taskId }).first();
+        const historyRecords = await db('task_history')
+          .where({ task_id: taskId })
+          .orderBy('timestamp', 'asc');
+        
+        if (task && historyRecords.length > 0) {
+          const [repoOwner, repoName] = task.repository.split('/');
+          taskInfo = {
+            repoOwner,
+            repoName,
+            number: task.issue_number,
+            type: task.task_type,
+            correlationId: task.correlation_id
+          };
+          
+          history = historyRecords.map(record => {
+            const historyItem = {
+              state: record.state,
+              timestamp: record.timestamp,
+              reason: record.reason
+            };
+            
+            if (record.metadata) {
+              const metadata = typeof record.metadata === 'string' 
+                ? JSON.parse(record.metadata) 
+                : record.metadata;
+              
+              historyItem.metadata = metadata;
+              
+              if (metadata.sessionId) {
+                historyItem.promptPath = `/api/execution/${metadata.sessionId}/prompt`;
+                historyItem.logsPath = `/api/execution/${metadata.sessionId}/logs`;
+              }
+            }
+            
+            return historyItem;
+          });
+          
+          console.log(`Fetched ${history.length} history records from PostgreSQL for task ${taskId}`);
+          return res.json({
+            taskId,
+            history,
+            taskInfo
+          });
+        } else {
+          console.log(`Task ${taskId} not found in PostgreSQL, falling back to Redis`);
+        }
+      } catch (error) {
+        console.error('Error fetching task history from PostgreSQL:', error);
+        console.log('Falling back to Redis for task history...');
+      }
+    }
+    
+    // Fallback to Redis
     const stateKey = `worker:state:${taskId}`;
     const stateData = await redisClient.get(stateKey);
     
-    let history = [];
-    let taskInfo = null;
     if (stateData) {
       try {
         const state = JSON.parse(stateData);
@@ -1313,6 +1373,21 @@ async function start() {
     generateCorrelationId = loggerModule.generateCorrelationId;
 
     configRepoManager = await import('../../src/config/configRepoManager.js');
+
+    // Initialize PostgreSQL if enabled
+    const dbModule = await import('../../src/db/postgres.js');
+    db = dbModule.db;
+    isDbEnabled = dbModule.isEnabled;
+    
+    if (isDbEnabled && db) {
+      console.log('PostgreSQL persistence is enabled');
+      try {
+        await db.migrate.latest();
+        console.log('Database migrations completed successfully');
+      } catch (error) {
+        console.error('Database migration failed:', error);
+      }
+    }
 
     await initRedis();
 

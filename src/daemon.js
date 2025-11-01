@@ -7,6 +7,7 @@ import { issueQueue, shutdownQueue } from './queue/taskQueue.js';
 import Redis from 'ioredis';
 import { resolveModelAlias, getDefaultModel } from './config/modelAliases.js';
 import { loadMonitoredRepos, ensureConfigRepoExists, loadSettings, loadAiPrimaryTag, loadPrimaryProcessingLabels } from './config/configRepoManager.js';
+import { db, isEnabled as isDbEnabled } from './db/postgres.js';
 
 // Create Redis client for activity logging
 const redisClient = new Redis({
@@ -857,6 +858,20 @@ async function startDaemon(options = {}) {
     if (repos.length === 0) {
         logger.error('No repositories configured. Set GITHUB_REPOS_TO_MONITOR or CONFIG_REPO. Exiting.');
         process.exit(1);
+    }
+    
+    // Run database migrations if enabled
+    if (isDbEnabled && db) {
+        try {
+            logger.info('Running database migrations...');
+            await db.migrate.latest();
+            logger.info('Database migrations completed successfully');
+        } catch (error) {
+            logger.error({
+                error: error.message,
+                stack: error.stack
+            }, 'Database migration failed - daemon will continue but database persistence may not work');
+        }
     }
     
     // Handle reset flag

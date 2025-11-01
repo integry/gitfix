@@ -6,6 +6,7 @@ import { getAuthenticatedOctokit } from './auth/githubAuth.js';
 import { withErrorHandling, handleError, ErrorCategories } from './utils/errorHandler.js';
 import { withRetry, retryConfigs } from './utils/retryHandler.js';
 import { getStateManager, TaskStates } from './utils/workerStateManager.js';
+import { db, isEnabled as isDbEnabled } from './db/postgres.js';
 import { 
     ensureRepoCloned, 
     createWorktreeForIssue,
@@ -462,7 +463,7 @@ ${commentHistory}
             number: pullRequestNumber, 
             repoOwner, 
             repoName 
-        }, 'pr_comment', correlationId);
+        }, 'pr_comment', correlationId, taskId);
 
         // Create log files and store in Redis for live-details API
         await createLogFiles(claudeResult, { 
@@ -703,7 +704,7 @@ The job has been automatically rescheduled and will restart ${readableResetTime}
                         number: pullRequestNumber, 
                         repoOwner, 
                         repoName 
-                    }, 'pr_comment', correlationId);
+                    }, 'pr_comment', correlationId, taskId);
                     correlatedLogger.info({
                         correlationId,
                         pullRequestNumber
@@ -1081,6 +1082,20 @@ async function startWorker(options = {}) {
         concurrency: workerConcurrency,
         resetPerformed: options.reset || false
     }, 'Starting GitHub Issue Worker...');
+    
+    // Run database migrations if enabled
+    if (isDbEnabled && db) {
+        try {
+            logger.info('Running database migrations...');
+            await db.migrate.latest();
+            logger.info('Database migrations completed successfully');
+        } catch (error) {
+            logger.error({
+                error: error.message,
+                stack: error.stack
+            }, 'Database migration failed - worker will continue but database persistence may not work');
+        }
+    }
     
     // Initialize Redis connection for heartbeat
     const heartbeatRedis = new Redis({
