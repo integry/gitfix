@@ -15,6 +15,7 @@ const dashboardSource = readSource('../../../propr-ui/src/components/Dashboard.t
 const taskStatsChartSource = readSource('../../../propr-ui/src/components/TaskStatsChart.tsx');
 const topModelsSource = readSource('../../../propr-ui/src/components/TopModels.tsx');
 const repositoryBreakdownSource = readSource('../../../propr-ui/src/components/RepositoryBreakdown.tsx');
+const headerStatsSource = readSource('../../../propr-ui/src/hooks/useHeaderStats.ts');
 
 const fixturePayload = pathname => {
   const route = `if (requestUrl.pathname === '${pathname}')`;
@@ -36,6 +37,18 @@ const interfaceFields = name => {
 };
 
 describe('packaged acceptance stats fixtures', () => {
+  it('returns the paginated draft shape consumed by the dashboard header', () => {
+    const payload = fixturePayload('/api/planner/drafts');
+    const draftsRoute = runnerSource.indexOf("requestUrl.pathname === '/api/planner/drafts'");
+    const genericApiFallback = runnerSource.indexOf("request.url?.startsWith('/api/')");
+
+    assert.deepEqual(payload, { drafts: [], total: 0, page: 1, limit: 20, hasMore: false });
+    assert.ok(draftsRoute < genericApiFallback);
+    assert.match(headerStatsSource, /buildRunningItems\(\s*draftsResponse\.drafts,/);
+    assert.match(headerStatsSource, /draftsResponse\.drafts\.filter/);
+    assert.ok(Array.isArray(payload.drafts));
+  });
+
   it('dispatches exact stats pathnames before the unchanged generic fallback', () => {
     const generatingPlans = runnerSource.indexOf("requestUrl.pathname === '/api/stats/generating-plans'");
     const tasks = runnerSource.indexOf("requestUrl.pathname === '/api/stats/tasks'");
@@ -104,4 +117,3 @@ describe('packaged acceptance stats fixtures', () => {
     assert.ok(Array.isArray(repositories.repositories));
   });
 });
-

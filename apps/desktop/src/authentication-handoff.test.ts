@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -45,6 +46,23 @@ const waitForProcessExit = async (pid: number): Promise<void> => {
 };
 
 describe('desktop terminal authentication handoff', () => {
+  it('preserves terminal stdin for an interactive authentication command', { skip: process.platform !== 'linux' }, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-auth-pty-test-'));
+    const terminal = join(directory, 'terminal');
+    const authentication = join(directory, 'authentication');
+    const completed = join(directory, 'completed');
+    try {
+      await writeExecutable(terminal, '#!/bin/sh\nprintf "approved\\n" | script -qfec "\\"$1\\" \\"$2\\" \\"$3\\"" /dev/null >/dev/null 2>&1\n');
+      await writeExecutable(authentication, `#!/bin/sh\n[ -t 0 ] || exit 91\nIFS= read -r answer || exit 92\n[ "$answer" = approved ] || exit 93\nprintf interactive > "${completed}"\n`);
+
+      const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
+      assert.deepEqual(await launch(authentication, [], { title: 'Controlled interactive authentication' }), { status: 0 });
+      assert.equal(await readFile(completed, 'utf8'), 'interactive');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('waits for the actual command after a server-capable terminal launcher exits', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-handoff-test-'));
     const terminal = join(directory, 'terminal');
@@ -66,7 +84,7 @@ describe('desktop terminal authentication handoff', () => {
     }
   });
 
-  it('cancels and reaps the actual command owned by a server-capable terminal', async () => {
+  it('cancels and reaps a TERM-resistant command owned by a server-capable terminal', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-cancel-test-'));
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
@@ -74,7 +92,7 @@ describe('desktop terminal authentication handoff', () => {
     const controller = new AbortController();
     try {
       await writeExecutable(terminal, '#!/bin/sh\n"$@" >/dev/null 2>&1 &\nexit 0\n');
-      await writeExecutable(authentication, `#!/bin/sh\nprintf '%s' "$$" > "${pidPath}"\ntrap 'exit 143' TERM INT HUP\nwhile :; do sleep 1; done\n`);
+      await writeExecutable(authentication, `#!/bin/sh\nprintf '%s' "$$" > "${pidPath}"\ntrap '' TERM INT HUP\nwhile :; do sleep 1; done\n`);
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
       const handoff = launch(authentication, [], { title: 'Controlled authentication', signal: controller.signal });
       await waitForFile(pidPath);
@@ -84,6 +102,49 @@ describe('desktop terminal authentication handoff', () => {
       await waitForProcessExit(pid);
     } finally {
       controller.abort();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('lets a published completion win a concurrent cancellation request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-auth-race-test-'));
+    const terminal = join(directory, 'terminal');
+    const authentication = join(directory, 'authentication');
+    const readyPath = join(directory, 'authentication.ready');
+    const triggerPath = join(directory, 'authentication.finish');
+    const controller = new AbortController();
+    try {
+      await writeExecutable(terminal, '#!/bin/sh\n"$@" >/dev/null 2>&1 &\nexit 0\n');
+      await writeExecutable(authentication, `#!/bin/sh\nprintf ready > "${readyPath}"\nwhile [ ! -f "${triggerPath}" ]; do sleep 0.01; done\nexit 0\n`);
+      const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
+      const handoff = launch(authentication, [], { title: 'Controlled completion race', signal: controller.signal });
+      await waitForFile(readyPath);
+      writeFileSync(triggerPath, '', { mode: 0o600 });
+      const blockUntil = Date.now() + 150;
+      while (Date.now() < blockUntil) { /* let the external wrapper publish while JS polling is paused */ }
+      controller.abort();
+      assert.deepEqual(await handoff, { status: 0 });
+    } finally {
+      controller.abort();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('drains a TERM-resistant command after the terminal sends HUP', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-auth-hup-test-'));
+    const terminal = join(directory, 'terminal');
+    const authentication = join(directory, 'authentication');
+    const pidPath = join(directory, 'authentication.pid');
+    try {
+      await writeExecutable(terminal, `#!/bin/sh\n"$@" >/dev/null 2>&1 &\nwrapper=$!\nwhile [ ! -f "${pidPath}" ]; do sleep 0.01; done\nkill -HUP "$wrapper"\nwait "$wrapper"\n`);
+      await writeExecutable(authentication, `#!/bin/sh\nprintf '%s' "$$" > "${pidPath}"\ntrap '' TERM INT HUP\nwhile :; do sleep 1; done\n`);
+      const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
+      const handoff = launch(authentication, [], { title: 'Controlled terminal close' });
+      await waitForFile(pidPath);
+      const pid = Number(await readFile(pidPath, 'utf8'));
+      assert.deepEqual(await handoff, { status: 137 });
+      await waitForProcessExit(pid);
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });

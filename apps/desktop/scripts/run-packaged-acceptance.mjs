@@ -511,6 +511,7 @@ const createFixture = async (mode, fixedOrigin) => {
     if (request.url === '/api/auth/demo-mode') return json(response, 200, { demoMode: false });
     if (request.url?.startsWith('/api/status')) return json(response, 200, { daemon: 'Running', redis: 'Connected', githubAuth: 'Authenticated', claudeAuth: 'Ready', agents: [], githubEventIntake: 'ProPR Connect', githubEventIntakeStatus: 'Connected' });
     if (request.url?.startsWith('/api/queue/stats')) return json(response, 200, { active: 0, waiting: 0, completed: 12, failed: 0, delayed: 0, paused: 0 });
+    if (requestUrl.pathname === '/api/planner/drafts') return json(response, 200, { drafts: [], total: 0, page: 1, limit: 20, hasMore: false });
     if (requestUrl.pathname === '/api/stats/generating-plans') return json(response, 200, { count: 0 });
     if (requestUrl.pathname === '/api/stats/tasks') {
       return json(response, 200, {

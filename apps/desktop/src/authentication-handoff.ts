@@ -18,7 +18,6 @@ const terminals: TerminalCandidate[] = [
 ];
 
 const START_TIMEOUT_MS = 5_000;
-const FORCE_KILL_AFTER_MS = 1_000;
 const POLL_INTERVAL_MS = 25;
 
 // A terminal such as xfce4-terminal can hand the command to an existing server
@@ -34,31 +33,114 @@ started_file="\${state_base}.started"
 result_file="\${state_base}.result"
 cancel_file="\${state_base}.cancel"
 umask 077
+wrapper=$$
 if command -v setsid >/dev/null 2>&1; then
-  setsid -- "$@" &
+  if [ -t 0 ]; then
+    setsid -- "$@" </dev/tty &
+  else
+    setsid -- "$@" &
+  fi
   child=$!
   mode=group
 else
-  "$@" &
+  if [ -t 0 ]; then
+    "$@" </dev/tty &
+  else
+    "$@" &
+  fi
   child=$!
   mode=process
 fi
+terminating=0
+force_killer=
+cancel_watcher=
+child_start=
+observed_child_parent=
+observed_child_start=
+load_child_identity() {
+  stat_line=
+  if [ -r "/proc/$child/stat" ]; then
+    IFS= read -r stat_line < "/proc/$child/stat" || return 1
+    stat_rest=\${stat_line##*) }
+    set -- $stat_rest
+    [ "$#" -ge 20 ] || return 1
+    observed_child_parent=$2
+    shift 19
+    observed_child_start=$1
+    return 0
+  fi
+  observed_child_parent=$(ps -o ppid= -p "$child" 2>/dev/null) || return 1
+  observed_child_parent=$(printf '%s' "$observed_child_parent" | tr -d '[:space:]')
+  observed_child_start=unavailable
+}
+if load_child_identity && [ "$observed_child_parent" = "$wrapper" ]; then
+  child_start=$observed_child_start
+fi
 printf '%s:%s\n' "$mode" "$child" > "$started_file"
-terminate() {
+child_is_owned() {
+  [ -n "$child_start" ] || return 1
+  load_child_identity || return 1
+  [ "$observed_child_parent" = "$wrapper" ] && [ "$observed_child_start" = "$child_start" ]
+}
+signal_child() {
+  child_is_owned || return 1
   if [ "$mode" = group ]; then
-    kill -TERM "-$child" 2>/dev/null || true
+    kill -TERM "-$child" 2>/dev/null
   else
-    kill -TERM "$child" 2>/dev/null || true
+    kill -TERM "$child" 2>/dev/null
+  fi
+}
+force_kill_child() {
+  child_is_owned || return 0
+  if [ "$mode" = group ]; then
+    kill -KILL "-$child" 2>/dev/null || true
+  else
+    kill -KILL "$child" 2>/dev/null || true
+  fi
+}
+terminate() {
+  if [ "$terminating" -ne 0 ]; then
+    return
+  fi
+  terminating=1
+  if signal_child; then
+    (
+      trap 'exit 0' TERM
+      trap '' HUP INT
+      sleep 1
+      force_kill_child
+    ) &
+    force_killer=$!
   fi
 }
 trap terminate HUP INT TERM
-if [ -f "$cancel_file" ]; then
-  terminate
+(
+  trap 'exit 0' TERM
+  trap '' HUP INT
+  while [ ! -f "$cancel_file" ]; do sleep 0.025; done
+  kill -TERM "$wrapper" 2>/dev/null || true
+) &
+cancel_watcher=$!
+
+status=127
+while :; do
+  wait "$child"
+  status=$?
+  if ! child_is_owned; then
+    break
+  fi
+done
+
+kill -TERM "$cancel_watcher" 2>/dev/null || true
+wait "$cancel_watcher" 2>/dev/null || true
+if [ -n "$force_killer" ]; then
+  if child_is_owned; then
+    wait "$force_killer" 2>/dev/null || true
+  else
+    kill -TERM "$force_killer" 2>/dev/null || true
+    wait "$force_killer" 2>/dev/null || true
+  fi
 fi
-set +e
-wait "$child"
-status=$?
-set -e
 printf '%s\n' "$status" > "$result_file"
 exit "$status"
 `;
@@ -80,29 +162,17 @@ const readOwnedMarker = async (path: string): Promise<string | null> => {
   }
 };
 
-interface StartedCommand {
-  mode: 'group' | 'process';
-  pid: number;
-}
-
-const parseStartedCommand = (value: string | null): StartedCommand | null => {
+const hasStartedCommand = (value: string | null): boolean => {
   const match = /^(group|process):([1-9][0-9]{0,9})\n?$/.exec(value ?? '');
-  if (!match) return null;
+  if (!match) return false;
   const pid = Number(match[2]);
-  return Number.isSafeInteger(pid) ? { mode: match[1] as StartedCommand['mode'], pid } : null;
+  return Number.isSafeInteger(pid);
 };
 
 const parseStatus = (value: string | null): number | null => {
   if (!/^[0-9]{1,3}\n?$/.test(value ?? '')) return null;
   const status = Number(value);
   return Number.isSafeInteger(status) && status >= 0 && status <= 255 ? status : null;
-};
-
-const stopStartedCommand = (started: StartedCommand, signal: NodeJS.Signals): void => {
-  try { process.kill(started.mode === 'group' ? -started.pid : started.pid, signal); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-  }
 };
 
 const tryTerminal = async (
@@ -120,9 +190,9 @@ const tryTerminal = async (
   let terminalChild: ChildProcess | null = null;
   let terminalClosed = false;
   let terminalStatus: number | null = null;
-  let started: StartedCommand | null = null;
+  let started = false;
+  let completed = false;
   let cancellationWritten = false;
-  let forceKillAt = 0;
   try {
     await writeFile(wrapperPath, commandWrapper, { mode: 0o700, flag: 'wx' });
     const admission = await new Promise<'spawned' | 'missing'>((resolve, reject) => {
@@ -145,40 +215,32 @@ const tryTerminal = async (
 
     const startDeadline = Date.now() + START_TIMEOUT_MS;
     while (true) {
-      started ??= parseStartedCommand(await readOwnedMarker(`${stateBase}.started`));
-      const aborted = signal?.aborted === true;
-      if (aborted && !cancellationWritten) {
-        await writeFile(cancelPath, '', { mode: 0o600, flag: 'wx' });
-        cancellationWritten = true;
-        // Once the wrapper has reported the real child, leave its terminal
-        // process alive long enough to reap that child and publish the result.
-        // Before then, the terminal group is the only process we can own.
-        if (started) stopStartedCommand(started, 'SIGTERM');
-        else if (terminalChild) stopProcessGroup(terminalChild, 'SIGTERM');
-        forceKillAt = Date.now() + FORCE_KILL_AFTER_MS;
-      }
-      if (aborted && started && forceKillAt > 0 && Date.now() >= forceKillAt) {
-        stopStartedCommand(started, 'SIGKILL');
-        forceKillAt = Number.POSITIVE_INFINITY;
-      }
-
       const status = parseStatus(await readOwnedMarker(`${stateBase}.result`));
       if (status !== null) {
-        if (aborted) throw abortError();
+        completed = true;
+        if (cancellationWritten) throw abortError();
         return status;
       }
+
+      started ||= hasStartedCommand(await readOwnedMarker(`${stateBase}.started`));
+      if (signal?.aborted && !cancellationWritten) {
+        await writeFile(cancelPath, '', { mode: 0o600, flag: 'wx' });
+        cancellationWritten = true;
+      }
       if (!started && terminalClosed && terminalStatus !== 0) {
-        if (aborted) throw abortError();
+        if (signal?.aborted) throw abortError();
         return terminalStatus;
       }
       if (!started && Date.now() >= startDeadline) {
-        if (aborted) throw abortError();
+        if (signal?.aborted) throw abortError();
         return terminalStatus === null ? null : terminalStatus || 1;
       }
       await sleep(POLL_INTERVAL_MS);
     }
   } finally {
-    if (signal?.aborted && terminalChild && !started) stopProcessGroup(terminalChild, 'SIGKILL');
+    if (signal?.aborted && !completed && terminalChild && !terminalClosed && !started) {
+      stopProcessGroup(terminalChild, 'SIGKILL');
+    }
     await rm(runtimeDirectory, { recursive: true, force: true });
   }
 };
