@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -43,6 +43,25 @@ const waitForProcessExit = async (pid: number): Promise<void> => {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error('Controlled authentication process was not reaped');
+};
+
+const waitForPublishedStatus = (path: string, expected: string): void => {
+  const deadline = Date.now() + 2_000;
+  const pause = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  while (Date.now() < deadline) {
+    try {
+      const status = readFileSync(path, 'utf8');
+      if (status.length > 0) {
+        assert.equal(status, expected);
+        return;
+      }
+    }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    Atomics.wait(pause, 0, 0, 10);
+  }
+  throw new Error('Timed out waiting for the authentication wrapper to publish its result');
 };
 
 describe('desktop terminal authentication handoff', () => {
@@ -146,16 +165,23 @@ while :; do sleep 1; done
     const authentication = join(directory, 'authentication');
     const readyPath = join(directory, 'authentication.ready');
     const triggerPath = join(directory, 'authentication.finish');
+    const statePath = join(directory, 'authentication.state');
     const controller = new AbortController();
     try {
-      await writeExecutable(terminal, '#!/bin/sh\n"$@" >/dev/null 2>&1 &\nexit 0\n');
+      await writeExecutable(terminal, `#!/bin/sh
+printf '%s' "$2" > "${statePath}"
+"$@" >/dev/null 2>&1 &
+exit 0
+`);
       await writeExecutable(authentication, `#!/bin/sh\nprintf ready > "${readyPath}"\nwhile [ ! -f "${triggerPath}" ]; do sleep 0.01; done\nexit 0\n`);
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
       const handoff = launch(authentication, [], { title: 'Controlled completion race', signal: controller.signal });
       await waitForFile(readyPath);
+      const stateBase = await readFile(statePath, 'utf8');
       writeFileSync(triggerPath, '', { mode: 0o600 });
-      const blockUntil = Date.now() + 150;
-      while (Date.now() < blockUntil) { /* let the external wrapper publish while JS polling is paused */ }
+      // Keep the handoff's async poll paused until the external wrapper has
+      // actually published completion, then request cancellation in that gap.
+      waitForPublishedStatus(`${stateBase}.result`, '0\n');
       controller.abort();
       assert.deepEqual(await handoff, { status: 0 });
     } finally {
