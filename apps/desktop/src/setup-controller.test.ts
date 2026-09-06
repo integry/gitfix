@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -66,5 +66,39 @@ describe('desktop local setup controller', () => {
       assert.equal((await controller.status()).phase, 'unsupported');
       await assert.rejects(controller.start(request), /not supported/);
     } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
+  it('admits private-key resolution atomically and cancels it before host actions start', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const privateKey = join(appData, 'github-app.pem');
+    writeFileSync(privateKey, 'private test fixture', { mode: 0o600 });
+    let hostActions = 0;
+    const controller = new DesktopSetupController({
+      actions: { runChecks: async () => { hostActions += 1; throw new Error('must not run'); } } as unknown as SetupActions,
+      platform: 'linux', appDataDir: appData, defaultRootDir: join(appData, 'local-runtime'),
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => privateKey, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const selection = await controller.selectPrivateKey();
+      assert.ok(selection);
+      const appRequest: DesktopSetupRequest = {
+        ...request,
+        github: { mode: 'app', appId: '123', installationId: '456', privateKeyCapability: selection.capability },
+      };
+
+      const running = controller.start(appRequest);
+      await assert.rejects(controller.start(appRequest), /already running/);
+      const cancelled = await controller.cancel();
+
+      assert.equal((await running).phase, 'cancelled');
+      assert.equal(cancelled.phase, 'cancelled');
+      assert.equal(hostActions, 0);
+    } finally {
+      await controller.shutdown();
+      rmSync(appData, { recursive: true, force: true });
+    }
   });
 });

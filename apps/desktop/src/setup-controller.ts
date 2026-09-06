@@ -116,37 +116,61 @@ export class DesktopSetupController {
     if (this.#current) throw new SetupRequestError('Local setup is already running.');
     if (request.sessionId !== this.#sessionId) throw new SetupRequestError('The setup session expired. Start again.');
     const authority = RootDirectoryAuthority.open(this.#options.defaultRootDir, this.#options.appDataDir);
+    return this.#admit(signal => this.#resolveAndRun(request, authority, retry, signal));
+  }
+
+  async #resolveAndRun(request: DesktopSetupRequest, authority: RootDirectoryAuthority, retry: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
     try {
       const privateKeyPath = request.github.mode === 'app'
-        ? await this.#filesystem.consume(request.github.privateKeyCapability, this.#sessionId, `${this.#options.statePath}.keys`)
+        ? await this.#filesystem.consume(request.github.privateKeyCapability, this.#sessionId, `${this.#options.statePath}.keys`, signal)
         : undefined;
+      signal.throwIfAborted();
       const webhookSecret = request.intake.mode === 'direct_webhook'
-        ? this.#secrets.consume(request.intake.secretCapability, this.#sessionId) : undefined;
+        ? this.#secrets.consume(request.intake.secretCapability, this.#sessionId, signal) : undefined;
       const resolved = { request, authority, privateKeyPath, webhookSecret };
       if (this.#resolved?.authority !== authority) this.#resolved?.authority.close();
       this.#resolved = resolved;
       this.#resume = this.#resumeFrom(request);
-      return await this.#runResolved(resolved, retry);
+      return await this.#executeResolved(resolved, retry, signal);
     } catch (error) {
       if (this.#resolved?.authority !== authority) authority.close();
+      if (signal.aborted || (error as Error).name === 'AbortError') {
+        this.#resume = this.#resumeFrom(request);
+        this.#snapshot = {
+          phase: 'cancelled', capability: getLocalSetupCapability(this.#options.platform ?? process.platform),
+          sessionId: this.#sessionId, logs: [], resume: copyResume(this.#resume), resumeAvailable: true,
+          reconfigurationRequired: Boolean(this.#resume.reconfigurationStage), error: 'Setup was cancelled safely.',
+        };
+        this.#publish();
+        return this.#publicSnapshot();
+      }
       throw error;
     }
   }
 
   #runResolved(resolved: ResolvedRequest, retry: boolean): Promise<DesktopSetupSnapshot> {
+    if (this.#current) throw new SetupRequestError('Local setup is already running.');
+    return this.#admit(signal => this.#executeResolved(resolved, retry, signal));
+  }
+
+  #admit(run: (signal: AbortSignal) => Promise<DesktopSetupSnapshot>): Promise<DesktopSetupSnapshot> {
     const controller = new AbortController();
     this.#abort = controller;
+    const operation = Promise.resolve().then(() => run(controller.signal));
+    this.#current = operation;
+    const cleanup = () => { if (this.#current === operation) { this.#current = null; this.#abort = null; } };
+    void operation.then(cleanup, cleanup);
+    return operation;
+  }
+
+  #executeResolved(resolved: ResolvedRequest, retry: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
     this.#snapshot = {
       phase: 'running', capability: getLocalSetupCapability(this.#options.platform ?? process.platform),
       sessionId: this.#sessionId, logs: retry ? ['Retrying setup with a fresh host inspection…'] : [],
       resume: copyResume(this.#resume!), resumeAvailable: true,
     };
     this.#publish();
-    const operation = this.#execute(resolved, retry, controller.signal);
-    this.#current = operation;
-    const cleanup = () => { if (this.#current === operation) { this.#current = null; this.#abort = null; } };
-    void operation.then(cleanup, cleanup);
-    return operation;
+    return this.#execute(resolved, retry, signal);
   }
 
   async #execute(resolved: ResolvedRequest, retry: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {

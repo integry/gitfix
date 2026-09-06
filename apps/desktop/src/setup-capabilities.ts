@@ -73,6 +73,10 @@ export class RootDirectoryAuthority {
   close(): void { if (!this.#closed) { this.#closed = true; closeSync(this.#fd); } }
 }
 
+const isThenable = (value: unknown): value is PromiseLike<unknown> => (
+  (typeof value === 'object' && value !== null) || typeof value === 'function'
+) && typeof (value as PromiseLike<unknown>).then === 'function';
+
 /** Revalidate the fixed root around every setup host action and Docker handoff. */
 export const bindRootOperations = (actions: SetupActions, authority: RootDirectoryAuthority): SetupActions => new Proxy(actions, {
   get(target, property, receiver) {
@@ -84,6 +88,10 @@ export const bindRootOperations = (actions: SetupActions, authority: RootDirecto
         args[0] = { ...(args[0] as Record<string, unknown>), assertRootAuthority: () => authority.validate() };
       }
       const result = Reflect.apply(value, target, args);
+      if (!isThenable(result)) {
+        authority.validate();
+        return result;
+      }
       return Promise.resolve(result).then(output => { authority.validate(); return output; }, error => { authority.validate(); throw error; });
     };
   },
@@ -140,9 +148,11 @@ export class SetupSecretCapabilities {
     this.#records.set(capability, { sessionId, value, expiresAt: Date.now() + TTL_MS });
     return { capability, label: 'Secret entered' };
   }
-  consume(capability: string, sessionId: string): string {
+  consume(capability: string, sessionId: string, signal?: AbortSignal): string {
+    signal?.throwIfAborted();
     const record = this.#records.get(capability); this.#records.delete(capability);
     if (!record || record.sessionId !== sessionId || record.expiresAt < Date.now()) throw new SetupCapabilityError();
+    signal?.throwIfAborted();
     return record.value;
   }
   clear(): void { this.#records.clear(); }

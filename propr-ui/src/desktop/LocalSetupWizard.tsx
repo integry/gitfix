@@ -116,7 +116,11 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
     if (!request) return;
     if (retry && snapshot?.reconfigurationRequired && !reconfiguring) { setStage(snapshot.resume?.reconfigurationStage ?? 'github'); setReconfiguring(true); return; }
     setBusy(true); setError(null);
-    try { setSnapshot(retry ? reconfiguring ? await adapter.retry(request) : await adapter.retry() : await adapter.start(request)); }
+    try {
+      const nextSnapshot = retry ? reconfiguring ? await adapter.retry(request) : await adapter.retry() : await adapter.start(request);
+      setSnapshot(nextSnapshot);
+      if (retry && reconfiguring && ['failed', 'cancelled'].includes(nextSnapshot.phase)) setReconfiguring(false);
+    }
     catch { setError('Local setup could not be started. Check the selected values and try again.'); }
     finally { setBusy(false); }
   };

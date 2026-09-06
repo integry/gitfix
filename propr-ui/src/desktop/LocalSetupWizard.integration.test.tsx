@@ -135,4 +135,46 @@ describe('production local setup journey', () => {
     expect(screen.getByRole('button', { name: 'Retry setup' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
   });
+
+  it.each(['failed', 'cancelled'] as const)('returns a %s reconfigured retry to credential-free recovery', async phase => {
+    const resume = {
+      agents: ['codex'], reinitialize: false, github: { mode: 'keep' as const },
+      intake: { mode: 'direct_webhook' as const, reconfigurationRequired: true as const },
+      whitelist: null, repository: null, reconfigurationStage: 'intake' as const,
+    };
+    const requiresSecret: DesktopSetupSnapshot = {
+      ...idle, phase: 'failed', error: 'Enter the webhook secret again.', resume,
+      resumeAvailable: true, reconfigurationRequired: true,
+    };
+    const terminal: DesktopSetupSnapshot = {
+      ...requiresSecret, phase, error: phase === 'cancelled' ? 'Setup was cancelled safely.' : 'Webhook setup failed.',
+      reconfigurationRequired: false,
+    };
+    const retry = vi.fn()
+      .mockResolvedValueOnce(terminal)
+      .mockResolvedValueOnce(completed);
+    const adapter = guidedAdapter({
+      status: vi.fn(async () => requiresSecret), retry,
+      acquireWebhookSecret: vi.fn(async () => ({ capability: 'webhook-secret-capability', label: 'Secret entered' as const })),
+    });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review saved choices' }));
+    expect(await screen.findByRole('heading', { name: 'Choose GitHub event intake' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Enter webhook secret securely' }));
+    await screen.findByText('Secret entered');
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    await screen.findByRole('heading', { name: 'Select coding agents' });
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    await screen.findByRole('heading', { name: 'Ready to install' });
+    fireEvent.click(screen.getByRole('button', { name: /Install ProPR/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Setup needs attention' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
+    expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
+    expect(retry).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      intake: { mode: 'direct_webhook', secretCapability: 'webhook-secret-capability' },
+    }));
+    expect(retry).toHaveBeenNthCalledWith(2);
+  });
 });
