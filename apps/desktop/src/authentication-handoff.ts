@@ -34,23 +34,20 @@ result_file="\${state_base}.result"
 cancel_file="\${state_base}.cancel"
 umask 077
 wrapper=$$
-if command -v setsid >/dev/null 2>&1; then
-  if [ -t 0 ]; then
-    setsid -- "$@" </dev/tty &
-  else
-    setsid -- "$@" &
-  fi
-  child=$!
+if [ -t 0 ]; then
+  # Keep the command in the terminal's session so /dev/tty remains its
+  # controlling terminal. Starting a new session here preserves the tty file
+  # descriptor but makes interactive programs unable to open /dev/tty.
+  "$@" </dev/tty &
+  mode=process
+elif command -v setsid >/dev/null 2>&1; then
+  setsid -- "$@" &
   mode=group
 else
-  if [ -t 0 ]; then
-    "$@" </dev/tty &
-  else
-    "$@" &
-  fi
-  child=$!
+  "$@" &
   mode=process
 fi
+child=$!
 terminating=0
 force_killer=
 cancel_watcher=

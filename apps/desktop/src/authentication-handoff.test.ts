@@ -46,14 +46,14 @@ const waitForProcessExit = async (pid: number): Promise<void> => {
 };
 
 describe('desktop terminal authentication handoff', () => {
-  it('preserves terminal stdin for an interactive authentication command', { skip: process.platform !== 'linux' }, async () => {
+  it('preserves terminal stdin and /dev/tty for an interactive authentication command', { skip: process.platform !== 'linux' }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-pty-test-'));
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
     const completed = join(directory, 'completed');
     try {
-      await writeExecutable(terminal, '#!/bin/sh\nprintf "approved\\n" | script -qfec "\\"$1\\" \\"$2\\" \\"$3\\"" /dev/null >/dev/null 2>&1\n');
-      await writeExecutable(authentication, `#!/bin/sh\n[ -t 0 ] || exit 91\nIFS= read -r answer || exit 92\n[ "$answer" = approved ] || exit 93\nprintf interactive > "${completed}"\n`);
+      await writeExecutable(terminal, '#!/bin/sh\nprintf "controlled\\nstandard\\n" | script -qfec "\\"$1\\" \\"$2\\" \\"$3\\"" /dev/null >/dev/null 2>&1\n');
+      await writeExecutable(authentication, `#!/bin/sh\n[ -t 0 ] || exit 91\nexec 3</dev/tty || exit 92\n[ -t 3 ] || exit 93\nIFS= read -r controlled <&3 || exit 94\nIFS= read -r standard || exit 95\n[ "$controlled" = controlled ] || exit 96\n[ "$standard" = standard ] || exit 97\nprintf interactive > "${completed}"\n`);
 
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
       assert.deepEqual(await launch(authentication, [], { title: 'Controlled interactive authentication' }), { status: 0 });
