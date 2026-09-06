@@ -33,6 +33,8 @@ const InlineError: React.FC<{ message: string | null }> = ({ message }) => messa
   ? <div className="desktop-inline-error" role="alert">{message}</div>
   : null;
 
+const hasSavedChoices = (snapshot: DesktopSetupSnapshot): boolean => Boolean(snapshot.resumeAvailable && snapshot.resume);
+
 const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; cancel(): void }> = ({ snapshot, busy, error, back, cancel }) => {
   const complete = snapshot.state?.steps.filter(step => ['done', 'skipped', 'warning'].includes(step.status)).length ?? 0;
   const total = snapshot.state?.steps.length ?? 1;
@@ -58,7 +60,7 @@ const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error:
     {(failed?.nextAction || snapshot.errors?.[0]?.nextAction) && <div className="desktop-setup-recovery">{failed?.nextAction || snapshot.errors?.[0]?.nextAction}</div>}
     <InlineError message={error} />
     <div className="desktop-setup-footer"><button className="desktop-secondary-button" type="button" onClick={back}>Back</button>
-      {snapshot.reconfigurationRequired && <button className="desktop-secondary-button" type="button" disabled={busy} onClick={review}>Review saved choices</button>}
+      {hasSavedChoices(snapshot) && <button className="desktop-secondary-button" type="button" disabled={busy} onClick={review}>Review saved choices</button>}
       <button className="desktop-primary-button" type="button" disabled={busy} onClick={retry}><RotateCcw /> {busy ? 'Waiting…' : 'Retry setup'}</button></div>
   </main>;
 };
@@ -115,7 +117,7 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
   const request = useMemo(() => snapshot ? requestFrom(snapshot.sessionId, draft) : null, [draft, snapshot]);
   const run = async (retry: boolean, review = false) => {
     if (!request) return;
-    if (review && snapshot?.reconfigurationRequired && !reconfiguring) {
+    if (review && snapshot?.resumeAvailable && snapshot.resume && !reconfiguring) {
       setStage(snapshot.resume?.reconfigurationStage ?? 'github'); setReconfiguring(true); return;
     }
     setBusy(true); setError(null);
