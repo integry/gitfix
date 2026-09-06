@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDesktopBridge, type PreloadIpc } from '../../../apps/desktop/src/preload-bridge';
+import { IPC_CHANNELS } from '../../../apps/desktop/src/shared/contract';
 import { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DEFAULT_LOCAL_API_BASE_URL } from '@propr/shared';
 import { DesktopExperience } from './DesktopExperience';
@@ -67,9 +69,16 @@ describe('DesktopExperience', () => {
 
     expect(await screen.findByRole('heading', { name: 'Let’s set up this computer' })).toBeInTheDocument();
     vi.clearAllMocks();
-    act(() => deepLinks.receive('propr://connect?api=https%3A%2F%2Fconnect.propr.dev'));
+    let consumption: ReturnType<DesktopDeepLinkInbox['receive']> = null;
+    act(() => {
+      consumption = deepLinks.receive('propr://connect?api=https%3A%2F%2Fconnect.propr.dev');
+    });
 
     expect(await screen.findByRole('status')).toHaveTextContent(/untrusted instance address/i);
+    expect(consumption).toEqual({
+      kind: 'connect-confirmation',
+      target: 'https://connect.propr.dev',
+    });
     expect(screen.getByLabelText('Instance URL')).toHaveValue('https://connect.propr.dev');
     expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
     expect(adapters.discovery.discover).not.toHaveBeenCalled();
@@ -86,6 +95,44 @@ describe('DesktopExperience', () => {
     await waitFor(() => expect(adapters.connection.probe).toHaveBeenCalledOnce());
     expect(adapters.profiles.save).toHaveBeenCalledOnce();
     expect(adapters.connection.activate).toHaveBeenCalledOnce();
+  });
+
+  it('acknowledges a preload delivery after the inbox and hook consume buffered work', async () => {
+    const invocations: Array<{ channel: string; args: unknown[] }> = [];
+    let receiveFromMain: ((event: unknown, value: unknown) => void) | undefined;
+    const ipc: PreloadIpc = {
+      invoke: async (channel, ...args) => { invocations.push({ channel, args }); },
+      on: (channel, listener) => {
+        if (channel === IPC_CHANNELS.deepLink) receiveFromMain = listener;
+      },
+      removeListener: () => undefined,
+    };
+    const bridge = createDesktopBridge(ipc);
+    const delivery = {
+      deliveryId: 41,
+      url: 'propr://connect?api=https%3A%2F%2Fconnect.propr.dev',
+    };
+    receiveFromMain?.({}, delivery);
+
+    const inbox = new DesktopDeepLinkInbox();
+    const unsubscribe = bridge.app.onDeepLink(value => inbox.receive(value));
+    const adapters = adaptersFor();
+    const rendered = render(
+      <DesktopExperience adapters={adapters} deepLinks={inbox}><div>Shared route tree</div></DesktopExperience>
+    );
+    try {
+      expect(await screen.findByLabelText('Instance URL')).toHaveValue('https://connect.propr.dev');
+      await waitFor(() => expect(invocations).toEqual([{
+        channel: IPC_CHANNELS.deepLinkAcknowledgement,
+        args: [{
+          ...delivery,
+          consumption: { kind: 'connect-confirmation', target: 'https://connect.propr.dev' },
+        }],
+      }]));
+    } finally {
+      unsubscribe();
+      rendered.unmount();
+    }
   });
 
   it('returns from the prefilled profile editor to every packaged-layout chooser element', async () => {
@@ -120,9 +167,13 @@ describe('DesktopExperience', () => {
     render(<DesktopExperience adapters={adapters} deepLinks={deepLinks}><div>Connected app</div></DesktopExperience>);
 
     expect(await screen.findByText('Connected app')).toBeInTheDocument();
-    act(() => deepLinks.receive('propr://open?path=%2Ftasks%3Fstatus%3Dopen'));
+    let consumption: ReturnType<DesktopDeepLinkInbox['receive']> = null;
+    act(() => {
+      consumption = deepLinks.receive('propr://open?path=%2Ftasks%3Fstatus%3Dopen');
+    });
 
     expect(window.location.hash).toBe('#/tasks?status=open');
+    expect(consumption).toEqual({ kind: 'open-navigated', target: '/tasks?status=open' });
     expect(screen.queryByLabelText('Instance URL')).not.toBeInTheDocument();
   });
 
@@ -133,11 +184,15 @@ describe('DesktopExperience', () => {
 
     expect(await screen.findByRole('heading', { name: 'Let’s set up this computer' })).toBeInTheDocument();
     vi.clearAllMocks();
-    act(() => deepLinks.receive('propr://connect?api=SENTINEL_ATTACKER_VALUE&token=secret'));
+    let consumption: ReturnType<DesktopDeepLinkInbox['receive']> = null;
+    act(() => {
+      consumption = deepLinks.receive('propr://connect?api=SENTINEL_ATTACKER_VALUE&token=secret');
+    });
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('ProPR Desktop could not use that link. Choose an instance and try again.');
     expect(alert).not.toHaveTextContent('SENTINEL_ATTACKER_VALUE');
+    expect(consumption).toBeNull();
     expect(adapters.connection.probe).not.toHaveBeenCalled();
     expect(adapters.authentication.authenticate).not.toHaveBeenCalled();
     expect(adapters.profiles.save).not.toHaveBeenCalled();
