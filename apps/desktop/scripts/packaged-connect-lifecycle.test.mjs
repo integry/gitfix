@@ -727,6 +727,8 @@ describe('packaged Connect fixture cleanup', () => {
     let attempts = 0;
     const result = await removeAuthorizedConnectFixture({
       ...identityOptions,
+      // This test proves retry semantics; timeout-specific tests retain their tight wall-clock bounds.
+      retryBoundMs: 250,
       rmImpl: async removed => {
         assert.equal(removed, fixture);
         attempts += 1;

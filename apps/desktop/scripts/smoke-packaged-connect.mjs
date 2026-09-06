@@ -29,6 +29,7 @@ import {
   collectAcceptedSocketEvidence,
   evaluatePackagedConnectEvidence,
 } from './packaged-connect-evidence.mjs';
+import { isExpectedScopedCurrentUserRequest } from './packaged-acceptance-current-user.mjs';
 import {
   canonicalizeWindowsFixtureEntry,
   encodedWindowsFixtureAcl,
@@ -58,6 +59,12 @@ let resourcesPath = process.platform === 'darwin'
 let unpackedNative = join(resourcesPath, 'app.asar.unpacked', '.vite', 'native', 'prebuilds');
 const endpoint = 'https://t-packaged123.propr.dev';
 const identity = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const EXPECTED_CURRENT_USER_SCOPE_GENERATION = 1;
+const isExpectedCurrentUserRequest = request => isExpectedScopedCurrentUserRequest(
+  request.method,
+  request.url,
+  EXPECTED_CURRENT_USER_SCOPE_GENERATION,
+);
 const secrets = [
   'tunnel-secret-SENTINEL', 'connector-secret-SENTINEL',
   'relay-secret-SENTINEL', 'github-secret-SENTINEL',
@@ -160,7 +167,7 @@ const createPackagedJourneyFixture = async () => {
       }
       if (request.method === 'GET' && request.url === '/__packaged/evidence') {
         const authenticatedRest = requests.filter(item => item.socketIo === false
-          && item.url === '/api/auth/user'
+          && isExpectedCurrentUserRequest(item)
           && item.authorization === `Bearer ${token}`
           && item.transportScope === null);
         const authenticatedSockets = requests.filter(item => item.socketIo === true
@@ -263,7 +270,7 @@ const createPackagedJourneyFixture = async () => {
         response.end();
         return;
       }
-      if (request.method === 'GET' && request.url === '/api/auth/user'
+      if (isExpectedCurrentUserRequest(request)
         && active && record.authorization === `Bearer ${token}`) {
         response.writeHead(200, cors);
         response.end(JSON.stringify({
@@ -639,7 +646,7 @@ try {
         && requests.every((request, index) => request.fixtureMode === intendedPairingModes[index]);
       const authenticatedRest = applicationRequests.filter(request =>
         request.socketIo === false
-        && request.url === '/api/auth/user'
+        && isExpectedCurrentUserRequest(request)
         && request.authorization === `Bearer ${journeyFixture.secrets[2]}`);
       const socketEvidence = collectAcceptedSocketEvidence({
         requests: applicationRequests,

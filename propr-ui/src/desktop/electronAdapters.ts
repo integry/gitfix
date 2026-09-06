@@ -3,6 +3,7 @@ import { isProprLoopbackHostname, parseProprConnectEndpoint } from '@propr/share
 import type { DesktopBridge, DesktopDiscoveryCandidate, DesktopProfile as StoredDesktopProfile } from '../../../apps/desktop/src/shared/contract';
 import { getDesktopConnectionScope, setDesktopConnectionScope } from '../api/apiClient';
 import type { DesktopAdapters, DesktopPlatform, DesktopProfile } from './types';
+import { reportPackagedAcceptanceRendererLifecycle } from './packagedAcceptanceRendererLifecycle';
 
 const platform = (value: string): DesktopPlatform => {
   const normalized = value.toLowerCase();
@@ -220,6 +221,10 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
         profileId: result.profileId,
         transportScope: result.transportScope,
       }, profile.baseUrl);
+      reportPackagedAcceptanceRendererLifecycle('profile-activation-published', {
+        profileActivationPublished: true,
+        connectionScope: 'available',
+      });
       publishedProfile = {
         id: profile.id,
         origin: normalizeApiBaseUrl(profile.baseUrl),
