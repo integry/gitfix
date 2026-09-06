@@ -137,6 +137,35 @@ while :; do sleep 1; done
     }
   });
 
+  it('does not signal an already-closed terminal that never starts the wrapper', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-auth-closed-terminal-test-'));
+    const terminal = join(directory, 'terminal');
+    const authentication = join(directory, 'authentication');
+    const pidPath = join(directory, 'terminal.pid');
+    const signalAttempts: Array<{ pid: number; signal: string | number | undefined }> = [];
+    const originalKill = process.kill;
+    try {
+      await writeExecutable(terminal, `#!/bin/sh\nprintf '%s' "$$" > "${pidPath}"\nexit 23\n`);
+      await writeExecutable(authentication, '#!/bin/sh\nexit 0\n');
+      process.kill = ((pid: number, signal?: string | number) => {
+        signalAttempts.push({ pid, signal });
+        return true;
+      }) as typeof process.kill;
+
+      const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
+      assert.deepEqual(await launch(authentication, [], { title: 'Controlled closed terminal' }), { status: 23 });
+      const terminalPid = Number(await readFile(pidPath, 'utf8'));
+      assert.equal(
+        signalAttempts.some(attempt => Math.abs(attempt.pid) === terminalPid),
+        false,
+        'a reaped launcher PID was reused to signal a process or process group',
+      );
+    } finally {
+      process.kill = originalKill;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('cancels and reaps a TERM-resistant command owned by a server-capable terminal', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-cancel-test-'));
     const terminal = join(directory, 'terminal');

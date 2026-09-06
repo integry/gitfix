@@ -167,10 +167,11 @@ const relinquishTerminal = async (
   closed: Promise<void>,
   isClosed: () => boolean,
 ): Promise<void> => {
-  // Signal the detached group even when the launcher itself already closed: a
-  // failed terminal may have left descendants in the group before exiting.
+  // Once the launcher is reaped, its numeric PID no longer proves ownership of
+  // either a process or process group and must not be used for signaling.
+  if (isClosed()) return;
   stopProcessGroup(child, 'SIGTERM');
-  if (isClosed() || await waitForClose(closed, TERMINAL_STOP_GRACE_MS)) return;
+  if (await waitForClose(closed, TERMINAL_STOP_GRACE_MS)) return;
   stopProcessGroup(child, 'SIGKILL');
   await closed;
 };
