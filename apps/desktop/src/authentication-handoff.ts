@@ -35,6 +35,10 @@ result_file="\${state_base}.result"
 cancel_file="\${state_base}.cancel"
 umask 077
 wrapper=$$
+termination_requested=0
+# Record terminal shutdowns while the child is being spawned and its identity is
+# captured. The full handler cannot safely signal until child ownership is known.
+trap 'termination_requested=1' HUP INT TERM
 if [ -t 0 ]; then
   # Keep the command in the terminal's session so /dev/tty remains its
   # controlling terminal. Starting a new session here preserves the tty file
@@ -74,7 +78,6 @@ load_child_identity() {
 if load_child_identity && [ "$observed_child_parent" = "$wrapper" ]; then
   child_start=$observed_child_start
 fi
-printf '%s:%s\n' "$mode" "$child" > "$started_file"
 child_is_owned() {
   [ -n "$child_start" ] || return 1
   load_child_identity || return 1
@@ -112,6 +115,9 @@ terminate() {
   fi
 }
 trap terminate HUP INT TERM
+if [ "$termination_requested" -ne 0 ]; then
+  terminate
+fi
 (
   trap 'exit 0' TERM
   trap '' HUP INT
@@ -119,6 +125,7 @@ trap terminate HUP INT TERM
   kill -TERM "$wrapper" 2>/dev/null || true
 ) &
 cancel_watcher=$!
+printf '%s:%s\n' "$mode" "$child" > "$started_file"
 
 status=127
 while :; do
