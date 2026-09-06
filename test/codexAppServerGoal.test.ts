@@ -14,6 +14,8 @@ after(async () => {
 
 class FakeConnection {
   started: string[] = [];
+  summaryParts: string[] = [];
+  private summarySequence = 0;
   requests: Array<{ method: string; params: Record<string, unknown>; timeoutMs?: number }> = [];
   effectiveModel?: string;
   closeError: Error | null = null;
@@ -21,6 +23,7 @@ class FakeConnection {
   private goalStatus: string;
   private objective = '/goal Ship it\n\nPolicy';
   private turnResolver?: (message: Record<string, unknown>) => void;
+  private nextAgentMessage?: string;
 
   constructor(
     private resume: boolean,
@@ -67,11 +70,19 @@ class FakeConnection {
   }
 
   notify(): void {}
+  get agentMessageCursor(): number { return this.summarySequence; }
+  agentMessagesAfter(cursor: number): string[] { return cursor < this.summarySequence ? this.summaryParts.slice(-1) : []; }
   completeGoal(): void { this.goalStatus = 'complete'; }
+  declareCheckpoint(value: Record<string, unknown>): void { this.nextAgentMessage = JSON.stringify(value); }
   takeStartedTurn(): string | null { return this.started.shift() ?? null; }
   discardStartedTurn(): void {}
   waitForTurn(): Promise<Record<string, unknown>> {
     if (this.holdTurn) return new Promise(resolve => { this.turnResolver = resolve; });
+    if (this.nextAgentMessage) {
+      this.summaryParts.push(this.nextAgentMessage);
+      this.summarySequence += 1;
+      this.nextAgentMessage = undefined;
+    }
     return Promise.resolve({ params: { turn: { status: 'completed' } } });
   }
   private startNativeTurn(): void {
@@ -85,11 +96,11 @@ function controls(onCheckpoint?: () => void) {
   const delivered: string[] = [];
   const undeliverable: string[] = [];
   const checkpoints: string[] = [];
+  const checkpointRequests: Array<Record<string, unknown>> = [];
   let desiredState: 'running' | 'paused' | 'cancelled' = 'running';
-  let checkpoint: { id?: string; kind: 'manual' | 'automatic'; commitMessage?: string } | null = null;
   const control: GoalExecutionControl = {
     load: async () => ({
-      desiredState, requestedModel: 'gpt-5.6', pendingInputs: [], controlGeneration: 0, checkpoint,
+      desiredState, requestedModel: 'gpt-5.6', pendingInputs: [], controlGeneration: 0,
     }),
     heartbeat: async () => {},
     setActiveTurn: async () => {},
@@ -97,15 +108,14 @@ function controls(onCheckpoint?: () => void) {
     markInputUndeliverable: async id => { undeliverable.push(id); },
     publishCheckpoint: async (request, turnId) => {
       checkpoints.push(`${request.kind}:${turnId}`);
-      checkpoint = null;
+      checkpointRequests.push(request as unknown as Record<string, unknown>);
       onCheckpoint?.();
     },
     appendOutput: async () => {},
   };
   return {
-    control, delivered, undeliverable, checkpoints,
+    control, delivered, undeliverable, checkpoints, checkpointRequests,
     setDesiredState: (state: typeof desiredState) => { desiredState = state; },
-    requestCheckpoint: (request: NonNullable<typeof checkpoint>) => { checkpoint = request; },
   };
 }
 
@@ -224,15 +234,28 @@ describe('pinned Codex 0.146 native external-goal activation', () => {
     );
   });
 
-  test('pauses native auto-continuation while the worker publishes a checkpoint', async () => {
+  test('pauses native auto-continuation while ProPR publishes an agent-declared checkpoint', async () => {
     const state = controls();
-    state.requestCheckpoint({ id: 'checkpoint-1', kind: 'manual' });
     const connection = new FakeConnection(false, 'before');
+    connection.declareCheckpoint({
+      checkpointReady: true,
+      message: 'feat: stable slice',
+      include: ['src/stable.ts'],
+      exclude: ['src/in-progress.ts'],
+      summary: 'The stable slice is tested.',
+    });
 
     const result = await runGoalProtocol(connection as never, options(state.control), 'gpt-5.6');
 
     assert.equal(result.completion?.status, 'completed');
-    assert.deepEqual(state.checkpoints, ['manual:turn-native']);
+    assert.deepEqual(state.checkpoints, ['agent:turn-native']);
+    assert.deepEqual(state.checkpointRequests, [{
+      kind: 'agent',
+      commitMessage: 'feat: stable slice',
+      include: ['src/stable.ts'],
+      exclude: ['src/in-progress.ts'],
+      summary: 'The stable slice is tested.',
+    }]);
     assert.deepEqual(
       connection.requests
         .filter(request => request.method === 'thread/goal/set')
@@ -244,12 +267,12 @@ describe('pinned Codex 0.146 native external-goal activation', () => {
   test('does not reactivate a native goal that completed while its final turn was checkpointed', async () => {
     const connection = new FakeConnection(false, 'before');
     const state = controls(() => connection.completeGoal());
-    state.requestCheckpoint({ kind: 'automatic' });
+    connection.declareCheckpoint({ checkpointReady: true, message: 'feat: final slice' });
 
     const result = await runGoalProtocol(connection as never, options(state.control), 'gpt-5.6');
 
     assert.equal(result.completion?.status, 'completed');
-    assert.deepEqual(state.checkpoints, ['automatic:turn-native']);
+    assert.deepEqual(state.checkpoints, ['agent:turn-native']);
     assert.deepEqual(
       connection.requests
         .filter(request => request.method === 'thread/goal/set')

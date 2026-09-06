@@ -14,6 +14,7 @@ import type {
 } from '../types.js';
 import { AppServerConnection, asRecord, type RpcMessage } from './codexAppServerConnection.js';
 import { buildCodexAppServerDockerArgs } from './utils/codexDockerArgsBuilder.js';
+import { parseGoalCheckpointDeclaration } from '../../goals.js';
 
 const execFileAsync = promisify(execFile);
 export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -203,14 +204,12 @@ async function observeNativeGoal(
         await control.setActiveTurn(null);
         if (completion.status !== 'completed') return completion;
         let boundary = await control.load();
-        const checkpoint = completion.checkpoint ?? boundary.checkpoint;
+        const checkpoint = completion.checkpoint;
         let completedDuringCheckpoint = false;
         if (checkpoint) {
-            if (!completion.checkpoint) {
-                await connection.request('thread/goal/set', {
-                    threadId, objective, status: 'paused',
-                });
-            }
+            await connection.request('thread/goal/set', {
+                threadId, objective, status: 'paused',
+            });
             await control.publishCheckpoint(checkpoint, turnId);
             boundary = await control.load();
             const nativeBoundary = nativeGoalSnapshot(await connection.request('thread/goal/get', { threadId }));
@@ -392,9 +391,9 @@ async function observeActiveTurnWithThread(
     const control = options.goalControl!;
     const objective = nativeGoalObjective(options);
     let completed: RpcMessage | null = null;
+    const summaryStart = connection.agentMessageCursor;
     const completion = connection.waitForTurn(turnId).then(message => { completed = message; });
     let interrupted = false;
-    let checkpoint: GoalCheckpointRequest | undefined;
     while (!completed) {
         await Promise.race([completion, new Promise(resolve => setTimeout(resolve, 400))]);
         if (completed) break;
@@ -409,15 +408,6 @@ async function observeActiveTurnWithThread(
             }
             continue;
         }
-        if (!checkpoint && snapshot.checkpoint) {
-            checkpoint = snapshot.checkpoint;
-            // Pausing the external goal does not interrupt the current turn. It
-            // prevents native auto-continuation from racing the worker's git
-            // checkpoint after this turn reaches its safe boundary.
-            await connection.request('thread/goal/set', {
-                threadId, objective, status: 'paused',
-            });
-        }
         for (const input of snapshot.pendingInputs) {
             await connection.request('turn/steer', {
                 threadId,
@@ -428,5 +418,13 @@ async function observeActiveTurnWithThread(
             await control.markInputDelivered(input.id, turnId);
         }
     }
+    const declaration = parseGoalCheckpointDeclaration(connection.agentMessagesAfter(summaryStart).join('\n'));
+    const checkpoint: GoalCheckpointRequest | undefined = declaration ? {
+        kind: 'agent',
+        commitMessage: declaration.message,
+        include: declaration.include,
+        exclude: declaration.exclude,
+        summary: declaration.summary,
+    } : undefined;
     return { ...turnStatus(completed!), ...(checkpoint ? { checkpoint } : {}) };
 }

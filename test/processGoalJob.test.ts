@@ -59,7 +59,7 @@ test('processGoalJob fails provider success without the exact open draft PR', as
   assert.match((markFailed.mock.calls[0].arguments[1] as Error).message, /required open draft PR/);
 });
 
-test('direct goals publish a requested boundary checkpoint and a final checkpoint through the worker', async () => {
+test('whole-session direct goals publish an agent declaration and continue after acknowledgement', async () => {
   const data: GoalJobData = {
     goalId: 'goal-direct', taskId: 'goal-task-direct', repoOwner: 'acme', repoName: 'repo',
     generation: 1, claimId: 'claim-direct',
@@ -74,39 +74,45 @@ test('direct goals publish a requested boundary checkpoint and a final checkpoin
     active_turn_id: null, pause_confirmed_at: null, resume_requested: false,
     started_at: new Date().toISOString(), paused_at: null, control_generation: 0, control_ack_generation: 0,
   };
-  const published: Array<{ kind: string; checkpointId?: string }> = [];
-  const markCompleted = mock.fn(async () => ({ state: 'completed' }));
+  const wholeSessionGoal = { ...goal, agent_type: 'claude' };
+  const published: Array<{ kind: string; message?: string; include?: string[]; exclude?: string[] }> = [];
+  let continuedAfterCheckpoint = false;
   const dependencies = {
-    claim: async () => goal,
+    claim: async () => wholeSessionGoal,
     withHeartbeat: async (_job: GoalJobData, operation: () => Promise<unknown>) => operation(),
     prepare: async () => ({ ready: true, value: {
-      goal, agent: {}, githubToken: 'token', worktree: { worktreePath: '/tmp/worktree', branchName: 'goal/ship-it' }, pendingInput: null,
+      goal: wholeSessionGoal, agent: {}, githubToken: 'token', worktree: { worktreePath: '/tmp/worktree', branchName: 'goal/ship-it' }, pendingInput: null,
     } }),
-    execute: async () => ({ success: true, modelUsed: 'gpt-5.6', executionTimeMs: 1, logs: '', modifiedFiles: [] }),
+    execute: async () => ({
+      success: true, modelUsed: 'gpt-5.6', executionTimeMs: 1, logs: '', modifiedFiles: [],
+      summary: '{"checkpointReady":true,"message":"feat: stable slice","include":["src/stable.ts"],"exclude":["src/wip.ts"],"summary":"Stable slice complete."}',
+    }),
     result: {
-      loadGoal: async () => goal,
-      fencedGoal: async () => goal,
+      loadGoal: async () => wholeSessionGoal,
+      fencedGoal: async () => wholeSessionGoal,
       acknowledgeInput: async () => {}, recordMetrics: async () => {}, handleStopped: async () => null,
-      nextCheckpoint: async () => ({ id: 'checkpoint-1', kind: 'manual' }),
-      publishCheckpoint: async (_job: GoalJobData, checkpoint: { kind: string; checkpointId?: string }) => {
-        published.push({ kind: checkpoint.kind, checkpointId: checkpoint.checkpointId });
+      publishCheckpoint: async (_job: GoalJobData, checkpoint: { kind: string; commitMessage?: string; include?: string[]; exclude?: string[] }) => {
+        published.push({ kind: checkpoint.kind, message: checkpoint.commitMessage, include: checkpoint.include, exclude: checkpoint.exclude });
         return { commitSha: 'abc', pullRequest: { number: 42, url: 'https://github.com/acme/repo/pull/42', state: 'open', draft: true } };
       },
       saveProviderResult: async () => ({ finalPr: { number: 42, url: 'https://github.com/acme/repo/pull/42' } }),
-      scheduleFurtherWork: async () => null, finalizeGoal: async () => true,
+      scheduleFurtherWork: async (_data: GoalJobData, _goal: unknown, _result: unknown, checkpointPublished: boolean) => {
+        continuedAfterCheckpoint = checkpointPublished;
+        return { status: 'continuing' };
+      },
+      finalizeGoal: async () => true,
       markTaskReconciled: async () => {},
-      stateManager: () => ({ markTaskCompleted: markCompleted, markTaskFailed: async () => ({ state: 'failed' }) }),
+      stateManager: () => ({ markTaskCompleted: async () => ({ state: 'completed' }), markTaskFailed: async () => ({ state: 'failed' }) }),
     },
   };
 
   const outcome = await processGoalJob({ data } as never, dependencies as never);
 
-  assert.deepEqual(outcome, { status: 'complete', goalId: 'goal-direct' });
+  assert.deepEqual(outcome, { status: 'continuing' });
   assert.deepEqual(published, [
-    { kind: 'manual', checkpointId: 'checkpoint-1' },
-    { kind: 'final', checkpointId: undefined },
+    { kind: 'agent', message: 'feat: stable slice', include: ['src/stable.ts'], exclude: ['src/wip.ts'] },
   ]);
-  assert.equal(markCompleted.mock.callCount(), 1);
+  assert.equal(continuedAfterCheckpoint, true);
 });
 
 test('goal execution keeps initial prompt identity separate from FIFO continuation input', async () => {

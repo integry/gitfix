@@ -89,6 +89,36 @@ test('commitChanges can create the empty bootstrap commit required for an early 
     }
 });
 
+test('commitChanges stages only the agent-declared checkpoint scope', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'propr-goal-scope-'));
+    try {
+        const repoPath = path.join(tempDir, 'repo');
+        await git(tempDir, ['init', repoPath]);
+        await configureRepository(repoPath);
+        await writeFile(path.join(repoPath, 'stable.txt'), 'initial\n', 'utf8');
+        await writeFile(path.join(repoPath, 'parallel.txt'), 'initial\n', 'utf8');
+        await git(repoPath, ['add', '.']);
+        await git(repoPath, ['commit', '-m', 'initial']);
+
+        await writeFile(path.join(repoPath, 'stable.txt'), 'checkpoint ready\n', 'utf8');
+        await writeFile(path.join(repoPath, 'parallel.txt'), 'still in progress\n', 'utf8');
+        const result = await commitChanges(repoPath, 'feat: stable checkpoint', null, {
+            include: ['stable.txt'],
+            exclude: ['parallel.txt'],
+        });
+
+        assert.deepEqual(result?.filesChanged, ['stable.txt']);
+        assert.equal(await git(repoPath, ['show', '--format=', '--name-only', 'HEAD']), 'stable.txt');
+        assert.match(await git(repoPath, ['status', '--porcelain']), /parallel\.txt/);
+        await assert.rejects(
+            commitChanges(repoPath, 'feat: invalid scope', null, { include: ['../outside.txt'] }),
+            /normalized repository-relative file/,
+        );
+    } finally {
+        await rm(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('pushBranch disables repository pre-push hooks', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'propr-hookless-push-'));
     try {

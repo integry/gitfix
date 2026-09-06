@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { db, type GoalCheckpointRequest, type GoalExecutionControl, type GoalJobData } from '@propr/core';
+import { db, type GoalExecutionControl, type GoalJobData } from '@propr/core';
 import type { GoalArtifact } from '@propr/core';
 import { publishDirectGoalCheckpoint } from './goalCheckpointPublisher.js';
 
@@ -104,25 +104,6 @@ export async function saveFencedGoalSession(
     });
 }
 
-export async function nextGoalCheckpoint(goal: GoalRow): Promise<GoalCheckpointRequest | null> {
-    if (goal.launch_strategy !== 'direct') return null;
-    const pendingCheckpoint = await db('goal_checkpoints').where({
-        goal_id: goal.goal_id, owner_id: goal.owner_id, state: 'pending', kind: 'manual',
-    }).orderBy('created_at', 'asc').first('checkpoint_id', 'commit_message');
-    if (pendingCheckpoint) {
-        return {
-            id: pendingCheckpoint.checkpoint_id,
-            kind: 'manual',
-            ...(pendingCheckpoint.commit_message ? { commitMessage: pendingCheckpoint.commit_message } : {}),
-        };
-    }
-    const intervalMs = Number(goal.checkpoint_interval_minutes || 0) * 60_000;
-    const intervalDue = intervalMs > 0
-        && Boolean(goal.last_checkpoint_at)
-        && Date.now() - new Date(goal.last_checkpoint_at!).getTime() >= intervalMs;
-    return intervalDue ? { kind: 'automatic' } : null;
-}
-
 export function createGoalExecutionControl(job: GoalJobData): GoalExecutionControl {
     return {
         async load() {
@@ -136,7 +117,6 @@ export function createGoalExecutionControl(job: GoalJobData): GoalExecutionContr
                 requestedModel: goal.requested_model,
                 pendingInputs: inputs.map(input => ({ id: input.input_id, message: input.message })),
                 controlGeneration: Number(goal.control_generation || 0),
-                checkpoint: await nextGoalCheckpoint(goal),
             };
         },
         async heartbeat() {
@@ -200,6 +180,9 @@ export function createGoalExecutionControl(job: GoalJobData): GoalExecutionContr
                 checkpointId: request.id,
                 kind: request.kind,
                 commitMessage: request.commitMessage,
+                include: request.include,
+                exclude: request.exclude,
+                summary: request.summary,
                 turnId,
             });
         },

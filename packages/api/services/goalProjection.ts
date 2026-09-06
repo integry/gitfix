@@ -69,6 +69,14 @@ function parseStats(value: GoalProjectionRow['artifact_stats']): GoalArtifactSta
   return { issues: 0, openIssues: 0, pullRequests: 0, openPullRequests: 0 };
 }
 
+function parseCheckpointPaths(value: unknown): string[] | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every(item => typeof item === 'string') ? parsed : null;
+  } catch { return null; }
+}
+
 function goalTiming(row: GoalProjectionRow): { elapsedMs: number; pausedMs: number; activeMs: number } {
   const endMs = row.completed_at ? new Date(row.completed_at).getTime() : Date.now();
   const startMs = row.started_at ? new Date(row.started_at).getTime() : new Date(row.created_at).getTime();
@@ -97,6 +105,10 @@ function checkpointProjection(
       kind: latestCheckpoint.kind,
       state: latestCheckpoint.state,
       commitSha: latestCheckpoint.commit_sha,
+      message: latestCheckpoint.commit_message,
+      include: parseCheckpointPaths(latestCheckpoint.include_paths),
+      exclude: parseCheckpointPaths(latestCheckpoint.exclude_paths),
+      summary: latestCheckpoint.summary,
       error: latestCheckpoint.error,
       createdAt: latestCheckpoint.created_at,
       completedAt: latestCheckpoint.completed_at,

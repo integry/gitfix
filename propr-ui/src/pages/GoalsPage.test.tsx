@@ -8,7 +8,6 @@ import { getInstanceCatalog, getTaskLiveDetails } from '../api/proprApi';
 vi.mock('../api/goals', () => ({
   getGoalCapabilities: vi.fn(), listGoals: vi.fn(), getGoal: vi.fn(), createGoal: vi.fn(),
   pauseGoal: vi.fn(), resumeGoal: vi.fn(), cancelGoal: vi.fn(), deleteGoal: vi.fn(), requestGoalModel: vi.fn(), sendGoalInput: vi.fn(),
-  checkpointGoal: vi.fn(), requestGoalCheckpointInterval: vi.fn(),
 }));
 vi.mock('../api/proprApi', () => ({ getInstanceCatalog: vi.fn(), getTaskLiveDetails: vi.fn() }));
 const socket = vi.hoisted(() => ({
@@ -58,8 +57,6 @@ describe('GoalsPage', () => {
     vi.mocked(goalsApi.cancelGoal).mockResolvedValue({ goal: { ...goal, desiredState: 'cancelled', resultState: null } });
     vi.mocked(goalsApi.deleteGoal).mockResolvedValue();
     vi.mocked(goalsApi.requestGoalModel).mockResolvedValue({ goal: { ...goal, requestedModel: 'gpt-5.6-luna' } });
-    vi.mocked(goalsApi.checkpointGoal).mockResolvedValue({ goal });
-    vi.mocked(goalsApi.requestGoalCheckpointInterval).mockResolvedValue({ goal });
   });
 
   it('creates exactly one native goal from repository, agent, model and objective', async () => {
@@ -109,7 +106,7 @@ describe('GoalsPage', () => {
     expect(screen.getByLabelText('Maximum parallel tasks')).toHaveValue(6);
     expect(screen.getByLabelText('Agent implements directly')).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Ask the coding agent to use Ultrafix' })).toBeChecked();
-    expect(screen.getByRole('slider', { name: 'Checkpoint frequency' })).toHaveAttribute('aria-valuetext', '60 minutes');
+    expect(screen.getByRole('slider', { name: 'Checkpoint target cadence' })).toHaveAttribute('aria-valuetext', '60 minutes');
     expect(screen.getByLabelText('Objective')).toHaveValue('');
 
     fireEvent.change(screen.getByLabelText('Objective'), { target: { value: 'Ship the API' } });
@@ -133,9 +130,9 @@ describe('GoalsPage', () => {
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /><Route path="/goals/:goalId" element={<div>Goal detail</div>} /></Routes></MemoryRouter>);
     await screen.findByRole('option', { name: 'Codex' });
     fireEvent.change(screen.getByLabelText('Objective'), { target: { value: 'Ship the dashboard' } });
-    const checkpointSlider = screen.getByRole('slider', { name: 'Checkpoint frequency' });
+    const checkpointSlider = screen.getByRole('slider', { name: 'Checkpoint target cadence' });
     expect(checkpointSlider).toHaveAttribute('aria-valuetext', '15 minutes');
-    const checkpointOptions = screen.getByLabelText('Checkpoint frequency options');
+    const checkpointOptions = screen.getByLabelText('Checkpoint target cadence options');
     for (const minutes of [5, 10, 15, 30, 60, 120]) {
       expect(within(checkpointOptions).getByText(String(minutes))).toBeInTheDocument();
     }
@@ -241,7 +238,7 @@ describe('GoalsPage', () => {
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('stopped first'));
   });
 
-  it('requests worker-owned checkpoint commits and adjusts their safe-boundary frequency', async () => {
+  it('shows agent-declared checkpoints and their prompt target cadence', async () => {
     const directGoal: goalsApi.Goal = {
       ...goal,
       launchStrategy: 'direct',
@@ -252,14 +249,10 @@ describe('GoalsPage', () => {
       },
     };
     vi.mocked(goalsApi.getGoal).mockResolvedValue({ goal: directGoal });
-    vi.mocked(goalsApi.checkpointGoal).mockResolvedValue({ goal: { ...directGoal, checkpoint: { ...directGoal.checkpoint!, pending: true } } });
-    vi.mocked(goalsApi.requestGoalCheckpointInterval).mockResolvedValue({ goal: { ...directGoal, checkpoint: { ...directGoal.checkpoint!, intervalMinutes: 30 } } });
     render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Checkpoint now' }));
-    await waitFor(() => expect(goalsApi.checkpointGoal).toHaveBeenCalledWith('goal-1'));
-    expect(await screen.findByRole('button', { name: 'Checkpoint pending' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Checkpoint frequency'), { target: { value: '30' } });
-    await waitFor(() => expect(goalsApi.requestGoalCheckpointInterval).toHaveBeenCalledWith('goal-1', 30));
+    expect(await screen.findByText('The agent declares when coherent work is ready.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Checkpoint now' })).not.toBeInTheDocument();
+    expect(screen.getByText('Target cadence: about every 15 minutes.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open draft PR/ })).toHaveAttribute('href', directGoal.finalPr!.url);
   });
 

@@ -6,6 +6,7 @@ import { AgentRegistry, closeConnection } from '@propr/core';
 import { up as createGoals } from '../../core/src/db/migrations/20260902000000_create_goals.js';
 import { up as hardenGoals } from '../../core/src/db/migrations/20260902010000_harden_native_goals.js';
 import { up as addGoalCheckpoints } from '../../core/src/db/migrations/20260903000000_add_direct_goal_checkpoints.js';
+import { up as addGoalCheckpointDeclarations } from '../../core/src/db/migrations/20260906000000_add_goal_checkpoint_declarations.js';
 import { createGoalRoutes } from '../routes/goalRoutes.js';
 
 function request(userId: string, params: Record<string, string> = {}, body: unknown = {}): Request {
@@ -35,6 +36,7 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         await createGoals(database);
         await hardenGoals(database);
         await addGoalCheckpoints(database);
+        await addGoalCheckpointDeclarations(database);
         await database.schema.createTable('task_history', table => {
             table.increments('id');
             table.string('task_id');
@@ -264,33 +266,6 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         assert.equal(updated.current_task_id, 'goal-task-1');
         assert.equal(updated.worktree_path, '/worktrees/goal-1');
         assert.equal(updated.desired_state, 'running');
-
-        const manualCheckpoint = response();
-        const checkpointRequest = request('owner-2', { goalId: 'goal-3' });
-        checkpointRequest.get = () => 'owner-checkpoint-1';
-        await routes.checkpoint(checkpointRequest, manualCheckpoint.res);
-        await routes.checkpoint(checkpointRequest, manualCheckpoint.res);
-        assert.equal(manualCheckpoint.state.status, 202);
-        assert.equal((manualCheckpoint.state.body as { goal: { checkpoint: { pending: boolean } } }).goal.checkpoint.pending, true);
-        const checkpointRows = await database('goal_checkpoints').where({ goal_id: 'goal-3' });
-        assert.equal(checkpointRows.length, 1);
-        assert.equal(checkpointRows[0].kind, 'manual');
-        assert.equal(checkpointRows[0].state, 'pending');
-
-        const frequencyRequest = request('owner-2', { goalId: 'goal-3' }, { minutes: 30 });
-        frequencyRequest.get = () => 'owner-frequency-1';
-        const frequency = response();
-        await routes.requestCheckpointInterval(frequencyRequest, frequency.res);
-        await routes.requestCheckpointInterval(frequencyRequest, frequency.res);
-        assert.equal(frequency.state.status, 200);
-        assert.equal((await database('goals').where({ goal_id: 'goal-3' }).first()).checkpoint_interval_minutes, 30);
-
-        const orchestratedCheckpoint = response();
-        const orchestratedCheckpointRequest = request('owner-2', { goalId: 'goal-8' });
-        orchestratedCheckpointRequest.get = () => 'owner-checkpoint-orchestrated';
-        await routes.checkpoint(orchestratedCheckpointRequest, orchestratedCheckpoint.res);
-        assert.equal(orchestratedCheckpoint.state.status, 409);
-        assert.match((orchestratedCheckpoint.state.body as { error: string }).error, /only apply to direct goals/);
 
         const runningClaudeInput = response();
         const runningInputRequest = request('owner-2', { goalId: 'goal-3' }, { message: 'Apply this at a safe boundary.' });

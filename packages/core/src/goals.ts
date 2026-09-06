@@ -3,7 +3,7 @@ export type GoalResultState = 'completed' | 'failed' | 'cancelled';
 export const GOAL_LAUNCH_STRATEGIES = ['direct', 'orchestrate'] as const;
 export type GoalLaunchStrategy = typeof GOAL_LAUNCH_STRATEGIES[number];
 
-export const GOAL_CONTINUE_INPUT = 'Continue working toward the goal.';
+export const GOAL_CONTINUE_INPUT = 'ProPR has acknowledged any checkpoint request from the previous turn. Continue working toward the goal.';
 export const CODEX_GOAL_OBJECTIVE_MAX_LENGTH = 4_000;
 export const DEFAULT_GOAL_CHECKPOINT_INTERVAL_MINUTES = 15;
 export const MIN_GOAL_CHECKPOINT_INTERVAL_MINUTES = 5;
@@ -20,8 +20,7 @@ const launchInstructions: Record<GoalLaunchStrategy, string> = {
     direct: [
         'Launch strategy — Agent implements directly:',
         'Implement the goal yourself in the prepared worktree. ProPR creates the draft PR before execution and owns all commits and pushes.',
-        'Do not run git commit, git push, change branches, rewrite .git metadata, or create another implementation PR.',
-        'Finish coherent provider turns as work progresses so ProPR can publish safe checkpoint commits to the draft PR.',
+        'Do not run Git commands, change branches, rewrite .git metadata, or create another implementation PR.',
     ].join('\n'),
     orchestrate: [
         'Launch strategy — Agent orchestrates through ProPR:',
@@ -36,6 +35,7 @@ export function buildNativeGoalCommand(options: {
     launchStrategy: GoalLaunchStrategy;
     maxParallelTasks?: number | null;
     ultrafix?: boolean | null;
+    checkpointIntervalMinutes?: number | null;
 }): string {
     const parallelPolicy = options.maxParallelTasks == null
         ? 'Concurrency policy: No maximum parallel task count was selected. Decide and manage concurrency yourself; ProPR does not schedule a plan graph.'
@@ -53,15 +53,104 @@ export function buildNativeGoalCommand(options: {
             '- Track every GitHub issue and PR you create, validate that each artifact exists and is in the expected state, and report its URL so ProPR can record it.',
             '- Validate the final draft PR and its related artifacts before declaring the goal complete.',
         ];
+    const checkpointPolicy = options.launchStrategy === 'direct'
+        ? [
+            `Checkpoint policy: Aim to produce a checkpoint approximately every ${options.checkpointIntervalMinutes ?? DEFAULT_GOAL_CHECKPOINT_INTERVAL_MINUTES} minutes, but only when a coherent set of changes is ready. This is a target cadence, not a timer or interruption.`,
+            'When a checkpoint is ready, finish the turn with a JSON checkpoint request using this shape:',
+            '{"checkpointReady":true,"message":"type(scope): meaningful description","include":["path/to/stable-file"],"exclude":["path/to/unfinished-file"],"summary":"What this checkpoint completes."}',
+            'The message is required. Include and exclude are optional; use them to identify exact repository-relative files when parallel work is still in progress. Omit include to publish all current changes except excluded files.',
+            'ProPR validates the paths, stages only that scope, commits, pushes, records the SHA, and then acknowledges the checkpoint. Unlisted parallel work remains untouched. Continue only after that acknowledgment.',
+        ]
+        : [];
     return [
         `/goal ${options.objective}`,
         '',
         launchInstructions[options.launchStrategy],
+        ...checkpointPolicy,
         parallelPolicy,
         ultrafixPolicy,
         'Delivery requirements:',
         ...deliveryRequirements,
     ].join('\n');
+}
+
+export interface GoalCheckpointDeclaration {
+    checkpointReady: true;
+    message: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
+}
+
+function jsonObjects(text: string): unknown[] {
+    const values: unknown[] = [];
+    let start = -1;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+        const character = text[index];
+        if (start < 0) {
+            if (character === '{') {
+                start = index;
+                depth = 1;
+            }
+            continue;
+        }
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (character === '\\') escaped = true;
+            else if (character === '"') quoted = false;
+            continue;
+        }
+        if (character === '"') quoted = true;
+        else if (character === '{') depth += 1;
+        else if (character === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                try { values.push(JSON.parse(text.slice(start, index + 1))); } catch { /* ignore non-JSON prose */ }
+                start = -1;
+            }
+        }
+    }
+    return values;
+}
+
+function optionalPaths(value: unknown, field: 'include' | 'exclude'): string[] | undefined {
+    if (value == null) return undefined;
+    if (!Array.isArray(value) || value.length === 0 || value.length > 1_000
+        || value.some(item => typeof item !== 'string' || !item.trim())) {
+        throw new Error(`Checkpoint ${field} must be a non-empty array of at most 1000 file paths when provided`);
+    }
+    return [...new Set(value as string[])];
+}
+
+/** Parse the last structured checkpoint declaration in an agent's turn output. */
+export function parseGoalCheckpointDeclaration(text: string | undefined): GoalCheckpointDeclaration | null {
+    if (!text) return null;
+    const candidate = jsonObjects(text).reverse().find(value => {
+        return Boolean(value && typeof value === 'object'
+            && (value as Record<string, unknown>).checkpointReady === true);
+    }) as Record<string, unknown> | undefined;
+    if (!candidate) return null;
+    if (typeof candidate.message !== 'string' || !candidate.message.trim() || candidate.message.length > 500) {
+        throw new Error('Checkpoint message must be a non-empty string of at most 500 characters');
+    }
+    if (candidate.summary != null
+        && (typeof candidate.summary !== 'string' || !candidate.summary.trim() || candidate.summary.length > 4_000)) {
+        throw new Error('Checkpoint summary must be a non-empty string of at most 4000 characters when provided');
+    }
+    const include = optionalPaths(candidate.include, 'include');
+    const exclude = optionalPaths(candidate.exclude, 'exclude');
+    const overlap = include?.find(file => exclude?.includes(file));
+    if (overlap) throw new Error(`Checkpoint file cannot be both included and excluded: ${overlap}`);
+    return {
+        checkpointReady: true,
+        message: candidate.message.trim(),
+        ...(include ? { include } : {}),
+        ...(exclude ? { exclude } : {}),
+        ...(typeof candidate.summary === 'string' ? { summary: candidate.summary.trim() } : {}),
+    };
 }
 
 export function goalJobId(goalId: string, generation: number): string {

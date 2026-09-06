@@ -11,12 +11,15 @@ import {
     type GoalJobData,
 } from '@propr/core';
 
-export type GoalCheckpointKind = 'bootstrap' | 'manual' | 'automatic' | 'final';
+export type GoalCheckpointKind = 'bootstrap' | 'agent' | 'final';
 
 export interface GoalCheckpointRequest {
     checkpointId?: string;
     kind: GoalCheckpointKind;
     commitMessage?: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
     turnId?: string;
 }
 
@@ -60,7 +63,7 @@ function checkpointKey(goal: PublishableGoal, request: GoalCheckpointRequest): s
     if (request.checkpointId) return request.checkpointId;
     if (request.kind === 'bootstrap') return `goal-bootstrap:${goal.goal_id}`;
     if (request.kind === 'final') return `goal-final:${goal.goal_id}:${goal.run_generation}`;
-    return `goal-${request.kind}:${goal.goal_id}:${goal.run_generation}:${randomUUID()}`;
+    return `goal-agent:${goal.goal_id}:${goal.run_generation}:${request.turnId ?? 'provider-turn'}`;
 }
 
 async function resolveBaseBranch(
@@ -172,9 +175,10 @@ async function publishLocked(
 
     const checkpointId = request.checkpointId ?? randomUUID();
     const idempotencyKey = checkpointKey(goal, request);
-    const operation = request.kind === 'manual' ? 'goal.checkpoint' : `goal.checkpoint.${request.kind}`;
+    const operation = `goal.checkpoint.${request.kind}`;
     const payloadHash = createHash('sha256').update(JSON.stringify({
         goalId: goal.goal_id, kind: request.kind, commitMessage: request.commitMessage ?? null,
+        include: request.include ?? null, exclude: request.exclude ?? null, summary: request.summary ?? null,
     })).digest('hex');
     const existingCheckpoint = request.checkpointId
         ? await db('goal_checkpoints').where({ checkpoint_id: request.checkpointId, goal_id: goal.goal_id }).first()
@@ -209,6 +213,9 @@ async function publishLocked(
             payload_hash: payloadHash,
             kind: request.kind,
             commit_message: request.commitMessage ?? null,
+            include_paths: request.include ? JSON.stringify(request.include) : null,
+            exclude_paths: request.exclude ? JSON.stringify(request.exclude) : null,
+            summary: request.summary ?? null,
             state: 'processing',
             requested_generation: job.generation,
             requested_claim: job.claimId,
@@ -224,7 +231,12 @@ async function publishLocked(
             goal.worktree_path,
             checkpointMessage(goal, request),
             AI_COMMIT_AUTHOR,
-            { issueTitle: goal.objective, allowEmpty: request.kind === 'bootstrap' },
+            {
+                issueTitle: goal.objective,
+                allowEmpty: request.kind === 'bootstrap',
+                include: request.include,
+                exclude: request.exclude,
+            },
         );
         const octokit = await getAuthenticatedOctokit();
         const auth = await octokit.auth({ type: 'installation' }) as { token: string };

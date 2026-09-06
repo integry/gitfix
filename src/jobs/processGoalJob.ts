@@ -21,6 +21,7 @@ import {
     type Agent,
     type GoalJobData,
     parseGoalArtifacts,
+    parseGoalCheckpointDeclaration,
     validateGoalArtifacts,
 } from '@propr/core';
 import { createContainerIdCallback } from './issueJobCallbacks.js';
@@ -30,7 +31,6 @@ import {
     fencedGoal,
     fencedGoalUpdate,
     firstPendingGoalInput,
-    nextGoalCheckpoint,
     saveFencedGoalSession,
     type GoalRow,
 } from './goalAttemptState.js';
@@ -40,7 +40,7 @@ import { publishDirectGoalCheckpoint } from './goalCheckpointPublisher.js';
 function isRecoverableInterruption(result: AgentExecutionResult): boolean {
     if (result.terminationReason) return true;
     if (result.exitCode != null && [125, 137, 143].includes(result.exitCode)) return true;
-    return /(?:docker|container|socket hang up|ECONNRESET|ECONNREFUSED|SIGKILL|terminated|execution aborted|checkpoint boundary|App Server exited)/i
+    return /(?:docker|container|socket hang up|ECONNRESET|ECONNREFUSED|SIGKILL|terminated|execution aborted|App Server exited)/i
         .test(result.error || '');
 }
 
@@ -251,23 +251,9 @@ export async function executePreparedGoal(data: GoalJobData, prepared: PreparedG
         : pendingInput?.message ?? GOAL_CONTINUE_INPUT;
     const control = createGoalExecutionControl(data);
     const executionController = new AbortController();
-    let sessionReady = Boolean(goal.session_id);
-    let checkpointPoll = Promise.resolve();
-    const checkpointTimer = goal.launch_strategy === 'direct' && goal.agent_type !== 'codex'
-        ? setInterval(() => {
-            checkpointPoll = checkpointPoll.then(async () => {
-                if (executionController.signal.aborted || !sessionReady) return;
-                const boundary = await control.load();
-                if (boundary.desiredState === 'running' && boundary.checkpoint) {
-                    executionController.abort(new Error('Goal checkpoint boundary requested'));
-                }
-            }).catch(error => logger.warn({ error: (error as Error).message }, 'Failed to inspect direct-goal checkpoint boundary'));
-        }, 2_000)
-        : null;
-    try {
-        return await runWithExecutionAbortSignal(
-            executionController.signal,
-            () => agent.executeTask({
+    return runWithExecutionAbortSignal(
+        executionController.signal,
+        () => agent.executeTask({
             worktreePath: worktree.worktreePath,
             issueRef: { number: 0, repoOwner: data.repoOwner, repoName: data.repoName },
             prompt,
@@ -287,7 +273,6 @@ export async function executePreparedGoal(data: GoalJobData, prepared: PreparedG
                     job: data, goal, sessionId, conversationId,
                     acknowledgeControls: !pendingInput,
                 });
-                sessionReady = true;
                 if (pendingInput && goal.agent_type !== 'codex' && !freshSession) {
                     await control.markInputDelivered(pendingInput.input_id, `session:${sessionId}`);
                 }
@@ -314,13 +299,9 @@ export async function executePreparedGoal(data: GoalJobData, prepared: PreparedG
             onContainerId: createContainerIdCallback(
                 goal.current_task_id, getStateManager(), logger as never, worktree.worktreePath,
             ),
-            }),
-            goalAttemptLabel(data.generation, data.claimId),
-        );
-    } finally {
-        if (checkpointTimer) clearInterval(checkpointTimer);
-        await checkpointPoll;
-    }
+        }),
+        goalAttemptLabel(data.generation, data.claimId),
+    );
 }
 
 async function acknowledgeNonCodexInput(data: GoalJobData, prepared: PreparedGoalAttempt): Promise<void> {
@@ -413,8 +394,13 @@ async function scheduleFurtherWork(
     data: GoalJobData,
     latest: GoalRow,
     result: AgentExecutionResult,
+    checkpointPublished = false,
 ): Promise<{ status: string } | null> {
     if (await firstPendingGoalInput(latest)) {
+        await enqueueNextGoalAttempt(latest, data);
+        return { status: 'continuing' };
+    }
+    if (checkpointPublished) {
         await enqueueNextGoalAttempt(latest, data);
         return { status: 'continuing' };
     }
@@ -443,12 +429,13 @@ async function handleGoalResult(
     await operations.acknowledgeInput(data, prepared);
     await operations.recordMetrics(goal, data, result);
     const boundary = await operations.fencedGoal(data);
-    if (boundary?.launch_strategy === 'direct' && boundary.desired_state !== 'cancelled') {
-        const checkpoint = await operations.nextCheckpoint(boundary!);
-        if (checkpoint) await operations.publishCheckpoint(data, {
-            checkpointId: checkpoint.id,
-            kind: checkpoint.kind,
-            commitMessage: checkpoint.commitMessage,
+    const declaration = result.success && goal.launch_strategy === 'direct' && goal.agent_type !== 'codex'
+        ? parseGoalCheckpointDeclaration(result.summary)
+        : null;
+    if (boundary?.launch_strategy === 'direct' && boundary.desired_state !== 'cancelled' && declaration) {
+        await operations.publishCheckpoint(data, {
+            kind: 'agent', commitMessage: declaration.message,
+            include: declaration.include, exclude: declaration.exclude, summary: declaration.summary,
         });
     }
     const boundaryStop = await operations.handleStopped(data, goal, boundary);
@@ -457,7 +444,7 @@ async function handleGoalResult(
     const latest = await operations.fencedGoal(data);
     const stopped = await operations.handleStopped(data, goal, latest);
     if (stopped) return stopped;
-    const furtherWork = await operations.scheduleFurtherWork(data, latest!, result);
+    const furtherWork = await operations.scheduleFurtherWork(data, latest!, result, Boolean(declaration));
     if (furtherWork) return furtherWork;
     if (goal.launch_strategy === 'direct') {
         await operations.publishCheckpoint(data, { kind: 'final' });
@@ -500,7 +487,6 @@ interface GoalResultOperations {
     saveProviderResult: typeof saveProviderResult;
     scheduleFurtherWork: typeof scheduleFurtherWork;
     publishCheckpoint: typeof publishDirectGoalCheckpoint;
-    nextCheckpoint: typeof nextGoalCheckpoint;
     finalizeGoal: typeof finalizeGoal;
     markTaskReconciled: typeof markGoalTaskReconciled;
     stateManager(): Pick<ReturnType<typeof getStateManager>, 'markTaskCompleted' | 'markTaskFailed'>;
@@ -515,7 +501,6 @@ const defaultGoalResultOperations: GoalResultOperations = {
     saveProviderResult,
     scheduleFurtherWork,
     publishCheckpoint: publishDirectGoalCheckpoint,
-    nextCheckpoint: nextGoalCheckpoint,
     finalizeGoal,
     markTaskReconciled: markGoalTaskReconciled,
     stateManager: getStateManager,

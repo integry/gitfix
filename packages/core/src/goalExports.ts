@@ -18,12 +18,14 @@ export {
     MIN_GOAL_CHECKPOINT_INTERVAL_MINUTES,
     MAX_GOAL_CHECKPOINT_INTERVAL_MINUTES,
     buildGoalPolicyEnvironment,
+    parseGoalCheckpointDeclaration,
     buildNativeGoalCommand,
     codexGoalPromptValidationError,
     goalJobId,
     goalAttemptLabel,
     type GoalDesiredState,
     type GoalLaunchStrategy,
+    type GoalCheckpointDeclaration,
     type GoalResultState,
 } from './goals.js';
 export type { GoalJobData } from './queue/taskQueue.types.js';

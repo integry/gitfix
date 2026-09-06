@@ -71,6 +71,8 @@ export class AppServerConnection {
     private flushPromise: Promise<void> = Promise.resolve();
     private closedError: Error | null = null;
     summaryParts: string[] = [];
+    private summarySequence = 0;
+    private summaryRecords: Array<{ sequence: number; text: string }> = [];
     tokenUsage?: TokenUsage;
     effectiveModel?: string;
 
@@ -101,6 +103,10 @@ export class AppServerConnection {
     }
     get stderrOutput(): string { return this.stderr; }
     get closeError(): Error | null { return this.closedError; }
+    get agentMessageCursor(): number { return this.summarySequence; }
+    agentMessagesAfter(cursor: number): string[] {
+        return this.summaryRecords.filter(record => record.sequence > cursor).map(record => record.text);
+    }
 
     private onLine(line: string): void {
         this.appendOutput(`${line}\n`);
@@ -148,6 +154,9 @@ export class AppServerConnection {
             if (item.type === 'agentMessage' && typeof item.text === 'string') {
                 this.summaryParts.push(item.text);
                 if (this.summaryParts.length > MAX_SUMMARY_PARTS) this.summaryParts.shift();
+                this.summarySequence += 1;
+                this.summaryRecords.push({ sequence: this.summarySequence, text: item.text });
+                if (this.summaryRecords.length > MAX_SUMMARY_PARTS) this.summaryRecords.shift();
             }
         }
         if (message.method === 'thread/tokenUsage/updated') this.tokenUsage = extractTokenUsage(params) ?? this.tokenUsage;

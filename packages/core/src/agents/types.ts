@@ -102,8 +102,11 @@ export interface GoalControlInput {
 
 export interface GoalCheckpointRequest {
     id?: string;
-    kind: 'manual' | 'automatic';
-    commitMessage?: string;
+    kind: 'agent';
+    commitMessage: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
 }
 
 export interface GoalControlSnapshot {
@@ -111,8 +114,6 @@ export interface GoalControlSnapshot {
     requestedModel: string;
     pendingInputs: GoalControlInput[];
     controlGeneration: number;
-    /** Direct-goal publication requested for the next safe provider boundary. */
-    checkpoint: GoalCheckpointRequest | null;
 }
 
 export interface GoalExecutionControl {

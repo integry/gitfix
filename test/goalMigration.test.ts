@@ -4,6 +4,7 @@ import knex from 'knex';
 import { down, up } from '../packages/core/src/db/migrations/20260902000000_create_goals.js';
 import { down as downHardening, up as upHardening } from '../packages/core/src/db/migrations/20260902010000_harden_native_goals.js';
 import { down as downCheckpoints, up as upCheckpoints } from '../packages/core/src/db/migrations/20260903000000_add_direct_goal_checkpoints.js';
+import { down as downDeclarations, up as upDeclarations } from '../packages/core/src/db/migrations/20260906000000_add_goal_checkpoint_declarations.js';
 
 test('goal migration stores only the durable owner/session execution envelope', async () => {
     const database = knex({
@@ -22,6 +23,7 @@ test('goal migration stores only the durable owner/session execution envelope', 
         };
         await database('goals').insert(base);
         await upCheckpoints(database);
+        await upDeclarations(database);
         const columns = await database('goals').columnInfo();
         assert.deepEqual(
             ['goal_id', 'owner_id', 'repository', 'objective', 'launch_strategy', 'initial_prompt', 'agent_id', 'requested_model', 'desired_state', 'current_task_id', 'session_id', 'worktree_path']
@@ -46,7 +48,7 @@ test('goal migration stores only the durable owner/session execution envelope', 
         );
         const checkpointColumns = await database('goal_checkpoints').columnInfo();
         assert.deepEqual(
-            ['checkpoint_id', 'goal_id', 'owner_id', 'idempotency_key', 'operation', 'payload_hash', 'kind', 'commit_message', 'state', 'requested_generation', 'requested_claim', 'delivered_turn_id', 'commit_sha', 'pr_number', 'pr_url', 'error']
+            ['checkpoint_id', 'goal_id', 'owner_id', 'idempotency_key', 'operation', 'payload_hash', 'kind', 'commit_message', 'include_paths', 'exclude_paths', 'summary', 'state', 'requested_generation', 'requested_claim', 'delivered_turn_id', 'commit_sha', 'pr_number', 'pr_url', 'error']
                 .filter(column => !checkpointColumns[column]),
             [],
         );
@@ -61,6 +63,7 @@ test('goal migration stores only the durable owner/session execution envelope', 
             database('goals').insert({ ...base, goal_id: 'goal-2' }),
             /unique/i,
         );
+        await downDeclarations(database);
         await downCheckpoints(database);
         await downHardening(database);
         await down(database);

@@ -55,9 +55,13 @@ export interface Goal {
     error: string | null;
     pending: boolean;
     latest: {
-      kind: 'bootstrap' | 'manual' | 'automatic' | 'final';
+      kind: 'bootstrap' | 'agent' | 'final';
       state: 'pending' | 'processing' | 'completed' | 'skipped' | 'failed';
       commitSha: string | null;
+      message: string | null;
+      include: string[] | null;
+      exclude: string[] | null;
+      summary: string | null;
       error: string | null;
       createdAt: string;
       completedAt: string | null;
@@ -125,5 +129,3 @@ export const resumeGoal = async (id: string) => request<{ goal: Goal }>(`/api/go
 export const cancelGoal = async (id: string) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/cancel`, idempotentMutation('POST'));
 export const requestGoalModel = async (id: string, model: string) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/model`, idempotentMutation('PATCH', { model }));
 export const sendGoalInput = async (id: string, body: { message?: string; canned?: 'done' | 'left' }) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/input`, idempotentMutation('POST', body));
-export const checkpointGoal = async (id: string, commitMessage?: string) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/checkpoint`, idempotentMutation('POST', commitMessage ? { commitMessage } : {}));
-export const requestGoalCheckpointInterval = async (id: string, minutes: number) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/checkpoint-frequency`, idempotentMutation('PATCH', { minutes }));

@@ -24,6 +24,51 @@ interface CommitOptions {
     issueTitle?: string;
     /** Create an empty commit when a remote branch must exist before agent edits begin. */
     allowEmpty?: boolean;
+    /** Exact repository-relative changed files to stage. Omitted means all changed files. */
+    include?: string[];
+    /** Exact repository-relative changed files to leave unstaged. */
+    exclude?: string[];
+}
+
+const GENERATED_RUNTIME_PATHS = ['.propr/assets', '.propr/cache', '.propr/.cache', '.propr/node_modules', '.propr/previews'];
+
+function validateScopedPath(file: string): string {
+    if (!file || file.trim() !== file || file.includes('\\') || file.includes('\0') || file.includes('\n') || file.includes('\r')
+        || path.posix.isAbsolute(file) || path.posix.normalize(file) !== file
+        || file.split('/').some(part => part === '..' || part === '.git')) {
+        throw new Error(`Checkpoint path must be a normalized repository-relative file: ${JSON.stringify(file)}`);
+    }
+    return file;
+}
+
+function isGeneratedRuntimePath(file: string): boolean {
+    return GENERATED_RUNTIME_PATHS.some(generated => file === generated || file.startsWith(`${generated}/`));
+}
+
+async function stageCommitFiles(git: SimpleGit, options: CommitOptions): Promise<void> {
+    const scoped = options.include !== undefined || options.exclude !== undefined;
+    if (!scoped) {
+        await git.add('.');
+        for (const generatedPath of GENERATED_RUNTIME_PATHS) {
+            try { await git.raw(['reset', 'HEAD', '--', generatedPath]); } catch { /* path was not staged */ }
+        }
+        return;
+    }
+    const include = options.include?.map(validateScopedPath);
+    const exclude = new Set((options.exclude ?? []).map(validateScopedPath));
+    if (include?.some(file => exclude.has(file))) {
+        throw new Error('Checkpoint include and exclude paths must not overlap');
+    }
+    const before = await git.status();
+    const changed = new Set(before.files.map(file => file.path));
+    const missing = include?.filter(file => !changed.has(file)) ?? [];
+    if (missing.length > 0) throw new Error(`Checkpoint include path is not a changed file: ${missing.join(', ')}`);
+    const selected = (include ?? [...changed])
+        .filter(file => !exclude.has(file) && !isGeneratedRuntimePath(file));
+    // The worker owns the index. Clear it before staging the declared scope so
+    // unrelated parallel work cannot leak into this commit.
+    await git.raw(['reset', 'HEAD', '--', '.']);
+    if (selected.length > 0) await git.raw(['add', '--', ...selected.map(file => `:(literal)${file}`)]);
 }
 
 export interface CommitResult {
@@ -118,16 +163,7 @@ export async function commitChanges(worktreePath: string, commitMessage: string 
     try {
         await configureGitAuthor(git, author, worktreePath, issueNumber);
 
-        await git.add('.');
-        // Unstage generated ProPR runtime directories. Repo-authored files such
-        // as .propr/setup.sh and .propr/package.json should remain committable.
-        for (const generatedPath of ['.propr/assets', '.propr/cache', '.propr/.cache', '.propr/node_modules', '.propr/previews']) {
-            try {
-                await git.raw(['reset', 'HEAD', '--', generatedPath]);
-            } catch {
-                // Ignore error if the path doesn't exist or wasn't staged.
-            }
-        }
+        await stageCommitFiles(git, options);
         const status = await git.status();
         const stagedFiles = status.files.filter((file: FileStatusResult) => file.index !== ' ' && file.index !== '?');
 

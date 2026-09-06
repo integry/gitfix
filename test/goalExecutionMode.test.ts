@@ -6,6 +6,7 @@ import {
   buildGoalPolicyEnvironment,
   buildNativeGoalCommand,
   codexGoalPromptValidationError,
+  parseGoalCheckpointDeclaration,
 } from '../packages/core/src/goals.ts';
 import {
   GoalCapabilityProbe,
@@ -50,15 +51,44 @@ describe('native goal provider contract', () => {
   test('builds the direct strategy as one visible native prompt policy', () => {
     const prompt = buildNativeGoalCommand({
       objective: 'Ship the dashboard', launchStrategy: 'direct', maxParallelTasks: 3, ultrafix: true,
+      checkpointIntervalMinutes: 30,
     });
     assert.match(prompt, /^\/goal Ship the dashboard/);
     assert.match(prompt, /Agent implements directly/);
     assert.match(prompt, /ProPR creates the draft PR before execution/);
-    assert.match(prompt, /Do not run git commit, git push/);
-    assert.match(prompt, /safe checkpoint commits/);
+    assert.match(prompt, /Do not run Git commands/);
+    assert.match(prompt, /approximately every 30 minutes/);
+    assert.match(prompt, /target cadence, not a timer or interruption/);
+    assert.match(prompt, /"checkpointReady":true/);
+    assert.match(prompt, /include and exclude are optional/i);
     assert.match(prompt, /at most 3 implementation tasks in parallel/);
     assert.match(prompt, /Ultrafix policy: Enabled/);
     assert.match(prompt, /ProPR publishes and validates the final checkpoint/);
+  });
+
+  test('parses and validates the agent checkpoint handoff', () => {
+    const declaration = parseGoalCheckpointDeclaration([
+      'Stable work is ready.',
+      '```json',
+      '{"checkpointReady":true,"message":"feat(goals): publish stable work","include":["src/a.ts","test/a.test.ts"],"exclude":["src/wip.ts"],"summary":"Implementation and tests are coherent."}',
+      '```',
+    ].join('\n'));
+    assert.deepEqual(declaration, {
+      checkpointReady: true,
+      message: 'feat(goals): publish stable work',
+      include: ['src/a.ts', 'test/a.test.ts'],
+      exclude: ['src/wip.ts'],
+      summary: 'Implementation and tests are coherent.',
+    });
+    assert.equal(parseGoalCheckpointDeclaration('Work continues without a checkpoint.'), null);
+    assert.throws(
+      () => parseGoalCheckpointDeclaration('{"checkpointReady":true,"message":"","include":["src/a.ts"]}'),
+      /message must be a non-empty string/,
+    );
+    assert.throws(
+      () => parseGoalCheckpointDeclaration('{"checkpointReady":true,"message":"feat: overlap","include":["src/a.ts"],"exclude":["src/a.ts"]}'),
+      /both included and excluded/,
+    );
   });
 
   test('builds orchestration as agent-owned prompt policy without scheduler state', () => {
