@@ -85,6 +85,10 @@ describe('packaged acceptance authorization', () => {
     )), 'utf8');
     assert.match(acceptanceRunner, /'Access-Control-Allow-Private-Network': 'true'/);
     assert.match(acceptanceRunner, /network-permissions=/);
+    assert.match(acceptanceRunner, /request\.url === '\/api\/auth\/demo-mode'\) return json\(response, 200, \{ demoMode: false \}\)/);
+    const demoModeFixture = acceptanceRunner.indexOf("request.url === '/api/auth/demo-mode'");
+    const genericApiFixture = acceptanceRunner.indexOf("request.url?.startsWith('/api/')");
+    assert.ok(demoModeFixture >= 0 && demoModeFixture < genericApiFixture);
     assert.match(currentUserClassifier, /networkPermissionDecisionSummary/);
     assert.match(currentUserClassifier, /current-user-upstream-request-not-arrived/);
     assert.match(currentUserClassifier, /current-user-parsed-schema-rejected/);
@@ -159,20 +163,21 @@ describe('packaged acceptance authorization', () => {
     assert.match(uiSummary, /a\[href="\/admin\/members"\]/);
     assert.doesNotMatch(uiSummary, /outerHTML|innerHTML|document\.body\.textContent/);
 
-    assert.match(
-      acceptanceRunner,
-      /const rendererLifecycleDiagnosticSummary = journey => \(\{[\s\S]*?recordCount:[\s\S]*?evidenceInvalid:[\s\S]*?invalidCategory:/,
-    );
+    assert.match(acceptanceRunner, /const rendererLifecycleDiagnosticSummary = journey => \{[\s\S]*?invalidCount:[\s\S]*?firstInvalidCategory:[\s\S]*?invalidCategories:/);
     assert.match(
       acceptanceRunner,
       /recordCount: rendererLifecycleRecords\.filter\(record => record\.journey === journey\)\.length/,
     );
-    assert.match(acceptanceRunner, /rendererLifecycleInvalidCategories\.add\('schema-shape'\)/);
-    assert.match(acceptanceRunner, /rendererLifecycleInvalidCategories\.add\('overflow'\)/);
-    assert.match(acceptanceRunner, /if \(schemaShape && overflow\) return 'multiple'/);
+    assert.match(acceptanceRunner, /recordRendererLifecycleInvalid\(journey, \[/);
+    assert.match(acceptanceRunner, /\.\.\.\(invalidCategory \? \[invalidCategory\] : \[\]\)/);
+    assert.match(acceptanceRunner, /\.\.\.\(overflow \? \['overflow'\] : \[\]\)/);
+    assert.match(acceptanceRunner, /rendererLifecycleInvalidStates\.has\(journey\)/);
+    assert.match(acceptanceRunner, /if \(rendererLifecycleInvalidStates\.size > 0\)/);
+    assert.match(acceptanceRunner, /firstInvalidCategory: firstInvalid\?\.firstCategory \?\? 'none'/);
+    assert.doesNotMatch(acceptanceRunner, /rendererLifecycleEvidenceInvalid/);
 
     const errorSummaryStart = acceptanceRunner.indexOf('const rendererConsoleErrorCategory = record =>');
-    const errorSummaryEnd = acceptanceRunner.indexOf('\nconst rendererLifecycleInvalidCategory', errorSummaryStart);
+    const errorSummaryEnd = acceptanceRunner.indexOf('\nconst rendererLifecycleDiagnosticSummary', errorSummaryStart);
     assert.notEqual(errorSummaryStart, -1);
     assert.notEqual(errorSummaryEnd, -1);
     const errorSummary = acceptanceRunner.slice(errorSummaryStart, errorSummaryEnd);

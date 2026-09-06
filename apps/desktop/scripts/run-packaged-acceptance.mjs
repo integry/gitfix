@@ -84,8 +84,7 @@ let visibleFocus = false;
 let modalFocusTrap = false;
 let modalFocusRestore = false;
 let traceWritten = false;
-let rendererLifecycleEvidenceInvalid = false;
-const rendererLifecycleInvalidCategories = new Set();
+const rendererLifecycleInvalidStates = new Map();
 let currentUserEvidenceInvalid = false;
 let networkPermissionEvidenceInvalidCount = 0;
 
@@ -129,6 +128,20 @@ const CURRENT_USER_CLASSIFICATIONS = new Set([
 const NETWORK_PERMISSION_CATEGORIES = new Set([
   'local-network-access', 'local-network', 'loopback-network',
 ]);
+
+const recordRendererLifecycleInvalid = (journey, categories) => {
+  const current = rendererLifecycleInvalidStates.get(journey);
+  if (current) {
+    current.count = Math.min(current.count + 1, 9);
+    categories.forEach(category => current.categories.add(category));
+    return;
+  }
+  rendererLifecycleInvalidStates.set(journey, {
+    count: 1,
+    firstCategory: categories[0],
+    categories: new Set(categories),
+  });
+};
 
 const captureMainHandshakeEvidence = (line, journey) => {
   if (!line.includes(MAIN_HANDSHAKE_EVENT)) return;
@@ -280,11 +293,13 @@ const captureRendererLifecycleEvidence = (text, journey) => {
   const serializedPrefix = `${RENDERER_LIFECYCLE_PREFIX} `;
   let evidence;
   try {
-    if (!text.startsWith(serializedPrefix)) throw new Error('missing lifecycle evidence');
+    if (!text.startsWith(serializedPrefix)) {
+      recordRendererLifecycleInvalid(journey, ['serialization-prefix']);
+      return;
+    }
     evidence = JSON.parse(text.slice(serializedPrefix.length));
   } catch {
-    rendererLifecycleEvidenceInvalid = true;
-    rendererLifecycleInvalidCategories.add('schema-shape');
+    recordRendererLifecycleInvalid(journey, ['serialization-json']);
     return;
   }
   const exactKeys = evidence && typeof evidence === 'object' && !Array.isArray(evidence)
@@ -303,14 +318,25 @@ const captureRendererLifecycleEvidence = (text, journey) => {
     evidence.disabledByCurrentUserLoading,
     evidence.disabledByCurrentUserAbsent,
   ].some(Boolean);
-  const schemaOrShapeInvalid = !exactKeys || evidence.schemaVersion !== 2 || !RENDERER_LIFECYCLE_PHASES.has(evidence.phase)
-    || !['unknown', 'available', 'unavailable'].includes(evidence.connectionScope)
-    || !booleans || !counts || !disableReasonsConsistent;
+  const missingKey = evidence && typeof evidence === 'object' && !Array.isArray(evidence)
+    ? RENDERER_LIFECYCLE_KEYS.find(key => !Object.hasOwn(evidence, key))
+    : null;
+  const invalidCategory = !evidence || typeof evidence !== 'object' || Array.isArray(evidence) ? 'evidence-kind'
+    : missingKey ? `missing-${missingKey}`
+      : !exactKeys ? 'unexpected-keys'
+        : evidence.schemaVersion !== 2 ? 'schema-version'
+          : !RENDERER_LIFECYCLE_PHASES.has(evidence.phase) ? 'phase'
+            : !['unknown', 'available', 'unavailable'].includes(evidence.connectionScope) ? 'connection-scope'
+              : !booleans ? 'booleans'
+                : !counts ? 'counts'
+                  : !disableReasonsConsistent ? 'disable-reasons'
+                    : null;
   const overflow = rendererLifecycleRecords.filter(record => record.journey === journey).length >= 12;
-  if (schemaOrShapeInvalid || overflow) {
-    rendererLifecycleEvidenceInvalid = true;
-    if (schemaOrShapeInvalid) rendererLifecycleInvalidCategories.add('schema-shape');
-    if (overflow) rendererLifecycleInvalidCategories.add('overflow');
+  if (invalidCategory || overflow) {
+    recordRendererLifecycleInvalid(journey, [
+      ...(invalidCategory ? [invalidCategory] : []),
+      ...(overflow ? ['overflow'] : []),
+    ]);
     return;
   }
   rendererLifecycleRecords.push({ journey, ...evidence });
@@ -480,6 +506,9 @@ const createFixture = async (mode, fixedOrigin) => {
       });
     }
     if (request.url === '/api/compatibility') return json(response, 200, { apiCompatibility: PROPR_API_COMPATIBILITY, uiCompatibility: PROPR_UI_COMPATIBILITY });
+    // Socket lifecycle evidence requires the same boolean consumed from the
+    // production endpoint; the generic API fixture shape is not compatible.
+    if (request.url === '/api/auth/demo-mode') return json(response, 200, { demoMode: false });
     if (request.url?.startsWith('/api/status')) return json(response, 200, { daemon: 'Running', redis: 'Connected', githubAuth: 'Authenticated', claudeAuth: 'Ready', agents: [], githubEventIntake: 'ProPR Connect', githubEventIntakeStatus: 'Connected' });
     if (request.url?.startsWith('/api/queue/stats')) return json(response, 200, { active: 0, waiting: 0, completed: 12, failed: 0, delayed: 0, paused: 0 });
     if (requestUrl.pathname === '/api/stats/generating-plans') return json(response, 200, { count: 0 });
@@ -1084,21 +1113,28 @@ const rendererErrorCountSummary = journey => {
   };
 };
 
-const rendererLifecycleInvalidCategory = () => {
-  const schemaShape = rendererLifecycleInvalidCategories.has('schema-shape');
-  const overflow = rendererLifecycleInvalidCategories.has('overflow');
-  if (schemaShape && overflow) return 'multiple';
-  if (schemaShape) return 'schema-shape';
-  if (overflow) return 'overflow';
-  return 'none';
+const rendererLifecycleDiagnosticSummary = journey => {
+  const invalid = rendererLifecycleInvalidStates.get(journey);
+  return {
+    schemaVersion: 2,
+    recordCount: rendererLifecycleRecords.filter(record => record.journey === journey).length,
+    invalidCount: invalid?.count ?? 0,
+    firstInvalidCategory: invalid?.firstCategory ?? 'none',
+    invalidCategories: invalid ? [...invalid.categories].sort() : [],
+  };
 };
 
-const rendererLifecycleDiagnosticSummary = journey => ({
-  schemaVersion: 1,
-  recordCount: rendererLifecycleRecords.filter(record => record.journey === journey).length,
-  evidenceInvalid: rendererLifecycleEvidenceInvalid,
-  invalidCategory: rendererLifecycleInvalidCategory(),
-});
+const rendererLifecycleInvalidSummary = () => {
+  const [firstJourney, firstInvalid] = rendererLifecycleInvalidStates.entries().next().value ?? [];
+  return {
+    schemaVersion: 1,
+    journeyCount: Math.min(rendererLifecycleInvalidStates.size, ACCEPTANCE_JOURNEYS.length),
+    invalidCount: Math.min([...rendererLifecycleInvalidStates.values()]
+      .reduce((total, invalid) => total + invalid.count, 0), 9),
+    firstJourney: ACCEPTANCE_JOURNEYS.includes(firstJourney) ? firstJourney : 'unknown',
+    firstInvalidCategory: firstInvalid?.firstCategory ?? 'none',
+  };
+};
 
 const rendererUiStateSummary = async page => {
   const absent = {
@@ -1205,7 +1241,7 @@ const socketHandshakeFailureCategory = journey => {
 };
 
 const rendererLifecycleCategory = journey => {
-  if (rendererLifecycleEvidenceInvalid) return 'renderer-lifecycle-evidence-invalid';
+  if (rendererLifecycleInvalidStates.has(journey)) return 'renderer-lifecycle-evidence-invalid';
   const records = rendererLifecycleRecords.filter(record => record.journey === journey);
   const latest = records.at(-1);
   if (!latest?.profileActivationPublished) return 'renderer-profile-activation-not-propagated';
@@ -1249,10 +1285,10 @@ const waitForAuthenticatedSocket = async journey => {
       && rendererLifecycle === 'none') return;
     const category = socketHandshakeFailureCategory(journey);
     if (category.startsWith('main-') || category.startsWith('fixture-') || category.startsWith('duplicate-')) {
-      throw new Error(`Acceptance Socket.IO handshake failed: ${category}; current-user-phases=${JSON.stringify(currentUserPhaseSummary(journey))}; network-permissions=${JSON.stringify(networkPermissionSummary(journey))}`);
+      throw new Error(`Acceptance Socket.IO handshake failed: ${category}; current-user-phases=${JSON.stringify(currentUserPhaseSummary(journey))}; renderer-lifecycle=${JSON.stringify(rendererLifecycleDiagnosticSummary(journey))}; network-permissions=${JSON.stringify(networkPermissionSummary(journey))}`);
     }
     if (Date.now() >= deadline) {
-      throw new Error(`Acceptance Socket.IO handshake failed: ${category}; current-user-phases=${JSON.stringify(currentUserPhaseSummary(journey))}; network-permissions=${JSON.stringify(networkPermissionSummary(journey))}`);
+      throw new Error(`Acceptance Socket.IO handshake failed: ${category}; current-user-phases=${JSON.stringify(currentUserPhaseSummary(journey))}; renderer-lifecycle=${JSON.stringify(rendererLifecycleDiagnosticSummary(journey))}; network-permissions=${JSON.stringify(networkPermissionSummary(journey))}`);
     }
     await sleep(50);
   }
@@ -1515,6 +1551,9 @@ try {
 
   if (!traceWritten) throw new Error('Playwright trace was not produced');
   await Promise.all(pendingConsoleRecords);
+  if (rendererLifecycleInvalidStates.size > 0) {
+    throw new Error(`Acceptance renderer lifecycle evidence was invalid: ${JSON.stringify(rendererLifecycleInvalidSummary())}`);
+  }
   if (boundaryJourneys.size !== ACCEPTANCE_JOURNEYS.length
     || ACCEPTANCE_JOURNEYS.some(journey => !boundaryJourneys.has(journey))) throw new Error('Packaged main/preload/renderer boundary was not observed for every journey');
   const serious = axeFindings.filter(finding => finding.impact === 'serious').length;
