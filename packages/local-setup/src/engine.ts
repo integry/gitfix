@@ -36,6 +36,7 @@ import { isAbsolute, join, normalize, resolve } from "node:path";
 import {
   resolveGithubEventIntakeMode,
   validateIntakeModePrerequisites,
+  DEFAULT_LOCAL_API_OAUTH_CALLBACK_URL,
   DEFAULT_PROPR_GH_RELAY_URL,
   type GithubAuthMode,
   type GithubAuthModeResult,
@@ -421,7 +422,7 @@ export interface SetupActions extends AgentSetupActions {
   /** Ensure a selected agent's host credential path is a directory, creating it securely when absent. */
   prepareAgentCredentialDir(path: string): void;
   pullImages(params: PullImagesParams): Promise<PullImagesResult>;
-  isStackRunning(rootDir: string): Promise<boolean>;
+  isStackRunning(rootDir: string, signal?: AbortSignal): Promise<boolean>;
   startStack(params: StartStackParams): Promise<void>;
   checkBackendHealth(params: BackendHealthParams): Promise<BackendHealth>;
   addRepository(selection: RepoSelection, rootDir: string): Promise<void>;
@@ -452,8 +453,8 @@ export interface SetupActions extends AgentSetupActions {
     installationId: string;
     label?: string;
   }): Promise<{ relayUrl: string; token: string }>;
-  /** Authenticate with GitHub via the interactive `gh` CLI and store the token. */
-  loginWithGithub(params?: { onLog?: (line: string) => void }): Promise<boolean>;
+  /** Authenticate with GitHub through the host's interactive handoff and store the token. */
+  loginWithGithub(params?: { onLog?: (line: string) => void; signal?: AbortSignal }): Promise<boolean>;
   /** Host preference used to select managed browser authentication. */
   getTunnelEnabled?(rootDir: string): boolean | undefined;
 }
@@ -625,7 +626,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
     if (!actions.hasGithubToken()) {
       const reason = "Relay enrollment needs a GitHub token.";
       if (prompts.confirmGithubLogin && (await prompts.confirmGithubLogin({ reason }))) {
-        await actions.loginWithGithub({ onLog: log });
+        await actions.loginWithGithub({ onLog: log, signal: options.signal });
       }
       if (!actions.hasGithubToken()) {
         return {
@@ -717,7 +718,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
         normalizeServiceUrl(existingEnv.PROPR_CONNECT_URL || "https://connect.propr.dev") ===
           "https://connect.propr.dev";
       const callbackUrl = existingEnv.GH_OAUTH_CALLBACK_URL ||
-        "http://localhost:4000/api/auth/github/callback";
+        DEFAULT_LOCAL_API_OAUTH_CALLBACK_URL;
       const automaticConnectApplies =
         managedTunnelEnabled ||
         (usesHostedConnect && isSupportedLoopbackCallback(callbackUrl));
@@ -1099,7 +1100,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
   if (!demoModeEnabled && !actions.hasGithubToken()) {
     const reason = "Finishing setup requires a GitHub user token for protected backend API steps.";
     if (prompts.confirmGithubLogin && (await prompts.confirmGithubLogin({ reason }))) {
-      await actions.loginWithGithub({ onLog: log });
+      await actions.loginWithGithub({ onLog: log, signal: options.signal });
     }
     if (!actions.hasGithubToken()) {
       settle("github-auth", {
@@ -1219,7 +1220,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
   //    not recreated, so user data and live work are untouched.
   begin("start-stack");
   try {
-    const alreadyRunning = await actions.isStackRunning(rootDir);
+    const alreadyRunning = await actions.isStackRunning(rootDir, options.signal);
     const startConfirmed = prompts.confirmStartStack ? await prompts.confirmStartStack({ rootDir, alreadyRunning }) : true;
     if (!startConfirmed) {
       settle("start-stack", {
@@ -1287,6 +1288,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       actions,
       confirmLogin: prompts.confirmAgentLogin,
       onLog: log,
+      signal: options.signal,
     });
     if (selectedAgents.length === 0) {
       settle("enable-agents", {
@@ -1342,7 +1344,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       // Prefer the settings API when the backend is up so the change applies
       // immediately (and never overwrites unrelated settings); always mirror into
       // .env so it survives a restart. Falls back to .env if the API is down.
-      const backendRunning = backendReady && await actions.isStackRunning(rootDir);
+      const backendRunning = backendReady && await actions.isStackRunning(rootDir, options.signal);
       const saved = await saveWhitelist({
         users: cleaned,
         backendRunning,

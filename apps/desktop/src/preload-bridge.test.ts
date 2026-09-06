@@ -24,7 +24,7 @@ class FakeIpc implements PreloadIpc {
 describe('desktop preload bridge', () => {
   it('exposes only the narrow frozen namespaces', () => {
     const bridge = createDesktopBridge(new FakeIpc());
-    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'profiles', 'storage']);
+    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'localSetup', 'profiles', 'storage']);
     assert.equal(Object.isFrozen(bridge), true);
     assert.equal(Object.values(bridge).every(Object.isFrozen), true);
     assert.equal('fs' in bridge, false);
@@ -68,6 +68,25 @@ describe('desktop preload bridge', () => {
     const bridge = createDesktopBridge(new FakeIpc(), false);
     assert.equal(bridge.discovery.supported, false);
     assert.deepEqual(Object.keys(bridge.discovery).sort(), ['discover', 'rediscover', 'supported']);
+  });
+
+  it('maps setup operations to fixed channels and forwards snapshot values without Electron events', async () => {
+    const ipc = new FakeIpc();
+    const bridge = createDesktopBridge(ipc);
+    const snapshots: unknown[] = [];
+    const unsubscribe = bridge.localSetup.onProgress(value => snapshots.push(value));
+    const request = { sessionId: '11111111-1111-4111-8111-111111111111', root: { mode: 'default' as const },
+      reinitialize: false, agents: [], github: { mode: 'demo' as const }, intake: { mode: 'keep' as const }, whitelist: null, repository: null };
+    await bridge.localSetup.status();
+    await bridge.localSetup.start(request);
+    await bridge.localSetup.retry();
+    await bridge.localSetup.cancel();
+    ipc.listeners.get(IPC_CHANNELS.setupProgress)?.({ mustNotLeak: true }, { phase: 'running' } as never);
+    unsubscribe();
+    assert.deepEqual(ipc.invocations.map(value => value.channel), [
+      IPC_CHANNELS.setupStatus, IPC_CHANNELS.setupStart, IPC_CHANNELS.setupRetry, IPC_CHANNELS.setupCancel,
+    ]);
+    assert.deepEqual(snapshots, [{ phase: 'running' }]);
   });
 
   it('exposes only a fixed stage reporter when packaged Connect acceptance is authorized', async () => {

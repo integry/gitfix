@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PROPR_API_ORIGIN_PARITY_CASES } from '@propr/shared';
+import { DEFAULT_LOCAL_API_BASE_URL, PROPR_API_ORIGIN_PARITY_CASES } from '@propr/shared';
 import { normalizeBaseUrl, resolveDesktopAdapters } from './browserAdapters';
 import { DESKTOP_AUTHENTICATION_COMPLETE_EVENT } from './types';
 
@@ -20,6 +20,9 @@ describe('desktop browser fixtures', () => {
     const adapters = resolveDesktopAdapters();
     expect(adapters).not.toBeNull();
     await expect(adapters?.profiles.list()).resolves.toHaveLength(2);
+    await expect(adapters?.profiles.list()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ baseUrl: DEFAULT_LOCAL_API_BASE_URL })])
+    );
     expect(adapters?.discovery.supported).toBe(false);
   });
 

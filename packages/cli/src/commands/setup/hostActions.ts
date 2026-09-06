@@ -17,8 +17,20 @@ import type { ConfigManager } from "../../config/index.js";
 import type { RelayClientOptions } from "../../api/relay.js";
 import { localhostServiceUrl } from "../../utils/dockerPort.js";
 import { createDefaultAgentSetupActions } from "./agentHostActions.js";
+import type { AuthenticationCommandHandoff, CapturedCommandRunner } from "../../auth/githubLogin.js";
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", abort);
+    resolve();
+  }, ms);
+  const abort = () => {
+    clearTimeout(timer);
+    reject(signal?.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" }));
+  };
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+});
 
 function assertSafeAgentCredentialDir(path: string, name = "Agent credential path"): void {
   if (!isAbsolute(path) || normalize(path) === "/" || path.includes(":") || /[\u0000-\u001f\u007f-\u009f]/.test(path)) {
@@ -26,7 +38,10 @@ function assertSafeAgentCredentialDir(path: string, name = "Agent credential pat
   }
 }
 
-export function createDefaultActions(configManager?: ConfigManager): SetupActions {
+export function createDefaultActions(configManager?: ConfigManager, options: {
+  authenticationHandoff?: AuthenticationCommandHandoff;
+  capturedCommand?: CapturedCommandRunner;
+} = {}): SetupActions {
   /** A client pointed at the local stack's API port (not the saved remote URL). */
   const localApiClient = async (rootDir: string): Promise<import("../../api/client.js").ApiClient> => {
     const { getHostConfig } = await import("../../orchestrator/index.js");
@@ -44,7 +59,7 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
 
   return {
     // Agent enablement + image-login actions, bound to the local stack.
-    ...createDefaultAgentSetupActions(configManager),
+    ...createDefaultAgentSetupActions(configManager, { authenticationHandoff: options.authenticationHandoff }),
     async runChecks(options) {
       const { runChecks } = await import("../checkCommands.js");
       return runChecks(options);
@@ -69,13 +84,15 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
       assertSafeAgentCredentialDir(path);
       mkdirSync(path, { recursive: true, mode: 0o700 });
     },
-    async pullImages({ rootDir, agentTypes, onLog }) {
+    async pullImages({ rootDir, agentTypes, onLog, signal }) {
+      signal?.throwIfAborted();
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
       const selected = new Set(agentTypes);
       const result: PullImagesResult = { pulledCore: [], pulledAgents: [], failedCore: [], failedAgents: [] };
 
       for (const [key, tag] of Object.entries(cfg.images)) {
+        signal?.throwIfAborted();
         if (key === "docs" && !cfg.docsEnabled) continue;
         const isAgent = key === "agent";
         // Pull the shared agent image when the user selected any agent; core images
@@ -85,7 +102,8 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
         onLog?.(`pulling ${tag}…`);
         // Async exec keeps the event loop free so the wizard's Ink spinner keeps
         // animating while the (often slow) pull runs, instead of freezing.
-        const pulled = await orch.dockerAsync(["pull", tag]);
+        const pulled = await orch.dockerAsync(["pull", tag], { signal });
+        signal?.throwIfAborted();
         if (pulled.status === 0) {
           try {
             orch.tagAgentLatest(key, tag);
@@ -99,12 +117,13 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
       }
       return result;
     },
-    async isStackRunning(rootDir) {
+    async isStackRunning(rootDir, signal) {
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
-      return orch.isStackRunningAsync(cfg);
+      return orch.isStackRunningAsync(cfg, signal);
     },
-    async startStack({ rootDir, ui, docs, onLog }) {
+    async startStack({ rootDir, ui, docs, onLog, signal }) {
+      signal?.throwIfAborted();
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
       // Pre-create the host Vibe prompt-cache dir owned by this user so Docker
@@ -124,20 +143,24 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
       // Use the async start path: `propr setup` drives this from behind a live
       // Ink TUI, so the blocking synchronous startStack would freeze the spinner
       // and swallow keystrokes for the seconds-to-minutes a cold start takes.
-      await orch.ensureNetworkAsync(cfg, onLog);
+      await orch.ensureNetworkAsync(cfg, onLog, signal);
       await orch.startStackAsync(cfg, {
         ui: ui ?? configManager?.getUiEnabled() ?? true,
         docs: docs ?? cfg.docsEnabled,
         onLog,
+        signal,
       });
+      signal?.throwIfAborted();
     },
-    async checkBackendHealth({ rootDir, timeoutMs = 60_000 }) {
+    async checkBackendHealth({ rootDir, timeoutMs = 60_000, signal }) {
+      signal?.throwIfAborted();
       const { getSystemStatus } = await import("../../api/system.js");
       const client = await localApiClient(rootDir);
       const deadline = Date.now() + timeoutMs;
       let lastError = "no response";
       // Containers take a few seconds to report healthy; poll until the deadline.
       do {
+        signal?.throwIfAborted();
         try {
           const status = await getSystemStatus(client);
           if (String(status.api).toLowerCase() === "healthy") {
@@ -154,7 +177,8 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
           lastError = (error as Error).message;
         }
         if (Date.now() >= deadline) break;
-        await sleep(2_000);
+        await sleep(2_000, signal);
+        signal?.throwIfAborted();
       } while (Date.now() < deadline);
       return { healthy: false, detail: `backend not healthy within ${Math.round(timeoutMs / 1000)}s (${lastError})` };
     },
@@ -208,10 +232,14 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
       const result = await enrollRelayToken(client, { installationId, label: label ?? hostname() });
       return { relayUrl: client.baseUrl, token: result.token };
     },
-    async loginWithGithub({ onLog } = {}) {
+    async loginWithGithub({ onLog, signal } = {}) {
       if (!configManager) return false;
       const { loginWithGithubCli } = await import("../../auth/githubLogin.js");
-      const result = await loginWithGithubCli(configManager, { interactive: true, onLog });
+      const result = await loginWithGithubCli(configManager, {
+        interactive: true, onLog, signal,
+        authenticationHandoff: options.authenticationHandoff,
+        capturedCommand: options.capturedCommand,
+      });
       if (!result.ok) onLog?.(result.message);
       return result.ok;
     },

@@ -83,11 +83,10 @@ const clearRendererProfileState = (): boolean => {
 };
 
 export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAdapters => {
-  const packagedAcceptance = typeof window.__PROPR_PACKAGED_ACCEPTANCE__ === 'object'
-    && window.__PROPR_PACKAGED_ACCEPTANCE__ !== null;
   let publishedProfile: { id: string; origin: string; identityEpoch: string } | null = null;
+  const desktopPlatform = platform(navigator.platform || navigator.userAgent);
   return {
-  platform: platform(navigator.platform || navigator.userAgent),
+  platform: desktopPlatform,
   app: { onDeepLink: listener => bridge.app.onDeepLink(listener) },
   profiles: {
     async list() {
@@ -142,10 +141,14 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
   },
   externalBrowser: { open: url => bridge.external.open(url) },
   localSetup: {
-    supported: packagedAcceptance,
-    async setup() {
-      throw new Error('Local setup is not available in this desktop build. Connect to a running local instance instead.');
-    },
+    supported: desktopPlatform === 'linux',
+    status: () => bridge.localSetup.status(),
+    start: request => bridge.localSetup.start(request),
+    retry: request => bridge.localSetup.retry(request),
+    cancel: () => bridge.localSetup.cancel(),
+    selectPrivateKey: () => bridge.localSetup.selectPrivateKey(),
+    acquireWebhookSecret: () => bridge.localSetup.acquireWebhookSecret(),
+    onProgress: listener => bridge.localSetup.onProgress(listener),
   },
   connection: {
     async probe(profile) {

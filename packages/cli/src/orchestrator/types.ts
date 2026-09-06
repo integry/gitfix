@@ -151,6 +151,7 @@ export interface OnLogOption {
   onLog?: (line: string) => void;
   pull?: boolean;
   freshnessCache?: Map<string, ImageFreshnessResult>;
+  signal?: AbortSignal;
 }
 
 /** Public surface of orchestrator.mjs consumed by the CLI. */
@@ -164,10 +165,10 @@ export interface OrchestratorModule {
 
   dockerAvailable(): boolean;
   inspectImageFreshness(tag: string, opts?: { skipRemoteCheck?: boolean }): ImageFreshnessResult;
-  inspectImageFreshnessAsync(tag: string, opts?: { skipRemoteCheck?: boolean }): Promise<ImageFreshnessResult>;
+  inspectImageFreshnessAsync(tag: string, opts?: { skipRemoteCheck?: boolean; signal?: AbortSignal }): Promise<ImageFreshnessResult>;
   tagAgentLatest(key: string, imageTag: string): void;
   ensureNetwork(cfg: OrchestratorConfig, onLog?: (line: string) => void): void;
-  ensureNetworkAsync(cfg: OrchestratorConfig, onLog?: (line: string) => void): Promise<void>;
+  ensureNetworkAsync(cfg: OrchestratorConfig, onLog?: (line: string) => void, signal?: AbortSignal): Promise<void>;
   ensureServiceImage(
     cfg: OrchestratorConfig,
     service: string,
@@ -184,7 +185,7 @@ export interface OrchestratorModule {
   readonly TOGGLE_SERVICES: readonly string[];
 
   isStackRunning(cfg: OrchestratorConfig): boolean;
-  isStackRunningAsync(cfg: OrchestratorConfig): Promise<boolean>;
+  isStackRunningAsync(cfg: OrchestratorConfig, signal?: AbortSignal): Promise<boolean>;
 
   startService(cfg: OrchestratorConfig, service: string, opts?: OnLogOption): ServiceState | undefined;
   startServiceAsync(cfg: OrchestratorConfig, service: string, opts?: OnLogOption): Promise<ServiceState | undefined>;
@@ -194,7 +195,7 @@ export interface OrchestratorModule {
   ): void;
   runMigrationPhaseAsync(
     cfg: OrchestratorConfig,
-    opts?: { onLog?: (line: string) => void; freshnessCache?: Map<string, ImageFreshnessResult> }
+    opts?: { onLog?: (line: string) => void; freshnessCache?: Map<string, ImageFreshnessResult>; signal?: AbortSignal }
   ): Promise<void>;
   stopService(cfg: OrchestratorConfig, service: string, opts?: { remove?: boolean; onLog?: (line: string) => void }): void;
   startStack(
@@ -203,7 +204,7 @@ export interface OrchestratorModule {
   ): StackStatus;
   startStackAsync(
     cfg: OrchestratorConfig,
-    opts?: { ui?: boolean; docs?: boolean; tunnel?: boolean; onLog?: (line: string) => void }
+    opts?: { ui?: boolean; docs?: boolean; tunnel?: boolean; onLog?: (line: string) => void; signal?: AbortSignal }
   ): Promise<StackStatus>;
   stopStack(
     cfg: OrchestratorConfig,
@@ -215,7 +216,7 @@ export interface OrchestratorModule {
     cfg: OrchestratorConfig,
     opts?: { timeout?: number; env?: NodeJS.ProcessEnv }
   ): StackStatusInspection;
-  getStackStatusAsync(cfg: OrchestratorConfig): Promise<StackStatus>;
+  getStackStatusAsync(cfg: OrchestratorConfig, signal?: AbortSignal): Promise<StackStatus>;
   /** Pure parse of `docker ps` tab-separated output into per-service state. */
   parseStackStatus(cfg: OrchestratorConfig, stdout: string): StackStatus;
   getTunnelStatus(cfg: OrchestratorConfig, stackStatus?: StackStatus): Promise<TunnelStatus>;
@@ -228,5 +229,5 @@ export interface OrchestratorModule {
 
   containerExists(cfg: OrchestratorConfig, name: string): boolean;
   docker(args: string[], opts?: DockerCommandOptions): DockerCommandResult;
-  dockerAsync(args: string[], opts?: { timeout?: number }): Promise<DockerCommandResult>;
+  dockerAsync(args: string[], opts?: { timeout?: number; signal?: AbortSignal }): Promise<DockerCommandResult>;
 }
