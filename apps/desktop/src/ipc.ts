@@ -5,6 +5,7 @@ import type { DesktopConnectDiscoveryService } from './connect-discovery';
 import type { DesktopLogger } from './logger';
 import type { LocalLifecycleController } from './lifecycle';
 import type { ProfileStore } from './profile-store';
+import type { DesktopSetupController } from './setup-controller';
 import {
   connectApiBaseUrlFromDeepLink,
   dashboardPathFromDeepLink,
@@ -30,6 +31,7 @@ interface RegisterIpcOptions {
   credentials: DesktopCredentialService;
   connectDiscovery: Pick<DesktopConnectDiscoveryService, 'discover' | 'rediscover'>;
   lifecycle: LocalLifecycleController;
+  setup?: DesktopSetupController;
   logger: DesktopLogger;
   desktopSession: Session;
   devServerUrl: string | undefined;
@@ -238,11 +240,14 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       await reconcileRendererActiveProfile();
       return activated;
     } catch (error) {
-      const discarded = await options.credentials.discardActivation({
-        profileId: activated.profileId,
-        transportScope: activated.transportScope,
-      });
-      if (discarded.discarded) await reconcileRendererActiveProfile();
+      try {
+        await options.credentials.discardActivation({
+          profileId: activated.profileId,
+          transportScope: activated.transportScope,
+        });
+      } finally {
+        await reconcileRendererActiveProfile();
+      }
       throw error;
     }
   });
@@ -270,6 +275,31 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
   handle(IPC_CHANNELS.lifecycleStart, () => options.lifecycle.start());
   handle(IPC_CHANNELS.lifecycleStop, () => options.lifecycle.stop());
   handle(IPC_CHANNELS.lifecycleRestart, () => options.lifecycle.restart());
+  const setup = options.setup;
+  if (setup) handle(IPC_CHANNELS.setupStatus, (_event, ...args) => {
+    if (args.length) throw new Error('Invalid setup status request');
+    return setup.status();
+  });
+  if (setup) handle(IPC_CHANNELS.setupStart, (_event, request, ...args) => {
+    if (args.length) throw new Error('Invalid setup start request');
+    return setup.start(request);
+  });
+  if (setup) handle(IPC_CHANNELS.setupRetry, (_event, request, ...args) => {
+    if (args.length) throw new Error('Invalid setup retry request');
+    return setup.retry(request);
+  });
+  if (setup) handle(IPC_CHANNELS.setupCancel, (_event, ...args) => {
+    if (args.length) throw new Error('Invalid setup cancellation request');
+    return setup.cancel();
+  });
+  if (setup) handle(IPC_CHANNELS.setupSelectPrivateKey, (_event, ...args) => {
+    if (args.length) throw new Error('Invalid setup file request');
+    return setup.selectPrivateKey();
+  });
+  if (setup) handle(IPC_CHANNELS.setupAcquireWebhookSecret, (_event, ...args) => {
+    if (args.length) throw new Error('Invalid setup secret request');
+    return setup.acquireWebhookSecret();
+  });
   return {
     close() {
       if (closing) return;

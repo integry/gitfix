@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, crashReporter, ipcMain, net, protocol, safeStorage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, net, protocol, safeStorage, screen, session, shell } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -14,6 +14,9 @@ import {
   DESKTOP_CONNECT_DISCOVERY_PLATFORMS,
   discoverConfiguredConnect,
 } from '@propr/cli/desktop-discovery';
+import { createDesktopSetupHost } from '@propr/cli/desktop-local-setup';
+import type { SetupActions } from '@propr/local-setup';
+import { launchDesktopAuthentication } from './authentication-handoff';
 import { DesktopConnectDiscoveryService } from './connect-discovery';
 import { DeepLinkDelivery, deepLinkAcknowledgementTimeoutMs } from './deep-link-delivery';
 import { handleDeepLinkDeliveryFailure } from './deep-link-failure-policy';
@@ -35,6 +38,8 @@ import {
   packagedApprovalPartition,
 } from './packaged-approval-session';
 import { createDesktopShutdownCoordinator } from './shutdown';
+import { DesktopSetupController } from './setup-controller';
+import { promptForWebhookSecret } from './secure-secret-prompt';
 import {
   createLatestRendererReloader,
   deepLinkFromArguments,
@@ -1560,6 +1565,31 @@ if (!hasSingleInstanceLock) {
     }
     const lifecycle = new LocalLifecycleController();
     nativeProfiles = profiles;
+    const setupHost = process.platform === 'linux'
+      ? await createDesktopSetupHost({
+          configDir: join(app.getPath('userData'), 'local-setup', 'cli'),
+          authenticationHandoff: launchDesktopAuthentication,
+          ...(app.isPackaged ? { resourcesPath: process.resourcesPath } : {}),
+        })
+      : { actions: {} as SetupActions, resolveApiBaseUrl: async () => { throw new Error('Local setup is unsupported'); } };
+    const setup = new DesktopSetupController({
+      actions: setupHost.actions,
+      platform: process.platform,
+      appDataDir: app.getPath('userData'),
+      defaultRootDir: join(app.getPath('userData'), 'local-runtime'),
+      statePath: join(app.getPath('userData'), 'local-setup', 'state.json'),
+      selectPrivateKey: async () => {
+        const result = await dialog.showOpenDialog({
+          title: 'Choose GitHub App private key', properties: ['openFile'],
+          filters: [{ name: 'Private keys', extensions: ['pem', 'key'] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      promptWebhookSecret: promptForWebhookSecret,
+      resolveApiBaseUrl: setupHost.resolveApiBaseUrl,
+      emit: snapshot => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.setupProgress, snapshot); },
+      diagnose: (event, fields) => log('error', event, fields),
+    });
     const registeredIpc = registerIpcHandlers({
       app,
       ipcMain,
@@ -1567,6 +1597,7 @@ if (!hasSingleInstanceLock) {
       credentials,
       connectDiscovery,
       lifecycle,
+      setup,
       logger,
       desktopSession: session.defaultSession,
       devServerUrl,
@@ -1605,6 +1636,7 @@ if (!hasSingleInstanceLock) {
       credentials,
       lifecycle: shutdownLifecycle,
       deepLinks: deepLinkDelivery,
+      setup,
       ipc: registeredIpc,
       profiles,
       sessionSecurity,

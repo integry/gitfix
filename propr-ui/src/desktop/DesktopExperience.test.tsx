@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDesktopBridge, type PreloadIpc } from '../../../apps/desktop/src/preload-bridge';
 import { IPC_CHANNELS } from '../../../apps/desktop/src/shared/contract';
 import { DesktopDeepLinkInbox } from '../desktop-deep-link';
+import { DEFAULT_LOCAL_API_BASE_URL } from '@propr/shared';
 import { DesktopExperience } from './DesktopExperience';
 import { adaptersFor, deferred, localProfile, remoteProfile, renderConnectedExperience } from './DesktopExperience.testSupport';
 import type { DesktopConnectionResult } from './types';
@@ -211,6 +212,15 @@ describe('DesktopExperience', () => {
     expect(screen.queryByText('Verified ProPR Connect endpoint')).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: 'https://t-instance123.foo.propr.dev' } });
     expect(screen.queryByText('Verified ProPR Connect endpoint')).not.toBeInTheDocument();
+  });
+
+  it('prefills new profiles from the shared local API endpoint contract', async () => {
+    const adapters = adaptersFor();
+    render(<DesktopExperience adapters={adapters}><div>Shared route tree</div></DesktopExperience>);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Connect to an existing instance/i }));
+
+    expect(screen.getByLabelText('Instance URL')).toHaveValue(DEFAULT_LOCAL_API_BASE_URL);
   });
 
   it('supports editing a recent profile and connecting to the updated URL', async () => {

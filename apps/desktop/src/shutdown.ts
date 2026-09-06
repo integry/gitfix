@@ -12,6 +12,7 @@ interface DestructibleWindow {
 interface ShutdownOptions {
   credentials: { dispose(): Promise<void> };
   lifecycle: { shutdown(): Promise<void> };
+  setup?: { shutdown(): Promise<void> };
   ipc: RegisteredIpcHandlers;
   deepLinks?: { close(): void; whenIdle(): Promise<void> };
   profiles: { close(): Promise<void> };
@@ -88,6 +89,8 @@ export const createDesktopShutdownCoordinator = (
       step('authentication-cleared');
       const lifecycleDrain = options.lifecycle.shutdown();
       step('lifecycle-drain-started');
+      const setupDrain = options.setup?.shutdown() ?? Promise.resolve();
+      step('setup-drain-started');
       const ipcDrain = options.ipc.awaitIdle();
       step('ipc-drain-started');
       const deepLinkDrain = options.deepLinks?.whenIdle() ?? Promise.resolve();
@@ -95,6 +98,7 @@ export const createDesktopShutdownCoordinator = (
       completion = bounded(Promise.allSettled([
         credentialDrain,
         lifecycleDrain,
+        setupDrain,
         ipcDrain,
         deepLinkDrain,
       ]).then(results => {

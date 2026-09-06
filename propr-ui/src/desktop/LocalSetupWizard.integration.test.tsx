@@ -1,0 +1,228 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DesktopSetupSnapshot } from '../../../apps/desktop/src/shared/contract';
+import { DesktopExperience } from './DesktopExperience';
+import { adaptersFor, localProfile } from './DesktopExperience.testSupport';
+import { LocalSetupWizard } from './LocalSetupWizard';
+import type { DesktopGuidedLocalSetupAdapter } from './types';
+
+const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
+const runtimeMock = vi.hoisted(() => ({ setDesktopApiBaseUrl: vi.fn() }));
+vi.mock('../api/apiClient', () => ({ setApiBaseUrl: apiMock.setApiBaseUrl }));
+vi.mock('../config/runtimeConfig', () => ({ setDesktopApiBaseUrl: runtimeMock.setDesktopApiBaseUrl }));
+
+const idle: DesktopSetupSnapshot = {
+  phase: 'idle', capability: { supported: true, kind: 'local', platform: 'linux' },
+  sessionId: '11111111-1111-4111-8111-111111111111', logs: [],
+};
+const completed: DesktopSetupSnapshot = { ...idle, phase: 'completed', profile: { ...localProfile, kind: 'local' } };
+const defaultCancelled: DesktopSetupSnapshot = { ...idle, phase: 'cancelled', error: 'Setup was cancelled safely.' };
+
+const guidedAdapter = (overrides: Partial<DesktopGuidedLocalSetupAdapter> = {}): DesktopGuidedLocalSetupAdapter => ({
+  supported: true,
+  status: vi.fn(async () => idle),
+  start: vi.fn(async () => completed),
+  retry: vi.fn(async () => completed),
+  cancel: vi.fn(async () => defaultCancelled),
+  selectPrivateKey: vi.fn(async () => null),
+  acquireWebhookSecret: vi.fn(async () => null),
+  onProgress: vi.fn(() => () => undefined),
+  ...overrides,
+});
+
+const openAndSubmitWizard = async () => {
+  fireEvent.click(await screen.findByRole('button', { name: /Set up this computer/i }));
+  await screen.findByRole('heading', { name: 'Check the essentials' });
+  for (const heading of ['Private local storage', 'Connect GitHub', 'Choose GitHub event intake', 'Select coding agents', 'Ready to install']) {
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    await screen.findByRole('heading', { name: heading });
+  }
+  fireEvent.click(screen.getByRole('button', { name: /Install ProPR/i }));
+};
+
+describe('production local setup journey', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('opens the real wizard and settles cancellation before retrying', async () => {
+    let progress: ((snapshot: DesktopSetupSnapshot) => void) | undefined;
+    let settleStart: ((snapshot: DesktopSetupSnapshot) => void) | undefined;
+    const start = vi.fn(async () => new Promise<DesktopSetupSnapshot>(resolve => {
+      settleStart = resolve;
+      progress?.({ ...idle, phase: 'running' });
+    }));
+    const cancelled = { ...idle, phase: 'cancelled' as const, error: 'Setup was cancelled safely.' };
+    const cancel = vi.fn(async () => { settleStart?.(cancelled); return cancelled; });
+    const retry = vi.fn(async () => completed);
+    const adapter = guidedAdapter({
+      start, cancel, retry,
+      onProgress: vi.fn(listener => { progress = listener; return () => { progress = undefined; }; }),
+    });
+    const adapters = adaptersFor(); adapters.localSetup = adapter;
+    render(<DesktopExperience adapters={adapters}><div>Dashboard</div></DesktopExperience>);
+
+    await openAndSubmitWizard();
+    expect(await screen.findByRole('heading', { name: 'Setting up ProPR' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Cancel safely/i }));
+    expect(await screen.findByRole('heading', { name: 'Setup needs attention' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Retry setup/i }));
+    expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledWith();
+  });
+
+  it('hands completion into pairing, authenticated reprobe, and the current dashboard flow', async () => {
+    const adapters = adaptersFor();
+    adapters.localSetup = guidedAdapter();
+    vi.mocked(adapters.connection.probe)
+      .mockResolvedValueOnce({ status: 'authentication-required', message: 'Pair this desktop.' })
+      .mockResolvedValueOnce({ status: 'ready', version: '0.8.15' });
+    render(<DesktopExperience adapters={adapters}><div>Authenticated dashboard</div></DesktopExperience>);
+
+    await openAndSubmitWizard();
+    fireEvent.click(await screen.findByRole('button', { name: /Connect securely/i }));
+    expect(await screen.findByText('Sign in required')).toBeInTheDocument();
+    expect(adapters.profiles.save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Sign in in browser/i }));
+
+    expect(await screen.findByText('Authenticated dashboard')).toBeInTheDocument();
+    expect(adapters.authentication.authenticate).toHaveBeenCalledWith(localProfile);
+    expect(adapters.connection.probe).toHaveBeenCalledTimes(2);
+    expect(adapters.profiles.save).toHaveBeenCalledWith(expect.objectContaining({ id: localProfile.id }));
+    expect(adapters.profiles.setActiveId).toHaveBeenCalledWith(localProfile.id);
+    expect(runtimeMock.setDesktopApiBaseUrl).toHaveBeenCalledWith(localProfile.baseUrl);
+  });
+
+  it('shows status failures with working back and retry actions', async () => {
+    const adapter = guidedAdapter();
+    vi.mocked(adapter.status).mockRejectedValueOnce(new Error('private status failure'));
+    const onBack = vi.fn();
+    render(<LocalSetupWizard adapter={adapter} onBack={onBack} onComplete={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: 'Could not load setup' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Setup status is unavailable.');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: 'Check the essentials' })).toBeInTheDocument();
+    expect(adapter.status).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it('keeps cancellation failures visible with retry and back available', async () => {
+    const adapter = guidedAdapter({
+      status: vi.fn(async () => ({ ...idle, phase: 'running' as const })),
+      cancel: vi.fn(async () => { throw new Error('private cancellation failure'); }),
+    });
+    const onBack = vi.fn();
+    render(<LocalSetupWizard adapter={adapter} onBack={onBack} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel safely' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Setup cancellation could not be confirmed.');
+    expect(screen.getByRole('button', { name: 'Try cancellation again' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it('renders a failed recovery retry without hiding recovery controls', async () => {
+    const failed = { ...idle, phase: 'failed' as const, error: 'Docker is unavailable.' };
+    const adapter = guidedAdapter({
+      status: vi.fn(async () => failed),
+      retry: vi.fn(async () => { throw new Error('private retry failure'); }),
+    });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry setup' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Local setup could not be started.');
+    expect(screen.getByRole('button', { name: 'Retry setup' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
+  });
+
+  it('offers credential review without replacing ordinary retry for a transient failure', async () => {
+    const requiresReview: DesktopSetupSnapshot = {
+      ...idle, phase: 'failed', error: 'The backend was temporarily unavailable.',
+      resumeAvailable: true, reconfigurationRequired: true,
+      resume: {
+        agents: [], reinitialize: false,
+        github: { mode: 'app', appId: '123', installationId: '456', reconfigurationRequired: true },
+        intake: { mode: 'polling' }, whitelist: null, repository: null, reconfigurationStage: 'github',
+      },
+    };
+    const retry = vi.fn(async () => completed);
+    const adapter = guidedAdapter({ status: vi.fn(async () => requiresReview), retry });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(await screen.findByRole('button', { name: 'Review saved choices' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
+    expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
+    expect(retry).toHaveBeenCalledWith();
+  });
+
+  it.each(['failed', 'cancelled', 'interrupted'] as const)('lets a resumable %s setup revise ordinary saved choices', async phase => {
+    const recoverable: DesktopSetupSnapshot = {
+      ...idle, phase, error: 'ProPR Connect could not be configured.',
+      resumeAvailable: true, reconfigurationRequired: false,
+      resume: {
+        agents: ['codex'], reinitialize: false, github: { mode: 'relay' },
+        intake: { mode: 'routing_websocket' }, whitelist: ['octocat'], repository: null,
+      },
+    };
+    const retry = vi.fn(async () => completed);
+    const adapter = guidedAdapter({ status: vi.fn(async () => recoverable), retry });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review saved choices' }));
+    expect(await screen.findByRole('heading', { name: 'Connect GitHub' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Demo mode' }));
+    for (const heading of ['Choose GitHub event intake', 'Select coding agents', 'Ready to install']) {
+      fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+      await screen.findByRole('heading', { name: heading });
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Install ProPR/i }));
+
+    expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
+    expect(retry).toHaveBeenCalledWith(expect.objectContaining({
+      github: { mode: 'demo' }, intake: { mode: 'keep' },
+    }));
+  });
+
+  it.each(['failed', 'cancelled'] as const)('returns a %s reconfigured retry to credential-free recovery', async phase => {
+    const resume = {
+      agents: ['codex'], reinitialize: false, github: { mode: 'keep' as const },
+      intake: { mode: 'direct_webhook' as const, reconfigurationRequired: true as const },
+      whitelist: null, repository: null, reconfigurationStage: 'intake' as const,
+    };
+    const requiresSecret: DesktopSetupSnapshot = {
+      ...idle, phase: 'failed', error: 'Enter the webhook secret again.', resume,
+      resumeAvailable: true, reconfigurationRequired: true,
+    };
+    const terminal: DesktopSetupSnapshot = {
+      ...requiresSecret, phase, error: phase === 'cancelled' ? 'Setup was cancelled safely.' : 'Webhook setup failed.',
+      reconfigurationRequired: false,
+    };
+    const retry = vi.fn()
+      .mockResolvedValueOnce(terminal)
+      .mockResolvedValueOnce(completed);
+    const adapter = guidedAdapter({
+      status: vi.fn(async () => requiresSecret), retry,
+      acquireWebhookSecret: vi.fn(async () => ({ capability: 'webhook-secret-capability', label: 'Secret entered' as const })),
+    });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review saved choices' }));
+    expect(await screen.findByRole('heading', { name: 'Choose GitHub event intake' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Enter webhook secret securely' }));
+    await screen.findByText('Secret entered');
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    await screen.findByRole('heading', { name: 'Select coding agents' });
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    await screen.findByRole('heading', { name: 'Ready to install' });
+    fireEvent.click(screen.getByRole('button', { name: /Install ProPR/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Setup needs attention' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
+    expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
+    expect(retry).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      intake: { mode: 'direct_webhook', secretCapability: 'webhook-secret-capability' },
+    }));
+    expect(retry).toHaveBeenNthCalledWith(2);
+  });
+});

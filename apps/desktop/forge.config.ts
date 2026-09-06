@@ -20,6 +20,10 @@ const DESKTOP_EXECUTABLE_NAME = 'propr-desktop';
 
 const connectNativePrebuilds = fileURLToPath(new URL('../../packages/cli/native/prebuilds', import.meta.url));
 const connectOrchestrator = fileURLToPath(new URL('../../packages/cli/dist/orchestrator', import.meta.url));
+const setupAssets = fileURLToPath(new URL('../../packages/cli/dist/assets', import.meta.url));
+const linuxSetupResources = process.platform === 'linux'
+  ? { [['extra', 'Resource'].join('')]: [connectOrchestrator, setupAssets] }
+  : {};
 
 const packagedConnectNativeArtifacts = (platform: string, arch: string): string[] => {
   if (platform === 'darwin' || platform === 'mas') {
@@ -89,6 +93,7 @@ const windowsSign = windowsSigning ? {
 const config: ForgeConfig = {
   packagerConfig: {
     asar: { unpack: '**/.vite/native/prebuilds/**' },
+    ...linuxSetupResources,
     appBundleId: 'dev.propr.desktop',
     appCategoryType: 'public.app-category.developer-tools',
     appVersion: releaseVersion,

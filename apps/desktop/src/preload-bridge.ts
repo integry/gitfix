@@ -52,6 +52,7 @@ export const createDesktopBridge = (
     };
     await invoke(ipc, IPC_CHANNELS.deepLinkAcknowledgement, acknowledgement).catch(() => undefined);
   };
+  const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
@@ -59,6 +60,11 @@ export const createDesktopBridge = (
       return;
     }
     void consume(value).catch(() => undefined);
+  });
+  ipc.on(IPC_CHANNELS.setupProgress, (_event, value) => {
+    setupProgressListeners.forEach(listener => listener(
+      value as Awaited<ReturnType<DesktopBridge['localSetup']['status']>>,
+    ));
   });
 
   const bridge: DesktopBridge = {
@@ -105,6 +111,20 @@ export const createDesktopBridge = (
       start: () => invoke(ipc, IPC_CHANNELS.lifecycleStart),
       stop: () => invoke(ipc, IPC_CHANNELS.lifecycleStop),
       restart: () => invoke(ipc, IPC_CHANNELS.lifecycleRestart),
+    },
+    localSetup: {
+      status: () => invoke(ipc, IPC_CHANNELS.setupStatus),
+      start: request => invoke(ipc, IPC_CHANNELS.setupStart, request),
+      retry: request => request === undefined
+        ? invoke(ipc, IPC_CHANNELS.setupRetry)
+        : invoke(ipc, IPC_CHANNELS.setupRetry, request),
+      cancel: () => invoke(ipc, IPC_CHANNELS.setupCancel),
+      selectPrivateKey: () => invoke(ipc, IPC_CHANNELS.setupSelectPrivateKey),
+      acquireWebhookSecret: () => invoke(ipc, IPC_CHANNELS.setupAcquireWebhookSecret),
+      onProgress: listener => {
+        setupProgressListeners.add(listener);
+        return () => setupProgressListeners.delete(listener);
+      },
     },
     ...(connectJourneyAcceptance ? {
       acceptance: {
