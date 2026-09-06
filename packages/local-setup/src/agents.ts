@@ -64,8 +64,8 @@ export interface AgentSetupActions {
   addAgent(rootDir: string, options: AddAgentOptions): Promise<void>;
   /** Agent types that support an interactive image login (have a login plan). */
   loginableAgents(): Promise<string[]>;
-  /** Authenticate one agent through its image; interactive (inherits stdio). */
-  loginAgent(rootDir: string, type: string): Promise<AgentLoginResult>;
+  /** Authenticate one agent through its image; hosts may present a visible interactive handoff. */
+  loginAgent(rootDir: string, type: string, options?: { signal?: AbortSignal }): Promise<AgentLoginResult>;
   /** Run a live, image-only request that mirrors the worker credential mount. */
   validateAgents(rootDir: string, types: string[]): Promise<AgentConnectivityResult[]>;
 }
@@ -82,6 +82,8 @@ export interface AgentSetupParams {
    */
   confirmLogin?(ctx: { candidates: string[]; rootDir: string }): Promise<string[]>;
   onLog?(line: string): void;
+  /** Cooperative cancellation for host authentication and connectivity work. */
+  signal?: AbortSignal;
 }
 
 /** What the agent-setup step did, for the caller to render as a step status. */
@@ -189,11 +191,13 @@ export async function runAgentSetup(params: AgentSetupParams): Promise<AgentSetu
       if (!chosenSet.has(type)) continue;
       try {
         onLog?.(`authenticating ${type} through its image…`);
-        const result = await actions.loginAgent(rootDir, type);
+        const result = await actions.loginAgent(rootDir, type, { signal: params.signal });
+        params.signal?.throwIfAborted();
         if (result.detail) onLog?.(result.detail);
         if (result.available && result.success) outcome.authenticated.push(type);
         else outcome.authFailed.push(type);
       } catch (error) {
+        params.signal?.throwIfAborted();
         outcome.authFailed.push(type);
         outcome.errors.push(`login for ${type} failed: ${(error as Error).message}`);
       }
@@ -204,6 +208,7 @@ export async function runAgentSetup(params: AgentSetupParams): Promise<AgentSetu
   // worker uses. This is one live call per agent (host calls are deliberately
   // skipped), so setup catches a successful host login that was not mounted into
   // Docker without doubling subscription usage.
+  params.signal?.throwIfAborted();
   try {
     onLog?.(`checking agent connectivity through worker image${selectedAgents.length === 1 ? "" : "s"}…`);
     const checks = await actions.validateAgents(rootDir, selectedAgents);

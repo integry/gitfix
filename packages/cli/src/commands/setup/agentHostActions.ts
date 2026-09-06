@@ -4,10 +4,13 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { AgentSetupActions } from "@propr/local-setup";
 import type { ConfigManager } from "../../config/index.js";
+import type { AuthenticationCommandHandoff } from "../../auth/githubLogin.js";
 import { localhostServiceUrl } from "../../utils/dockerPort.js";
 
 /** Bind the portable agent setup engine to the CLI API and Docker launcher. */
-export function createDefaultAgentSetupActions(configManager?: ConfigManager): AgentSetupActions {
+export function createDefaultAgentSetupActions(configManager?: ConfigManager, options: {
+  authenticationHandoff?: AuthenticationCommandHandoff;
+} = {}): AgentSetupActions {
   const localApiClient = async (rootDir: string): Promise<import("../../api/client.js").ApiClient> => {
     const { getHostConfig } = await import("../../orchestrator/index.js");
     const { cfg } = await getHostConfig({ configManager, root: rootDir });
@@ -28,7 +31,7 @@ export function createDefaultAgentSetupActions(configManager?: ConfigManager): A
       const { loginableAgents } = await import("../agentValidation.js");
       return loginableAgents();
     },
-    async loginAgent(rootDir, type) {
+    async loginAgent(rootDir, type, loginOptions = {}) {
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { planAgentLogin } = await import("../agentValidation.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
@@ -42,7 +45,13 @@ export function createDefaultAgentSetupActions(configManager?: ConfigManager): A
           return { available: true, success: false, detail: `image ${plan.image} not present locally — run \`propr images pull\`` };
         }
         mkdirSync(plan.hostDir, { recursive: true, mode: 0o700 });
-        const result = spawnSync("docker", plan.dockerArgs, { stdio: "inherit" });
+        const result = options.authenticationHandoff
+          ? await options.authenticationHandoff("docker", plan.dockerArgs, {
+              title: `ProPR · ${type} authentication`,
+              signal: loginOptions.signal,
+            })
+          : spawnSync("docker", plan.dockerArgs, { stdio: "inherit" });
+        loginOptions.signal?.throwIfAborted();
         return result.status === 0
           ? { available: true, success: true, detail: `${type} login finished — credentials written to ${plan.hostDir}` }
           : { available: true, success: false, detail: `${type} login exited with code ${result.status ?? "?"}` };

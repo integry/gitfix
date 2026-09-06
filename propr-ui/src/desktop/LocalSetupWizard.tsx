@@ -29,7 +29,11 @@ const requestFrom = (sessionId: string, draft: Draft): DesktopSetupRequest => ({
   repository: null,
 });
 
-const Running: React.FC<{ snapshot: DesktopSetupSnapshot; cancel(): void }> = ({ snapshot, cancel }) => {
+const InlineError: React.FC<{ message: string | null }> = ({ message }) => message
+  ? <div className="desktop-inline-error" role="alert">{message}</div>
+  : null;
+
+const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; cancel(): void }> = ({ snapshot, busy, error, back, cancel }) => {
   const complete = snapshot.state?.steps.filter(step => ['done', 'skipped', 'warning'].includes(step.status)).length ?? 0;
   const total = snapshot.state?.steps.length ?? 1;
   return <main className="desktop-setup-wizard" aria-live="polite">
@@ -40,16 +44,19 @@ const Running: React.FC<{ snapshot: DesktopSetupSnapshot; cancel(): void }> = ({
       <div><strong>{step.title}</strong><small>{step.detail || step.description}</small></div>
     </div>)}</div>
     {snapshot.logs.length > 0 && <pre className="desktop-setup-log">{snapshot.logs.slice(-8).join('\n')}</pre>}
-    <button type="button" className="desktop-secondary-button" onClick={cancel}>Cancel safely</button>
+    <InlineError message={error} />
+    <div className="desktop-setup-footer">{error && <button type="button" className="desktop-secondary-button" onClick={back}>Back</button>}
+      <button type="button" className="desktop-secondary-button" disabled={busy} onClick={cancel}>{busy ? 'Cancelling…' : error ? 'Try cancellation again' : 'Cancel safely'}</button></div>
   </main>;
 };
 
-const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; back(): void; retry(): void }> = ({ snapshot, busy, back, retry }) => {
+const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; retry(): void }> = ({ snapshot, busy, error, back, retry }) => {
   const failed = snapshot.state?.steps.find(step => step.status === 'failed');
   return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon desktop-setup-error-icon" />
     <span className="desktop-eyebrow">Recovery</span><h1>{snapshot.phase === 'interrupted' ? 'Continue your setup' : 'Setup needs attention'}</h1>
     <p>{failed?.detail || snapshot.error || snapshot.errors?.[0]?.message || 'Setup stopped safely.'}</p>
     {(failed?.nextAction || snapshot.errors?.[0]?.nextAction) && <div className="desktop-setup-recovery">{failed?.nextAction || snapshot.errors?.[0]?.nextAction}</div>}
+    <InlineError message={error} />
     <div className="desktop-setup-footer"><button className="desktop-secondary-button" type="button" onClick={back}>Back</button>
       <button className="desktop-primary-button" type="button" disabled={busy} onClick={retry}><RotateCcw /> {busy ? 'Waiting…' : snapshot.reconfigurationRequired ? 'Review saved choices' : 'Retry setup'}</button></div>
   </main>;
@@ -88,7 +95,9 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
   const [stage, setStage] = useState<Stage>('prerequisites');
   const [snapshot, setSnapshot] = useState<DesktopSetupSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [statusAttempt, setStatusAttempt] = useState(0);
   const [reconfiguring, setReconfiguring] = useState(false);
   const [draft, setDraft] = useState<Draft>({ githubMode: 'relay', appId: '', installationId: '', privateKey: null,
     intakeMode: 'routing_websocket', webhookSecret: null, selectedAgents: ['codex'], whitelist: '', reinitialize: false });
@@ -101,7 +110,7 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
       selectedAgents: value.resume!.agents, whitelist: value.resume!.whitelist?.join(', ') ?? '', reinitialize: value.resume!.reinitialize })); })
       .catch(() => { if (mounted) setError('Setup status is unavailable.'); });
     return () => { mounted = false; unsubscribe(); };
-  }, [adapter]);
+  }, [adapter, statusAttempt]);
   const request = useMemo(() => snapshot ? requestFrom(snapshot.sessionId, draft) : null, [draft, snapshot]);
   const run = async (retry: boolean) => {
     if (!request) return;
@@ -113,10 +122,20 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
   };
   const chooseKey = async () => { setBusy(true); try { const value = await adapter.selectPrivateKey(); if (value) setDraft(current => ({ ...current, privateKey: value })); } catch { setError('Choose a regular owner-only private-key file.'); } finally { setBusy(false); } };
   const acquireSecret = async () => { setBusy(true); try { const value = await adapter.acquireWebhookSecret(); if (value) setDraft(current => ({ ...current, webhookSecret: value })); } catch { setError('Install zenity or kdialog to enter the secret securely.'); } finally { setBusy(false); } };
+  const cancel = async () => {
+    setCancelling(true); setError(null);
+    try { setSnapshot(await adapter.cancel()); }
+    catch { setError('Setup cancellation could not be confirmed. Try again or go back and reopen setup.'); }
+    finally { setCancelling(false); }
+  };
+  if (!snapshot && error) return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon desktop-setup-error-icon" />
+    <span className="desktop-eyebrow">Setup unavailable</span><h1>Could not load setup</h1><div className="desktop-inline-error" role="alert">{error}</div>
+    <div className="desktop-setup-footer"><button type="button" className="desktop-secondary-button" onClick={onBack}>Back</button>
+      <button type="button" className="desktop-primary-button" onClick={() => { setError(null); setStatusAttempt(value => value + 1); }}><RotateCcw /> Retry</button></div></main>;
   if (!snapshot) return <div className="desktop-loading"><LoaderCircle className="desktop-spin" /> Loading setup…</div>;
   if (snapshot.phase === 'unsupported') return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon" /><h1>Local setup is unavailable</h1><p>{snapshot.error}</p><button className="desktop-primary-button" onClick={onBack}>Back to instances</button></main>;
-  if (snapshot.phase === 'running') return <Running snapshot={snapshot} cancel={() => { void adapter.cancel().then(setSnapshot); }} />;
-  if (['failed', 'cancelled', 'interrupted'].includes(snapshot.phase) && !reconfiguring) return <Recovery snapshot={snapshot} busy={busy} back={onBack} retry={() => void run(true)} />;
+  if (snapshot.phase === 'running') return <Running snapshot={snapshot} busy={cancelling} error={error} back={onBack} cancel={() => void cancel()} />;
+  if (['failed', 'cancelled', 'interrupted'].includes(snapshot.phase) && !reconfiguring) return <Recovery snapshot={snapshot} busy={busy} error={error} back={onBack} retry={() => void run(true)} />;
   if (snapshot.phase === 'completed' && snapshot.profile) return <main className="desktop-setup-wizard"><div className="desktop-setup-success"><Check /></div><span className="desktop-eyebrow">Setup complete</span><h1>ProPR is ready</h1><p>The local stack is healthy. Continue through the normal identity and pairing checks to open it.</p><div className="desktop-setup-footer"><button className="desktop-primary-button" onClick={() => onComplete(snapshot.profile!)}>Connect securely</button></div></main>;
   const index = stages.indexOf(stage);
   const next = () => { setError(null); if (stage === 'github' && draft.githubMode === 'app' && (!/^\d{1,20}$/.test(draft.appId) || !/^\d{1,20}$/.test(draft.installationId) || !draft.privateKey)) return setError('Enter numeric App and installation IDs, then choose the private key.');

@@ -17,6 +17,7 @@ import type { ConfigManager } from "../../config/index.js";
 import type { RelayClientOptions } from "../../api/relay.js";
 import { localhostServiceUrl } from "../../utils/dockerPort.js";
 import { createDefaultAgentSetupActions } from "./agentHostActions.js";
+import type { AuthenticationCommandHandoff, CapturedCommandRunner } from "../../auth/githubLogin.js";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -26,7 +27,10 @@ function assertSafeAgentCredentialDir(path: string, name = "Agent credential pat
   }
 }
 
-export function createDefaultActions(configManager?: ConfigManager): SetupActions {
+export function createDefaultActions(configManager?: ConfigManager, options: {
+  authenticationHandoff?: AuthenticationCommandHandoff;
+  capturedCommand?: CapturedCommandRunner;
+} = {}): SetupActions {
   /** A client pointed at the local stack's API port (not the saved remote URL). */
   const localApiClient = async (rootDir: string): Promise<import("../../api/client.js").ApiClient> => {
     const { getHostConfig } = await import("../../orchestrator/index.js");
@@ -44,7 +48,7 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
 
   return {
     // Agent enablement + image-login actions, bound to the local stack.
-    ...createDefaultAgentSetupActions(configManager),
+    ...createDefaultAgentSetupActions(configManager, { authenticationHandoff: options.authenticationHandoff }),
     async runChecks(options) {
       const { runChecks } = await import("../checkCommands.js");
       return runChecks(options);
@@ -216,10 +220,14 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
       const result = await enrollRelayToken(client, { installationId, label: label ?? hostname() });
       return { relayUrl: client.baseUrl, token: result.token };
     },
-    async loginWithGithub({ onLog } = {}) {
+    async loginWithGithub({ onLog, signal } = {}) {
       if (!configManager) return false;
       const { loginWithGithubCli } = await import("../../auth/githubLogin.js");
-      const result = await loginWithGithubCli(configManager, { interactive: true, onLog });
+      const result = await loginWithGithubCli(configManager, {
+        interactive: true, onLog, signal,
+        authenticationHandoff: options.authenticationHandoff,
+        capturedCommand: options.capturedCommand,
+      });
       if (!result.ok) onLog?.(result.message);
       return result.ok;
     },

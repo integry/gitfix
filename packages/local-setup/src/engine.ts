@@ -452,8 +452,8 @@ export interface SetupActions extends AgentSetupActions {
     installationId: string;
     label?: string;
   }): Promise<{ relayUrl: string; token: string }>;
-  /** Authenticate with GitHub via the interactive `gh` CLI and store the token. */
-  loginWithGithub(params?: { onLog?: (line: string) => void }): Promise<boolean>;
+  /** Authenticate with GitHub through the host's interactive handoff and store the token. */
+  loginWithGithub(params?: { onLog?: (line: string) => void; signal?: AbortSignal }): Promise<boolean>;
   /** Host preference used to select managed browser authentication. */
   getTunnelEnabled?(rootDir: string): boolean | undefined;
 }
@@ -625,7 +625,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
     if (!actions.hasGithubToken()) {
       const reason = "Relay enrollment needs a GitHub token.";
       if (prompts.confirmGithubLogin && (await prompts.confirmGithubLogin({ reason }))) {
-        await actions.loginWithGithub({ onLog: log });
+        await actions.loginWithGithub({ onLog: log, signal: options.signal });
       }
       if (!actions.hasGithubToken()) {
         return {
@@ -1099,7 +1099,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
   if (!demoModeEnabled && !actions.hasGithubToken()) {
     const reason = "Finishing setup requires a GitHub user token for protected backend API steps.";
     if (prompts.confirmGithubLogin && (await prompts.confirmGithubLogin({ reason }))) {
-      await actions.loginWithGithub({ onLog: log });
+      await actions.loginWithGithub({ onLog: log, signal: options.signal });
     }
     if (!actions.hasGithubToken()) {
       settle("github-auth", {
@@ -1287,6 +1287,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       actions,
       confirmLogin: prompts.confirmAgentLogin,
       onLog: log,
+      signal: options.signal,
     });
     if (selectedAgents.length === 0) {
       settle("enable-agents", {

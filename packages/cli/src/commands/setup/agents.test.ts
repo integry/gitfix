@@ -191,6 +191,35 @@ test("login runs only for confirmed agents and records the result", async () => 
   assert.deepEqual(outcome.authFailed, ["codex"]);
 });
 
+test("an aborted desktop login stops before image validation", async () => {
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
+  let validationCalled = false;
+  const setup = runAgentSetup({
+    rootDir: "/stack",
+    selectedAgents: ["codex"],
+    actions: mockAgentActions({
+      loginableAgents: async () => ["codex"],
+      loginAgent: async (_root, _type, options) => new Promise((_resolve, reject) => {
+        receivedSignal = options?.signal;
+        options?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { name: "AbortError" })), { once: true });
+      }),
+      validateAgents: async () => {
+        validationCalled = true;
+        return [];
+      },
+    }),
+    confirmLogin: async ({ candidates }) => candidates,
+    signal: controller.signal,
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+
+  await assert.rejects(setup, error => (error as Error).name === "AbortError");
+  assert.equal(receivedSignal, controller.signal);
+  assert.equal(validationCalled, false);
+});
+
 test("a confirm choice outside the candidate set is ignored", async () => {
   const loggedIn: string[] = [];
   await runAgentSetup({

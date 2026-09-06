@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesktopSetupSnapshot } from '../../../apps/desktop/src/shared/contract';
 import { DesktopExperience } from './DesktopExperience';
 import { adaptersFor, localProfile } from './DesktopExperience.testSupport';
+import { LocalSetupWizard } from './LocalSetupWizard';
 import type { DesktopGuidedLocalSetupAdapter } from './types';
 
 const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
@@ -89,5 +90,49 @@ describe('production local setup journey', () => {
     expect(adapters.profiles.save).toHaveBeenCalledWith(expect.objectContaining({ id: localProfile.id }));
     expect(adapters.profiles.setActiveId).toHaveBeenCalledWith(localProfile.id);
     expect(runtimeMock.setDesktopApiBaseUrl).toHaveBeenCalledWith(localProfile.baseUrl);
+  });
+
+  it('shows status failures with working back and retry actions', async () => {
+    const adapter = guidedAdapter();
+    vi.mocked(adapter.status).mockRejectedValueOnce(new Error('private status failure'));
+    const onBack = vi.fn();
+    render(<LocalSetupWizard adapter={adapter} onBack={onBack} onComplete={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: 'Could not load setup' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Setup status is unavailable.');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: 'Check the essentials' })).toBeInTheDocument();
+    expect(adapter.status).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it('keeps cancellation failures visible with retry and back available', async () => {
+    const adapter = guidedAdapter({
+      status: vi.fn(async () => ({ ...idle, phase: 'running' as const })),
+      cancel: vi.fn(async () => { throw new Error('private cancellation failure'); }),
+    });
+    const onBack = vi.fn();
+    render(<LocalSetupWizard adapter={adapter} onBack={onBack} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel safely' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Setup cancellation could not be confirmed.');
+    expect(screen.getByRole('button', { name: 'Try cancellation again' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it('renders a failed recovery retry without hiding recovery controls', async () => {
+    const failed = { ...idle, phase: 'failed' as const, error: 'Docker is unavailable.' };
+    const adapter = guidedAdapter({
+      status: vi.fn(async () => failed),
+      retry: vi.fn(async () => { throw new Error('private retry failure'); }),
+    });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry setup' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Local setup could not be started.');
+    expect(screen.getByRole('button', { name: 'Retry setup' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
   });
 });

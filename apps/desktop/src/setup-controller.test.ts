@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -15,7 +15,7 @@ const request: DesktopSetupRequest = {
 
 describe('desktop local setup controller', () => {
   it('cancels admitted engine work and allows a fresh retry without touching a real stack', async () => {
-    const appData = mkdtempSync(join(tmpdir(), 'propr-setup-controller-'));
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
     chmodSync(appData, 0o700);
     let attempts = 0;
     let started!: () => void;
@@ -55,7 +55,7 @@ describe('desktop local setup controller', () => {
   });
 
   it('reports remote-only capability and rejects setup outside Linux', async () => {
-    const appData = mkdtempSync(join(tmpdir(), 'propr-setup-controller-'));
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
     const controller = new DesktopSetupController({
       actions: {} as SetupActions, platform: 'win32', appDataDir: appData,
       defaultRootDir: join(appData, 'local-runtime'), statePath: join(appData, 'state.json'),

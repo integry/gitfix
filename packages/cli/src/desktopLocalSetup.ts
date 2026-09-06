@@ -6,6 +6,9 @@ import { configureStackTemplatePath } from './commands/initStack.js';
 import { createDefaultActions } from './commands/setup/hostActions.js';
 import { configureOrchestratorAssetPath, getHostConfig } from './orchestrator/index.js';
 import { localhostServiceUrl } from './utils/dockerPort.js';
+import type { AuthenticationCommandHandoff, CapturedCommandRunner } from './auth/githubLogin.js';
+
+export type { AuthenticationCommandHandoff } from './auth/githubLogin.js';
 
 export interface DesktopSetupHost {
   actions: SetupActions;
@@ -23,6 +26,8 @@ const verifiedResource = (path: string): string => {
 export async function createDesktopSetupHost(options: {
   configDir: string;
   resourcesPath?: string;
+  authenticationHandoff: AuthenticationCommandHandoff;
+  capturedCommand?: CapturedCommandRunner;
 }): Promise<DesktopSetupHost> {
   if (options.resourcesPath) {
     const root = realpathSync(options.resourcesPath);
@@ -31,7 +36,10 @@ export async function createDesktopSetupHost(options: {
   }
   const config = new ConfigManager(resolve(options.configDir));
   await config.init();
-  const actions = createDefaultActions(config);
+  const actions = createDefaultActions(config, {
+    authenticationHandoff: options.authenticationHandoff,
+    capturedCommand: options.capturedCommand,
+  });
   return {
     actions,
     async resolveApiBaseUrl(rootDir, signal) {

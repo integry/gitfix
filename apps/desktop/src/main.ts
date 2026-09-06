@@ -16,6 +16,7 @@ import {
 } from '@propr/cli/desktop-discovery';
 import { createDesktopSetupHost } from '@propr/cli/desktop-local-setup';
 import type { SetupActions } from '@propr/local-setup';
+import { launchDesktopAuthentication } from './authentication-handoff';
 import { DesktopConnectDiscoveryService } from './connect-discovery';
 import { DeepLinkDelivery } from './deep-link-delivery';
 import { clearDesktopInstanceCookies } from './desktop-session';
@@ -1286,6 +1287,7 @@ if (!hasSingleInstanceLock) {
     const setupHost = process.platform === 'linux'
       ? await createDesktopSetupHost({
           configDir: join(app.getPath('userData'), 'local-setup', 'cli'),
+          authenticationHandoff: launchDesktopAuthentication,
           ...(app.isPackaged ? { resourcesPath: process.resourcesPath } : {}),
         })
       : { actions: {} as SetupActions, resolveApiBaseUrl: async () => { throw new Error('Local setup is unsupported'); } };
