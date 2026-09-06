@@ -121,13 +121,28 @@ const accessibilityFor = () => ({
 });
 
 const summaryFor = () => ({
-  schemaVersion: 5,
+  schemaVersion: 6,
   generatedAt: FIXED_TIME,
   status: 'passed',
   journeys: ACCEPTANCE_JOURNEYS.length,
   screenshots: expectedScreenshotNames().length,
   boundary: { packagedExecutable: true, rendererOrigin: 'propr-app://renderer', preloadBridge: true, journeys: ACCEPTANCE_JOURNEYS },
-  console: { records: 3, errors: 0 },
+  console: {
+    records: 3,
+    errors: 0,
+    expectedErrors: 0,
+    unexpectedErrors: 0,
+    errorCategoryCounts: {
+      expectedRevokedAuthorizationResponse: 0,
+      currentUserSync: 0,
+      apiLoad: 0,
+      socketContext: 0,
+      reactRuntime: 0,
+      networkResource: 0,
+      other: 0,
+      pageError: 0,
+    },
+  },
   services: {
     rest: {
       requestCount: 12,
@@ -364,6 +379,19 @@ describe('packaged acceptance artifact contract', () => {
         }, evidence.sanitizedLog),
         /not observed/,
       );
+      assert.throws(
+        () => validateAcceptanceEvidence(evidence.accessibility, evidence.manifest, {
+          ...evidence.summary,
+          console: {
+            ...evidence.summary.console,
+            records: 4,
+            errors: 1,
+            unexpectedErrors: 1,
+            errorCategoryCounts: { ...evidence.summary.console.errorCategoryCounts, networkResource: 1 },
+          },
+        }, evidence.sanitizedLog),
+        /console summary is invalid/,
+      );
       for (const mutateHandshake of [
         handshake => { handshake.scopeQueryPresent = false; handshake.scopeQueryCount = 0; },
         handshake => { handshake.scopeQueryCount = 2; },
@@ -522,4 +550,3 @@ describe('packaged acceptance artifact contract', () => {
     }
   });
 });
-

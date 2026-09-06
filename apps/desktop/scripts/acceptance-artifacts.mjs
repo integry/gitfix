@@ -452,7 +452,7 @@ const validateAccessibility = accessibility => {
 
 const validateSummary = summary => {
   assertExactKeys(summary, ['schemaVersion', 'generatedAt', 'status', 'journeys', 'screenshots', 'boundary', 'console', 'services', 'redaction'], 'Acceptance summary');
-  if (summary.schemaVersion !== 5 || summary.generatedAt !== FIXED_TIME || summary.status !== 'passed'
+  if (summary.schemaVersion !== 6 || summary.generatedAt !== FIXED_TIME || summary.status !== 'passed'
     || summary.journeys !== ACCEPTANCE_JOURNEYS.length || summary.screenshots !== expectedScreenshotNames().length
     || summary.redaction !== 'Full raw surfaces were scanned; published logs retain only source, level, byte count, and digest.') {
     throw new Error('Acceptance sanitized summary is invalid');
@@ -461,8 +461,25 @@ const validateSummary = summary => {
   if (summary.boundary.packagedExecutable !== true || summary.boundary.rendererOrigin !== 'propr-app://renderer'
     || summary.boundary.preloadBridge !== true
     || summary.boundary.journeys?.join('\n') !== ACCEPTANCE_JOURNEYS.join('\n')) throw new Error('Acceptance executable boundary was not observed');
-  assertExactKeys(summary.console, ['records', 'errors'], 'Acceptance console summary');
-  if (!isInteger(summary.console.records) || !isInteger(summary.console.errors) || summary.console.errors > summary.console.records) {
+  assertExactKeys(summary.console, [
+    'records', 'errors', 'expectedErrors', 'unexpectedErrors', 'errorCategoryCounts',
+  ], 'Acceptance console summary');
+  const errorCategories = [
+    'expectedRevokedAuthorizationResponse', 'currentUserSync', 'apiLoad', 'socketContext',
+    'reactRuntime', 'networkResource', 'other', 'pageError',
+  ];
+  assertExactKeys(summary.console.errorCategoryCounts, errorCategories, 'Acceptance console error categories');
+  const categoryTotal = errorCategories.reduce((total, category) => {
+    const count = summary.console.errorCategoryCounts[category];
+    if (!isInteger(count)) throw new Error('Acceptance console error category is invalid');
+    return total + count;
+  }, 0);
+  if (!isInteger(summary.console.records) || !isInteger(summary.console.errors)
+    || !isInteger(summary.console.expectedErrors) || !isInteger(summary.console.unexpectedErrors)
+    || summary.console.errors > summary.console.records
+    || summary.console.expectedErrors + summary.console.unexpectedErrors !== summary.console.errors
+    || summary.console.expectedErrors !== summary.console.errorCategoryCounts.expectedRevokedAuthorizationResponse
+    || summary.console.unexpectedErrors !== 0 || categoryTotal !== summary.console.errors) {
     throw new Error('Acceptance console summary is invalid');
   }
   assertExactKeys(summary.services, ['rest', 'socketIo', 'pairing', 'connect'], 'Acceptance service summary');
@@ -568,8 +585,6 @@ export const validateAcceptanceEvidence = (accessibility, manifest, summary, san
     'linux-arm64': 'structural-runtime-only',
     'darwin-x64': 'structural-runtime-only',
     'darwin-arm64': 'structural-runtime-only',
-    'win32-x64': 'structural-runtime-only',
-    'win32-arm64': 'structural-runtime-only',
   }, 'Acceptance native package coverage');
   manifest.screenshots.forEach((entry, index) => validateScreenshotEntry(entry, expectedScreenshotNames()[index]));
   for (const journey of ACCEPTANCE_JOURNEYS) {
@@ -668,8 +683,6 @@ export const writeAcceptanceManifest = async (outputDirectory, screenshotMetadat
       'linux-arm64': 'structural-runtime-only',
       'darwin-x64': 'structural-runtime-only',
       'darwin-arm64': 'structural-runtime-only',
-      'win32-x64': 'structural-runtime-only',
-      'win32-arm64': 'structural-runtime-only',
     },
     screenshots,
     supporting,
@@ -677,4 +690,3 @@ export const writeAcceptanceManifest = async (outputDirectory, screenshotMetadat
   await writeFile(join(root, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   return manifest;
 };
-

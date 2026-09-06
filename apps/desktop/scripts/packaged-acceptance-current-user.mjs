@@ -47,6 +47,57 @@ export const classifyCurrentUserRequestShape = (method, url, origin) => {
     : null;
 };
 
+const REVOKED_AUTHORIZATION_CONSOLE_TEXT = /^Failed to load resource: the server responded with a status of 401(?: \(Unauthorized\))?$/;
+
+/**
+ * Resolve the sole console error caused by the deliberately revoked renderer
+ * request. Ambiguous evidence is never exempted from the unexpected-error gate.
+ */
+export const correlateExpectedRevokedAuthorizationConsoleRecord = ({
+  consoleRecords,
+  fixtureRecords,
+  rendererRecords,
+  revokedOrigin,
+}) => {
+  const issued = rendererRecords.filter(record => record.journey === 'revoked'
+    && record.phase === 'request-issued');
+  if (issued.length !== 1 || issued[0].activeScopePresent !== true
+    || !Number.isSafeInteger(issued[0].scopeGeneration) || issued[0].scopeGeneration <= 0) return null;
+  const expectedGeneration = issued[0].scopeGeneration;
+
+  const requests = fixtureRecords.filter(record => record.journey === 'revoked'
+    && record.source === 'renderer');
+  if (requests.length !== 1) return null;
+  const request = requests[0];
+  if (request.correlation !== 'current-scope-user-validation'
+    || request.rendererRequestOccurrence !== 1
+    || request.scopeGeneration !== expectedGeneration
+    || request.requestArrived !== true
+    || request.authorizationPresent !== true
+    || request.authorizationMatchesActivatedBearer !== true
+    || request.cookiePresent !== false
+    || request.responseStatus !== 401
+    || request.classification !== 'revoked') return null;
+
+  const matching = consoleRecords.filter(record => {
+    if (record.journey !== 'revoked' || record.type !== 'error'
+      || !REVOKED_AUTHORIZATION_CONSOLE_TEXT.test(record.text)) return false;
+    try {
+      const url = new URL(record.location?.url);
+      const shape = classifyCurrentUserRequestShape(
+        'GET', `${url.pathname}${url.search}`, DESKTOP_RENDERER_ORIGIN,
+      );
+      return url.origin === revokedOrigin
+        && url.username === '' && url.password === '' && url.hash === ''
+        && shape?.source === 'renderer'
+        && shape.scopeGeneration === expectedGeneration;
+    } catch {
+      return false;
+    }
+  });
+  return matching.length === 1 ? matching[0] : null;
+};
+
 const boundedCount = records => Math.min(records.length, 9);
 
 /** Fixed, bounded, secret-free counts for Local Network Access decisions. */
