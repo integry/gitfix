@@ -44,7 +44,7 @@ if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then
   exit 1
 fi
 
-for required_tool in docker curl grep sed cut basename cp mv sleep; do
+for required_tool in docker curl grep sed cut basename cp mkdir mv sleep; do
     if ! command -v "$required_tool" >/dev/null 2>&1; then
         echo "Error: Required tool '$required_tool' is not installed"
         exit 1
@@ -253,6 +253,10 @@ else
     ENV_FILE_ARG=""
 fi
 
+# Keep the trusted staging env path for resolving the seed database after the
+# sanitized preview env replaces ENV_FILE below.
+STAGING_SOURCE_ENV_FILE="$ENV_FILE"
+
 # Docker Compose env_file entries are relative to the PR checkout, but the PR
 # checkout is also the Docker build context. We start from a sanitized preview
 # .env (no secrets), then re-inject ONLY the auth keys needed for real GitHub
@@ -285,7 +289,46 @@ if [ -f "$PREVIEW_ENV_FILE" ]; then
     echo "Using preview env file: $ENV_FILE"
 fi
 
-# 4. Deploy using the main compose file
+# 4. Seed the preview database before any service starts. Backend startup owns
+# schema migration, so replacing SQLite after startup would discard the schema
+# that workers just migrated and leave their open connections on a stale file.
+SEED_DB_PATH="${STAGING_DB_PATH:-}"
+if [ -n "$SEED_DB_PATH" ] && [ ! -f "$SEED_DB_PATH" ]; then
+    echo "Warning: Explicit STAGING_DB_PATH not found at $SEED_DB_PATH; falling back to DB_FILENAME"
+    SEED_DB_PATH=""
+fi
+if [ -z "$SEED_DB_PATH" ] && [ -n "$STAGING_SOURCE_ENV_FILE" ]; then
+    SEED_DB_PATH=$(grep -E '^DB_FILENAME=' "$STAGING_SOURCE_ENV_FILE" 2>/dev/null | cut -d= -f2-)
+fi
+SEED_DB_PATH="${SEED_DB_PATH:-/usr/src/app/data/propr.sqlite}"
+
+PREVIEW_DB_CONFIG_PATH=""
+if [ -n "$ENV_FILE" ]; then
+    PREVIEW_DB_CONFIG_PATH=$(grep -E '^DB_FILENAME=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+fi
+PREVIEW_DB_FILENAME=$(basename "${PREVIEW_DB_CONFIG_PATH:-$SEED_DB_PATH}")
+PREVIEW_DB_PATH="$REPO_ROOT/data/$PREVIEW_DB_FILENAME"
+
+if [ -f "$SEED_DB_PATH" ]; then
+    # A prior deployment may still hold this bind-mounted SQLite file open.
+    # Stop every database consumer before replacing it; `up` below restarts
+    # them and applies all pending migrations to the copied schema.
+    STAGING_ENV_FILE="" STAGING_DB_PATH="" PR_SOURCE_DIR="" PR_HEAD_SHA="" \
+        $DOCKER_COMPOSE -f "$REPO_ROOT/docker-compose.yml" $ENV_FILE_ARG \
+        -p "propr-pr-${PR_NUMBER}" stop api daemon worker analysis-worker indexing-worker
+    mkdir -p "$REPO_ROOT/data"
+    if [ "$SEED_DB_PATH" = "$PREVIEW_DB_PATH" ]; then
+        echo "Preview database already seeded at $PREVIEW_DB_PATH"
+    else
+        echo "Copying database from staging site ($SEED_DB_PATH)..."
+        cp "$SEED_DB_PATH" "$PREVIEW_DB_PATH"
+        echo "Database seeded successfully"
+    fi
+else
+    echo "Warning: Staging database not found at $SEED_DB_PATH"
+fi
+
+# 5. Deploy using the main compose file
 # -f: Points to the compose file at repository root
 # -p: Sets the project name (isolates the stack)
 # --env-file: Load staging .env as base configuration
@@ -315,39 +358,6 @@ STAGING_DB_PATH="" \
 PR_SOURCE_DIR="" \
 PR_HEAD_SHA="" \
 $DOCKER_COMPOSE -f "$REPO_ROOT/docker-compose.yml" $ENV_FILE_ARG -p "propr-pr-${PR_NUMBER}" up -d --build
-
-# 5. Database State Handling - copy from staging site
-CONTAINER_ID=$(STAGING_ENV_FILE="" STAGING_DB_PATH="" PR_SOURCE_DIR="" PR_HEAD_SHA="" $DOCKER_COMPOSE -f "$REPO_ROOT/docker-compose.yml" $ENV_FILE_ARG -p "propr-pr-${PR_NUMBER}" ps -q api 2>/dev/null || true)
-
-if [ -n "$CONTAINER_ID" ]; then
-    echo "API container created: $CONTAINER_ID"
-
-    # Copy database from staging site. Prefer an explicit STAGING_DB_PATH, then
-    # DB_FILENAME from the staging env file, then the historical default.
-    SEED_DB_PATH="${STAGING_DB_PATH:-}"
-    if [ -n "$SEED_DB_PATH" ] && [ ! -f "$SEED_DB_PATH" ]; then
-        echo "Warning: Explicit STAGING_DB_PATH not found at $SEED_DB_PATH; falling back to DB_FILENAME"
-        SEED_DB_PATH=""
-    fi
-    if [ -z "$SEED_DB_PATH" ] && [ -n "$ENV_FILE" ]; then
-        SEED_DB_PATH=$(grep -E '^DB_FILENAME=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
-    fi
-    SEED_DB_PATH="${SEED_DB_PATH:-/usr/src/app/data/propr.sqlite}"
-    # Extract just the filename for the destination path
-    DB_FILENAME=$(basename "$SEED_DB_PATH")
-    if [ -f "$SEED_DB_PATH" ]; then
-        echo "Copying database from staging site ($SEED_DB_PATH)..."
-        if docker cp "$SEED_DB_PATH" "$CONTAINER_ID":/usr/src/app/data/"$DB_FILENAME"; then
-            echo "Database seeded successfully"
-        else
-            echo "Warning: Failed to copy database"
-        fi
-    else
-        echo "Warning: Staging database not found at $SEED_DB_PATH"
-    fi
-else
-    echo "Warning: Docker Compose did not return an API container; startup verification will report diagnostics"
-fi
 
 # `docker compose up -d` succeeds once containers are created, even when an
 # entrypoint exits immediately. Wait for the API endpoint and then verify every
