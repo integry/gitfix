@@ -36,6 +36,7 @@ import { PACKAGED_ACCEPTANCE_EPOCH_MILLISECONDS } from './packaged-acceptance-cl
 import { analyzeExistingElectronRenderer } from './packaged-acceptance-axe.mjs';
 import {
   classifyCurrentUserRequestShape,
+  correlateExpectedRevokedAuthorizationConsoleRecord,
   currentUserValidationPhaseSummary,
   currentUserValidationFailureCategory as classifyCurrentUserValidation,
   networkPermissionDecisionSummary,
@@ -478,6 +479,7 @@ const createFixture = async (mode, fixedOrigin) => {
         correlation: 'current-scope-user-validation',
         source,
         scopeGeneration: currentUserShape.scopeGeneration,
+        rendererRequestOccurrence: source === 'renderer' ? authChecks : 0,
         requestArrived: true,
         authorizationPresent: typeof request.headers.authorization === 'string',
         authorizationMatchesActivatedBearer: request.headers.authorization === `Bearer ${INSTANCE_TOKEN}`,
@@ -1075,22 +1077,8 @@ const settlePendingRendererConsoleCaptures = async () => {
 
 const boundedAcceptanceDiagnosticCount = records => Math.min(records.length, 9);
 
-const isExpectedRevokedAuthorizationResponse = record => {
-  if (record.journey === 'revoked'
-    && /^Failed to load resource: the server responded with a status of 401(?: \(Unauthorized\))?$/.test(record.text)) {
-    try {
-      const url = new URL(record.location?.url);
-      if (url.origin === FIXED_ACCEPTANCE_ORIGINS.revoked
-        && classifyCurrentUserRequestShape('GET', `${url.pathname}${url.search}`, DESKTOP_RENDERER_ORIGIN)?.source === 'renderer') {
-        return true;
-      }
-    } catch { return false; }
-  }
-  return false;
-};
-
-const rendererConsoleErrorCategory = record => {
-  if (isExpectedRevokedAuthorizationResponse(record)) return 'expectedRevokedAuthorizationResponse';
+const rendererConsoleErrorCategory = (record, expectedRevokedAuthorizationRecord) => {
+  if (record === expectedRevokedAuthorizationRecord) return 'expectedRevokedAuthorizationResponse';
   if (record.text.startsWith('Failed to refresh instance authorization:')
     || record.text.startsWith('Failed to synchronize instance authorization:')) return 'currentUserSync';
   if (record.text.startsWith('[SocketContext]')) return 'socketContext';
@@ -1109,6 +1097,12 @@ const rendererConsoleErrorCategory = record => {
 };
 
 const rendererConsoleErrorCategoryCounts = (records, rendererPageErrors = []) => {
+  const expectedRevokedAuthorizationRecord = correlateExpectedRevokedAuthorizationConsoleRecord({
+    consoleRecords: records,
+    fixtureRecords: fixtureCurrentUserRecords,
+    rendererRecords: rendererCurrentUserRecords,
+    revokedOrigin: FIXED_ACCEPTANCE_ORIGINS.revoked,
+  });
   const counts = {
     expectedRevokedAuthorizationResponse: 0,
     currentUserSync: 0,
@@ -1120,7 +1114,7 @@ const rendererConsoleErrorCategoryCounts = (records, rendererPageErrors = []) =>
     pageError: boundedAcceptanceDiagnosticCount(rendererPageErrors),
   };
   for (const record of records) {
-    const category = rendererConsoleErrorCategory(record);
+    const category = rendererConsoleErrorCategory(record, expectedRevokedAuthorizationRecord);
     counts[category] = Math.min(counts[category] + 1, 9);
   }
   return counts;

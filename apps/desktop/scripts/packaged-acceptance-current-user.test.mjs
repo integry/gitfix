@@ -2,12 +2,50 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   classifyCurrentUserRequestShape,
+  correlateExpectedRevokedAuthorizationConsoleRecord,
   currentUserValidationPhaseSummary,
   currentUserValidationFailureCategory,
   isExpectedScopedCurrentUserRequest,
   networkPermissionDecisionSummary,
   scopedCurrentUserRequestGeneration,
 } from './packaged-acceptance-current-user.mjs';
+
+const revokedOrigin = 'http://127.0.0.3:41732';
+const revokedGeneration = 4;
+const revokedRendererRecord = {
+  journey: 'revoked', activeScopePresent: true, scopeGeneration: revokedGeneration, phase: 'request-issued',
+};
+const revokedFixtureRecord = {
+  journey: 'revoked',
+  correlation: 'current-scope-user-validation',
+  source: 'renderer',
+  scopeGeneration: revokedGeneration,
+  rendererRequestOccurrence: 1,
+  requestArrived: true,
+  authorizationPresent: true,
+  authorizationMatchesActivatedBearer: true,
+  cookiePresent: false,
+  responseStatus: 401,
+  classification: 'revoked',
+};
+const revokedConsoleRecord = {
+  journey: 'revoked',
+  type: 'error',
+  text: 'Failed to load resource: the server responded with a status of 401 (Unauthorized)',
+  location: {
+    url: `${revokedOrigin}/api/auth/user?proprDesktopScopeGeneration=${revokedGeneration}`,
+  },
+};
+const correlateRevoked = ({
+  consoleRecords = [revokedConsoleRecord],
+  fixtureRecords: observedFixtureRecords = [revokedFixtureRecord],
+  rendererRecords: observedRendererRecords = [revokedRendererRecord],
+} = {}) => correlateExpectedRevokedAuthorizationConsoleRecord({
+  consoleRecords,
+  fixtureRecords: observedFixtureRecords,
+  rendererRecords: observedRendererRecords,
+  revokedOrigin,
+});
 
 const journey = 'dashboard-profile-manager';
 const rendererRecords = [
@@ -123,6 +161,43 @@ describe('packaged current-user fixture request shapes', () => {
     ]) {
       assert.equal(classifyCurrentUserRequestShape(method, url, origin), null, `${method} ${url}`);
     }
+  });
+});
+
+describe('packaged revoked authorization console correlation', () => {
+  it('correlates exactly one console error to the deliberate scoped request', () => {
+    assert.equal(correlateRevoked(), revokedConsoleRecord);
+  });
+
+  it('rejects a stale console scope generation', () => {
+    assert.equal(correlateRevoked({
+      consoleRecords: [{
+        ...revokedConsoleRecord,
+        location: { url: `${revokedOrigin}/api/auth/user?proprDesktopScopeGeneration=3` },
+      }],
+    }), null);
+  });
+
+  it('rejects duplicate console errors and duplicate revoked requests', () => {
+    assert.equal(correlateRevoked({
+      consoleRecords: [revokedConsoleRecord, { ...revokedConsoleRecord }],
+    }), null);
+    assert.equal(correlateRevoked({
+      fixtureRecords: [
+        revokedFixtureRecord,
+        { ...revokedFixtureRecord, rendererRequestOccurrence: 2 },
+      ],
+    }), null);
+  });
+
+  it('rejects unmatched request generations and occurrences', () => {
+    assert.equal(correlateRevoked({
+      fixtureRecords: [{ ...revokedFixtureRecord, scopeGeneration: revokedGeneration + 1 }],
+    }), null);
+    assert.equal(correlateRevoked({
+      fixtureRecords: [{ ...revokedFixtureRecord, rendererRequestOccurrence: 2 }],
+    }), null);
+    assert.equal(correlateRevoked({ fixtureRecords: [] }), null);
   });
 });
 

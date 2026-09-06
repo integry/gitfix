@@ -176,7 +176,9 @@ describe('packaged acceptance authorization', () => {
     assert.match(acceptanceRunner, /firstInvalidCategory: firstInvalid\?\.firstCategory \?\? 'none'/);
     assert.doesNotMatch(acceptanceRunner, /rendererLifecycleEvidenceInvalid/);
 
-    const errorSummaryStart = acceptanceRunner.indexOf('const rendererConsoleErrorCategory = record =>');
+    const errorSummaryStart = acceptanceRunner.indexOf(
+      'const rendererConsoleErrorCategory = (record, expectedRevokedAuthorizationRecord) =>',
+    );
     const errorSummaryEnd = acceptanceRunner.indexOf('\nconst rendererLifecycleDiagnosticSummary', errorSummaryStart);
     assert.notEqual(errorSummaryStart, -1);
     assert.notEqual(errorSummaryEnd, -1);
@@ -188,6 +190,8 @@ describe('packaged acceptance authorization', () => {
       assert.ok(errorSummary.includes(category), category);
     }
     assert.match(errorSummary, /consoleErrorCategoryCounts: rendererConsoleErrorCategoryCounts\(rendererConsoleErrors, rendererPageErrors\)/);
+    assert.match(errorSummary, /correlateExpectedRevokedAuthorizationConsoleRecord\(\{/);
+    assert.match(acceptanceRunner, /rendererRequestOccurrence: source === 'renderer' \? authChecks : 0/);
     assert.match(errorSummary, /counts\[category\] = Math\.min\(counts\[category\] \+ 1, 9\)/);
     assert.doesNotMatch(errorSummary, /arguments|location|stack|url/);
     assert.match(acceptanceRunner, /if \(rendererErrors\.unexpectedErrors !== 0\)/);
