@@ -49,6 +49,13 @@ const bridgeFixture = () => {
     label: 'Team server',
     apiBaseUrl: 'https://t-recovered456.propr.dev',
   }));
+  const setupSnapshot = {
+    phase: 'idle' as const,
+    capability: { supported: true as const, kind: 'local' as const, platform: 'linux' as const },
+    sessionId: '11111111-1111-4111-8111-111111111111',
+    logs: [],
+  };
+  const setupStart = vi.fn(async () => setupSnapshot);
   const bridge: DesktopBridge = {
     app: {
       getMetadata: async () => ({
@@ -78,8 +85,17 @@ const bridgeFixture = () => {
       stop: async () => ({ ok: false, code: 'not-implemented', status: { state: 'disconnected' } }),
       restart: async () => ({ ok: false, code: 'not-implemented', status: { state: 'disconnected' } }),
     },
+    localSetup: {
+      status: async () => setupSnapshot,
+      start: setupStart,
+      retry: async () => setupSnapshot,
+      cancel: async () => setupSnapshot,
+      selectPrivateKey: async () => null,
+      acquireWebhookSecret: async () => null,
+      onProgress: () => () => undefined,
+    },
   };
-  return { bridge, onDeepLink, pair, probe, activate, discard, discover, rediscover, profiles: () => profiles };
+  return { bridge, onDeepLink, pair, probe, activate, discard, discover, rediscover, setupStart, profiles: () => profiles };
 };
 
 describe('Electron remote instance adapters', () => {
@@ -89,11 +105,25 @@ describe('Electron remote instance adapters', () => {
     desktopConnectionState.scope = null;
     setDesktopConnectionScope.mockClear();
   });
-  it('reports local setup as unavailable in the production Electron adapter', () => {
+  it('reports real local setup in the production Linux Electron adapter', () => {
     const adapters = createElectronDesktopAdapters(bridgeFixture().bridge);
 
-    expect(adapters.localSetup.supported).toBe(false);
+    expect(adapters.localSetup.supported).toBe(true);
     expect(adapters.discovery.supported).toBe(true);
+  });
+
+  it('forwards guided setup start to the trusted main-process bridge', async () => {
+    const fixture = bridgeFixture();
+    const adapters = createElectronDesktopAdapters(fixture.bridge);
+    const request = {
+      sessionId: '11111111-1111-4111-8111-111111111111', root: { mode: 'default' as const },
+      reinitialize: false, agents: ['codex'], github: { mode: 'demo' as const },
+      intake: { mode: 'keep' as const }, whitelist: null, repository: null,
+    };
+
+    await adapters.localSetup.start?.(request);
+
+    expect(fixture.setupStart).toHaveBeenCalledWith(request);
   });
 
   it('forwards the renderer deep-link subscription through the Electron adapter once', () => {

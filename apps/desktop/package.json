@@ -9,6 +9,7 @@
   "dependencies": {
     "@propr/cli": "*",
     "@propr/client": "*",
+    "@propr/local-setup": "*",
     "@propr/shared": "*"
   },
   "homepage": "https://github.com/integry/propr",

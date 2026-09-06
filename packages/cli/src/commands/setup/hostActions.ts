@@ -69,13 +69,15 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
       assertSafeAgentCredentialDir(path);
       mkdirSync(path, { recursive: true, mode: 0o700 });
     },
-    async pullImages({ rootDir, agentTypes, onLog }) {
+    async pullImages({ rootDir, agentTypes, onLog, signal }) {
+      signal?.throwIfAborted();
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
       const selected = new Set(agentTypes);
       const result: PullImagesResult = { pulledCore: [], pulledAgents: [], failedCore: [], failedAgents: [] };
 
       for (const [key, tag] of Object.entries(cfg.images)) {
+        signal?.throwIfAborted();
         if (key === "docs" && !cfg.docsEnabled) continue;
         const isAgent = key === "agent";
         // Pull the shared agent image when the user selected any agent; core images
@@ -86,6 +88,7 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
         // Async exec keeps the event loop free so the wizard's Ink spinner keeps
         // animating while the (often slow) pull runs, instead of freezing.
         const pulled = await orch.dockerAsync(["pull", tag]);
+        signal?.throwIfAborted();
         if (pulled.status === 0) {
           try {
             orch.tagAgentLatest(key, tag);
@@ -104,7 +107,8 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
       return orch.isStackRunningAsync(cfg);
     },
-    async startStack({ rootDir, ui, docs, onLog }) {
+    async startStack({ rootDir, ui, docs, onLog, signal }) {
+      signal?.throwIfAborted();
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
       // Pre-create the host Vibe prompt-cache dir owned by this user so Docker
@@ -130,14 +134,17 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
         docs: docs ?? cfg.docsEnabled,
         onLog,
       });
+      signal?.throwIfAborted();
     },
-    async checkBackendHealth({ rootDir, timeoutMs = 60_000 }) {
+    async checkBackendHealth({ rootDir, timeoutMs = 60_000, signal }) {
+      signal?.throwIfAborted();
       const { getSystemStatus } = await import("../../api/system.js");
       const client = await localApiClient(rootDir);
       const deadline = Date.now() + timeoutMs;
       let lastError = "no response";
       // Containers take a few seconds to report healthy; poll until the deadline.
       do {
+        signal?.throwIfAborted();
         try {
           const status = await getSystemStatus(client);
           if (String(status.api).toLowerCase() === "healthy") {
@@ -155,6 +162,7 @@ export function createDefaultActions(configManager?: ConfigManager): SetupAction
         }
         if (Date.now() >= deadline) break;
         await sleep(2_000);
+        signal?.throwIfAborted();
       } while (Date.now() < deadline);
       return { healthy: false, detail: `backend not healthy within ${Math.round(timeoutMs / 1000)}s (${lastError})` };
     },

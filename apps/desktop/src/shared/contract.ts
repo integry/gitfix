@@ -21,6 +21,13 @@ export const IPC_CHANNELS = Object.freeze({
   lifecycleStart: 'desktop:lifecycle-start',
   lifecycleStop: 'desktop:lifecycle-stop',
   lifecycleRestart: 'desktop:lifecycle-restart',
+  setupStatus: 'desktop:setup-status',
+  setupStart: 'desktop:setup-start',
+  setupRetry: 'desktop:setup-retry',
+  setupCancel: 'desktop:setup-cancel',
+  setupSelectPrivateKey: 'desktop:setup-select-private-key',
+  setupAcquireWebhookSecret: 'desktop:setup-acquire-webhook-secret',
+  setupProgress: 'desktop:setup-progress',
   deepLink: 'desktop:deep-link',
   acceptanceJourneyStage: 'desktop:acceptance-journey-stage',
 } as const);
@@ -110,6 +117,64 @@ export type LocalLifecycleOperationResult =
   | { ok: true; status: LocalLifecycleStatus }
   | { ok: false; code: 'not-implemented'; status: LocalLifecycleStatus };
 
+export interface DesktopSetupRequest {
+  sessionId: string;
+  root: { mode: 'default' | 'resume' };
+  reinitialize: boolean;
+  agents: string[];
+  github:
+    | { mode: 'keep' }
+    | { mode: 'demo' }
+    | { mode: 'relay' }
+    | { mode: 'app'; appId: string; privateKeyCapability: string; installationId: string };
+  intake:
+    | { mode: 'keep' }
+    | { mode: 'routing_websocket' }
+    | { mode: 'polling' }
+    | { mode: 'direct_webhook'; secretCapability: string };
+  whitelist: string[] | null;
+  repository: { fullName: string; alias?: string; baseBranch?: string } | null;
+}
+
+export interface DesktopFilesystemSelection { capability: string; label: string }
+export interface DesktopSecretSelection { capability: string; label: 'Secret entered' }
+
+export interface DesktopSetupResumeView {
+  agents: string[];
+  reinitialize: boolean;
+  github: { mode: 'keep' | 'demo' | 'relay' }
+    | { mode: 'app'; appId: string; installationId: string; reconfigurationRequired: true };
+  intake: { mode: 'keep' | 'routing_websocket' | 'polling' }
+    | { mode: 'direct_webhook'; reconfigurationRequired: true };
+  whitelist: string[] | null;
+  repository: { fullName: string; alias?: string; baseBranch?: string } | null;
+  reconfigurationStage?: 'github' | 'intake';
+}
+
+export type DesktopSetupPhase = 'idle' | 'running' | 'interrupted' | 'cancelled' | 'failed' | 'completed' | 'unsupported';
+
+export interface DesktopSetupProfile {
+  id: string;
+  name: string;
+  baseUrl: string;
+  kind: 'local';
+}
+
+export interface DesktopSetupSnapshot {
+  phase: DesktopSetupPhase;
+  capability: import('@propr/local-setup').LocalSetupCapability;
+  sessionId: string;
+  rootDir?: string;
+  state?: import('@propr/local-setup').SetupState;
+  logs: string[];
+  errors?: import('@propr/local-setup').SetupStructuredError[];
+  error?: string;
+  profile?: DesktopSetupProfile;
+  resume?: DesktopSetupResumeView;
+  resumeAvailable?: boolean;
+  reconfigurationRequired?: boolean;
+}
+
 export interface DesktopBridge {
   app: {
     getMetadata(): Promise<DesktopAppMetadata>;
@@ -150,6 +215,15 @@ export interface DesktopBridge {
     start(): Promise<LocalLifecycleOperationResult>;
     stop(): Promise<LocalLifecycleOperationResult>;
     restart(): Promise<LocalLifecycleOperationResult>;
+  };
+  localSetup: {
+    status(): Promise<DesktopSetupSnapshot>;
+    start(request: DesktopSetupRequest): Promise<DesktopSetupSnapshot>;
+    retry(request?: DesktopSetupRequest): Promise<DesktopSetupSnapshot>;
+    cancel(): Promise<DesktopSetupSnapshot>;
+    selectPrivateKey(): Promise<DesktopFilesystemSelection | null>;
+    acquireWebhookSecret(): Promise<DesktopSecretSelection | null>;
+    onProgress(listener: (snapshot: DesktopSetupSnapshot) => void): () => void;
   };
   /** @internal Present only in an authorized packaged Connect acceptance process. */
   acceptance?: {

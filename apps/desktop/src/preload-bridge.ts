@@ -3,8 +3,8 @@ import { IPC_CHANNELS } from './shared/contract';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
-  on(channel: string, listener: (event: unknown, value: string) => void): void;
-  removeListener(channel: string, listener: (event: unknown, value: string) => void): void;
+  on(channel: string, listener: (event: unknown, value: any) => void): void;
+  removeListener(channel: string, listener: (event: unknown, value: any) => void): void;
 }
 
 const invoke = <T>(ipc: PreloadIpc, channel: string, ...args: unknown[]): Promise<T> =>
@@ -19,12 +19,16 @@ export const createDesktopBridge = (
 ): DesktopBridge => {
   const deepLinkListeners = new Set<(url: string) => void>();
   const pendingDeepLinks: string[] = [];
+  const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (deepLinkListeners.size === 0) {
       pendingDeepLinks.push(value);
       return;
     }
     deepLinkListeners.forEach(listener => listener(value));
+  });
+  ipc.on(IPC_CHANNELS.setupProgress, (_event, value) => {
+    setupProgressListeners.forEach(listener => listener(value));
   });
 
   const bridge: DesktopBridge = {
@@ -71,6 +75,20 @@ export const createDesktopBridge = (
       start: () => invoke(ipc, IPC_CHANNELS.lifecycleStart),
       stop: () => invoke(ipc, IPC_CHANNELS.lifecycleStop),
       restart: () => invoke(ipc, IPC_CHANNELS.lifecycleRestart),
+    },
+    localSetup: {
+      status: () => invoke(ipc, IPC_CHANNELS.setupStatus),
+      start: request => invoke(ipc, IPC_CHANNELS.setupStart, request),
+      retry: request => request === undefined
+        ? invoke(ipc, IPC_CHANNELS.setupRetry)
+        : invoke(ipc, IPC_CHANNELS.setupRetry, request),
+      cancel: () => invoke(ipc, IPC_CHANNELS.setupCancel),
+      selectPrivateKey: () => invoke(ipc, IPC_CHANNELS.setupSelectPrivateKey),
+      acquireWebhookSecret: () => invoke(ipc, IPC_CHANNELS.setupAcquireWebhookSecret),
+      onProgress: listener => {
+        setupProgressListeners.add(listener);
+        return () => setupProgressListeners.delete(listener);
+      },
     },
     ...(connectJourneyAcceptance ? {
       acceptance: {

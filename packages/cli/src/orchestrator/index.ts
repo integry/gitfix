@@ -24,6 +24,14 @@ export type {
 
 let cached: OrchestratorModule | undefined;
 let cachedPath: string | undefined;
+let configuredOrchestratorPath: string | undefined;
+
+/** Pin the packaged desktop to its checksum-covered orchestrator resource. */
+export function configureOrchestratorAssetPath(path: string | undefined): void {
+  configuredOrchestratorPath = path;
+  cached = undefined;
+  cachedPath = undefined;
+}
 
 /**
  * Candidate locations for orchestrator.mjs, in priority order:
@@ -31,6 +39,10 @@ let cachedPath: string | undefined;
  *   2. Bundled next to this module in dist.
  */
 function resolveOrchestratorPath(): string {
+  if (configuredOrchestratorPath) {
+    if (!existsSync(configuredOrchestratorPath)) throw new Error('Configured orchestrator resource is unavailable');
+    return configuredOrchestratorPath;
+  }
   const here = dirname(fileURLToPath(import.meta.url));
   const bundled = join(here, "orchestrator.mjs");
 
