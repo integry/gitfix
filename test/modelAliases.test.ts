@@ -25,7 +25,7 @@ const {
 test('Model Aliases Configuration', async (t) => {
     await t.test('should resolve known aliases to full model IDs', () => {
         // Default aliases point to the latest tier models
-        assert.strictEqual(resolveModelAlias('fable'), 'claude-fable-5');
+        assert.strictEqual(resolveModelAlias('fable'), 'claude-fable-5-1');
         assert.strictEqual(resolveModelAlias('opus'), 'claude-opus-5');
         assert.strictEqual(resolveModelAlias('sonnet'), 'claude-sonnet-5');
         // Explicit 4.5 aliases
@@ -64,6 +64,8 @@ test('Model Aliases Configuration', async (t) => {
 
     await t.test('should handle explicit version aliases', () => {
         // Fable aliases
+        assert.strictEqual(resolveModelAlias('fable51'), 'claude-fable-5-1');
+        assert.strictEqual(resolveModelAlias('fable-5-1'), 'claude-fable-5-1');
         assert.strictEqual(resolveModelAlias('fable5'), 'claude-fable-5');
         assert.strictEqual(resolveModelAlias('fable-5'), 'claude-fable-5');
         assert.strictEqual(resolveModelAlias('claude-fable-5'), 'claude-fable-5');
@@ -91,7 +93,7 @@ test('resolveLlmLabel - 7-step model resolution', async (t) => {
                 type: 'claude' as const,
                 alias: 'claude',
                 enabled: true,
-                supportedModels: ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'],
+                supportedModels: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'],
                 defaultModel: 'claude-sonnet-4-6'
             }
         },
@@ -121,7 +123,7 @@ test('resolveLlmLabel - 7-step model resolution', async (t) => {
                 type: 'opencode' as const,
                 alias: 'opencode',
                 enabled: true,
-                supportedModels: ['opencode-deepseek-v4-flash-free', 'opencode-openai/gpt-5.5', 'opencode-go/glm-5.1', 'opencode-go/kimi-k2.6', 'opencode-kimi-k2.6']
+                supportedModels: ['opencode-big-pickle', 'opencode-openai/gpt-5.5', 'opencode-go/glm-5.1', 'opencode-go/kimi-k2.6', 'opencode-kimi-k2.6']
             }
         },
         {
@@ -211,16 +213,16 @@ test('resolveLlmLabel - 7-step model resolution', async (t) => {
         try {
             const result = await resolveLlmLabel('fable');
             assert.strictEqual(result.agentAlias, 'claude', 'Should route Claude alias to Claude agent');
-            assert.strictEqual(result.model, 'claude-fable-5', 'Should resolve fable alias to Claude Fable');
+            assert.strictEqual(result.model, 'claude-fable-5-1', 'Should resolve fable alias to latest Claude Fable');
         } finally {
             registry.getDefaultAgent = () => mockAgentConfigs[0] as any;
         }
     });
 
     await t.test('Step 3: resolves exact githubLabel for OpenCode models', async () => {
-        const result = await resolveLlmLabel('opencode-deepseek-v4-flash-free');
+        const result = await resolveLlmLabel('opencode-big-pickle');
         assert.strictEqual(result.agentAlias, 'opencode', 'Should resolve to OpenCode agent');
-        assert.strictEqual(result.model, 'opencode-deepseek-v4-flash-free', 'Should resolve to correct OpenCode model');
+        assert.strictEqual(result.model, 'opencode-big-pickle', 'Should resolve to correct OpenCode model');
     });
 
     await t.test('Step 1: resolves prefixed OpenCode provider model IDs', async () => {
@@ -300,7 +302,7 @@ test('resolveLlmLabel - 7-step model resolution', async (t) => {
     await t.test('Step 4: resolves opencode alias to preferred model', async () => {
         const result = await resolveLlmLabel('opencode');
         assert.strictEqual(result.agentAlias, 'opencode', 'Should resolve to OpenCode agent');
-        assert.strictEqual(result.model, 'opencode-deepseek-v4-flash-free', 'Should use preferred OpenCode model');
+        assert.strictEqual(result.model, 'opencode-big-pickle', 'Should use preferred OpenCode model');
     });
 
     await t.test('Step 2: resolves vibe alias to default model', async () => {
@@ -605,8 +607,11 @@ test('getModelShortName - returns short display names for PR titles', async (t) 
     });
 
     await t.test('returns correct short name for OpenCode models', () => {
-        assert.strictEqual(getModelShortName('opencode-deepseek-v4-flash-free'), 'DeepSeek V4 Flash Free');
         assert.strictEqual(getModelShortName('opencode-big-pickle'), 'Big Pickle');
+        assert.strictEqual(
+            getModelShortName('opencode-muse-spark-1.3-contributor-free'),
+            'Muse Spark 1.3 Free'
+        );
     });
 
     await t.test('returns correct short name for Vibe (Mistral) models', () => {
@@ -671,7 +676,7 @@ test('resolveReviewModels - multi-model /review resolution', async (t) => {
                 type: 'claude' as const,
                 alias: 'claude',
                 enabled: true,
-                supportedModels: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'],
+                supportedModels: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'],
                 defaultModel: 'claude-sonnet-4-6'
             }
         },
@@ -701,7 +706,7 @@ test('resolveReviewModels - multi-model /review resolution', async (t) => {
                 type: 'opencode' as const,
                 alias: 'opencode',
                 enabled: true,
-                supportedModels: ['opencode-deepseek-v4-flash-free', 'opencode-openai/gpt-5.5', 'opencode-go/glm-5.1', 'opencode-go/kimi-k2.6', 'opencode-kimi-k2.6']
+                supportedModels: ['opencode-big-pickle', 'opencode-openai/gpt-5.5', 'opencode-go/glm-5.1', 'opencode-go/kimi-k2.6', 'opencode-kimi-k2.6']
             }
         },
         {
@@ -751,7 +756,7 @@ test('resolveReviewModels - multi-model /review resolution', async (t) => {
             const results = await resolveReviewModels(['fable']);
             assert.strictEqual(results.length, 1, 'Should resolve to exactly one assignment');
             assert.strictEqual(results[0].agentAlias, 'claude');
-            assert.strictEqual(results[0].model, 'claude-fable-5');
+            assert.strictEqual(results[0].model, 'claude-fable-5-1');
         } finally {
             registry.getDefaultAgent = () => mockAgentConfigs[0] as any;
         }
@@ -836,7 +841,7 @@ test('resolveReviewModels - multi-model /review resolution', async (t) => {
         // opencode -> preferred enabled OpenCode agent/model
         const opencodeResults = await resolveReviewModels(['opencode']);
         assert.strictEqual(opencodeResults[0].agentAlias, 'opencode');
-        assert.strictEqual(opencodeResults[0].model, 'opencode-deepseek-v4-flash-free');
+        assert.strictEqual(opencodeResults[0].model, 'opencode-big-pickle');
 
         // vibe -> default enabled Vibe agent/model
         const vibeResults = await resolveReviewModels(['vibe']);
@@ -845,11 +850,11 @@ test('resolveReviewModels - multi-model /review resolution', async (t) => {
     });
 
     await t.test('OpenCode labels resolve to configured OpenCode agent models', async () => {
-        const results = await resolveReviewModels(['opencode-deepseek-v4-flash-free']);
+        const results = await resolveReviewModels(['opencode-big-pickle']);
         assert.strictEqual(results.length, 1);
         assert.strictEqual(results[0].agentAlias, 'opencode');
-        assert.strictEqual(results[0].model, 'opencode-deepseek-v4-flash-free');
-        assert.strictEqual(results[0].displayLabel, 'DeepSeek V4 Flash Free');
+        assert.strictEqual(results[0].model, 'opencode-big-pickle');
+        assert.strictEqual(results[0].displayLabel, 'Big Pickle');
     });
 
     await t.test('dynamic OpenCode provider model IDs resolve through /review validation', async () => {

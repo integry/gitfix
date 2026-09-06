@@ -105,7 +105,7 @@ WORKDIR /home/node/workspace
 
 
 FROM agent-base AS claude-cli
-ARG CLAUDE_CLI_VERSION=2.1.220
+ARG CLAUDE_CLI_VERSION=2.1.263
 USER root
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
     && npm cache clean --force \
@@ -114,7 +114,7 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
 
 
 FROM agent-base AS codex-cli
-ARG CODEX_CLI_VERSION=0.151.0
+ARG CODEX_CLI_VERSION=0.153.4
 USER root
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && npm cache clean --force \
@@ -123,7 +123,7 @@ RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
 
 
 FROM agent-base AS opencode-cli
-ARG OPENCODE_CLI_VERSION=1.18.9
+ARG OPENCODE_CLI_VERSION=1.18.29
 USER root
 RUN npm install -g "opencode-ai@${OPENCODE_CLI_VERSION}" \
     && npm cache clean --force \
@@ -137,7 +137,7 @@ RUN npm install -g "opencode-ai@${OPENCODE_CLI_VERSION}" \
 
 
 FROM agent-base AS vibe-cli
-ARG VIBE_CLI_VERSION=2.23.1
+ARG VIBE_CLI_VERSION=2.25.0
 COPY --from=uv-bin /uv /uvx /usr/local/bin/
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_TOOL_BIN_DIR=/usr/local/bin \
@@ -155,9 +155,9 @@ RUN case "${VIBE_CLI_VERSION}" in \
 
 
 FROM agent-base AS antigravity-cli
-ARG ANTIGRAVITY_CLI_VERSION=1.1.13
-ARG ANTIGRAVITY_CLI_RELEASE_ID=6057583128215552
-ARG ANTIGRAVITY_CLI_SHA512=89c6881b6c1999cb8236e7181c2192ae8f372b0413396c0f7bcff83d27ac9c0cc1202795cc0d629ec1ecbf4937d1c294cf4f5e4f9f8e05b1e972e27198313442
+ARG ANTIGRAVITY_CLI_VERSION=1.1.27
+ARG ANTIGRAVITY_CLI_RELEASE_ID=5211191891591168
+ARG ANTIGRAVITY_CLI_SHA512=793d4b9ea2c08d9a7e50bafa02cfc8c19424bd60d6e83f91408d45f9c6d4ce79a5d576fede5bef164d823abf84f81359a14b4ca665952c47b0a7cfd743bb69c0
 ENV PATH="/home/node/.local/bin:${PATH}" \
     AGY_CLI_DISABLE_AUTO_UPDATE=true
 # Both download URLs resolve the same pinned public GCS object. The JSON API
@@ -191,11 +191,11 @@ RUN set -eu; \
 
 
 FROM agent-base AS final
-ARG CLAUDE_CLI_VERSION=2.1.220
-ARG CODEX_CLI_VERSION=0.151.0
-ARG ANTIGRAVITY_CLI_VERSION=1.1.13
-ARG OPENCODE_CLI_VERSION=1.18.9
-ARG VIBE_CLI_VERSION=2.23.1
+ARG CLAUDE_CLI_VERSION=2.1.263
+ARG CODEX_CLI_VERSION=0.153.4
+ARG ANTIGRAVITY_CLI_VERSION=1.1.27
+ARG OPENCODE_CLI_VERSION=1.18.29
+ARG VIBE_CLI_VERSION=2.25.0
 
 LABEL dev.propr.agent-bundle="true" \
       dev.propr.agent.claude.version="${CLAUDE_CLI_VERSION}" \

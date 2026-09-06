@@ -10,7 +10,7 @@ const smokeScript = readFileSync('scripts/smoke-test-images.sh', 'utf8');
 const integrationScript = readFileSync('scripts/integration-test-images.sh', 'utf8');
 const antigravityVerificationScript = readFileSync('scripts/verify-antigravity-image.sh', 'utf8');
 const releaseImageWorkflow = readFileSync('.github/workflows/docker-images.yml', 'utf8');
-const antigravity113VerifierFixturePath = new URL('./fixtures/antigravity-verifier-pinned-1.1.13.json', import.meta.url);
+const antigravity127VerifierFixturePath = new URL('./fixtures/antigravity-verifier-pinned-1.1.27.json', import.meta.url);
 const sqliteStartupScript = readFileSync('scripts/smoke-test-sqlite-startup.sh', 'utf8');
 
 function literalAssignment(source: string, name: string): string {
@@ -20,7 +20,7 @@ function literalAssignment(source: string, name: string): string {
 }
 
 function runAntigravityVerification(
-  initModelEvidence = 'pinned-1.1.13-canonical',
+  initModelEvidence = 'pinned-1.1.27-canonical',
   modelsEvidence = 'mapped',
   conversationEvidence = 'consistent',
   streamEvidence = 'canonical',
@@ -70,7 +70,7 @@ const evidence = process.env.FAKE_INIT_MODEL_EVIDENCE;
 if (evidence === 'missing') delete init.init.model;
 else if (evidence === 'different-tier') {
   init.init.model = fixture.models.find(candidate => candidate.id !== modelId).id;
-} else if (evidence === 'alias') init.init.model = 'flash37-high';
+} else if (evidence === 'alias') init.init.model = 'flash38-high';
 else if (evidence === 'display-name') init.init.model = modelFixture.displayName;
 if (process.env.FAKE_CONVERSATION_EVIDENCE === 'mixed') {
   const stepUpdate = events.find(event => event.event === 'step_update');
@@ -131,7 +131,7 @@ process.stdout.write(\`\${events.map(JSON.stringify).join('\\n')}\\n\`);
         ...process.env,
         AGENT_TAG: 'fake-antigravity-agent',
         ANTIGRAVITY_CONFIG_PATH: configDirectory,
-        ANTIGRAVITY_VERIFIER_FIXTURE: antigravity113VerifierFixturePath.pathname,
+        ANTIGRAVITY_VERIFIER_FIXTURE: antigravity127VerifierFixturePath.pathname,
         FAKE_INIT_MODEL_EVIDENCE: initModelEvidence,
         FAKE_MODELS_EVIDENCE: modelsEvidence,
         FAKE_CONVERSATION_EVIDENCE: conversationEvidence,
@@ -183,9 +183,9 @@ test('unauthenticated image smoke probes only public API routes', () => {
   assert.match(smokeScript, /\\"version\\":\\"\$\{EXPECTED_VERSION\}\\"/);
 });
 
-test('authenticated image integration verifies every Gemini 3.7 Flash tier without silent fallback', () => {
+test('authenticated image integration verifies every Gemini 3.8 Flash tier without silent fallback', () => {
   for (const tier of ['High', 'Medium', 'Low']) {
-    assert.match(antigravityVerificationScript, new RegExp(`Gemini 3\\.7 Flash \\(${tier}\\)`));
+    assert.match(antigravityVerificationScript, new RegExp(`Gemini 3\\.8 Flash \\(${tier}\\)`));
   }
   assert.match(antigravityVerificationScript, /^set -euo pipefail$/m);
   assert.match(antigravityVerificationScript, /run_agy models/);
@@ -205,7 +205,7 @@ test('authenticated image integration verifies every Gemini 3.7 Flash tier witho
   assert.match(antigravityVerificationScript, /EXPECTED_RESPONSE=\$'STREAM_OK\\n'/);
   assert.match(antigravityVerificationScript, /response !== process\.env\.EXPECTED_RESPONSE/);
   assert.match(antigravityVerificationScript, /reported_model.*model_id/s);
-  for (const id of ['gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low']) {
+  for (const id of ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low']) {
     assert.match(antigravityVerificationScript, new RegExp(id));
   }
   assert.match(integrationScript, /\.\/scripts\/verify-antigravity-image\.sh/);
@@ -218,12 +218,12 @@ test('release publication requires authenticated Antigravity verification of the
   );
 });
 
-test('authenticated image verifier accepts pinned 1.1.13 canonical init.model envelopes', () => {
+test('authenticated image verifier accepts pinned 1.1.27 canonical init.model envelopes', () => {
   const result = runAntigravityVerification();
 
   assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-  assert.match(result.stdout, /Antigravity CLI version 1\.1\.13/);
-  for (const id of ['gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low']) {
+  assert.match(result.stdout, /Antigravity CLI version 1\.1\.27/);
+  for (const id of ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low']) {
     assert.match(result.stdout, new RegExp(`${id} returned exact sentinel with SUCCESS and reported ${id}`));
   }
 });
@@ -232,12 +232,12 @@ test('authenticated image verifier rejects missing, alias, display-name, and oth
   for (const evidence of ['missing', 'different-tier', 'alias', 'display-name']) {
     const result = runAntigravityVerification(evidence);
     assert.notEqual(result.status, 0, `${evidence} evidence must not pass`);
-    assert.match(result.stderr, /expected init model "gemini-3\.7-flash-high", got/);
+    assert.match(result.stderr, /expected init model "gemini-3\.8-flash-high", got/);
   }
 });
 
 test('authenticated image verifier rejects mixed-conversation stream evidence', () => {
-  const result = runAntigravityVerification('pinned-1.1.13-canonical', 'mapped', 'mixed');
+  const result = runAntigravityVerification('pinned-1.1.27-canonical', 'mapped', 'mixed');
 
   assert.notEqual(result.status, 0);
   assert.match(
@@ -266,7 +266,7 @@ test('authenticated image verifier rejects malformed or mixed stream protocol ev
   for (const [name, evidence, expectedError] of cases) {
     await t.test(name, () => {
       const result = runAntigravityVerification(
-        'pinned-1.1.13-canonical',
+        'pinned-1.1.27-canonical',
         'mapped',
         'consistent',
         evidence,
@@ -287,7 +287,7 @@ test('authenticated image verifier retains exact sentinel and SUCCESS validation
   for (const [name, evidence, expectedError] of cases) {
     await t.test(name, () => {
       const result = runAntigravityVerification(
-        'pinned-1.1.13-canonical',
+        'pinned-1.1.27-canonical',
         'mapped',
         'consistent',
         evidence,
@@ -300,11 +300,11 @@ test('authenticated image verifier retains exact sentinel and SUCCESS validation
 });
 
 test('authenticated image verifier requires each discovered ID and display name on the same mapping', () => {
-  const result = runAntigravityVerification('pinned-1.1.13-canonical', 'unmapped');
+  const result = runAntigravityVerification('pinned-1.1.27-canonical', 'unmapped');
 
   assert.notEqual(result.status, 0);
   assert.match(
     result.stderr,
-    /Antigravity CLI did not advertise gemini-3\.7-flash-high as Gemini 3\.7 Flash \(High\)/,
+    /Antigravity CLI did not advertise gemini-3\.8-flash-high as Gemini 3\.8 Flash \(High\)/,
   );
 });

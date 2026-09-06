@@ -16,8 +16,8 @@ const opencodeConfig: AgentConfig = {
     enabled: true,
     dockerImage: 'propr/agent:latest',
     configPath: '~/.config/opencode',
-    supportedModels: ['opencode-deepseek-v4-flash-free'],
-    defaultModel: 'opencode-deepseek-v4-flash-free'
+    supportedModels: ['opencode-big-pickle'],
+    defaultModel: 'opencode-big-pickle'
 };
 
 let AgentRegistry: typeof import('../packages/core/src/agents/AgentRegistry.js').AgentRegistry;

@@ -220,7 +220,7 @@ By default the container receives `XDG_CONFIG_HOME=/home/node/.config` and `XDG_
 
 #### Model-ID Translation
 
-ProPR catalog IDs for OpenCode carry the `opencode-` prefix, for example `opencode-deepseek-v4-flash-free`. ProPR converts these back to OpenCode's native `provider/model` syntax at execution time (`opencode-deepseek-v4-flash-free` becomes `opencode/deepseek-v4-flash-free`) and strips only the internal `opencode:` routing prefix, so provider-qualified model IDs remain intact. The OpenCode model list is dynamic: run `opencode models` on the host after changing auth providers, then register any desired authenticated provider IDs (for example `opencode-openai/gpt-5.5`) on the agent's supported models. ProPR keeps only the built-in free OpenCode models as defaults and does not add authenticated provider models automatically. See [Agents and Models](../features/agents-and-models.md) for the catalog and label formats.
+ProPR catalog IDs for OpenCode carry the `opencode-` prefix, for example `opencode-big-pickle`. ProPR converts these back to OpenCode's native `provider/model` syntax at execution time (`opencode-big-pickle` becomes `opencode/big-pickle`) and strips only the internal `opencode:` routing prefix, so provider-qualified model IDs remain intact. The OpenCode model list is dynamic: run `opencode models` on the host after changing auth providers, then register any desired authenticated provider IDs (for example `opencode-openai/gpt-5.5`) on the agent's supported models. ProPR keeps only the built-in free OpenCode models as defaults and does not add authenticated provider models automatically. See [Agents and Models](../features/agents-and-models.md) for the catalog and label formats.
 
 ### Mistral Vibe
 
