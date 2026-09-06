@@ -32,11 +32,13 @@ interface CommitOptions {
 
 const GENERATED_RUNTIME_PATHS = ['.propr/assets', '.propr/cache', '.propr/.cache', '.propr/node_modules', '.propr/previews'];
 
+export class InvalidCheckpointScopeError extends Error {}
+
 function validateScopedPath(file: string): string {
     if (!file || file.trim() !== file || file.includes('\\') || file.includes('\0') || file.includes('\n') || file.includes('\r')
         || path.posix.isAbsolute(file) || path.posix.normalize(file) !== file
         || file.split('/').some(part => part === '..' || part === '.git')) {
-        throw new Error(`Checkpoint path must be a normalized repository-relative file: ${JSON.stringify(file)}`);
+        throw new InvalidCheckpointScopeError(`Checkpoint path must be a normalized repository-relative file: ${JSON.stringify(file)}`);
     }
     return file;
 }
@@ -57,12 +59,12 @@ async function stageCommitFiles(git: SimpleGit, options: CommitOptions): Promise
     const include = options.include?.map(validateScopedPath);
     const exclude = new Set((options.exclude ?? []).map(validateScopedPath));
     if (include?.some(file => exclude.has(file))) {
-        throw new Error('Checkpoint include and exclude paths must not overlap');
+        throw new InvalidCheckpointScopeError('Checkpoint include and exclude paths must not overlap');
     }
     const before = await git.status();
     const changed = new Set(before.files.map(file => file.path));
     const missing = include?.filter(file => !changed.has(file)) ?? [];
-    if (missing.length > 0) throw new Error(`Checkpoint include path is not a changed file: ${missing.join(', ')}`);
+    if (missing.length > 0) throw new InvalidCheckpointScopeError(`Checkpoint include path is not a changed file: ${missing.join(', ')}`);
     const selected = (include ?? [...changed])
         .filter(file => !exclude.has(file) && !isGeneratedRuntimePath(file));
     // The worker owns the index. Clear it before staging the declared scope so

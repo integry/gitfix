@@ -5,6 +5,7 @@ import {
     db,
     getAuthenticatedOctokit,
     getRepoUrl,
+    InvalidCheckpointScopeError,
     parseGoalArtifacts,
     pushBranch,
     type GoalArtifact,
@@ -22,6 +23,21 @@ export interface GoalCheckpointRequest {
     summary?: string;
     turnId?: string;
 }
+
+export interface RejectedGoalCheckpointRequest {
+    checkpointId?: string;
+    kind: 'agent';
+    error: string;
+    commitMessage?: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
+    turnId?: string;
+}
+
+export type GoalCheckpointPublication =
+    | { commitSha: string | null; pullRequest: PullRequestInfo; rejected?: false }
+    | { commitSha: null; rejected: true; error: string };
 
 interface PublishableGoal {
     goal_id: string;
@@ -163,7 +179,7 @@ function artifactStats(artifacts: GoalArtifact[]) {
 async function publishLocked(
     job: GoalJobData,
     request: GoalCheckpointRequest,
-): Promise<{ commitSha: string | null; pullRequest: PullRequestInfo }> {
+): Promise<GoalCheckpointPublication> {
     const goal = await db<PublishableGoal>('goals').where({
         goal_id: job.goalId,
         run_generation: job.generation,
@@ -280,11 +296,16 @@ async function publishLocked(
     } catch (error) {
         const message = (error as Error).message;
         await db('goal_checkpoints').where({ checkpoint_id: recordId }).update({
-            state: 'failed', error: message, completed_at: db.fn.now(),
+            state: request.kind === 'agent' && error instanceof InvalidCheckpointScopeError ? 'rejected' : 'failed',
+            error: message,
+            completed_at: db.fn.now(),
         });
         await db('goals').where({
             goal_id: job.goalId, run_generation: job.generation, run_claim: job.claimId,
         }).whereNull('result_state').update({ checkpoint_error: message, updated_at: db.fn.now() });
+        if (request.kind === 'agent' && error instanceof InvalidCheckpointScopeError) {
+            return { commitSha: null, rejected: true, error: message };
+        }
         throw error;
     }
 }
@@ -292,7 +313,7 @@ async function publishLocked(
 export async function publishDirectGoalCheckpoint(
     job: GoalJobData,
     request: GoalCheckpointRequest,
-): Promise<{ commitSha: string | null; pullRequest: PullRequestInfo }> {
+): Promise<GoalCheckpointPublication> {
     const previous = publicationLocks.get(job.goalId) ?? Promise.resolve();
     const publication = previous.catch(() => undefined).then(() => publishLocked(job, request));
     publicationLocks.set(job.goalId, publication);
@@ -301,4 +322,64 @@ export async function publishDirectGoalCheckpoint(
     } finally {
         if (publicationLocks.get(job.goalId) === publication) publicationLocks.delete(job.goalId);
     }
+}
+
+/** Persist an invalid agent declaration without failing or retrying its goal execution. */
+export async function rejectDirectGoalCheckpoint(
+    job: GoalJobData,
+    request: RejectedGoalCheckpointRequest,
+): Promise<void> {
+    const goal = await db<PublishableGoal>('goals').where({
+        goal_id: job.goalId,
+        run_generation: job.generation,
+        run_claim: job.claimId,
+    }).whereNull('result_state').first();
+    if (!goal) throw new Error('Goal checkpoint rejection was superseded');
+    if (goal.launch_strategy !== 'direct') throw new Error('Worker checkpoints only apply to direct goals');
+
+    const checkpointId = request.checkpointId ?? randomUUID();
+    const idempotencyKey = checkpointKey(goal, request);
+    const payloadHash = createHash('sha256').update(JSON.stringify({
+        goalId: goal.goal_id, kind: request.kind, commitMessage: request.commitMessage ?? null,
+        include: request.include ?? null, exclude: request.exclude ?? null, summary: request.summary ?? null,
+        error: request.error,
+    })).digest('hex');
+    const existing = await db('goal_checkpoints').where({
+        owner_id: goal.owner_id,
+        idempotency_key: idempotencyKey,
+    }).first();
+    if (existing) {
+        if (existing.goal_id !== goal.goal_id || existing.payload_hash !== payloadHash) {
+            throw new Error('Goal checkpoint rejection changed before it was recorded');
+        }
+        return;
+    }
+    await db.transaction(async trx => {
+        await trx('goal_checkpoints').insert({
+            checkpoint_id: checkpointId,
+            goal_id: goal.goal_id,
+            owner_id: goal.owner_id,
+            idempotency_key: idempotencyKey,
+            operation: 'goal.checkpoint.agent',
+            payload_hash: payloadHash,
+            kind: request.kind,
+            commit_message: request.commitMessage ?? null,
+            include_paths: request.include ? JSON.stringify(request.include) : null,
+            exclude_paths: request.exclude ? JSON.stringify(request.exclude) : null,
+            summary: request.summary ?? null,
+            state: 'rejected',
+            requested_generation: job.generation,
+            requested_claim: job.claimId,
+            delivered_turn_id: request.turnId ?? null,
+            error: request.error,
+            created_at: trx.fn.now(),
+            completed_at: trx.fn.now(),
+        });
+        const updated = await trx('goals').where({
+            goal_id: job.goalId,
+            run_generation: job.generation,
+            run_claim: job.claimId,
+        }).whereNull('result_state').update({ checkpoint_error: request.error, updated_at: trx.fn.now() });
+        if (updated !== 1) throw new Error('Goal checkpoint rejection was fenced');
+    });
 }

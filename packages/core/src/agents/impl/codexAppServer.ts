@@ -1,4 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import {
     getDockerRunContainerName,
@@ -11,6 +12,7 @@ import type {
     AgentExecutionResult,
     AgentTaskOptions,
     GoalCheckpointRequest,
+    GoalCheckpointRejection,
 } from '../types.js';
 import { AppServerConnection, asRecord, type RpcMessage } from './codexAppServerConnection.js';
 import { buildCodexAppServerDockerArgs } from './utils/codexDockerArgsBuilder.js';
@@ -62,6 +64,17 @@ interface TurnCompletion {
     status: string;
     error?: string;
     checkpoint?: GoalCheckpointRequest;
+    checkpointRejection?: GoalCheckpointRejection;
+}
+
+function checkpointAcknowledgement(commitSha: string | null | undefined): string {
+    return commitSha
+        ? `ProPR accepted and published your checkpoint as commit ${commitSha}. Continue working toward the goal.`
+        : 'ProPR accepted your checkpoint, but there were no matching changes to commit. Continue working toward the goal.';
+}
+
+function checkpointRejection(error: string): string {
+    return `ProPR rejected your checkpoint declaration: ${error}. No checkpoint was committed. Correct the declaration and continue working toward the goal.`;
 }
 
 function turnStatus(message: RpcMessage): TurnCompletion {
@@ -190,14 +203,14 @@ async function observeNativeGoal(
     while (true) {
         connection.discardStartedTurn(turnId);
         await control.setActiveTurn(turnId);
-        if (firstTurn && options.initialControlInputId) {
+        if (firstTurn && (options.initialControlInputId || options.initialGoalFeedback)) {
             await connection.request('turn/steer', {
                 threadId,
-                clientUserMessageId: options.initialControlInputId,
-                input: [{ type: 'text', text: options.prompt, text_elements: [] }],
+                clientUserMessageId: options.initialControlInputId ?? randomUUID(),
+                input: [{ type: 'text', text: options.initialGoalFeedback ?? options.prompt, text_elements: [] }],
                 expectedTurnId: turnId,
             });
-            await control.markInputDelivered(options.initialControlInputId, turnId);
+            if (options.initialControlInputId) await control.markInputDelivered(options.initialControlInputId, turnId);
         }
         firstTurn = false;
         const completion = await observeActiveTurnWithThread(connection, threadId, turnId, options);
@@ -205,12 +218,17 @@ async function observeNativeGoal(
         if (completion.status !== 'completed') return completion;
         let boundary = await control.load();
         const checkpoint = completion.checkpoint;
+        const rejection = completion.checkpointRejection;
         let completedDuringCheckpoint = false;
+        let checkpointFeedback: string | undefined;
         if (checkpoint) {
             await connection.request('thread/goal/set', {
                 threadId, objective, status: 'paused',
             });
-            await control.publishCheckpoint(checkpoint, turnId);
+            const outcome = await control.publishCheckpoint(checkpoint, turnId);
+            checkpointFeedback = outcome.accepted
+                ? checkpointAcknowledgement(outcome.commitSha)
+                : checkpointRejection(outcome.error || 'The declaration could not be published');
             boundary = await control.load();
             const nativeBoundary = nativeGoalSnapshot(await connection.request('thread/goal/get', { threadId }));
             completedDuringCheckpoint = nativeBoundary.status === 'complete';
@@ -219,6 +237,10 @@ async function observeNativeGoal(
                     threadId, objective, status: 'active',
                 });
             }
+        } else if (rejection) {
+            await control.rejectCheckpoint(rejection, turnId);
+            checkpointFeedback = checkpointRejection(rejection.error);
+            boundary = await control.load();
         }
         const desiredState = boundary.desiredState;
         if (desiredState !== 'running') {
@@ -226,13 +248,23 @@ async function observeNativeGoal(
             return { status: 'interrupted', error: 'Goal stopped at a provider turn boundary' };
         }
         if (completedDuringCheckpoint) return completion;
-        const goal = nativeGoalSnapshot(await connection.request('thread/goal/get', { threadId }));
+        const goal = checkpointFeedback && !completedDuringCheckpoint
+            ? { status: 'active' }
+            : nativeGoalSnapshot(await connection.request('thread/goal/get', { threadId }));
         if (goal.status === 'complete') return completion;
         if (goal.status !== 'active') {
             return { status: 'failed', error: `Codex native goal entered ${goal.status} status` };
         }
         const nextTurnId = await waitForNativeGoalTurn(connection, threadId, control, objective);
         if (!nextTurnId) return { status: 'interrupted', error: 'Goal stopped between provider turns' };
+        if (checkpointFeedback) {
+            await connection.request('turn/steer', {
+                threadId,
+                clientUserMessageId: randomUUID(),
+                input: [{ type: 'text', text: checkpointFeedback, text_elements: [] }],
+                expectedTurnId: nextTurnId,
+            });
+        }
         turnId = nextTurnId;
     }
 }
@@ -419,12 +451,24 @@ async function observeActiveTurnWithThread(
         }
     }
     const declaration = parseGoalCheckpointDeclaration(connection.agentMessagesAfter(summaryStart).join('\n'));
-    const checkpoint: GoalCheckpointRequest | undefined = declaration ? {
+    const checkpointRejectionRequest: GoalCheckpointRejection | undefined = declaration && 'rejected' in declaration ? {
+        kind: 'agent',
+        error: declaration.error,
+        commitMessage: declaration.message,
+        include: declaration.include,
+        exclude: declaration.exclude,
+        summary: declaration.summary,
+    } : undefined;
+    const checkpoint: GoalCheckpointRequest | undefined = declaration && !('rejected' in declaration) ? {
         kind: 'agent',
         commitMessage: declaration.message,
         include: declaration.include,
         exclude: declaration.exclude,
         summary: declaration.summary,
     } : undefined;
-    return { ...turnStatus(completed!), ...(checkpoint ? { checkpoint } : {}) };
+    return {
+        ...turnStatus(completed!),
+        ...(checkpoint ? { checkpoint } : {}),
+        ...(checkpointRejectionRequest ? { checkpointRejection: checkpointRejectionRequest } : {}),
+    };
 }

@@ -56,7 +56,7 @@ export interface Goal {
     pending: boolean;
     latest: {
       kind: 'bootstrap' | 'agent' | 'final';
-      state: 'pending' | 'processing' | 'completed' | 'skipped' | 'failed';
+      state: 'pending' | 'processing' | 'completed' | 'skipped' | 'failed' | 'rejected';
       commitSha: string | null;
       message: string | null;
       include: string[] | null;

@@ -97,6 +97,7 @@ function controls(onCheckpoint?: () => void) {
   const undeliverable: string[] = [];
   const checkpoints: string[] = [];
   const checkpointRequests: Array<Record<string, unknown>> = [];
+  const checkpointRejections: Array<Record<string, unknown>> = [];
   let desiredState: 'running' | 'paused' | 'cancelled' = 'running';
   const control: GoalExecutionControl = {
     load: async () => ({
@@ -110,11 +111,13 @@ function controls(onCheckpoint?: () => void) {
       checkpoints.push(`${request.kind}:${turnId}`);
       checkpointRequests.push(request as unknown as Record<string, unknown>);
       onCheckpoint?.();
+      return { accepted: true, commitSha: 'abc123' };
     },
+    rejectCheckpoint: async (request, turnId) => { checkpointRejections.push({ ...request, turnId }); },
     appendOutput: async () => {},
   };
   return {
-    control, delivered, undeliverable, checkpoints, checkpointRequests,
+    control, delivered, undeliverable, checkpoints, checkpointRequests, checkpointRejections,
     setDesiredState: (state: typeof desiredState) => { desiredState = state; },
   };
 }
@@ -217,6 +220,19 @@ describe('pinned Codex 0.146 native external-goal activation', () => {
     assert.equal(connection.requests.find(request => request.method === 'thread/start')?.params.model, 'requested-model');
   });
 
+  test('delivers durable checkpoint feedback when a Codex session resumes after publication', async () => {
+    const state = controls();
+    const connection = new FakeConnection(true, 'before');
+    const runOptions = options(state.control, true);
+    runOptions.initialGoalFeedback = 'ProPR accepted and published your checkpoint as commit durable123. Continue working toward the goal.';
+
+    await runGoalProtocol(connection as never, runOptions, 'gpt-5.6');
+
+    const feedback = connection.requests.find(request => request.method === 'turn/steer');
+    assert.match(JSON.stringify(feedback?.params.input), /durable123/);
+    assert.deepEqual(state.delivered, []);
+  });
+
   test('allows repository setup to finish before initialize times out', async () => {
     const state = controls();
     const connection = new FakeConnection(false, 'before');
@@ -262,6 +278,25 @@ describe('pinned Codex 0.146 native external-goal activation', () => {
         .map(request => request.params.status),
       ['paused', 'active', 'paused', 'active'],
     );
+    const acknowledgement = connection.requests.find(request => request.method === 'turn/steer');
+    assert.match(JSON.stringify(acknowledgement?.params.input), /accepted and published.*abc123/);
+  });
+
+  test('records a malformed declaration and explicitly asks Codex to correct it', async () => {
+    const state = controls();
+    const connection = new FakeConnection(false, 'before');
+    connection.declareCheckpoint({ checkpointReady: true, message: '', include: ['../outside.ts'] });
+    connection.started.push('turn-correction');
+
+    const result = await runGoalProtocol(connection as never, options(state.control), 'gpt-5.6');
+
+    assert.equal(result.completion?.status, 'completed');
+    assert.equal(state.checkpoints.length, 0);
+    assert.equal(state.checkpointRejections.length, 1);
+    assert.match(String(state.checkpointRejections[0].error), /message must be a non-empty string/);
+    const feedback = connection.requests.find(request => request.method === 'turn/steer');
+    assert.match(JSON.stringify(feedback?.params.input), /rejected your checkpoint declaration/);
+    assert.match(JSON.stringify(feedback?.params.input), /No checkpoint was committed/);
   });
 
   test('does not reactivate a native goal that completed while its final turn was checkpointed', async () => {

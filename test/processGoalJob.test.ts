@@ -115,6 +115,57 @@ test('whole-session direct goals publish an agent declaration and continue after
   assert.equal(continuedAfterCheckpoint, true);
 });
 
+test('whole-session direct goals record a malformed declaration and continue for correction', async () => {
+  const data: GoalJobData = {
+    goalId: 'goal-rejected', taskId: 'goal-task-rejected', repoOwner: 'acme', repoName: 'repo',
+    generation: 1, claimId: 'claim-rejected',
+  };
+  const goal = {
+    goal_id: data.goalId, owner_id: 'owner-1', repository: 'acme/repo', objective: 'Ship it',
+    launch_strategy: 'direct', initial_prompt: '/goal Ship it', base_branch: 'main', branch_name: 'goal/ship-it',
+    worktree_path: '/tmp/worktree', agent_id: 'agent-1', agent_alias: 'claude', agent_type: 'claude',
+    requested_model: 'claude-opus', desired_state: 'running', result_state: null,
+    current_task_id: data.taskId, session_id: 'session-1', conversation_id: null,
+    run_generation: data.generation, run_claim: data.claimId, claimed_at: new Date().toISOString(),
+    active_turn_id: null, pause_confirmed_at: null, resume_requested: false,
+    started_at: new Date().toISOString(), paused_at: null, control_generation: 0, control_ack_generation: 0,
+  };
+  const rejected: Array<Record<string, unknown>> = [];
+  let continued = false;
+  const dependencies = {
+    claim: async () => goal,
+    withHeartbeat: async (_job: GoalJobData, operation: () => Promise<unknown>) => operation(),
+    prepare: async () => ({ ready: true, value: {
+      goal, agent: {}, githubToken: 'token',
+      worktree: { worktreePath: '/tmp/worktree', branchName: 'goal/ship-it' }, pendingInput: null,
+    } }),
+    execute: async () => ({
+      success: true, modelUsed: 'claude-opus', executionTimeMs: 1, logs: '', modifiedFiles: [],
+      summary: '{"checkpointReady":true,"message":"","include":["../outside.ts"]}',
+    }),
+    result: {
+      loadGoal: async () => goal, fencedGoal: async () => goal, acknowledgeInput: async () => {},
+      recordMetrics: async () => {}, handleStopped: async () => null,
+      rejectCheckpoint: async (_job: GoalJobData, request: Record<string, unknown>) => { rejected.push(request); },
+      publishCheckpoint: async () => { throw new Error('Malformed declaration must not be published'); },
+      saveProviderResult: async () => ({}),
+      scheduleFurtherWork: async (_job: GoalJobData, _goal: unknown, _result: unknown, handled: boolean) => {
+        continued = handled;
+        return { status: 'continuing' };
+      },
+      finalizeGoal: async () => true, markTaskReconciled: async () => {},
+      stateManager: () => ({ markTaskCompleted: async () => ({ state: 'completed' }), markTaskFailed: async () => ({ state: 'failed' }) }),
+    },
+  };
+
+  const outcome = await processGoalJob({ data } as never, dependencies as never);
+
+  assert.deepEqual(outcome, { status: 'continuing' });
+  assert.equal(rejected.length, 1);
+  assert.match(String(rejected[0].error), /message must be a non-empty string/);
+  assert.equal(continued, true);
+});
+
 test('goal execution keeps initial prompt identity separate from FIFO continuation input', async () => {
   const data: GoalJobData = {
     goalId: 'goal-identity', taskId: 'goal-task-identity', repoOwner: 'acme', repoName: 'repo',

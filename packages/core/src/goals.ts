@@ -82,6 +82,16 @@ export interface GoalCheckpointDeclaration {
     summary?: string;
 }
 
+export interface RejectedGoalCheckpointDeclaration {
+    checkpointReady: true;
+    rejected: true;
+    error: string;
+    message?: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
+}
+
 function jsonObjects(text: string): unknown[] {
     const values: unknown[] = [];
     let start = -1;
@@ -122,35 +132,62 @@ function optionalPaths(value: unknown, field: 'include' | 'exclude'): string[] |
         || value.some(item => typeof item !== 'string' || !item.trim())) {
         throw new Error(`Checkpoint ${field} must be a non-empty array of at most 1000 file paths when provided`);
     }
-    return [...new Set(value as string[])];
+    const paths = [...new Set(value as string[])];
+    const invalid = paths.find(file => file.trim() !== file || file.includes('\\') || file.includes('\0')
+        || file.includes('\n') || file.includes('\r') || file.startsWith('/')
+        || file.split('/').some(part => part === '' || part === '.' || part === '..' || part === '.git'));
+    if (invalid) {
+        throw new Error(`Checkpoint ${field} path must be a normalized repository-relative file: ${JSON.stringify(invalid)}`);
+    }
+    return paths;
+}
+
+function rejectedDeclaration(candidate: Record<string, unknown>, error: unknown): RejectedGoalCheckpointDeclaration {
+    const stringPaths = (value: unknown): string[] | undefined => Array.isArray(value)
+        && value.every(item => typeof item === 'string') ? value as string[] : undefined;
+    return {
+        checkpointReady: true,
+        rejected: true,
+        error: (error as Error).message,
+        ...(typeof candidate.message === 'string' ? { message: candidate.message.trim() } : {}),
+        ...(stringPaths(candidate.include) ? { include: stringPaths(candidate.include) } : {}),
+        ...(stringPaths(candidate.exclude) ? { exclude: stringPaths(candidate.exclude) } : {}),
+        ...(typeof candidate.summary === 'string' ? { summary: candidate.summary.trim() } : {}),
+    };
 }
 
 /** Parse the last structured checkpoint declaration in an agent's turn output. */
-export function parseGoalCheckpointDeclaration(text: string | undefined): GoalCheckpointDeclaration | null {
+export function parseGoalCheckpointDeclaration(
+    text: string | undefined,
+): GoalCheckpointDeclaration | RejectedGoalCheckpointDeclaration | null {
     if (!text) return null;
     const candidate = jsonObjects(text).reverse().find(value => {
         return Boolean(value && typeof value === 'object'
             && (value as Record<string, unknown>).checkpointReady === true);
     }) as Record<string, unknown> | undefined;
     if (!candidate) return null;
-    if (typeof candidate.message !== 'string' || !candidate.message.trim() || candidate.message.length > 500) {
-        throw new Error('Checkpoint message must be a non-empty string of at most 500 characters');
+    try {
+        if (typeof candidate.message !== 'string' || !candidate.message.trim() || candidate.message.length > 500) {
+            throw new Error('Checkpoint message must be a non-empty string of at most 500 characters');
+        }
+        if (candidate.summary != null
+            && (typeof candidate.summary !== 'string' || !candidate.summary.trim() || candidate.summary.length > 4_000)) {
+            throw new Error('Checkpoint summary must be a non-empty string of at most 4000 characters when provided');
+        }
+        const include = optionalPaths(candidate.include, 'include');
+        const exclude = optionalPaths(candidate.exclude, 'exclude');
+        const overlap = include?.find(file => exclude?.includes(file));
+        if (overlap) throw new Error(`Checkpoint file cannot be both included and excluded: ${overlap}`);
+        return {
+            checkpointReady: true,
+            message: candidate.message.trim(),
+            ...(include ? { include } : {}),
+            ...(exclude ? { exclude } : {}),
+            ...(typeof candidate.summary === 'string' ? { summary: candidate.summary.trim() } : {}),
+        };
+    } catch (error) {
+        return rejectedDeclaration(candidate, error);
     }
-    if (candidate.summary != null
-        && (typeof candidate.summary !== 'string' || !candidate.summary.trim() || candidate.summary.length > 4_000)) {
-        throw new Error('Checkpoint summary must be a non-empty string of at most 4000 characters when provided');
-    }
-    const include = optionalPaths(candidate.include, 'include');
-    const exclude = optionalPaths(candidate.exclude, 'exclude');
-    const overlap = include?.find(file => exclude?.includes(file));
-    if (overlap) throw new Error(`Checkpoint file cannot be both included and excluded: ${overlap}`);
-    return {
-        checkpointReady: true,
-        message: candidate.message.trim(),
-        ...(include ? { include } : {}),
-        ...(exclude ? { exclude } : {}),
-        ...(typeof candidate.summary === 'string' ? { summary: candidate.summary.trim() } : {}),
-    };
 }
 
 export function goalJobId(goalId: string, generation: number): string {

@@ -26,10 +26,13 @@ export {
     type GoalDesiredState,
     type GoalLaunchStrategy,
     type GoalCheckpointDeclaration,
+    type RejectedGoalCheckpointDeclaration,
     type GoalResultState,
 } from './goals.js';
 export type { GoalJobData } from './queue/taskQueue.types.js';
 export type {
+    GoalCheckpointOutcome,
+    GoalCheckpointRejection,
     GoalCheckpointRequest,
     GoalControlInput,
     GoalControlSnapshot,

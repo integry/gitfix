@@ -245,7 +245,13 @@ describe('GoalsPage', () => {
       finalPr: { number: 42, url: 'https://github.com/acme/web/pull/42' },
       checkpoint: {
         intervalMinutes: 15, count: 2, lastAt: new Date().toISOString(), lastCommitSha: 'abc123',
-        error: null, pending: false, latest: null,
+        error: null, pending: false,
+        latest: {
+          kind: 'agent', state: 'completed', commitSha: 'abc123', message: 'feat(goals): publish stable work',
+          include: ['src/goals.ts', 'test/goals.test.ts'], exclude: ['src/in-progress.ts'],
+          summary: 'Checkpoint declaration and tests are complete.', error: null,
+          createdAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+        },
       },
     };
     vi.mocked(goalsApi.getGoal).mockResolvedValue({ goal: directGoal });
@@ -253,6 +259,13 @@ describe('GoalsPage', () => {
     expect(await screen.findByText('The agent declares when coherent work is ready.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Checkpoint now' })).not.toBeInTheDocument();
     expect(screen.getByText('Target cadence: about every 15 minutes.')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Latest checkpoint declaration' })).toBeInTheDocument();
+    expect(screen.getByText('feat(goals): publish stable work')).toBeInTheDocument();
+    expect(screen.getByText('Checkpoint declaration and tests are complete.')).toBeInTheDocument();
+    expect(screen.getByText('src/goals.ts')).toBeInTheDocument();
+    expect(screen.getByText('test/goals.test.ts')).toBeInTheDocument();
+    expect(screen.getByText('src/in-progress.ts')).toBeInTheDocument();
+    expect(screen.getByText('abc123')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open draft PR/ })).toHaveAttribute('href', directGoal.finalPr!.url);
   });
 

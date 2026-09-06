@@ -59,6 +59,8 @@ export interface AgentTaskOptions {
     nativeGoalObjective?: string;
     /** Pending FIFO input consumed by the turn being started, when applicable. */
     initialControlInputId?: string;
+    /** Durable ProPR checkpoint feedback to inject at the resumed Codex boundary. */
+    initialGoalFeedback?: string;
     /** Durable controls observed only at provider turn boundaries. */
     goalControl?: GoalExecutionControl;
 
@@ -109,6 +111,21 @@ export interface GoalCheckpointRequest {
     summary?: string;
 }
 
+export interface GoalCheckpointRejection {
+    kind: 'agent';
+    error: string;
+    commitMessage?: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
+}
+
+export interface GoalCheckpointOutcome {
+    accepted: boolean;
+    commitSha?: string | null;
+    error?: string;
+}
+
 export interface GoalControlSnapshot {
     desiredState: 'running' | 'paused' | 'cancelled';
     requestedModel: string;
@@ -122,7 +139,8 @@ export interface GoalExecutionControl {
     setActiveTurn(turnId: string | null): Promise<void>;
     markInputDelivered(inputId: string, turnId: string): Promise<void>;
     markInputUndeliverable(inputId: string, reason: string): Promise<void>;
-    publishCheckpoint(request: GoalCheckpointRequest, turnId: string): Promise<void>;
+    publishCheckpoint(request: GoalCheckpointRequest, turnId: string): Promise<GoalCheckpointOutcome>;
+    rejectCheckpoint(request: GoalCheckpointRejection, turnId: string): Promise<void>;
     appendOutput(records: string[]): Promise<void>;
 }
 

@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import { db, type GoalExecutionControl, type GoalJobData } from '@propr/core';
 import type { GoalArtifact } from '@propr/core';
-import { publishDirectGoalCheckpoint } from './goalCheckpointPublisher.js';
+import { publishDirectGoalCheckpoint, rejectDirectGoalCheckpoint } from './goalCheckpointPublisher.js';
 
 export interface GoalRow {
     goal_id: string;
@@ -38,6 +38,7 @@ export interface GoalRow {
     final_pr_url: string | null;
     checkpoint_interval_minutes: number | null;
     last_checkpoint_at: string | null;
+    checkpoint_error: string | null;
 }
 
 function attemptWhere(query: Knex.QueryBuilder, job: GoalJobData): Knex.QueryBuilder {
@@ -176,9 +177,23 @@ export function createGoalExecutionControl(job: GoalJobData): GoalExecutionContr
             });
         },
         async publishCheckpoint(request, turnId) {
-            await publishDirectGoalCheckpoint(job, {
+            const published = await publishDirectGoalCheckpoint(job, {
                 checkpointId: request.id,
                 kind: request.kind,
+                commitMessage: request.commitMessage,
+                include: request.include,
+                exclude: request.exclude,
+                summary: request.summary,
+                turnId,
+            });
+            return published.rejected
+                ? { accepted: false, error: published.error }
+                : { accepted: true, commitSha: published.commitSha };
+        },
+        async rejectCheckpoint(request, turnId) {
+            await rejectDirectGoalCheckpoint(job, {
+                kind: request.kind,
+                error: request.error,
                 commitMessage: request.commitMessage,
                 include: request.include,
                 exclude: request.exclude,

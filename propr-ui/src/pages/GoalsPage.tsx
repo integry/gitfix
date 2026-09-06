@@ -103,6 +103,34 @@ function GoalState({ goal }: { goal: Goal }) {
   return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${color}`}>{state}</span>;
 }
 
+function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['checkpoint']> }) {
+  const latest = checkpoint.latest;
+  if (!latest || latest.kind !== 'agent') return null;
+  const badgeClass = latest.state === 'completed'
+    ? 'bg-green-100 text-green-800'
+    : latest.state === 'rejected' || latest.state === 'failed'
+      ? 'bg-red-100 text-red-800'
+      : 'bg-amber-100 text-amber-800';
+  const paths = (label: string, values: string[] | null) => values && <div>
+    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
+    <dd className="mt-1 flex flex-wrap gap-1.5">{values.map(value => <code key={value} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">{value}</code>)}</dd>
+  </div>;
+  return <section aria-label="Latest checkpoint declaration" className="mt-3 rounded-md border border-indigo-100 bg-white p-3 text-slate-800">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h2 className="font-semibold">Latest checkpoint declaration</h2>
+      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${badgeClass}`}>{latest.state}</span>
+    </div>
+    <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+      <div><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Commit message</dt><dd className="mt-1 break-words font-medium">{latest.message || 'Not provided'}</dd></div>
+      {latest.summary && <div><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Summary</dt><dd className="mt-1 break-words">{latest.summary}</dd></div>}
+      {paths('Included paths', latest.include)}
+      {paths('Excluded paths', latest.exclude)}
+    </dl>
+    {latest.commitSha && <p className="mt-3 text-xs text-slate-500">Published commit <code className="font-mono text-slate-700">{latest.commitSha}</code></p>}
+    {latest.error && <p className="mt-3 rounded bg-red-50 p-2 text-sm text-red-700">{latest.error}</p>}
+  </section>;
+}
+
 function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
   const previousSettings = useMemo(readGoalFormSettings, []);
   const [repositories, setRepositories] = useState<InstanceCatalogRepository[]>([]);
@@ -336,11 +364,14 @@ function GoalDetails({ goalId }: { goalId: string }) {
       <div className="mt-4 flex flex-wrap gap-2">{goal.desiredState === 'running' && mutable && <button disabled={busy} onClick={() => act(() => pauseGoal(goal.id))} className={`${buttonClass} bg-amber-100 text-amber-800`}><CirclePause className="h-4 w-4" />Pause</button>}{goal.desiredState === 'paused' && mutable && <button disabled={busy} onClick={() => act(() => resumeGoal(goal.id))} className={`${buttonClass} bg-green-100 text-green-800`}><CirclePlay className="h-4 w-4" />{goal.pausePending ? 'Resume after safe boundary' : 'Resume'}</button>}{mutable && <button disabled={busy} onClick={() => act(() => cancelGoal(goal.id))} className={`${buttonClass} bg-red-100 text-red-800`}><CircleStop className="h-4 w-4" />Cancel</button>}<Link to={`/tasks/${goal.taskId}`} className={`${buttonClass} bg-slate-100 text-slate-700`}>Open task history</Link>{goal.finalPr && <a href={goal.finalPr.url} target="_blank" rel="noreferrer" className={`${buttonClass} bg-primary-50 text-primary-700`}>{goal.launchStrategy === 'direct' ? 'Open draft PR' : 'Review final PR'} <ExternalLink className="h-4 w-4" /></a>}<button disabled={busy} onClick={remove} className={`${buttonClass} border border-red-200 bg-white text-red-700 hover:bg-red-50`}><Trash2 className="h-4 w-4" />Delete goal</button></div>
       {cancelling && <p className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-800">Cancelling at the provider boundary and cleaning up the active session…</p>}
       <p className="mt-3 text-xs text-slate-500">{goal.artifactStats.openIssues}/{goal.artifactStats.issues} open issues · {goal.artifactStats.openPullRequests}/{goal.artifactStats.pullRequests} open PRs</p>
-      {goal.checkpoint && <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md bg-indigo-50 p-3 text-sm text-indigo-900">
-        <span>{goal.checkpoint.count} checkpoint commit{goal.checkpoint.count === 1 ? '' : 's'}{goal.checkpoint.lastAt ? ` · last ${new Date(goal.checkpoint.lastAt).toLocaleString()}` : ''}</span>
-        <span>Target cadence: about every {goal.checkpoint.intervalMinutes || 15} minutes.</span>
-        <span className="text-xs text-indigo-700">The agent declares when coherent work is ready.</span>
-        {goal.checkpoint.error && <span className="text-red-700">Checkpoint error: {goal.checkpoint.error}</span>}
+      {goal.checkpoint && <div className="mt-3 rounded-md bg-indigo-50 p-3 text-sm text-indigo-900">
+        <div className="flex flex-wrap items-center gap-3">
+          <span>{goal.checkpoint.count} checkpoint commit{goal.checkpoint.count === 1 ? '' : 's'}{goal.checkpoint.lastAt ? ` · last ${new Date(goal.checkpoint.lastAt).toLocaleString()}` : ''}</span>
+          <span>Target cadence: about every {goal.checkpoint.intervalMinutes || 15} minutes.</span>
+          <span className="text-xs text-indigo-700">The agent declares when coherent work is ready.</span>
+          {goal.checkpoint.error && !goal.checkpoint.latest?.error && <span className="text-red-700">Checkpoint error: {goal.checkpoint.error}</span>}
+        </div>
+        <CheckpointDeclaration checkpoint={goal.checkpoint} />
       </div>}
       {goal.artifacts.length > 0 && <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">{goal.artifacts.map((artifact, index) => { const item = artifact as { type?: string; number?: number; url?: string }; return item.url ? <a key={item.url} href={item.url} target="_blank" rel="noreferrer" className="rounded bg-slate-100 px-2 py-1 hover:underline">{item.type === 'pull_request' ? 'PR' : 'Issue'} #{item.number}</a> : <span key={index} />; })}</div>}
       <details className="mt-4 rounded-md bg-slate-50 p-3 text-sm"><summary className="cursor-pointer font-medium text-slate-700">Initial provider prompt</summary><pre className="mt-3 whitespace-pre-wrap break-words font-mono text-xs text-slate-600">{goal.initialPrompt}</pre></details>

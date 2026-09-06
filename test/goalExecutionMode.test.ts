@@ -81,14 +81,19 @@ describe('native goal provider contract', () => {
       summary: 'Implementation and tests are coherent.',
     });
     assert.equal(parseGoalCheckpointDeclaration('Work continues without a checkpoint.'), null);
-    assert.throws(
-      () => parseGoalCheckpointDeclaration('{"checkpointReady":true,"message":"","include":["src/a.ts"]}'),
-      /message must be a non-empty string/,
+    assert.deepEqual(
+      parseGoalCheckpointDeclaration('{"checkpointReady":true,"message":"","include":["src/a.ts"]}'),
+      {
+        checkpointReady: true, rejected: true, error: 'Checkpoint message must be a non-empty string of at most 500 characters',
+        message: '', include: ['src/a.ts'],
+      },
     );
-    assert.throws(
-      () => parseGoalCheckpointDeclaration('{"checkpointReady":true,"message":"feat: overlap","include":["src/a.ts"],"exclude":["src/a.ts"]}'),
-      /both included and excluded/,
-    );
+    const overlap = parseGoalCheckpointDeclaration('{"checkpointReady":true,"message":"feat: overlap","include":["src/a.ts"],"exclude":["src/a.ts"]}');
+    assert.ok(overlap && 'rejected' in overlap);
+    assert.match(overlap.error, /both included and excluded/);
+    const unsafePath = parseGoalCheckpointDeclaration('{"checkpointReady":true,"message":"feat: unsafe","include":["../outside.ts"]}');
+    assert.ok(unsafePath && 'rejected' in unsafePath);
+    assert.match(unsafePath.error, /normalized repository-relative file/);
   });
 
   test('builds orchestration as agent-owned prompt policy without scheduler state', () => {
