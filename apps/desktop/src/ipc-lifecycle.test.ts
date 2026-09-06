@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { App, IpcMain, IpcMainInvokeEvent, Session } from 'electron';
 import type { DesktopCredentialService } from './credential-service';
+import { DeepLinkDelivery, type DeepLinkWindow } from './deep-link-delivery';
 import { registerIpcHandlers } from './ipc';
 import type { LocalLifecycleController } from './lifecycle';
 import type { DesktopLogger } from './logger';
 import type { ProfileStore } from './profile-store';
 import { rendererContentSecurityPolicy } from './security';
-import { IPC_CHANNELS } from './shared/contract';
+import { IPC_CHANNELS, type DesktopDeepLinkDelivery } from './shared/contract';
 import { createDesktopShutdownCoordinator } from './shutdown';
 
 const deferred = <T>() => {
@@ -714,7 +715,7 @@ describe('desktop IPC shutdown gate', () => {
     assert.equal(removalCommitted, false);
   });
 
-  it('replaces every handler with a fixed closing failure and drains admitted work before disposal', async () => {
+  it('closes new work admission and drains admitted work before disposal', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const ipcMain = {
       handle: (channel: string, handler: (...args: any[]) => unknown) => { handlers.set(channel, handler); },
@@ -765,6 +766,105 @@ describe('desktop IPC shutdown gate', () => {
     await draining;
 
     registered.dispose();
+    assert.equal(handlers.size, 0);
+  });
+
+  it('keeps active and pending deep-link acknowledgement IPC open during shutdown drain', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const ipcMain = {
+      handle: (channel: string, handler: (...args: any[]) => unknown) => { handlers.set(channel, handler); },
+      removeHandler: (channel: string) => { handlers.delete(channel); },
+    } as unknown as IpcMain;
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const consumed: string[] = [];
+    const deepLinks = new DeepLinkDelivery<DeepLinkWindow>(
+      IPC_CHANNELS.deepLink,
+      [],
+      value => { consumed.push(value); },
+    );
+    const sender = {
+      isLoading: () => false,
+      send: (_channel: string, delivery: DesktopDeepLinkDelivery) => { sent.push(delivery); },
+    };
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: sender,
+    };
+    deepLinks.setWindow(window);
+
+    let profileListCalls = 0;
+    const registered = registerIpcHandlers({
+      app: {
+        getName: () => 'ProPR', getVersion: () => '0.8.15', isPackaged: true,
+      } as unknown as App,
+      ipcMain,
+      profiles: {} as ProfileStore,
+      credentials: {
+        listProfiles: async () => {
+          profileListCalls += 1;
+          return { profiles: [], activeProfileId: null };
+        },
+      } as unknown as DesktopCredentialService,
+      connectDiscovery,
+      lifecycle: {} as LocalLifecycleController,
+      logger: { log: () => undefined } as unknown as DesktopLogger,
+      desktopSession: {} as Session,
+      devServerUrl: undefined,
+      packagedRendererUrl: 'propr-renderer://app/index.html',
+      openExternal: async () => undefined,
+      acknowledgeDeepLink: (event, acknowledgement) =>
+        deepLinks.acknowledgeSender(event.sender, acknowledgement),
+    });
+    const event = {
+      sender,
+      senderFrame: { url: 'propr-renderer://app/index.html' },
+    } as unknown as IpcMainInvokeEvent;
+    const invoke = (channel: string, ...args: unknown[]) =>
+      Promise.resolve(handlers.get(channel)!(event, ...args));
+
+    assert.equal(deepLinks.deliver('propr://open?path=%2Ftasks'), true);
+    assert.equal(deepLinks.deliver('propr://open?path=%2Fplans'), true);
+    assert.equal(sent.length, 1);
+
+    let windowDestroyed = false;
+    const shutdown = createDesktopShutdownCoordinator({
+      credentials: { dispose: async () => undefined },
+      lifecycle: { shutdown: async () => undefined },
+      deepLinks,
+      ipc: registered,
+      profiles: { close: async () => undefined },
+      sessionSecurity: { close: () => undefined, dispose: () => undefined },
+      disposeRendererProtocol: () => undefined,
+      getWindow: () => ({
+        isDestroyed: () => windowDestroyed,
+        destroy: () => { windowDestroyed = true; },
+      }),
+      quit: () => undefined,
+      onStarted: () => undefined,
+      log: () => undefined,
+    });
+    shutdown.beforeQuit({ preventDefault: () => undefined });
+
+    assert.equal(deepLinks.deliver('propr://open?path=%2Finbox'), false);
+    await assert.rejects(invoke(IPC_CHANNELS.profilesList), /DESKTOP_CLOSING/);
+    assert.equal(profileListCalls, 0);
+    await invoke(IPC_CHANNELS.deepLinkAcknowledgement, {
+      ...sent[0],
+      consumption: { kind: 'open-queued', target: '/tasks' },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sent.length, 2);
+    await invoke(IPC_CHANNELS.deepLinkAcknowledgement, {
+      ...sent[1],
+      consumption: { kind: 'open-queued', target: '/plans' },
+    });
+    await shutdown.awaitFinished();
+
+    assert.deepEqual(consumed, [
+      'propr://open?path=%2Ftasks',
+      'propr://open?path=%2Fplans',
+    ]);
+    assert.equal(windowDestroyed, true);
     assert.equal(handlers.size, 0);
   });
 

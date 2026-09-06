@@ -118,10 +118,10 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     const senderUrl = event.senderFrame?.url ?? '';
     return isTrustedRendererUrl(senderUrl, options.devServerUrl, options.packagedRendererUrl);
   };
-  const handle = (channel: string, handler: Handler): void => {
+  const handle = (channel: string, handler: Handler, completesAdmittedWork = false): void => {
     channels.add(channel);
     options.ipcMain.handle(channel, async (event, ...args) => {
-      if (closing) throw closingError();
+      if (closing && !completesAdmittedWork) throw closingError();
       if (!trusted(event)) {
         options.logger.log('warn', 'desktop.ipc.rejected', { channel });
         throw new Error('Untrusted desktop IPC sender');
@@ -178,7 +178,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     if (!options.acknowledgeDeepLink?.(event, acknowledgement)) {
       throw new Error('Unexpected desktop deep-link acknowledgement');
     }
-  });
+  }, true);
   handle(IPC_CHANNELS.authLogout, (_event, apiBaseUrl) => logoutDesktopSession(options.desktopSession, apiBaseUrl));
   handle(IPC_CHANNELS.openExternal, async (_event, value: unknown) => {
     if (typeof value !== 'string' || !isSafeExternalUrl(value)) throw new Error('External URL is not allowed');
@@ -275,6 +275,9 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       if (closing) return;
       closing = true;
       for (const channel of channels) {
+        // This channel completes deep links accepted before admission closed.
+        // Final disposal removes it after the bounded shutdown drain.
+        if (channel === IPC_CHANNELS.deepLinkAcknowledgement) continue;
         options.ipcMain.removeHandler(channel);
         options.ipcMain.handle(channel, () => Promise.reject(closingError()));
       }

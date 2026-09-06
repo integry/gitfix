@@ -32,7 +32,6 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     acknowledged: boolean;
     delivery: DesktopDeepLinkDelivery;
     resolve: (consumption: DesktopDeepLinkConsumption) => void;
-    reject: (error: Error) => void;
     timer: ReturnType<typeof setTimeout>;
     window: TWindow;
   } | null = null;
@@ -108,15 +107,10 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     return new Promise(resolve => this.idleWaiters.add(resolve));
   }
 
+  /** Closes admission without canceling deliveries accepted before shutdown. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.pending.splice(0);
-    this.active?.reject(new Error('Desktop deep-link delivery closed during shutdown'));
-    if (!this.draining && !this.active) {
-      this.idleWaiters.forEach(resolve => resolve());
-      this.idleWaiters.clear();
-    }
   }
 
   private flush(_window: TWindow): void {
@@ -147,7 +141,6 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
           acknowledged: false,
           delivery,
           resolve: resolveAcknowledgement,
-          reject: rejectAcknowledgement,
           timer,
           window,
         };

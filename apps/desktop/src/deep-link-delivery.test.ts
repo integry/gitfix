@@ -187,29 +187,41 @@ describe('desktop deep-link delivery', () => {
     assert.deepEqual(consumed, ['propr://open?path=%2Fplans']);
   });
 
-  it('cancels pending acknowledgement work during coordinated shutdown', async () => {
+  it('closes admission while draining active and pending acknowledgements during shutdown', async () => {
     const sent: DesktopDeepLinkDelivery[] = [];
-    let failed = false;
+    const consumed: string[] = [];
+    const failures: Error[] = [];
     const delivery = new DeepLinkDelivery<DeepLinkWindow>(
       'desktop:deep-link',
       [],
-      undefined,
-      () => { failed = true; },
+      value => { consumed.push(value); },
+      error => { failures.push(error); },
     );
     const window = createWindow(sent);
     delivery.setWindow(window);
     assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
+    assert.equal(delivery.deliver('propr://open?path=%2Fplans'), true);
     assert.equal(sent.length, 1);
 
     delivery.close();
-    await delivery.whenIdle();
-
-    assert.equal(failed, false);
-    assert.equal(delivery.deliver('propr://open?path=%2Fplans'), false);
+    assert.equal(delivery.deliver('propr://open?path=%2Finbox'), false);
     assert.equal(delivery.acknowledge(window, {
       ...sent[0],
       consumption: { kind: 'open-queued', target: '/tasks' },
-    }), false);
+    }), true);
+    await tick();
+    assert.equal(sent.length, 2);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[1],
+      consumption: { kind: 'open-queued', target: '/plans' },
+    }), true);
+    await delivery.whenIdle();
+
+    assert.deepEqual(consumed, [
+      'propr://open?path=%2Ftasks',
+      'propr://open?path=%2Fplans',
+    ]);
+    assert.deepEqual(failures, []);
   });
 
   it('deduplicates a cold link reported through argv and open-url before delivery', async () => {
