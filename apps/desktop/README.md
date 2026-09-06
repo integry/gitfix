@@ -3,6 +3,46 @@
 This workspace packages the existing `propr-ui` React source as a sandboxed Electron renderer. The desktop entry is
 `propr-ui/src/desktop.tsx`; the normal web entry, service worker, CLI, API, and self-hosted deployment remain unchanged.
 
+## Supported platforms and first launch
+
+The first desktop release supports `linux-x64`, `linux-arm64`, `darwin-x64`, and `darwin-arm64`. Linux artifacts are
+DEB, RPM, and ZIP; macOS artifacts are DMG and ZIP. Windows source and security tests remain in the repository, but the
+`macos-linux-v1` release contains no Windows artifact and Windows desktop GA is deferred.
+
+Use **Set up this computer** on Linux to create an isolated desktop-managed local runtime. It requires a maintained
+Docker Engine, a reachable daemon, permission for the current user to use its socket without interactive `sudo`, image
+registry access, GitHub access, and enough disk/memory for the selected agents. The wizard checks the host, creates its
+private stack root below the isolated desktop profile, pulls images, opens interactive authentication in a visible
+terminal when needed, starts the stack, checks health, and then saves/probes/pairs/activates the ordinary local profile.
+Cancel waits for the active host or authentication child and rolls back completed mutations where supported. A cancelled,
+failed, or interrupted run retains only the bounded resume choices needed for **Retry setup** or **Review saved choices**.
+
+macOS is remote-only: local setup is not offered and the app makes zero host-stack mutations. Choose **Connect to an
+existing instance** and enter an HTTPS endpoint (or explicit loopback HTTP endpoint), or review a ProPR Connect discovery
+candidate. Manual, discovery, and `propr://connect` candidates are never paired or selected without confirmation. If the
+instance returns 401, **Sign in in browser** opens its API-supplied approval page; after approval, return to the app to
+finish pairing. Use the **Connected: _name_** control to switch, edit, remove, or re-pair saved profiles. Profile metadata
+survives relaunch; the credential remains in the OS secure store.
+
+### Recovery and troubleshooting
+
+- If Linux does not show **Set up this computer**, confirm that the running artifact is a current Linux package. The
+  control is intentionally absent on macOS and Windows.
+- For Docker absent, daemon-down, socket-permission, disk, image-pull, setup, authentication, or health errors, follow the
+  wizard's next action, correct the host condition, and use **Retry setup**. Do not run the desktop app with elevated
+  privileges to work around socket permissions.
+- Interactive GitHub or agent authentication requires one of `x-terminal-emulator`, GNOME Terminal, Konsole, or xterm.
+  The desktop waits for the authentication command itself, including terminals backed by an existing server, and safe
+  cancellation terminates that owned child before setup reports cancellation.
+- On Linux, an unlocked Secret Service/libsecret backend is required. If Electron selects `basic_text` or secure storage
+  is unavailable, pairing fails closed instead of saving a plaintext token.
+- **Revoked or expired** means the instance rejected the saved token; pair again. **Offline** preserves the profile and
+  can be retried after connectivity returns. An incompatible instance must be upgraded before connection.
+- A ProPR Connect tunnel endpoint or public identity change is a new trust generation. Review the new origin and pair
+  again; old REST cookies, bearer state, Socket.IO state, and renderer storage are not reused.
+- Quit through the application/window close path and wait for exit before uninstalling. Coordinated shutdown stops new
+  IPC work, drains admitted pairing/setup/deep-link work, closes sockets, and releases the single-instance lock.
+
 ## Commands
 
 Run these from the repository root:
@@ -41,9 +81,10 @@ scope rotation, and same-ID origin editing. It also checks the real welcome-card
 omission, both-origin storage cleanup, stale-scope fencing, renderer/main secret custody, uncaught exceptions, and a
 clean exit. The child receives only fixed smoke triggers, private profile/temp paths, and strictly validated platform
 launch inputs; it never broadly inherits the parent CI environment or `PATH`. `desktop:smoke:inspect` performs
-executable and fuse inspection without launching a window. Release CI launches both Linux architectures under Xvfb,
-inspects macOS and Windows packages on their native runners, validates DMG/ZIP/DEB/RPM/MSI packages, and validates
-configured OS signatures.
+executable and fuse inspection without launching a window. Release CI launches both Linux architectures under Xvfb and
+inspects both macOS architectures on native runners, validating DEB/RPM/ZIP/DMG packages and configured macOS signatures.
+Separate non-blocking compatibility jobs retain Windows source and native-runtime checks without adding Windows artifacts
+to the first-release profile.
 
 ## Packaged visual and accessibility acceptance
 
@@ -63,11 +104,14 @@ CDP/renderer viewports, independently measured geometry, DPR, and physical PNG d
 fails for any serious or critical axe finding or missing keyboard order, visible focus, dialog trap/restore,
 accessible name, or live announcement proof. Finalization rejects missing, duplicate, unexpected, incorrectly sized,
 or secret-bearing output. Sentinel coverage includes renderer DOM, process output, URLs, local/session storage,
-persisted profile/config data, screenshots and metadata, and every decompressed Playwright trace entry.
+persisted profile/config data, screenshots and metadata, and every decompressed Playwright trace entry. Browser-generated
+401 diagnostics from the intentional revoked-token request are classified only when they match the exact revoked fixture
+origin and current-user request. Every other renderer console error or page error fails acceptance; the published report
+retains only bounded category counts while the complete raw surface remains subject to secret scanning.
 
-The existing six-target package matrix is unchanged. Linux x64 produces the visual/accessibility runtime evidence.
-Linux arm64, macOS x64/arm64, and Windows x64/arm64 retain native package inspection and platform runtime smoke
-coverage; their acceptance classification is structural/runtime-only.
+Linux x64 produces the canonical visual/accessibility runtime evidence. Linux arm64 and macOS x64/arm64 retain native
+package inspection and platform runtime smoke coverage; their acceptance classification is structural/runtime-only.
+Supplementary non-blocking Windows source/runtime validation is isolated from `macos-linux-v1` and is not release evidence.
 
 Darwin packaged Connect acceptance first inspects the normal unsigned package, then generates a one-run self-signed
 CA:false code-signing leaf in an isolated default keychain and signs only that smoke artifact. The signature uses an
@@ -76,10 +120,9 @@ reprobe process. Chromium creates and reopens its real Safe Storage key in the s
 does not pre-seed or widen access to that item. A signal-aware exit trap restores the runner's original keychain list
 and default, deletes the disposable keychain, and removes all temporary signing material.
 
-The first-release Windows MVP packages only the normal desktop application. Native self-update installation authority
-is deferred to issue #2000: no broker, bootstrap, launcher, service, or authority custom action is built, copied into
-`resources`, or installed by the MSI. Both Windows architectures remain optional validation targets while Windows
-publication is deferred, and package/MSI inspection fails if any deferred authority resource appears.
+Windows source and native validation continue as non-blocking compatibility work. Native self-update installation authority
+is deferred: no broker, bootstrap, launcher, service, or authority custom action is built into the ordinary application.
+No Windows package is staged, checksummed, advertised, or published by the first-release profile.
 
 `desktop:audit` deliberately applies separate policies to the two dependency surfaces: low-or-higher advisories fail
 the production-runtime audit, while high and critical advisories fail the desktop development/build-tool audit. Release
@@ -88,8 +131,9 @@ CI runs both checks directly from the committed lockfile before installing or ex
 ## Security boundary
 
 The renderer has no Node.js integration and receives only the typed `window.proprDesktop` bridge. It exposes metadata,
-validated profiles, status-only pairing/probe/invalidation operations, lifecycle placeholders, and validated deep-link
-events. Pairing, browser approval, credential persistence, authenticated probes, and revocation run in Electron main.
+validated profiles, status-only pairing/probe/invalidation operations, Linux setup status/actions, and validated deep-link
+events. Pairing, browser approval, credential persistence, authenticated probes, revocation, and every mutating Linux
+setup action run in Electron main. macOS never constructs a mutating setup host.
 The bridge never exposes a credential value, shell, command runner, arbitrary IPC call, or filesystem path/API.
 
 Profile metadata is stored in an app-owned, permission-restricted JSON file. Credential values are encrypted with
@@ -109,8 +153,8 @@ Switching named profiles clears renderer and instance-origin state. Removing or 
 attempts current-token revocation at the old bound origin, then removes the credential.
 
 `propr://connect` and `propr://open` are the only accepted deep-link actions. A single-instance lock routes later
-activations to the existing window. Local lifecycle methods intentionally return `not-implemented`; this scaffold does
-not download, install, start, or execute ProPR runtime components.
+activations to the existing window. The Linux setup controller binds the shared setup engine to an app-owned root and
+capability-scoped file/secret selections; renderer code cannot choose arbitrary filesystem or command targets.
 
 ## Desktop distributables and releases
 

@@ -181,12 +181,17 @@ describe('packaged acceptance authorization', () => {
     assert.notEqual(errorSummaryStart, -1);
     assert.notEqual(errorSummaryEnd, -1);
     const errorSummary = acceptanceRunner.slice(errorSummaryStart, errorSummaryEnd);
-    for (const category of ['currentUserSync', 'apiLoad', 'socketContext', 'reactRuntime', 'other']) {
+    for (const category of [
+      'expectedRevokedAuthorizationResponse', 'currentUserSync', 'apiLoad', 'socketContext',
+      'reactRuntime', 'networkResource', 'other', 'pageError',
+    ]) {
       assert.ok(errorSummary.includes(category), category);
     }
-    assert.match(errorSummary, /consoleErrorCategoryCounts: rendererConsoleErrorCategoryCounts\(rendererConsoleErrors\)/);
+    assert.match(errorSummary, /consoleErrorCategoryCounts: rendererConsoleErrorCategoryCounts\(rendererConsoleErrors, rendererPageErrors\)/);
     assert.match(errorSummary, /counts\[category\] = Math\.min\(counts\[category\] \+ 1, 9\)/);
     assert.doesNotMatch(errorSummary, /arguments|location|stack|url/);
+    assert.match(acceptanceRunner, /if \(rendererErrors\.unexpectedErrors !== 0\)/);
+    assert.match(acceptanceRunner, /unexpectedErrors: rendererErrors\.unexpectedErrors/);
   });
 
   it('keeps the shared clock subject to exact pairing expiry validation', () => {

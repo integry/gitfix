@@ -73,6 +73,18 @@ propr setup   # guided one-pass: verify host, authorize agents, connect GitHub, 
 `propr setup` is re-runnable and wraps the individual steps (`propr init stack`, `propr check`, `propr start`), which remain available for scripting.
 During interactive setup, ProPR can also install its bundled operator Agent Skill into detected tools after showing the exact destinations. Manage it separately with `propr skill install|status|remove`; non-interactive setup does not write agent homes unless `--install-skill <targets>` is explicit.
 
+### Desktop release candidate
+
+ProPR Desktop packages the same Web UI for `linux-x64`, `linux-arm64`, `darwin-x64`, and `darwin-arm64`. On Linux,
+first launch can guide a new, isolated local stack through Docker checks, installation, authentication, startup, and a
+normal saved-profile connection. On macOS the app makes no local-stack changes; connect it to an existing HTTPS ProPR
+instance or a loopback instance instead. Windows packaging is deferred and is not part of the first public release.
+
+Desktop credentials are held by the operating-system credential facility, never by renderer storage. Manual endpoints,
+ProPR Connect discovery candidates, and `propr://connect` links require confirmation; a changed tunnel identity requires
+a fresh browser pairing. See the [desktop install, connection, security, and troubleshooting guide](apps/desktop/README.md)
+for unsigned internal-RC installation and the protected macOS release requirements.
+
 Delegating setup to an AI coding agent? Use the copyable [safe agent installation prompt](https://docs.propr.dev/docs/tutorials/setup#give-this-to-your-coding-agent) so GitHub authorization, App scope, Connect/tunnel choices, provider logins, and existing stack data stay under human control.
 
 Then open the Web UI at **http://localhost:5173** and add a repository and an agent (`propr repo add`, `propr agent add`, or via the UI).
@@ -128,6 +140,7 @@ State labels are derived from the trigger label, so an issue labeled `AI` moves 
 | Secure VPS deployment | https://docs.propr.dev/docs/tutorials/setup-vps |
 | Daily usage | https://docs.propr.dev/docs/tutorials/usage |
 | Planner Studio | https://docs.propr.dev/docs/tutorials/planner-studio |
+| Desktop application | [apps/desktop/README.md](apps/desktop/README.md) |
 | CLI reference | https://docs.propr.dev/docs/features/propr-cli |
 | Agents & models | https://docs.propr.dev/docs/features/agents-and-models |
 | Web UI guide | https://docs.propr.dev/docs/features/web-ui |

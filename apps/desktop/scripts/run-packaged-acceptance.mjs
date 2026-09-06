@@ -1074,7 +1074,22 @@ const settlePendingRendererConsoleCaptures = async () => {
 
 const boundedAcceptanceDiagnosticCount = records => Math.min(records.length, 9);
 
+const isExpectedRevokedAuthorizationResponse = record => {
+  if (record.journey === 'revoked'
+    && /^Failed to load resource: the server responded with a status of 401(?: \(Unauthorized\))?$/.test(record.text)) {
+    try {
+      const url = new URL(record.location?.url);
+      if (url.origin === FIXED_ACCEPTANCE_ORIGINS.revoked
+        && classifyCurrentUserRequestShape('GET', `${url.pathname}${url.search}`, DESKTOP_RENDERER_ORIGIN)?.source === 'renderer') {
+        return true;
+      }
+    } catch { return false; }
+  }
+  return false;
+};
+
 const rendererConsoleErrorCategory = record => {
+  if (isExpectedRevokedAuthorizationResponse(record)) return 'expectedRevokedAuthorizationResponse';
   if (record.text.startsWith('Failed to refresh instance authorization:')
     || record.text.startsWith('Failed to synchronize instance authorization:')) return 'currentUserSync';
   if (record.text.startsWith('[SocketContext]')) return 'socketContext';
@@ -1088,11 +1103,21 @@ const rendererConsoleErrorCategory = record => {
     || record.text.startsWith('Error fetching ')
     || record.text.startsWith('Silent refresh failed:')
     || record.text.startsWith('[useGenerationPolling] Poll error:')) return 'apiLoad';
+  if (record.text.startsWith('Failed to load resource:')) return 'networkResource';
   return 'other';
 };
 
-const rendererConsoleErrorCategoryCounts = records => {
-  const counts = { currentUserSync: 0, apiLoad: 0, socketContext: 0, reactRuntime: 0, other: 0 };
+const rendererConsoleErrorCategoryCounts = (records, rendererPageErrors = []) => {
+  const counts = {
+    expectedRevokedAuthorizationResponse: 0,
+    currentUserSync: 0,
+    apiLoad: 0,
+    socketContext: 0,
+    reactRuntime: 0,
+    networkResource: 0,
+    other: 0,
+    pageError: boundedAcceptanceDiagnosticCount(rendererPageErrors),
+  };
   for (const record of records) {
     const category = rendererConsoleErrorCategory(record);
     counts[category] = Math.min(counts[category] + 1, 9);
@@ -1109,7 +1134,21 @@ const rendererErrorCountSummary = journey => {
     console: boundedAcceptanceDiagnosticCount(rendererConsole),
     consoleErrors: boundedAcceptanceDiagnosticCount(rendererConsoleErrors),
     pageErrors: boundedAcceptanceDiagnosticCount(rendererPageErrors),
-    consoleErrorCategoryCounts: rendererConsoleErrorCategoryCounts(rendererConsoleErrors),
+    consoleErrorCategoryCounts: rendererConsoleErrorCategoryCounts(rendererConsoleErrors, rendererPageErrors),
+  };
+};
+
+const rendererErrorAcceptanceSummary = () => {
+  const rendererConsoleErrors = consoleRecords.filter(record => record.type === 'error');
+  const errorCategoryCounts = rendererConsoleErrorCategoryCounts(rendererConsoleErrors, pageErrorRecords);
+  const errors = rendererConsoleErrors.length + pageErrorRecords.length;
+  const expectedErrors = errorCategoryCounts.expectedRevokedAuthorizationResponse;
+  return {
+    records: consoleRecords.length + pageErrorRecords.length,
+    errors,
+    expectedErrors,
+    unexpectedErrors: errors - expectedErrors,
+    errorCategoryCounts,
   };
 };
 
@@ -1556,6 +1595,13 @@ try {
   }
   if (boundaryJourneys.size !== ACCEPTANCE_JOURNEYS.length
     || ACCEPTANCE_JOURNEYS.some(journey => !boundaryJourneys.has(journey))) throw new Error('Packaged main/preload/renderer boundary was not observed for every journey');
+  const rendererErrors = rendererErrorAcceptanceSummary();
+  if (rendererErrors.unexpectedErrors !== 0) {
+    throw new Error(`Packaged acceptance observed unexpected renderer errors: ${JSON.stringify({
+      unexpectedErrors: rendererErrors.unexpectedErrors,
+      errorCategoryCounts: rendererErrors.errorCategoryCounts,
+    })}`);
+  }
   const serious = axeFindings.filter(finding => finding.impact === 'serious').length;
   const critical = axeFindings.filter(finding => finding.impact === 'critical').length;
   const accessibility = {
@@ -1576,13 +1622,13 @@ try {
 
   const services = observedServiceSummary();
   const sanitizedSummary = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     generatedAt: FIXED_TIME,
     status: 'passed',
     journeys: ACCEPTANCE_JOURNEYS.length,
     screenshots: screenshotMetadata.length,
     boundary: { packagedExecutable: true, rendererOrigin: 'propr-app://renderer', preloadBridge: true, journeys: ACCEPTANCE_JOURNEYS },
-    console: { records: consoleRecords.length + pageErrorRecords.length, errors: consoleRecords.filter(record => record.type === 'error').length + pageErrorRecords.length },
+    console: rendererErrors,
     services,
     redaction: 'Full raw surfaces were scanned; published logs retain only source, level, byte count, and digest.',
   };
