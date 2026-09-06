@@ -28,6 +28,17 @@ export const DEFAULT_PROPR_ROUTING_URL = 'wss://webhook.propr.dev';
 export const DEFAULT_PROPR_GH_RELAY_URL = 'https://webhook.propr.dev/v1';
 
 /**
+ * Default endpoint contract for a ProPR API published on the local machine.
+ * Keep consumers on these derived values so desktop connection prompts, local
+ * setup, and the launcher cannot silently choose different ports.
+ */
+export const DEFAULT_LOCAL_API_PORT = '4000';
+export const DEFAULT_LOCAL_API_BINDING = `127.0.0.1:${DEFAULT_LOCAL_API_PORT}`;
+export const DEFAULT_LOCAL_API_BASE_URL = `http://localhost:${DEFAULT_LOCAL_API_PORT}`;
+export const DEFAULT_LOCAL_API_OAUTH_CALLBACK_URL =
+  `${DEFAULT_LOCAL_API_BASE_URL}/api/auth/github/callback`;
+
+/**
  * Origin of the hosted Propr UI (https://app.propr.dev). This is where the
  * managed control plane is served from; a local stack exposes its own UI on a
  * tunnel under a {@link PROPR_UI_PROXY_LABEL_PREFIX} host on

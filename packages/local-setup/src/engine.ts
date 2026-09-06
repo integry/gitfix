@@ -36,6 +36,7 @@ import { isAbsolute, join, normalize, resolve } from "node:path";
 import {
   resolveGithubEventIntakeMode,
   validateIntakeModePrerequisites,
+  DEFAULT_LOCAL_API_OAUTH_CALLBACK_URL,
   DEFAULT_PROPR_GH_RELAY_URL,
   type GithubAuthMode,
   type GithubAuthModeResult,
@@ -717,7 +718,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
         normalizeServiceUrl(existingEnv.PROPR_CONNECT_URL || "https://connect.propr.dev") ===
           "https://connect.propr.dev";
       const callbackUrl = existingEnv.GH_OAUTH_CALLBACK_URL ||
-        "http://localhost:4000/api/auth/github/callback";
+        DEFAULT_LOCAL_API_OAUTH_CALLBACK_URL;
       const automaticConnectApplies =
         managedTunnelEnabled ||
         (usesHostedConnect && isSupportedLoopbackCallback(callbackUrl));
