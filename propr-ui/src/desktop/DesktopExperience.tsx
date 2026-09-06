@@ -11,11 +11,11 @@ import { managedRecoveryMessage, managedRediscoveryUnavailableMessage, safeConne
 import { mergeProfiles, recoverableError, settleAuthenticationCancellation, type ExperienceState } from './desktopExperienceState';
 import { DESKTOP_ACCESS_INVALID_EVENT, type DesktopAccessInvalidEventDetail, type DesktopAdapters, type DesktopConnectionResult, type DesktopProfile } from './types';
 import { useDesktopDeepLinks } from './useDesktopDeepLinks';
+import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
 import {
-  PackagedAcceptanceLocalSetup,
   packagedAcceptanceSetupSurface,
   type PackagedAcceptanceSetupSurface,
-} from './PackagedAcceptanceLocalSetup';
+} from './packagedAcceptanceLocalSetupSurface';
 import './desktop.css';
 
 interface DesktopExperienceProps {

@@ -65,7 +65,11 @@ export const reportPackagedAcceptanceRendererLifecycle = (
   if (!acceptanceEvidenceEnabled() || reportCount >= REPORT_LIMIT) return;
   reportCount += 1;
   evidence = { ...evidence, ...update, schemaVersion: 2, phase };
-  console.info(PACKAGED_ACCEPTANCE_RENDERER_LIFECYCLE_PREFIX, evidence);
+  // CDP console argument handles are resolved asynchronously by the acceptance
+  // collector. Emit one immutable value so the collector observes the exact
+  // snapshot in renderer emission order, even if the page closes or the next
+  // lifecycle transition occurs before its general console capture settles.
+  console.info(`${PACKAGED_ACCEPTANCE_RENDERER_LIFECYCLE_PREFIX} ${JSON.stringify(evidence)}`);
 };
 
 export const reportPackagedAcceptanceSocketConstructionInvocation = (): void => {
@@ -85,4 +89,3 @@ export const reportPackagedAcceptanceSocketConnectInvocation = (): void => {
     connectInvocations: boundedCount(evidence.connectInvocations),
   });
 };
-

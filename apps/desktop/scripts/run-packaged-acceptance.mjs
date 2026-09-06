@@ -275,9 +275,18 @@ const captureNetworkPermissionEvidence = (line, journey) => {
   }
 };
 
-const captureRendererLifecycleEvidence = (argumentsValue, journey) => {
-  if (argumentsValue[0] !== RENDERER_LIFECYCLE_PREFIX) return;
-  const evidence = argumentsValue[1];
+const captureRendererLifecycleEvidence = (text, journey) => {
+  if (!text.startsWith(RENDERER_LIFECYCLE_PREFIX)) return;
+  const serializedPrefix = `${RENDERER_LIFECYCLE_PREFIX} `;
+  let evidence;
+  try {
+    if (!text.startsWith(serializedPrefix)) throw new Error('missing lifecycle evidence');
+    evidence = JSON.parse(text.slice(serializedPrefix.length));
+  } catch {
+    rendererLifecycleEvidenceInvalid = true;
+    rendererLifecycleInvalidCategories.add('schema-shape');
+    return;
+  }
   const exactKeys = evidence && typeof evidence === 'object' && !Array.isArray(evidence)
     && Object.keys(evidence).sort().join('\n') === RENDERER_LIFECYCLE_KEYS.join('\n');
   const booleans = exactKeys && [
@@ -692,6 +701,10 @@ const launchApplication = async (scenario, initialDeepLink) => {
     });
     page.on('console', message => {
       const journey = activeJourney;
+      // Lifecycle evidence is a single serialized renderer snapshot. Capture it
+      // synchronously so its strict transition order does not depend on CDP
+      // JSHandle resolution or page lifetime.
+      captureRendererLifecycleEvidence(message.text(), journey);
       const pending = Promise.all(message.args().map(async argument => {
         try { return await argument.jsonValue(); } catch { return { unserializable: argument.toString() }; }
       })).then(argumentsValue => {
@@ -703,7 +716,6 @@ const launchApplication = async (scenario, initialDeepLink) => {
           location: message.location(),
         };
         consoleRecords.push(record);
-        captureRendererLifecycleEvidence(record.arguments, journey);
         captureRendererCurrentUserEvidence(record.arguments, journey);
       });
       pendingConsoleRecords.push(pending);

@@ -39,9 +39,11 @@ describe('packaged acceptance renderer lifecycle evidence', () => {
       reportPackagedAcceptanceSocketConstructionInvocation();
     }
 
-    const [prefix, evidence] = info.mock.calls.at(-1)!;
+    const [message] = info.mock.calls.at(-1)!;
     expect(info).toHaveBeenCalledTimes(12);
-    expect(prefix).toBe(PACKAGED_ACCEPTANCE_RENDERER_LIFECYCLE_PREFIX);
+    expect(typeof message).toBe('string');
+    expect(message.startsWith(`${PACKAGED_ACCEPTANCE_RENDERER_LIFECYCLE_PREFIX} `)).toBe(true);
+    const evidence = JSON.parse(message.slice(PACKAGED_ACCEPTANCE_RENDERER_LIFECYCLE_PREFIX.length + 1));
     expect(Object.keys(evidence).sort()).toEqual([
       'connectInvocations', 'connectionScope', 'desktopRuntime', 'disabledByCurrentUserAbsent',
       'disabledByCurrentUserLoading', 'disabledByDemoMode', 'disabledByDemoModeLoading', 'phase',
@@ -59,7 +61,7 @@ describe('packaged acceptance renderer lifecycle evidence', () => {
       disabledByCurrentUserLoading: false,
       disabledByCurrentUserAbsent: false,
     });
-    expect(JSON.stringify(evidence)).not.toMatch(/scope-|https?:|profile-|bearer|authorization|cookie|path|error/i);
+    expect(message).not.toMatch(/scope-|https?:|profile-|bearer|authorization|cookie|path|error/i);
   });
 
   it('emits bounded current-user stages without identity or transport values', () => {
@@ -93,4 +95,3 @@ describe('packaged acceptance renderer lifecycle evidence', () => {
     expect(JSON.stringify(evidence)).not.toMatch(/https?:|profile-|bearer|authorization|cookie|user data|path/i);
   });
 });
-

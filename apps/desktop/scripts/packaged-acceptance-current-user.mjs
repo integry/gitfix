@@ -20,6 +20,12 @@ export const scopedCurrentUserRequestGeneration = (method, url) => {
   return Number.isSafeInteger(generation) ? generation : null;
 };
 
+export const isExpectedScopedCurrentUserRequest = (method, url, expectedGeneration) => (
+  Number.isSafeInteger(expectedGeneration)
+  && expectedGeneration >= 0
+  && scopedCurrentUserRequestGeneration(method, url) === expectedGeneration
+);
+
 /** Classify only the two authenticated current-user request shapes used by desktop. */
 export const classifyCurrentUserRequestShape = (method, url, origin) => {
   if (method !== 'GET' || typeof url !== 'string') return null;
@@ -181,4 +187,3 @@ export const currentUserValidationFailureCategory = ({
     : 'current-user-active-scope-accepted-duplicate';
   return 'none';
 };
-

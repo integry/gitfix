@@ -4,6 +4,7 @@ import {
   classifyCurrentUserRequestShape,
   currentUserValidationPhaseSummary,
   currentUserValidationFailureCategory,
+  isExpectedScopedCurrentUserRequest,
   networkPermissionDecisionSummary,
   scopedCurrentUserRequestGeneration,
 } from './packaged-acceptance-current-user.mjs';
@@ -77,6 +78,20 @@ describe('packaged scoped current-user request URL', () => {
       ['GET', '/api/smoke/rest?proprDesktopScopeGeneration=1'],
     ]) {
       assert.equal(scopedCurrentUserRequestGeneration(method, url), null, `${method} ${url}`);
+    }
+  });
+
+  it('matches only the canonical bounded generation expected by an ordinary packaged launch', () => {
+    assert.equal(isExpectedScopedCurrentUserRequest(
+      'GET', '/api/auth/user?proprDesktopScopeGeneration=1', 1,
+    ), true);
+    for (const [url, expectedGeneration] of [
+      ['/api/auth/user?proprDesktopScopeGeneration=0', 1],
+      ['/api/auth/user?proprDesktopScopeGeneration=2', 1],
+      ['/api/auth/user?proprDesktopScopeGeneration=1&extra=1', 1],
+      ['/api/auth/user?proprDesktopScopeGeneration=1', -1],
+    ]) {
+      assert.equal(isExpectedScopedCurrentUserRequest('GET', url, expectedGeneration), false);
     }
   });
 });
@@ -282,4 +297,3 @@ describe('packaged current-user strict failure diagnostics', () => {
     assert.equal(JSON.stringify(summary).includes('must-not-appear'), false);
   });
 });
-
