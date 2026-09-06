@@ -84,6 +84,40 @@ describe('desktop terminal authentication handoff', () => {
     }
   });
 
+  it('terminates and awaits a terminal that never starts the wrapper before removing runtime state', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-auth-start-timeout-test-'));
+    const terminal = join(directory, 'terminal');
+    const authentication = join(directory, 'authentication');
+    const pidPath = join(directory, 'terminal.pid');
+    const cleanupPath = join(directory, 'terminal.cleanup');
+    try {
+      await writeExecutable(terminal, `#!/bin/sh
+printf '%s' "$$" > "${pidPath}"
+wrapper_path=$1
+on_term() {
+  sleep 0.1
+  if [ -x "$wrapper_path" ]; then
+    printf preserved > "${cleanupPath}"
+  else
+    printf removed > "${cleanupPath}"
+  fi
+  exit 0
+}
+trap on_term TERM
+while :; do sleep 1; done
+`);
+      await writeExecutable(authentication, '#!/bin/sh\nexit 0\n');
+      const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
+
+      assert.deepEqual(await launch(authentication, [], { title: 'Controlled startup timeout' }), { status: null });
+      const pid = Number(await readFile(pidPath, 'utf8'));
+      assert.equal(await readFile(cleanupPath, 'utf8'), 'preserved');
+      await waitForProcessExit(pid);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('cancels and reaps a TERM-resistant command owned by a server-capable terminal', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-cancel-test-'));
     const terminal = join(directory, 'terminal');

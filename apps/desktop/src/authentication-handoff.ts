@@ -19,6 +19,7 @@ const terminals: TerminalCandidate[] = [
 
 const START_TIMEOUT_MS = 5_000;
 const POLL_INTERVAL_MS = 25;
+const TERMINAL_STOP_GRACE_MS = 1_000;
 
 // A terminal such as xfce4-terminal can hand the command to an existing server
 // and exit before that command finishes. Keep the command lifecycle in this
@@ -151,6 +152,29 @@ const stopProcessGroup = (child: ChildProcess, signal: NodeJS.Signals): void => 
   catch { try { child.kill(signal); } catch { /* already exited */ } }
 };
 
+const waitForClose = async (closed: Promise<void>, timeout: number): Promise<boolean> => {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<boolean>(resolve => {
+    timer = setTimeout(() => resolve(false), timeout);
+  });
+  const didClose = await Promise.race([closed.then(() => true), timedOut]);
+  if (timer) clearTimeout(timer);
+  return didClose;
+};
+
+const relinquishTerminal = async (
+  child: ChildProcess,
+  closed: Promise<void>,
+  isClosed: () => boolean,
+): Promise<void> => {
+  // Signal the detached group even when the launcher itself already closed: a
+  // failed terminal may have left descendants in the group before exiting.
+  stopProcessGroup(child, 'SIGTERM');
+  if (isClosed() || await waitForClose(closed, TERMINAL_STOP_GRACE_MS)) return;
+  stopProcessGroup(child, 'SIGKILL');
+  await closed;
+};
+
 const readOwnedMarker = async (path: string): Promise<string | null> => {
   try { return await readFile(path, 'utf8'); }
   catch (error) {
@@ -187,6 +211,9 @@ const tryTerminal = async (
   let terminalChild: ChildProcess | null = null;
   let terminalClosed = false;
   let terminalStatus: number | null = null;
+  let terminalAdmitted = false;
+  let resolveTerminalClose: () => void = () => undefined;
+  const terminalClose = new Promise<void>(resolve => { resolveTerminalClose = resolve; });
   let started = false;
   let completed = false;
   let cancellationWritten = false;
@@ -206,9 +233,11 @@ const tryTerminal = async (
       child.once('close', status => {
         terminalClosed = true;
         terminalStatus = status;
+        resolveTerminalClose();
       });
     });
     if (admission === 'missing') return undefined;
+    terminalAdmitted = true;
 
     const startDeadline = Date.now() + START_TIMEOUT_MS;
     while (true) {
@@ -235,8 +264,8 @@ const tryTerminal = async (
       await sleep(POLL_INTERVAL_MS);
     }
   } finally {
-    if (signal?.aborted && !completed && terminalChild && !terminalClosed && !started) {
-      stopProcessGroup(terminalChild, 'SIGKILL');
+    if (terminalAdmitted && !completed && terminalChild && !started) {
+      await relinquishTerminal(terminalChild, terminalClose, () => terminalClosed);
     }
     await rm(runtimeDirectory, { recursive: true, force: true });
   }
