@@ -1,5 +1,5 @@
 import { normalizeApiBaseUrl, ProprClientError } from '@propr/client';
-import { evaluateProprApiCompatibility } from '@propr/shared';
+import { DEFAULT_LOCAL_API_BASE_URL, evaluateProprApiCompatibility } from '@propr/shared';
 import { createElectronDesktopAdapters } from './electronAdapters';
 import type {
   DesktopAdapters,
@@ -21,7 +21,7 @@ type DesktopFixture = 'first-run' | 'recents' | 'offline' | 'incompatible' | 'co
 const fixtureProfile: DesktopProfile = {
   id: 'fixture-local',
   name: 'This computer',
-  baseUrl: 'http://127.0.0.1:3000',
+  baseUrl: DEFAULT_LOCAL_API_BASE_URL,
   kind: 'local',
   lastConnectedAt: '2026-08-29T12:00:00.000Z',
 };

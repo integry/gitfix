@@ -1,5 +1,9 @@
 import React, { useState } from 'react';
-import { isProprLoopbackHostname, parseProprConnectEndpoint } from '@propr/shared';
+import {
+  DEFAULT_LOCAL_API_BASE_URL,
+  isProprLoopbackHostname,
+  parseProprConnectEndpoint,
+} from '@propr/shared';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -57,7 +61,7 @@ interface ProfileEditorProps {
 
 export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate = false, notice, operationError, onCancel, onSave }) => {
   const [name, setName] = useState(initial?.name || 'My ProPR');
-  const [baseUrl, setBaseUrl] = useState(initial ? initial.baseUrl : 'http://127.0.0.1:3000');
+  const [baseUrl, setBaseUrl] = useState(initial ? initial.baseUrl : DEFAULT_LOCAL_API_BASE_URL);
   const [validationError, setValidationError] = useState<string | null>(null);
   const connectEndpoint = parseProprConnectEndpoint(baseUrl);
 

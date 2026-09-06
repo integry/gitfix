@@ -27,10 +27,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Hosted UI tunnel naming. These mirror the shared TypeScript constants in
-// packages/shared/src/proprServiceUrls.ts (PROPR_UI_PROXY_SUFFIX,
-// PROPR_UI_PROXY_LABEL_PREFIX, DEFAULT_CLOUDFLARED_IMAGE,
-// DEFAULT_PROPR_UI_ORIGIN) — kept as plain literals here because this module is
-// dependency-free .mjs (Node stdlib only) and cannot import the TS package.
+// packages/shared/src/proprServiceUrls.ts (DEFAULT_LOCAL_API_PORT,
+// DEFAULT_LOCAL_API_BINDING, PROPR_UI_PROXY_SUFFIX, PROPR_UI_PROXY_LABEL_PREFIX,
+// DEFAULT_CLOUDFLARED_IMAGE, DEFAULT_PROPR_UI_ORIGIN) — kept as plain literals
+// here because this module is dependency-free .mjs (Node stdlib only) and cannot
+// import the TS package.
 // Change one, change the other;
 // test/orchestratorProprUrlsDrift.test.ts guards against the copies diverging.
 export const PROPR_UI_PROXY_SUFFIX = 'propr.dev';
@@ -41,6 +42,8 @@ export const PROPR_UI_PROXY_LABEL_PREFIX = 't-';
 // operator docs can then describe a single, pinned default.
 export const DEFAULT_CLOUDFLARED_IMAGE = 'cloudflare/cloudflared:2024.12.2';
 export const DEFAULT_PROPR_UI_ORIGIN = 'https://app.propr.dev';
+export const DEFAULT_LOCAL_API_PORT = '4000';
+export const DEFAULT_LOCAL_API_BINDING = `127.0.0.1:${DEFAULT_LOCAL_API_PORT}`;
 
 // Whether an instance id is a valid single DNS label for the proxy hostname
 // (t-<id>.propr.dev): 1–61 chars (leaving room for `t-`), ASCII
@@ -285,7 +288,7 @@ export function resolveConfig(env = process.env, overrides = {}) {
     // Published service ports are host-loopback-only unless an operator chooses
     // an explicit binding. Preserve every explicit form verbatim: a bare port is
     // an intentional all-interface opt-in, while host:port supports custom binds.
-    const apiPort = overrides.apiPort ?? get('API_PORT') ?? '127.0.0.1:4000';
+    const apiPort = overrides.apiPort ?? get('API_PORT') ?? DEFAULT_LOCAL_API_BINDING;
     const uiPort = overrides.uiPort ?? get('UI_PORT') ?? '127.0.0.1:5173';
     const docsPort = overrides.docsPort ?? get('DOCS_PORT') ?? '8080';
     const redisExternalPort = overrides.redisExternalPort ?? get('REDIS_EXTERNAL_PORT') ?? '';
