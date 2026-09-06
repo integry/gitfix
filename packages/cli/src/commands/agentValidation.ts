@@ -470,6 +470,18 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item
   return results;
 }
 
+/** Preserve Promise.all's first rejection, but do not return until every started operation settles. */
+async function settleAllPreservingFailure<T extends readonly unknown[] | []>(
+  values: T
+): Promise<{ -readonly [P in keyof T]: Awaited<T[P]> }> {
+  try {
+    return await Promise.all(values);
+  } catch (error) {
+    await Promise.allSettled(values);
+    throw error;
+  }
+}
+
 export interface AgentValidationRow {
   type: string;
   hostVersion?: string;
@@ -494,7 +506,7 @@ async function versionInfo(
         .then((r) => parseVersion(`${r.stdout}\n${r.stderr}`))
       : undefined)
     : Promise.resolve(undefined);
-  const [host, img] = await Promise.all([hostPromise, imagePromise]);
+  const [host, img] = await settleAllPreservingFailure([hostPromise, imagePromise]);
   const drift = host && img && host !== img ? (compareVersions(img, host) < 0 ? "older" : "newer") : undefined;
   return { host, image: img, drift };
 }
@@ -628,7 +640,7 @@ export async function validateAgents(
           options.onUpdate?.(d.type, { field: "image", cell: i });
           return i;
         });
-        const [version, host, imageResult] = await Promise.all([versionP, hostP, imageP]);
+        const [version, host, imageResult] = await settleAllPreservingFailure([versionP, hostP, imageP]);
         return { type: d.type, hostVersion: version.host, imageVersion: version.image, drift: version.drift, host, image: imageResult };
       });
   } finally {
