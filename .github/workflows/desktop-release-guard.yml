@@ -336,7 +336,7 @@ jobs:
           npm run desktop:acceptance:verify
 
       - name: Publish mandatory packaged desktop acceptance evidence
-        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        if: always() && matrix.platform == 'linux' && matrix.arch == 'x64'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: propr-desktop-acceptance-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
@@ -693,7 +693,7 @@ jobs:
           npm run desktop:acceptance:verify
 
       - name: Publish mandatory signed packaged desktop acceptance evidence
-        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        if: always() && matrix.platform == 'linux' && matrix.arch == 'x64'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: propr-desktop-acceptance-signed-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}

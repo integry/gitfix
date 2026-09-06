@@ -187,7 +187,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
         <div className="flex items-center justify-between px-4 py-4 sm:py-6 h-12 sm:h-16">
-          <Link to="/" className="flex items-center">
+          <Link to="/" className="flex items-center" aria-label="ProPR dashboard">
             <img src={publicAssetUrl('/media/logo-and-name.png')} alt="ProPR" className="h-8 w-auto" />
           </Link>
           <button

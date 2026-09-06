@@ -110,7 +110,7 @@
 .desktop-choice-button strong,
 .desktop-choice-button small { display: block; }
 .desktop-choice-button strong { font-size: .9rem; }
-.desktop-choice-button small { margin-top: .18rem; color: #728080; font-size: .75rem; }
+.desktop-choice-button small { margin-top: .18rem; color: #657474; font-size: .75rem; }
 .desktop-choice-primary { border-color: #a8d2cf; background: #f7fbfa; }
 
 .desktop-recents { margin-top: 1.65rem; }
@@ -122,7 +122,7 @@
 .desktop-profile-connect strong,
 .desktop-profile-connect small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-profile-connect strong { color: #273939; font-size: .84rem; }
-.desktop-profile-connect small { margin-top: .12rem; color: #778686; font-size: .7rem; }
+.desktop-profile-connect small { margin-top: .12rem; color: #657474; font-size: .7rem; }
 .desktop-profile-icon { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: .5rem; background: #f0f5f5; color: #377b78; }
 .desktop-profile-icon svg,
 .desktop-profile-chevron { width: 1rem; height: 1rem; }

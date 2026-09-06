@@ -157,6 +157,7 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ inputRef: externalInputRef 
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={handleFocus}
+          aria-label="Search"
           placeholder="Search..."
           className="w-full pl-9 sm:pl-12 pr-8 sm:pr-10 py-1.5 sm:py-2 bg-gray-50 border border-slate-300 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 focus:bg-white transition-colors"
         />
