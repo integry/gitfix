@@ -81,10 +81,22 @@ describe('packaged smoke evidence', () => {
       const relaunch = createPackagedSmokeEvidenceSink(directory, 'relaunch');
       assert.ok(first && relaunch);
       first.write('desktop.native.profile_fresh');
+      first.write('desktop.native.cold_confirmation_not_visible');
+      first.write('desktop.renderer.gone');
+      first.write('desktop.native.failure:/private/profile?credential=raw');
       relaunch.write('desktop.native.profile_preserved');
       first.close();
       relaunch.close();
       assert.deepEqual(readdirSync(directory).sort(), Object.values(NATIVE_SMOKE_EVIDENCE_FILES).sort());
+      const firstRecords = readFileSync(
+        join(directory, NATIVE_SMOKE_EVIDENCE_FILES.first),
+        'utf8',
+      ).trimEnd().split('\n').map(line => JSON.parse(line));
+      assert.deepEqual(firstRecords, [
+        { event: 'desktop.native.profile_fresh' },
+        { event: 'desktop.native.cold_confirmation_not_visible' },
+        { event: 'desktop.renderer.gone' },
+      ]);
     });
   });
 });

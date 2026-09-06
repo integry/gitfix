@@ -214,6 +214,14 @@ export const FIRST_EVIDENCE_MILESTONES = Object.freeze([
   'RENDERER',
 ]);
 
+export const FIRST_EVIDENCE_FAILURE_CATEGORIES = Object.freeze([
+  'START_FAILED',
+  'UNCAUGHT_EXCEPTION',
+  'COLD_CONFIRMATION_INSPECTION_FAILED',
+  'COLD_CONFIRMATION_NOT_VISIBLE',
+  'RENDERER_GONE',
+]);
+
 export class NativeLifecycleEvidenceWaitFailure extends Error {
   constructor(resultClass) {
     if (!NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(resultClass)) {
@@ -234,11 +242,17 @@ export class NativeLifecycleOperationFailure extends Error {
     }
     if (evidenceClassification
       && (!FIRST_EVIDENCE_MILESTONES.includes(evidenceClassification.milestone)
-        || !NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(evidenceClassification.resultClass))) {
+        || !NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(evidenceClassification.resultClass)
+        || (evidenceClassification.failureCategory !== undefined
+          && !FIRST_EVIDENCE_FAILURE_CATEGORIES.includes(evidenceClassification.failureCategory)))) {
       throw new Error('Native lifecycle evidence failure classification is invalid');
     }
     const classification = evidenceClassification
-      ? ` [milestone:${evidenceClassification.milestone}] [result:${evidenceClassification.resultClass}]`
+      ? ` [milestone:${evidenceClassification.milestone}] [result:${evidenceClassification.resultClass}]${
+        evidenceClassification.failureCategory
+          ? ` [category:${evidenceClassification.failureCategory}]`
+          : ''
+      }`
       : '';
     super(`Native lifecycle operation failed [stage:${stage}]${classification}`);
     this.name = 'NativeLifecycleOperationFailure';
@@ -246,6 +260,9 @@ export class NativeLifecycleOperationFailure extends Error {
     if (evidenceClassification) {
       this.milestone = evidenceClassification.milestone;
       this.resultClass = evidenceClassification.resultClass;
+      if (evidenceClassification.failureCategory) {
+        this.failureCategory = evidenceClassification.failureCategory;
+      }
     }
     Object.defineProperty(this, 'operationError', { value: operationError, enumerable: false });
   }
@@ -259,6 +276,7 @@ export class NativeLifecycleFailure extends AggregateError {
           ` [stage:${primaryError.stage}]`,
           ...(primaryError.milestone ? [` [milestone:${primaryError.milestone}]`] : []),
           ...(primaryError.resultClass ? [` [result:${primaryError.resultClass}]`] : []),
+          ...(primaryError.failureCategory ? [` [category:${primaryError.failureCategory}]`] : []),
         ].join('')
       : '';
     const message = primaryError
@@ -680,10 +698,23 @@ export class DmgMountAuthority {
   }
 
   async attach(artifact) {
-    await this.runCommand('/usr/bin/hdiutil', [
-      'attach', '-readonly', '-nobrowse', '-mountpoint', this.mountRoot, artifact,
-    ]);
+    // hdiutil can mount successfully before returning a failure or being killed.
+    // Hold tentative authority until an exact post-failure query proves absence.
     this.mounted = true;
+    try {
+      await this.runCommand('/usr/bin/hdiutil', [
+        'attach', '-readonly', '-nobrowse', '-mountpoint', this.mountRoot, artifact,
+      ]);
+    } catch (error) {
+      try {
+        const mounts = await this.runCommand('/usr/bin/hdiutil', ['info'], { timeout: 30_000 });
+        if (!mountOutputContains(mounts.stdout, this.mountRoot)) this.mounted = false;
+      } catch {
+        // A failed query cannot release tentative mount authority. The caller's
+        // cleanup pass will retry detach plus the exact absence postcondition.
+      }
+      throw error;
+    }
   }
 
   async detach() {
@@ -907,8 +938,10 @@ export class LaunchServicesAuthority {
   }
 
   async register() {
-    await this.runCommand(LAUNCH_SERVICES, ['-f', this.applicationRoot], { env: this.environment, timeout: 30_000 });
+    // lsregister can update its database before returning a failure or timeout.
+    // Keep tentative authority so every exit path unregisters and proves absence.
     this.registered = true;
+    await this.runCommand(LAUNCH_SERVICES, ['-f', this.applicationRoot], { env: this.environment, timeout: 30_000 });
   }
 
   async dispatch(link) {
@@ -1228,6 +1261,7 @@ export const classifyFirstEvidenceFailure = async (path, resultClass) => {
     throw new Error('Native lifecycle evidence result class is invalid');
   }
   let milestone = 'NO_EVIDENCE';
+  let failureCategory;
   try {
     const events = new Set(await readFixedEvidenceEvents(path));
     if (events.has('desktop.smoke.authorized')) milestone = 'AUTHORIZED';
@@ -1238,6 +1272,15 @@ export const classifyFirstEvidenceFailure = async (path, resultClass) => {
     if (events.has('desktop.native.secure_storage_probe.started')) milestone = 'SECURE_STORAGE_STARTED';
     if (events.has('desktop.native.secure_storage_probe.completed')) milestone = 'SECURE_STORAGE_COMPLETED';
     if (events.has('desktop.renderer.ready')) milestone = 'RENDERER';
+    if (events.has('desktop.app.start_failed')) failureCategory = 'START_FAILED';
+    if (events.has('desktop.main_process.uncaught_exception')) failureCategory = 'UNCAUGHT_EXCEPTION';
+    if (events.has('desktop.native.cold_confirmation_inspection_failed')) {
+      failureCategory = 'COLD_CONFIRMATION_INSPECTION_FAILED';
+    }
+    if (events.has('desktop.native.cold_confirmation_not_visible')) {
+      failureCategory = 'COLD_CONFIRMATION_NOT_VISIBLE';
+    }
+    if (events.has('desktop.renderer.gone')) failureCategory = 'RENDERER_GONE';
   } catch {
     // Only fixed classifications may cross the native-gate diagnostic boundary.
   }
@@ -1246,7 +1289,7 @@ export const classifyFirstEvidenceFailure = async (path, resultClass) => {
     : ['SECURE_STORAGE_COMPLETED', 'RENDERER'].includes(milestone)
       ? 'FIRST_RENDERER_READY'
       : 'FIRST_INITIAL_EVIDENCE';
-  return { milestone, resultClass, stage };
+  return { milestone, resultClass, stage, ...(failureCategory ? { failureCategory } : {}) };
 };
 
 const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {

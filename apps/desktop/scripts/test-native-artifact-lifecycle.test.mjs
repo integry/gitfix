@@ -236,6 +236,35 @@ describe('native staged artifact lifecycle authority', () => {
     });
   }
 
+  test('detaches and proves absence when attach fails after mounting the exact DMG root', async () => {
+    const calls = [];
+    let infoCalls = 0;
+    const runCommand = async (file, args) => {
+      calls.push([file, ...args]);
+      if (args[0] === 'attach') throw new Error('injected partial attach failure');
+      if (args[0] === 'info') {
+        infoCalls += 1;
+        return {
+          stdout: Buffer.from(infoCalls === 1 ? '/dev/disk9 /private/mount\n' : ''),
+          stderr: Buffer.alloc(0),
+        };
+      }
+      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    };
+    const authority = new DmgMountAuthority('/private/mount', { runCommand });
+
+    await assert.rejects(extractDmg({
+      artifact: '/private/artifact.dmg',
+      installRoot: '/private/install',
+      mountAuthority: authority,
+      readDirectory: async () => { throw new Error('scan must not run'); },
+      runCommand,
+    }), /injected partial attach failure/);
+
+    assert.equal(authority.mounted, false);
+    assert.deepEqual(calls.map(call => call[1]), ['attach', 'info', 'detach', 'info']);
+  });
+
   test('retains DMG authority and fails when detach cannot prove the mount absent', async () => {
     const authority = new DmgMountAuthority('/private/mount', {
       runCommand: async (_file, args) => ({
@@ -314,6 +343,36 @@ describe('native staged artifact lifecycle authority', () => {
         });
       }
 
+      const categories = [
+        { event: 'desktop.app.start_failed', failureCategory: 'START_FAILED' },
+        { event: 'desktop.main_process.uncaught_exception', failureCategory: 'UNCAUGHT_EXCEPTION' },
+        {
+          event: 'desktop.native.cold_confirmation_inspection_failed',
+          failureCategory: 'COLD_CONFIRMATION_INSPECTION_FAILED',
+        },
+        {
+          event: 'desktop.native.cold_confirmation_not_visible',
+          failureCategory: 'COLD_CONFIRMATION_NOT_VISIBLE',
+        },
+        { event: 'desktop.renderer.gone', failureCategory: 'RENDERER_GONE' },
+      ];
+      for (const fixture of categories) {
+        await writeFile(evidence, [
+          JSON.stringify({ event: 'desktop.deeplink.cold_manual_once' }),
+          JSON.stringify({ event: fixture.event }),
+        ].join('\n'));
+        assert.deepEqual(await classifyFirstEvidenceFailure(evidence, 'FAILED_EXIT'), {
+          milestone: 'COLD_ACK',
+          resultClass: 'FAILED_EXIT',
+          stage: 'FIRST_INITIAL_EVIDENCE',
+          failureCategory: fixture.failureCategory,
+        });
+      }
+
+      await writeFile(evidence, [
+        JSON.stringify({ event: 'desktop.renderer.ready' }),
+        JSON.stringify({ event: 'desktop.renderer.gone' }),
+      ].join('\n'));
       const classification = await classifyFirstEvidenceFailure(evidence, 'FAILED_EXIT');
       const operationFailure = new NativeLifecycleOperationFailure(
         classification.stage,
@@ -327,6 +386,7 @@ describe('native staged artifact lifecycle authority', () => {
       assert.match(aggregate.message, /stage:FIRST_RENDERER_READY/);
       assert.match(aggregate.message, /milestone:RENDERER/);
       assert.match(aggregate.message, /result:FAILED_EXIT/);
+      assert.match(aggregate.message, /category:RENDERER_GONE/);
       assert.doesNotMatch(String(aggregate), /private\/profile|secret\.invalid|private cleanup output/);
       assert.doesNotMatch(JSON.stringify(aggregate), /private\/profile|secret\.invalid|private cleanup output/);
       assert.doesNotMatch(inspect(aggregate), /private\/profile|secret\.invalid|private cleanup output/);
@@ -379,6 +439,37 @@ describe('native staged artifact lifecycle authority', () => {
       args: ['-a', applicationRoot, link],
       options: { env: { FIXED: 'environment' }, timeout: 15_000 },
     });
+  });
+
+  test('unregisters and proves absence when registration fails after partial success', async () => {
+    const applicationRoot = '/private/copied/ProPR Desktop.app';
+    const calls = [];
+    const authority = new LaunchServicesAuthority(applicationRoot, { FIXED: 'environment' }, {
+      runCommand: async (file, args) => {
+        calls.push([file, ...args]);
+        if (args[0] === '-f') throw new Error('injected partial registration failure');
+        return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+      },
+    });
+
+    await assert.rejects(authority.register(), /injected partial registration failure/);
+    assert.equal(authority.registered, true);
+    assert.deepEqual(await removeCopiedApplicationWithLaunchServicesAuthority({
+      installRoot: '/private/install',
+      launchServices: authority,
+    }, {
+      removeInstallRoot: async () => { calls.push(['remove-install-root']); },
+      assertInstallRootAbsent: async () => { calls.push(['install-postcondition']); },
+    }), []);
+
+    assert.equal(authority.registered, false);
+    assert.deepEqual(calls.map(call => call[1] ?? call[0]), [
+      '-f',
+      '-u',
+      '-dump',
+      'remove-install-root',
+      'install-postcondition',
+    ]);
   });
 
   test('retains the copied application until unregister and exact absence both succeed', async () => {

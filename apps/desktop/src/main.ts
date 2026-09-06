@@ -1235,17 +1235,26 @@ const createMainWindow = async (
     const expectedInitialApi = nativeSmokePhase === 'first'
       ? 'http://localhost:44111'
       : 'https://t-native-relaunch.propr.dev';
-    const initialEndpointVisible = await window.webContents.executeJavaScript(`(async () => {
-      const deadline = performance.now() + 2000;
-      do {
-        const input = Array.from(document.querySelectorAll('label')).find(label =>
-          label.textContent?.includes('Instance URL'))?.querySelector('input');
-        if (input?.value === ${JSON.stringify(expectedInitialApi)}) return true;
-        await new Promise(resolve => setTimeout(resolve, 25));
-      } while (performance.now() < deadline);
-      return false;
-    })()`);
-    if (!initialEndpointVisible) throw new Error('Native cold deep link did not reach the confirmation UI');
+    let initialEndpointVisible: unknown;
+    try {
+      initialEndpointVisible = await window.webContents.executeJavaScript(`(async () => {
+        const deadline = performance.now() + 2000;
+        do {
+          const input = Array.from(document.querySelectorAll('label')).find(label =>
+            label.textContent?.includes('Instance URL'))?.querySelector('input');
+          if (input?.value === ${JSON.stringify(expectedInitialApi)}) return true;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        } while (performance.now() < deadline);
+        return false;
+      })()`);
+    } catch (error) {
+      recordNativeEvent('desktop.native.cold_confirmation_inspection_failed');
+      throw error;
+    }
+    if (!initialEndpointVisible) {
+      recordNativeEvent('desktop.native.cold_confirmation_not_visible');
+      throw new Error('Native cold deep link did not reach the confirmation UI');
+    }
     if (nativeSmokePhase === 'first') {
       await runNativeSecureStorageProbe();
       recordNativeEvent('desktop.native.profile_fresh');
