@@ -44,6 +44,7 @@ const goal: goalsApi.Goal = {
 describe('GoalsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     socket.isConnected = false;
     socket.onTaskUpdate.mockImplementation(() => vi.fn());
     socket.onTaskLiveUpdate.mockImplementation(() => vi.fn());
@@ -72,6 +73,59 @@ describe('GoalsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start goal' }));
     await waitFor(() => expect(goalsApi.createGoal).toHaveBeenCalledWith(expect.objectContaining({ repository: 'acme/web', agentId: 'agent-1', model: 'gpt-5.6-sol', objective: 'Ship the dashboard', launchStrategy: 'orchestrate' })));
     expect(await screen.findByText('Goal detail')).toBeInTheDocument();
+  });
+
+  it('remembers reusable settings from the previously created goal', async () => {
+    window.localStorage.setItem('propr.goalFormSettings', JSON.stringify({
+      repository: 'acme/api',
+      agentId: 'agent-2',
+      model: 'claude-opus-4-6',
+      launchStrategy: 'direct',
+      maxParallelTasks: 6,
+      ultrafix: true,
+      checkpointIntervalMinutes: 60,
+    }));
+    const claudeCapability = {
+      ...capability,
+      agentId: 'agent-2',
+      agentAlias: 'claude',
+      agentType: 'claude',
+      models: ['claude-sonnet-4-6', 'claude-opus-4-6'],
+      defaultModel: 'claude-sonnet-4-6',
+    };
+    vi.mocked(goalsApi.getGoalCapabilities).mockResolvedValue({ agents: [capability, claudeCapability] });
+    vi.mocked(getInstanceCatalog).mockResolvedValue({
+      agents: [],
+      repositories: [{ name: 'acme/web', enabled: true }, { name: 'acme/api', enabled: true }],
+    });
+    vi.mocked(goalsApi.createGoal).mockResolvedValue({ goal });
+
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /><Route path="/goals/:goalId" element={<div>Goal detail</div>} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByRole('option', { name: 'Claude' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /acme.*api/ })).toBeInTheDocument();
+    expect(screen.getByLabelText('Coding agent')).toHaveValue('agent-2');
+    expect(screen.getByLabelText('Model')).toHaveValue('claude-opus-4-6');
+    expect(screen.getByLabelText('Maximum parallel tasks')).toHaveValue(6);
+    expect(screen.getByLabelText('Agent implements directly')).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Ask the coding agent to use Ultrafix' })).toBeChecked();
+    expect(screen.getByRole('slider', { name: 'Checkpoint frequency' })).toHaveAttribute('aria-valuetext', '60 minutes');
+    expect(screen.getByLabelText('Objective')).toHaveValue('');
+
+    fireEvent.change(screen.getByLabelText('Objective'), { target: { value: 'Ship the API' } });
+    fireEvent.click(screen.getByLabelText('Agent orchestrates through ProPR'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }));
+
+    await waitFor(() => expect(goalsApi.createGoal).toHaveBeenCalled());
+    expect(JSON.parse(window.localStorage.getItem('propr.goalFormSettings') || '{}')).toEqual({
+      repository: 'acme/api',
+      agentId: 'agent-2',
+      model: 'claude-opus-4-6',
+      launchStrategy: 'orchestrate',
+      maxParallelTasks: 6,
+      ultrafix: true,
+      checkpointIntervalMinutes: 60,
+    });
   });
 
   it('configures worker checkpoints only for direct goals', async () => {

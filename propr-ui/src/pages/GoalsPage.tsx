@@ -23,6 +23,63 @@ import { getModelDisplayName } from '../utils/modelDisplay';
 
 const buttonClass = 'inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50';
 const checkpointIntervalOptions = [5, 10, 15, 30, 60, 120];
+const goalFormSettingsStorageKey = 'propr.goalFormSettings';
+
+interface GoalFormSettings {
+  repository: string;
+  agentId: string;
+  model: string;
+  launchStrategy: GoalLaunchStrategy;
+  maxParallelTasks: number | null;
+  ultrafix: boolean;
+  checkpointIntervalMinutes: number;
+}
+
+const defaultGoalFormSettings: GoalFormSettings = {
+  repository: '',
+  agentId: '',
+  model: '',
+  launchStrategy: 'direct',
+  maxParallelTasks: null,
+  ultrafix: false,
+  checkpointIntervalMinutes: 15,
+};
+
+const readGoalFormSettings = (): GoalFormSettings => {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(goalFormSettingsStorageKey) || 'null');
+    if (!parsed || typeof parsed !== 'object') return defaultGoalFormSettings;
+    const stored = parsed as Record<string, unknown>;
+    return {
+      repository: typeof stored.repository === 'string' ? stored.repository : '',
+      agentId: typeof stored.agentId === 'string' ? stored.agentId : '',
+      model: typeof stored.model === 'string' ? stored.model : '',
+      launchStrategy: stored.launchStrategy === 'orchestrate' ? 'orchestrate' : 'direct',
+      maxParallelTasks: typeof stored.maxParallelTasks === 'number'
+        && Number.isInteger(stored.maxParallelTasks)
+        && stored.maxParallelTasks >= 1
+        && stored.maxParallelTasks <= 32
+        ? stored.maxParallelTasks
+        : null,
+      ultrafix: typeof stored.ultrafix === 'boolean' ? stored.ultrafix : false,
+      checkpointIntervalMinutes: typeof stored.checkpointIntervalMinutes === 'number'
+        && checkpointIntervalOptions.includes(stored.checkpointIntervalMinutes)
+        ? stored.checkpointIntervalMinutes
+        : 15,
+    };
+  } catch {
+    return defaultGoalFormSettings;
+  }
+};
+
+const saveGoalFormSettings = (settings: GoalFormSettings) => {
+  try {
+    window.localStorage.setItem(goalFormSettingsStorageKey, JSON.stringify(settings));
+  } catch {
+    // The form should remain usable when browser storage is unavailable.
+  }
+};
+
 const duration = (milliseconds: number) => {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -47,16 +104,17 @@ function GoalState({ goal }: { goal: Goal }) {
 }
 
 function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
+  const previousSettings = useMemo(readGoalFormSettings, []);
   const [repositories, setRepositories] = useState<InstanceCatalogRepository[]>([]);
   const [agents, setAgents] = useState<GoalCapability[]>([]);
-  const [repository, setRepository] = useState('');
-  const [agentId, setAgentId] = useState('');
-  const [model, setModel] = useState('');
+  const [repository, setRepository] = useState(previousSettings.repository);
+  const [agentId, setAgentId] = useState(previousSettings.agentId);
+  const [model, setModel] = useState(previousSettings.model);
   const [objective, setObjective] = useState('');
-  const [launchStrategy, setLaunchStrategy] = useState<GoalLaunchStrategy>('direct');
-  const [parallelism, setParallelism] = useState('');
-  const [ultrafix, setUltrafix] = useState(false);
-  const [checkpointInterval, setCheckpointInterval] = useState(15);
+  const [launchStrategy, setLaunchStrategy] = useState<GoalLaunchStrategy>(previousSettings.launchStrategy);
+  const [parallelism, setParallelism] = useState(previousSettings.maxParallelTasks?.toString() || '');
+  const [ultrafix, setUltrafix] = useState(previousSettings.ultrafix);
+  const [checkpointInterval, setCheckpointInterval] = useState(previousSettings.checkpointIntervalMinutes);
   const [submitting, setSubmitting] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +139,9 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
     Promise.all([getInstanceCatalog(), getGoalCapabilities()]).then(([catalog, capabilityData]) => {
       setRepositories(catalog.repositories);
       applyCapabilities(capabilityData.agents);
-      setRepository(catalog.repositories[0]?.name || '');
+      setRepository(current => catalog.repositories.some(repo => repo.name === current)
+        ? current
+        : catalog.repositories[0]?.name || '');
     }).catch(err => setError((err as Error).message));
   }, [applyCapabilities]);
 
@@ -111,6 +171,15 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
         ...(parallelism ? { maxParallelTasks: Number(parallelism) } : {}),
         ...(launchStrategy === 'direct' ? { checkpointIntervalMinutes: checkpointInterval } : {}),
         ultrafix,
+      });
+      saveGoalFormSettings({
+        repository,
+        agentId,
+        model,
+        launchStrategy,
+        maxParallelTasks: parallelism ? Number(parallelism) : null,
+        ultrafix,
+        checkpointIntervalMinutes: checkpointInterval,
       });
       onCreated(result.goal);
     } catch (err) { setError((err as Error).message); }
