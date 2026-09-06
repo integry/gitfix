@@ -4,6 +4,7 @@ import { executePreparedGoal, processGoalJob } from '../src/jobs/processGoalJob.
 import type { GoalJobData } from '../packages/core/src/goalExports.ts';
 import type { AgentTaskOptions } from '../packages/core/src/agents/types.ts';
 import { assertProviderIdentityMatches } from '../src/jobs/goalAttemptState.ts';
+import { labelCompletedGoalPullRequest } from '../src/jobs/goalPullRequestLabel.ts';
 
 after(async () => {
   const { closeConnection } = await import('../packages/core/src/db/connection.ts');
@@ -164,6 +165,74 @@ test('whole-session direct goals record a malformed declaration and continue for
   assert.equal(rejected.length, 1);
   assert.match(String(rejected[0].error), /message must be a non-empty string/);
   assert.equal(continued, true);
+});
+
+test('completed goals label their final PR with the regular task PR label', async () => {
+  const requests: Array<{ endpoint: string; options: Record<string, unknown> }> = [];
+  const retryNames: string[] = [];
+
+  await labelCompletedGoalPullRequest('acme/repo', 42, {
+    resolveLabel: async () => 'AI',
+    getOctokit: async () => ({
+      request: async (endpoint: string, options: Record<string, unknown>) => {
+        requests.push({ endpoint, options });
+        return { data: {} };
+      },
+    }) as never,
+    retry: async (operation, operationName) => {
+      retryNames.push(operationName);
+      return operation();
+    },
+  });
+
+  assert.deepEqual(requests, [{
+    endpoint: 'POST /repos/{owner}/{repo}/issues/{issue_number}/labels',
+    options: { owner: 'acme', repo: 'repo', issue_number: 42, labels: ['AI'] },
+  }]);
+  assert.deepEqual(retryNames, ['add_goal_pr_label_42']);
+});
+
+test('goal processing defers the PR label until successful terminal reconciliation', async () => {
+  const data: GoalJobData = {
+    goalId: 'goal-complete', taskId: 'goal-task-complete', repoOwner: 'acme', repoName: 'repo',
+    generation: 1, claimId: 'claim-complete',
+  };
+  const goal = {
+    goal_id: data.goalId, owner_id: 'owner-1', repository: 'acme/repo', objective: 'Ship it',
+    launch_strategy: 'orchestrate', initial_prompt: '/goal Ship it', base_branch: 'main', branch_name: 'goal/ship-it',
+    worktree_path: '/tmp/worktree', agent_id: 'agent-1', agent_alias: 'codex', agent_type: 'codex',
+    requested_model: 'gpt-5.6', desired_state: 'running', result_state: null,
+    current_task_id: data.taskId, session_id: 'thread-1', conversation_id: null,
+    run_generation: data.generation, run_claim: data.claimId,
+  };
+  const events: string[] = [];
+  const dependencies = {
+    claim: async () => goal,
+    withHeartbeat: async (_job: GoalJobData, operation: () => Promise<unknown>) => operation(),
+    prepare: async () => ({ ready: true, value: {
+      goal, agent: {}, githubToken: 'token',
+      worktree: { worktreePath: '/tmp/worktree', branchName: 'goal/ship-it' }, pendingInput: null,
+    } }),
+    execute: async () => ({ success: true, modelUsed: 'gpt-5.6', executionTimeMs: 1, logs: '', modifiedFiles: [] }),
+    result: {
+      loadGoal: async () => goal, fencedGoal: async () => goal, acknowledgeInput: async () => {},
+      recordMetrics: async () => {}, handleStopped: async () => null,
+      saveProviderResult: async () => ({ finalPr: { number: 42, url: 'https://github.com/acme/repo/pull/42' } }),
+      scheduleFurtherWork: async () => null,
+      finalizeGoal: async () => { events.push('finalized'); return true; },
+      labelPullRequest: async (repository: string, prNumber: number) => { events.push(`labeled:${repository}#${prNumber}`); },
+      markTaskReconciled: async () => { events.push('reconciled'); },
+      stateManager: () => ({
+        markTaskCompleted: async () => { events.push('task-completed'); return { state: 'completed' }; },
+        markTaskFailed: async () => ({ state: 'failed' }),
+      }),
+    },
+  };
+
+  const outcome = await processGoalJob({ data } as never, dependencies as never);
+
+  assert.deepEqual(outcome, { status: 'complete', goalId: 'goal-complete' });
+  assert.deepEqual(events, ['finalized', 'labeled:acme/repo#42', 'task-completed', 'reconciled']);
 });
 
 test('goal execution keeps initial prompt identity separate from FIFO continuation input', async () => {
