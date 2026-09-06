@@ -22,7 +22,9 @@ export const createDesktopBridge = (
     || process.platform === 'win32',
   connectJourneyAcceptance = false,
 ): DesktopBridge => {
-  const deepLinkListeners = new Set<(url: string) => DesktopDeepLinkConsumption | null>();
+  const deepLinkListeners = new Set<(url: string) => (
+    DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>
+  )>();
   const pendingDeepLinks: DesktopDeepLinkDelivery[] = [];
   const isDelivery = (value: unknown): value is DesktopDeepLinkDelivery => Boolean(
     value && typeof value === 'object'
@@ -39,16 +41,16 @@ export const createDesktopBridge = (
       && (value as DesktopDeepLinkConsumption).target.length > 0
       && (value as DesktopDeepLinkConsumption).target.length <= 2_048,
   );
-  const consume = (delivery: DesktopDeepLinkDelivery): void => {
-    const acknowledgements = [...deepLinkListeners]
-      .map(listener => listener(delivery.url))
-      .filter(isConsumption);
+  const consume = async (delivery: DesktopDeepLinkDelivery): Promise<void> => {
+    const acknowledgements = (await Promise.all(
+      [...deepLinkListeners].map(listener => listener(delivery.url)),
+    )).filter(isConsumption);
     if (acknowledgements.length !== 1) return;
     const acknowledgement: DesktopDeepLinkAcknowledgement = {
       ...delivery,
       consumption: acknowledgements[0],
     };
-    void invoke(ipc, IPC_CHANNELS.deepLinkAcknowledgement, acknowledgement).catch(() => undefined);
+    await invoke(ipc, IPC_CHANNELS.deepLinkAcknowledgement, acknowledgement).catch(() => undefined);
   };
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
@@ -56,7 +58,7 @@ export const createDesktopBridge = (
       pendingDeepLinks.push(value);
       return;
     }
-    consume(value);
+    void consume(value).catch(() => undefined);
   });
 
   const bridge: DesktopBridge = {
@@ -64,7 +66,7 @@ export const createDesktopBridge = (
       getMetadata: () => invoke(ipc, IPC_CHANNELS.appMetadata),
       onDeepLink: (listener) => {
         deepLinkListeners.add(listener);
-        pendingDeepLinks.splice(0).forEach(consume);
+        pendingDeepLinks.splice(0).forEach(delivery => { void consume(delivery).catch(() => undefined); });
         return () => deepLinkListeners.delete(listener);
       },
     },

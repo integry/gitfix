@@ -30,10 +30,10 @@ export const PACKAGED_SMOKE_EVIDENCE_EVENTS = [
 export const NATIVE_SMOKE_EVIDENCE_EVENTS = [
   'desktop.deeplink.delivery_failed',
   'desktop.native.identity_verified',
+  'desktop.native.secure_storage_backend_invalid',
   'desktop.native.profile_fresh',
   'desktop.native.profile_preserved',
   'desktop.native.secure_storage_enforced',
-  'desktop.native.secure_storage_fallback_refused',
   'desktop.native.secure_storage_probe.started',
   'desktop.native.secure_storage_probe.completed',
   'desktop.deeplink.cold_manual_once',

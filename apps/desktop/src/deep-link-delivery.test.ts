@@ -119,6 +119,74 @@ describe('desktop deep-link delivery', () => {
     assert.match(failure?.message ?? '', /acknowledgement deadline/);
   });
 
+  it('reports a synchronous send failure and settles idle before accepting later work', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const failures: Error[] = [];
+    let failNextSend = true;
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        isLoading: () => false,
+        send: (_channel, value) => {
+          if (failNextSend) {
+            failNextSend = false;
+            throw new Error('window destroyed during send');
+          }
+          sent.push(value);
+        },
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      [],
+      undefined,
+      error => { failures.push(error); },
+    );
+    delivery.setWindow(window);
+
+    assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
+    await delivery.whenIdle();
+    assert.deepEqual(failures.map(error => error.message), ['window destroyed during send']);
+
+    assert.equal(delivery.deliver('propr://open?path=%2Fplans'), true);
+    assert.equal(sent.length, 1);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[0],
+      consumption: { kind: 'open-queued', target: '/plans' },
+    }), true);
+    await delivery.whenIdle();
+  });
+
+  it('continues with accepted queued links after one acknowledgement timeout', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const consumed: string[] = [];
+    const failures: Error[] = [];
+    const window = createWindow(sent);
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      [],
+      value => { consumed.push(value); },
+      error => { failures.push(error); },
+      Date.now,
+      1_000,
+      20,
+    );
+    delivery.setWindow(window);
+
+    assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
+    assert.equal(delivery.deliver('propr://open?path=%2Fplans'), true);
+    while (sent.length < 2) await tick();
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[1],
+      consumption: { kind: 'open-queued', target: '/plans' },
+    }), true);
+    await delivery.whenIdle();
+
+    assert.equal(failures.length, 1);
+    assert.match(failures[0].message, /acknowledgement deadline/);
+    assert.deepEqual(consumed, ['propr://open?path=%2Fplans']);
+  });
+
   it('cancels pending acknowledgement work during coordinated shutdown', async () => {
     const sent: DesktopDeepLinkDelivery[] = [];
     let failed = false;

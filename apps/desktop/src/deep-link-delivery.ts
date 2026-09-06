@@ -151,16 +151,14 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
           timer,
           window,
         };
-        window.webContents.send(this.channel, delivery);
         try {
+          window.webContents.send(this.channel, delivery);
           const consumption = await acknowledgement;
           await this.delivered(value, consumption, window);
         } catch (error) {
-          this.pending.splice(0);
           if (!this.closed) {
             this.failed(error instanceof Error ? error : new Error('Desktop renderer deep-link acknowledgement failed'));
           }
-          return;
         } finally {
           clearTimeout(timer);
           this.active = null;

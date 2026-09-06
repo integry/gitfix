@@ -328,9 +328,12 @@ describe('desktop trusted release workflow', () => {
     const upload = validation.indexOf('Upload unsigned validation target');
     assert.ok(stage >= 0 && lifecycle > stage && upload > lifecycle);
     assert.match(validation, /if: matrix\.platform == 'linux' \|\| matrix\.platform == 'darwin'/);
-    assert.match(validation, /dbus-run-session -- xvfb-run --auto-servernum/);
+    assert.match(validation, /keyring_root="\$\(mktemp -d\)"/);
+    assert.match(validation, /gnome-keyring-daemon --unlock --components=secrets/);
+    assert.match(validation, /dbus-run-session -- bash -euo pipefail -c '[\s\S]*xvfb-run --auto-servernum/);
     assert.match(validation, /run-packaged-darwin-connect-smoke\.sh[\s\S]*native-lifecycle/);
-    assert.match(validation, /--artifact-directory "desktop-release-\$\{\{ matrix\.platform \}\}-\$\{\{ matrix\.arch \}\}"/);
+    assert.match(validation, /--artifact-directory "\$4"/);
+    assert.match(validation, /"desktop-release-\$\{\{ matrix\.platform \}\}-\$\{\{ matrix\.arch \}\}"/);
     assert.match(forgeConfig, /mimeType: \['x-scheme-handler\/propr'\]/);
 
     for (const kind of ['deb', 'rpm', 'zip', 'dmg']) {

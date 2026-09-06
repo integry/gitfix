@@ -40,6 +40,7 @@ const PROCESS_TIMEOUT_MS = 45_000;
 const COMMAND_TIMEOUT_MS = 10 * 60_000;
 const OUTPUT_CAP = 64 * 1024;
 const CLEANUP_GRACE_MS = 2_000;
+const DBUS_SESSION_ADDRESS = /^unix:path=\/[^\0\r\n,]+(?:,guid=[0-9a-f]{32})?$/;
 const COLD_MANUAL = 'propr://connect?api=http%3A%2F%2Flocalhost%3A44111';
 const COLD_TUNNEL = 'propr://connect?api=https%3A%2F%2Ft-native-relaunch.propr.dev';
 const WARM_MANUAL = 'propr://connect?api=http%3A%2F%2F127.0.0.1%3A44112';
@@ -93,6 +94,23 @@ export const parseArguments = args => {
     throw new Error('Native artifact lifecycle target is invalid');
   }
   return { platform, arch, version, artifactDirectory: resolve(artifactDirectory) };
+};
+
+export const createNativeLaunchContext = ({ platform, baseEnvironment, sessionAddress }) => {
+  if (platform !== 'linux') {
+    return Object.freeze({
+      environment: Object.freeze({ ...baseEnvironment }),
+      arguments: Object.freeze([]),
+    });
+  }
+  if (typeof sessionAddress !== 'string' || sessionAddress.length > 4096 || /[\0\r\n]/.test(sessionAddress)
+    || !DBUS_SESSION_ADDRESS.test(sessionAddress)) {
+    throw new Error('Native Linux lifecycle requires one validated D-Bus session address');
+  }
+  return Object.freeze({
+    environment: Object.freeze({ ...baseEnvironment, DBUS_SESSION_BUS_ADDRESS: sessionAddress }),
+    arguments: Object.freeze(['--disable-gpu', '--password-store=gnome-libsecret']),
+  });
 };
 
 const appendBounded = (current, chunk) => {
@@ -188,6 +206,7 @@ export const FIRST_EVIDENCE_MILESTONES = Object.freeze([
   'NO_EVIDENCE',
   'AUTHORIZED',
   'IDENTITY',
+  'SECURE_STORAGE_BACKEND',
   'DEEP_LINK_DELIVERY_FAILURE',
   'COLD_ACK',
   'SECURE_STORAGE_STARTED',
@@ -841,10 +860,10 @@ const startApplication = (application, args, env, cwd, processGroups) => process
   stdio: ['ignore', 'ignore', 'ignore'],
 }));
 
-const dispatchDirect = async (application, userData, link, env, processGroups) => {
+const dispatchDirect = async (application, userData, link, env, processGroups, launchArguments = []) => {
   const group = startApplication(
     application,
-    [`--user-data-dir=${userData}`, link],
+    [...launchArguments, `--user-data-dir=${userData}`, link],
     env,
     dirname(application.applicationRoot),
     processGroups,
@@ -861,7 +880,10 @@ const linuxProtocolDispatch = async ({ application, profile, link, env, processG
   await mkdir(applications, { recursive: true, mode: 0o700 });
   const registered = join(applications, `${EXECUTABLE}.desktop`);
   const source = await readFile(application.desktopFile, 'utf8');
-  const relocated = source.replace(/^Exec=.*$/m, `Exec=${application.executable} --user-data-dir=${profile.userData} %U`);
+  const relocated = source.replace(
+    /^Exec=.*$/m,
+    `Exec=${application.executable} --disable-gpu --password-store=gnome-libsecret --user-data-dir=${profile.userData} %U`,
+  );
   if (relocated === source) throw new Error('Linux launcher relocation did not replace exactly one Exec declaration');
   await writeFile(registered, relocated, { mode: 0o600 });
   await run('/usr/bin/update-desktop-database', [applications], { env });
@@ -1210,6 +1232,7 @@ export const classifyFirstEvidenceFailure = async (path, resultClass) => {
     const events = new Set(await readFixedEvidenceEvents(path));
     if (events.has('desktop.smoke.authorized')) milestone = 'AUTHORIZED';
     if (events.has('desktop.native.identity_verified')) milestone = 'IDENTITY';
+    if (events.has('desktop.native.secure_storage_backend_invalid')) milestone = 'SECURE_STORAGE_BACKEND';
     if (events.has('desktop.deeplink.delivery_failed')) milestone = 'DEEP_LINK_DELIVERY_FAILURE';
     if (events.has('desktop.deeplink.cold_manual_once')) milestone = 'COLD_ACK';
     if (events.has('desktop.native.secure_storage_probe.started')) milestone = 'SECURE_STORAGE_STARTED';
@@ -1299,19 +1322,25 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
       profileApiUrl: profileApi.url,
       preserveMacosKeychainContext: target.platform === 'darwin',
     });
+    const launchContext = createNativeLaunchContext({
+      platform: target.platform,
+      baseEnvironment,
+      sessionAddress: process.env.DBUS_SESSION_BUS_ADDRESS,
+    });
     const firstEnvironment = Object.freeze({
-      ...baseEnvironment,
+      ...launchContext.environment,
       PROPR_DESKTOP_NATIVE_ARTIFACT_PHASE: 'first',
       PROPR_DESKTOP_NATIVE_EXPECTED_ARCH: target.arch,
       PROPR_DESKTOP_NATIVE_EXPECTED_PLATFORM: target.platform,
       PROPR_DESKTOP_NATIVE_EXPECTED_VERSION: target.version,
     });
-    const dispatchEnvironment = { ...baseEnvironment };
+    const dispatchEnvironment = { ...launchContext.environment };
     delete dispatchEnvironment.PROPR_DESKTOP_SMOKE_TEST;
     delete dispatchEnvironment.PROPR_DESKTOP_SMOKE_PROFILE_API_URL;
 
     operationStage = 'FIRST_LAUNCH';
     const first = startApplication(application, [
+      ...launchContext.arguments,
       '--propr-smoke-test',
       `--user-data-dir=${profile.userData}`,
       COLD_MANUAL,
@@ -1328,7 +1357,14 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
       throw error;
     }
     operationStage = 'WARM_MANUAL_DISPATCH';
-    await dispatchDirect(application, profile.userData, WARM_MANUAL, dispatchEnvironment, processGroups);
+    await dispatchDirect(
+      application,
+      profile.userData,
+      WARM_MANUAL,
+      dispatchEnvironment,
+      processGroups,
+      launchContext.arguments,
+    );
     operationStage = 'WARM_MANUAL_EVIDENCE';
     await waitForEvents(firstEvidence, ['desktop.deeplink.warm_manual_once'], first.child);
     if (target.platform === 'darwin') {
@@ -1354,11 +1390,25 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
     operationStage = 'PROTOCOL_EVIDENCE';
     await waitForEvents(firstEvidence, ['desktop.deeplink.warm_tunnel_once'], first.child);
     operationStage = 'WARM_OPEN_DISPATCH';
-    await dispatchDirect(application, profile.userData, WARM_OPEN, dispatchEnvironment, processGroups);
+    await dispatchDirect(
+      application,
+      profile.userData,
+      WARM_OPEN,
+      dispatchEnvironment,
+      processGroups,
+      launchContext.arguments,
+    );
     operationStage = 'WARM_OPEN_EVIDENCE';
     await waitForEvents(firstEvidence, ['desktop.deeplink.warm_open_once'], first.child);
     operationStage = 'MALFORMED_DISPATCH';
-    await dispatchDirect(application, profile.userData, 'native-evidence-malformed', dispatchEnvironment, processGroups);
+    await dispatchDirect(
+      application,
+      profile.userData,
+      'native-evidence-malformed',
+      dispatchEnvironment,
+      processGroups,
+      launchContext.arguments,
+    );
     operationStage = 'MALFORMED_EVIDENCE';
     await waitForEvents(firstEvidence, ['desktop.deeplink.rejected_malformed'], first.child);
     operationStage = 'OVERSIZED_DISPATCH';
@@ -1368,6 +1418,7 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
       `propr://connect?api=https%3A%2F%2Ft-native-evidence.propr.dev%2F${'a'.repeat(2_100)}`,
       dispatchEnvironment,
       processGroups,
+      launchContext.arguments,
     );
     operationStage = 'OVERSIZED_EVIDENCE';
     await waitForEvents(firstEvidence, ['desktop.deeplink.rejected_oversized'], first.child);
@@ -1378,23 +1429,20 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
       'https://native-evidence.invalid/unsafe',
       dispatchEnvironment,
       processGroups,
+      launchContext.arguments,
     );
     operationStage = 'UNSAFE_SCHEME_EVIDENCE';
     await waitForEvents(firstEvidence, ['desktop.deeplink.rejected_unsafe_scheme'], first.child);
     operationStage = 'FIRST_EXIT';
     await first.waitForSuccessfulExit();
-    const requiredFirstEvents = target.platform === 'linux'
-      ? REQUIRED_FIRST_EVENTS.flatMap(event => event === 'desktop.native.secure_storage_probe.completed'
-          ? ['desktop.native.secure_storage_fallback_refused', event]
-          : [event])
-      : REQUIRED_FIRST_EVENTS;
+    const requiredFirstEvents = REQUIRED_FIRST_EVENTS;
     operationStage = 'FIRST_EVIDENCE_VALIDATION';
     await waitForEvents(firstEvidence, requiredFirstEvents, { exitCode: null });
     await assertEvidenceOrdering(firstEvidence, requiredFirstEvents);
     await assertProfileAuthority(profile);
 
     const relaunchEnvironment = Object.freeze({
-      ...baseEnvironment,
+      ...launchContext.environment,
       PROPR_DESKTOP_NATIVE_ARTIFACT_PHASE: 'relaunch',
       PROPR_DESKTOP_NATIVE_EXPECTED_ARCH: target.arch,
       PROPR_DESKTOP_NATIVE_EXPECTED_PLATFORM: target.platform,
@@ -1402,6 +1450,7 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
     });
     operationStage = 'RELAUNCH';
     const relaunch = startApplication(application, [
+      ...launchContext.arguments,
       '--propr-smoke-test',
       `--user-data-dir=${profile.userData}`,
       COLD_TUNNEL,
@@ -1436,7 +1485,7 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
       lifecycle: 'extract-or-mount-copy/launch/shutdown/relaunch/remove',
       protocol,
       secureStorage: target.platform === 'linux'
-        ? 'fallback-only; plaintext refused; libsecret custody not exercised'
+        ? 'isolated gnome-libsecret round-trip and deletion'
         : 'OS-protected Keychain round-trip and deletion',
     });
   } catch (error) {
@@ -1493,7 +1542,7 @@ export const runNativeArtifactLifecycle = async target => {
     target: `${target.platform}-${target.arch}`,
     evidence: report,
     limitations: target.platform === 'linux'
-      ? 'Cold launch is direct argv. ZIP warm dispatch is direct. Package warm dispatch uses isolated XDG/GIO. Secure storage is fallback-only; libsecret custody is not exercised.'
+      ? 'Cold launch is direct argv. ZIP warm dispatch is direct. Package warm dispatch uses isolated XDG/GIO. Secure storage uses one isolated gnome-libsecret session.'
       : 'Cold launch is direct argv. Warm protocol evidence uses local LaunchServices. Unsigned internal-RC evidence does not claim signing, notarization, or Gatekeeper assessment.',
   }));
 };

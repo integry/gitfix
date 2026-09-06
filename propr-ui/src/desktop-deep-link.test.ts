@@ -94,14 +94,21 @@ describe('desktop open deep-link navigation', () => {
 });
 
 describe('desktop deep-link inbox', () => {
-  it('delivers values received before a consumer subscribes exactly once', () => {
+  it('delivers values received before a consumer subscribes exactly once with eventual consumption', async () => {
     const inbox = new DesktopDeepLinkInbox();
     const first = vi.fn();
     const second = vi.fn();
-    inbox.receive('propr://connect?api=https%3A%2F%2Ffirst.example');
+    const eventualConsumption = inbox.receive('propr://connect?api=https%3A%2F%2Ffirst.example');
 
-    const unsubscribe = inbox.subscribe(first);
+    const unsubscribe = inbox.subscribe(value => {
+      first(value);
+      return { kind: 'connect-confirmation', target: 'https://first.example' };
+    });
     expect(first).toHaveBeenCalledOnce();
+    await expect(eventualConsumption).resolves.toEqual({
+      kind: 'connect-confirmation',
+      target: 'https://first.example',
+    });
     unsubscribe();
     const unsubscribeSecond = inbox.subscribe(second);
     expect(second).not.toHaveBeenCalled();

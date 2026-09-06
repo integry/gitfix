@@ -128,7 +128,9 @@ export type LocalLifecycleOperationResult =
 export interface DesktopBridge {
   app: {
     getMetadata(): Promise<DesktopAppMetadata>;
-    onDeepLink(listener: (url: string) => DesktopDeepLinkConsumption | null): () => void;
+    onDeepLink(listener: (
+      url: string,
+    ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
   };
   auth: {
     logout(apiBaseUrl: string): Promise<void>;

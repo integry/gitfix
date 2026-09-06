@@ -96,7 +96,9 @@ export interface DesktopManagedTunnelRecoveryAdapter {
 export interface DesktopAdapters {
   platform: DesktopPlatform;
   app: {
-    onDeepLink(listener: (url: string) => DesktopDeepLinkConsumption | null): () => void;
+    onDeepLink(listener: (
+      url: string,
+    ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
   };
   profiles: DesktopProfileAdapter;
   discovery: DesktopDiscoveryAdapter;

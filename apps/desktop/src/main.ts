@@ -357,13 +357,7 @@ const runNativeSecureStorageProbe = async (): Promise<void> => {
     token: `propr_it_${'a'.repeat(43)}`,
   };
   const credentialWrite = await nativeProfiles.writeCredential(credential);
-  if (process.platform === 'linux') {
-    if (storage.available || credentialWrite.stored
-      || await nativeProfiles.readCredential('native-local') !== null) {
-      throw new Error('Native Linux fallback-only proof unexpectedly claimed libsecret custody');
-    }
-    recordNativeEvent('desktop.native.secure_storage_fallback_refused');
-  } else if (storage.available) {
+  if (storage.available) {
     const stored = await nativeProfiles.readCredential('native-local');
     if (storage.backend === 'basic_text' || !credentialWrite.stored
       || stored?.token !== credential.token || stored.origin !== credential.origin) {
@@ -385,8 +379,9 @@ const runNativeSecureStorageProbe = async (): Promise<void> => {
   } else if (credentialWrite.stored || await nativeProfiles.readCredential('native-local') !== null) {
     throw new Error('Native secure-storage custody probe allowed plaintext fallback');
   }
-  if (process.platform === 'darwin' && (!storage.available || storage.backend !== 'os-protected')) {
-    throw new Error('Native macOS artifact did not retain Keychain-backed custody');
+  const expectedBackend = process.platform === 'linux' ? 'gnome_libsecret' : 'os-protected';
+  if (!storage.available || storage.backend !== expectedBackend) {
+    throw new Error('Native artifact did not retain its expected secure-storage custody');
   }
   recordNativeEvent('desktop.native.secure_storage_probe.completed');
   recordNativeEvent('desktop.native.secure_storage_enforced');
@@ -1444,6 +1439,14 @@ if (!hasSingleInstanceLock) {
       decrypt: value => safeStorage.decryptString(value),
     };
     const profiles = new ProfileStore(app.getPath('userData'), productionEncryption);
+    if (nativeSmokePhase) {
+      const security = profiles.security();
+      const expectedBackend = process.platform === 'linux' ? 'gnome_libsecret' : 'os-protected';
+      if (!security.available || security.backend !== expectedBackend) {
+        recordNativeEvent('desktop.native.secure_storage_backend_invalid');
+        throw new Error('Native artifact secure-storage backend is unavailable');
+      }
+    }
     const connectDiscovery = new DesktopConnectDiscoveryService(profiles, {
       supported: DESKTOP_CONNECT_DISCOVERY_PLATFORMS.has(process.platform),
       discover: async () => {

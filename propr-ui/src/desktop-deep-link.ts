@@ -71,18 +71,20 @@ export class DesktopDeepLinkNavigation {
 /** One-consumer handoff between the desktop bridge and presentation experience. */
 export class DesktopDeepLinkInbox {
   private listener: ((value: string) => DesktopDeepLinkConsumption | null) | null = null;
-  private readonly pending: string[] = [];
+  private readonly pending: Array<{
+    resolve: (consumption: DesktopDeepLinkConsumption | null) => void;
+    value: string;
+  }> = [];
 
-  receive(value: string): DesktopDeepLinkConsumption | null {
+  receive(value: string): DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null> {
     if (this.listener) return this.listener(value);
-    this.pending.push(value);
-    return null;
+    return new Promise(resolve => this.pending.push({ resolve, value }));
   }
 
   subscribe(listener: (value: string) => DesktopDeepLinkConsumption | null): () => void {
     if (this.listener) throw new Error('Desktop deep-link inbox already has a consumer');
     this.listener = listener;
-    this.pending.splice(0).forEach(value => listener(value));
+    this.pending.splice(0).forEach(({ resolve, value }) => resolve(listener(value)));
     return () => {
       if (this.listener === listener) this.listener = null;
     };

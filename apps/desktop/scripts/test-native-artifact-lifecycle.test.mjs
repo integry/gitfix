@@ -10,6 +10,7 @@ import {
   assertSafeExtractedTree,
   classifyFirstEvidenceFailure,
   closeProfileApi,
+  createNativeLaunchContext,
   DmgMountAuthority,
   extractDmg,
   extractRpm,
@@ -56,6 +57,33 @@ describe('native staged artifact lifecycle authority', () => {
       ['--version', '1.2.3-beta', '--platform', 'darwin', '--arch', 'arm64', '--artifact-directory', 'artifacts'],
       ['--version', '1.2.3', '--version', '1.2.4', '--platform', 'linux', '--arch', 'x64'],
     ]) assert.throws(() => parseArguments(args), /invalid|missing|duplicated|malformed/);
+  });
+
+  test('binds Linux launches to one validated libsecret session without disabling the sandbox', () => {
+    const baseEnvironment = Object.freeze({
+      HOME: '/private/profile/home',
+      PROPR_DESKTOP_SMOKE_TEST: '1',
+    });
+    const sessionAddress = 'unix:path=/run/user/1000/bus,guid=0123456789abcdef0123456789abcdef';
+    const linux = createNativeLaunchContext({
+      platform: 'linux',
+      baseEnvironment,
+      sessionAddress,
+    });
+    assert.deepEqual(linux, {
+      environment: { ...baseEnvironment, DBUS_SESSION_BUS_ADDRESS: sessionAddress },
+      arguments: ['--disable-gpu', '--password-store=gnome-libsecret'],
+    });
+    assert.throws(() => createNativeLaunchContext({
+      platform: 'linux',
+      baseEnvironment,
+      sessionAddress: 'tcp:host=attacker.invalid',
+    }), /validated D-Bus session/);
+    assert.deepEqual(createNativeLaunchContext({
+      platform: 'darwin',
+      baseEnvironment,
+      sessionAddress: undefined,
+    }), { environment: baseEnvironment, arguments: [] });
   });
 
   test('fails closed for a missing kind, foreign file, or symlinked canonical artifact', async () => {
@@ -254,6 +282,11 @@ describe('native staged artifact lifecycle authority', () => {
         { event: null, milestone: 'NO_EVIDENCE', stage: 'FIRST_INITIAL_EVIDENCE' },
         { event: 'desktop.smoke.authorized', milestone: 'AUTHORIZED', stage: 'FIRST_INITIAL_EVIDENCE' },
         { event: 'desktop.native.identity_verified', milestone: 'IDENTITY', stage: 'FIRST_INITIAL_EVIDENCE' },
+        {
+          event: 'desktop.native.secure_storage_backend_invalid',
+          milestone: 'SECURE_STORAGE_BACKEND',
+          stage: 'FIRST_INITIAL_EVIDENCE',
+        },
         {
           event: 'desktop.deeplink.delivery_failed',
           milestone: 'DEEP_LINK_DELIVERY_FAILURE',

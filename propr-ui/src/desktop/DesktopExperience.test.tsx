@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDesktopBridge, type PreloadIpc } from '../../../apps/desktop/src/preload-bridge';
+import { IPC_CHANNELS } from '../../../apps/desktop/src/shared/contract';
 import { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopExperience } from './DesktopExperience';
 import { adaptersFor, deferred, localProfile, remoteProfile, renderConnectedExperience } from './DesktopExperience.testSupport';
@@ -92,6 +94,44 @@ describe('DesktopExperience', () => {
     await waitFor(() => expect(adapters.connection.probe).toHaveBeenCalledOnce());
     expect(adapters.profiles.save).toHaveBeenCalledOnce();
     expect(adapters.connection.activate).toHaveBeenCalledOnce();
+  });
+
+  it('acknowledges a preload delivery after the inbox and hook consume buffered work', async () => {
+    const invocations: Array<{ channel: string; args: unknown[] }> = [];
+    let receiveFromMain: ((event: unknown, value: unknown) => void) | undefined;
+    const ipc: PreloadIpc = {
+      invoke: async (channel, ...args) => { invocations.push({ channel, args }); },
+      on: (channel, listener) => {
+        if (channel === IPC_CHANNELS.deepLink) receiveFromMain = listener;
+      },
+      removeListener: () => undefined,
+    };
+    const bridge = createDesktopBridge(ipc);
+    const delivery = {
+      deliveryId: 41,
+      url: 'propr://connect?api=https%3A%2F%2Fconnect.propr.dev',
+    };
+    receiveFromMain?.({}, delivery);
+
+    const inbox = new DesktopDeepLinkInbox();
+    const unsubscribe = bridge.app.onDeepLink(value => inbox.receive(value));
+    const adapters = adaptersFor();
+    const rendered = render(
+      <DesktopExperience adapters={adapters} deepLinks={inbox}><div>Shared route tree</div></DesktopExperience>
+    );
+    try {
+      expect(await screen.findByLabelText('Instance URL')).toHaveValue('https://connect.propr.dev');
+      await waitFor(() => expect(invocations).toEqual([{
+        channel: IPC_CHANNELS.deepLinkAcknowledgement,
+        args: [{
+          ...delivery,
+          consumption: { kind: 'connect-confirmation', target: 'https://connect.propr.dev' },
+        }],
+      }]));
+    } finally {
+      unsubscribe();
+      rendered.unmount();
+    }
   });
 
   it('returns from the prefilled profile editor to every packaged-layout chooser element', async () => {

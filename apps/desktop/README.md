@@ -194,8 +194,8 @@ code-signing identity in an isolated keychain. It signs the copied app (never th
 designated requirement before and after both launches, and restores the runner's original keychain list/default before
 deleting the identity and temporary keychain. This stabilizes the Safe Storage application identity without changing
 trust settings and is not evidence of Developer ID signing, notarization, Gatekeeper approval, or end-user launchability.
-Linux intentionally withholds the outer session bus from the artifact process: it proves plaintext/basic-text fallback
-is refused, but does not claim libsecret custody. Cold launches are direct argv; Linux package warm dispatch uses an
+Linux runs each artifact against one isolated, unlocked D-Bus/libsecret session and proves credential round-trip and
+deletion without permitting plaintext/basic-text fallback. Cold launches are direct argv; Linux package warm dispatch uses an
 isolated XDG MIME database and `gio`, ZIP warm dispatch is direct because ZIP has no registered launcher, and macOS
 warm dispatch uses LaunchServices against the exact copied bundle.
 
