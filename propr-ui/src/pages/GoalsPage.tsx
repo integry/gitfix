@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Activity, CheckCircle2, Circle, CircleDot, CirclePause, CirclePlay, CircleStop, Clock3,
-  Coins, ExternalLink, GitPullRequest, Github, ListTodo, LoaderCircle, Plus, Send, Trash2,
+  Coins, ExternalLink, FileText, GitPullRequest, Github, ListTodo, LoaderCircle, Plus, Send,
+  Terminal, Trash2,
 } from 'lucide-react';
 import { getInstanceCatalog } from '../api/proprApi';
 import type { InstanceCatalogRepository } from '../api/proprTypes';
@@ -15,6 +16,8 @@ import { useTaskLiveData } from '../components/TaskDetails/useTaskLiveData';
 import TodoList from '../components/TaskDetails/TodoList';
 import RealTimeStats from '../components/TaskDetails/RealTimeStats';
 import ExecutionEventLog from '../components/TaskDetails/ExecutionEventLog';
+import ThinkingLog from '../components/TaskDetails/ThinkingLog';
+import { useThinkingLog } from '../components/TaskDetails/useThinkingLog';
 import { RepositorySelector, type RepoOption } from '../components/RepositorySelector';
 import { ProviderLogo } from '../components/ui/ProviderLogo';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -320,7 +323,12 @@ function GoalDetails({ goalId }: { goalId: string }) {
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [outputMode, setOutputMode] = useState<'readable' | 'terminal'>('readable');
   const { liveDetails: live } = useTaskLiveData(goal?.taskId);
+  const goalHistory = useMemo(() => goal?.startedAt
+    ? [{ state: 'CLAUDE_EXECUTION', timestamp: goal.startedAt }]
+    : [], [goal?.startedAt]);
+  const thinkingLog = useThinkingLog(live, goalHistory);
   useDocumentTitle(goal?.objective || 'Goal');
 
   const refresh = useCallback(async () => {
@@ -382,7 +390,22 @@ function GoalDetails({ goalId }: { goalId: string }) {
       <label className="mt-3 block text-sm text-slate-600">Model for next continuation <select value={goal.requestedModel} onChange={event => act(() => requestGoalModel(goal.id, event.target.value))} className="ml-2 rounded border p-1">{models.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
     </section>}
     <section className="grid gap-5 lg:grid-cols-3"><div className="rounded-lg border bg-white p-4"><h2 className="font-semibold">Native todos</h2>{live.todos.length ? <TodoList liveDetails={live} history={[{ state: goal.taskState }]} /> : <p className="mt-3 text-sm text-slate-500">No provider todos yet.</p>}</div><div className="rounded-lg border bg-white p-4"><h2 className="font-semibold">Usage</h2><p className="mt-3 text-2xl font-bold">{totalTokens.toLocaleString()}</p>{goal.liveSummary.nativeGoal && <p className="mt-1 text-xs text-slate-500">Native goal: {goal.liveSummary.nativeGoal.status} · {duration(goal.liveSummary.nativeGoal.timeUsedSeconds * 1000)}</p>}<RealTimeStats tokenUsage={live.tokenUsage || undefined} /></div><div className="rounded-lg border bg-white p-4"><h2 className="font-semibold">Session</h2><p className="mt-3 break-all text-sm text-slate-600">{goal.sessionId || 'Waiting for provider identity'}</p></div></section>
-    <section className="rounded-lg border bg-slate-950 p-4 text-slate-100"><ExecutionEventLog events={live.events} collapsed={false} onToggleCollapse={() => undefined} lastThought={null} isTaskActive={mutable && goal.desiredState === 'running'} taskInfo={null} /></section>
+    <section className="overflow-hidden rounded-lg border bg-white">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div><h2 className="font-semibold text-slate-900">Goal output</h2><p className="mt-0.5 text-xs text-slate-500">Follow the agent's progress or inspect the raw provider stream.</p></div>
+        <div role="group" aria-label="Goal output view" className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
+          <button type="button" aria-pressed={outputMode === 'readable'} onClick={() => setOutputMode('readable')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'readable' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><FileText className="h-3.5 w-3.5" />Human readable</button>
+          <button type="button" aria-pressed={outputMode === 'terminal'} onClick={() => setOutputMode('terminal')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'terminal' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><Terminal className="h-3.5 w-3.5" />Raw terminal</button>
+        </div>
+      </header>
+      {outputMode === 'readable'
+        ? <div className="min-h-32 p-4">{thinkingLog.thinkingLogWithTimestamps.length > 0
+          ? <ThinkingLog events={thinkingLog.thinkingLogWithTimestamps} todos={live.todos} />
+          : <p className="text-sm text-slate-500">No human-readable output yet.</p>}</div>
+        : <div className="min-h-32 bg-slate-950 p-4 text-slate-100">{live.events.length > 0
+          ? <ExecutionEventLog events={live.events} collapsed={false} onToggleCollapse={() => undefined} lastThought={thinkingLog.lastThought} isTaskActive={mutable && goal.desiredState === 'running'} taskInfo={null} />
+          : <p className="text-sm text-slate-400">No terminal output yet.</p>}</div>}
+    </section>
   </div>;
 }
 

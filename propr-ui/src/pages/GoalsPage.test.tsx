@@ -206,6 +206,32 @@ describe('GoalsPage', () => {
     expect(goalsApi.pauseGoal).not.toHaveBeenCalled();
   });
 
+  it('shows human-readable goal output by default and lets the user switch to raw terminal output', async () => {
+    vi.mocked(getTaskLiveDetails).mockResolvedValue({
+      events: [
+        { id: 'thought-1', type: 'thought', content: 'Implemented the dashboard filters.' },
+        { id: 'tool-1', type: 'tool_use', toolName: 'Bash', input: { command: 'npm test' } },
+        { id: 'result-1', type: 'tool_result', result: 'Tests passed.' },
+      ],
+      todos: [],
+      currentTask: 'Run tests',
+      tokenUsage: null,
+    });
+
+    render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByText('Implemented the dashboard filters.')).toBeInTheDocument());
+    expect(screen.getByText('IMPLEMENTATION LOG')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Human readable' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Raw terminal' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByText('npm test')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Raw terminal' }));
+
+    expect(screen.getByRole('button', { name: 'Raw terminal' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getAllByText('npm test')).toHaveLength(2);
+  });
+
   it('accepts a correction while the initial provider identity is still pending', async () => {
     vi.mocked(goalsApi.getGoal).mockResolvedValue({ goal: { ...goal, sessionId: null } });
     render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
