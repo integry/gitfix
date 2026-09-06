@@ -50,7 +50,7 @@ const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: 
   </main>;
 };
 
-const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; retry(): void }> = ({ snapshot, busy, error, back, retry }) => {
+const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; retry(): void; review(): void }> = ({ snapshot, busy, error, back, retry, review }) => {
   const failed = snapshot.state?.steps.find(step => step.status === 'failed');
   return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon desktop-setup-error-icon" />
     <span className="desktop-eyebrow">Recovery</span><h1>{snapshot.phase === 'interrupted' ? 'Continue your setup' : 'Setup needs attention'}</h1>
@@ -58,7 +58,8 @@ const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error:
     {(failed?.nextAction || snapshot.errors?.[0]?.nextAction) && <div className="desktop-setup-recovery">{failed?.nextAction || snapshot.errors?.[0]?.nextAction}</div>}
     <InlineError message={error} />
     <div className="desktop-setup-footer"><button className="desktop-secondary-button" type="button" onClick={back}>Back</button>
-      <button className="desktop-primary-button" type="button" disabled={busy} onClick={retry}><RotateCcw /> {busy ? 'Waiting…' : snapshot.reconfigurationRequired ? 'Review saved choices' : 'Retry setup'}</button></div>
+      {snapshot.reconfigurationRequired && <button className="desktop-secondary-button" type="button" disabled={busy} onClick={review}>Review saved choices</button>}
+      <button className="desktop-primary-button" type="button" disabled={busy} onClick={retry}><RotateCcw /> {busy ? 'Waiting…' : 'Retry setup'}</button></div>
   </main>;
 };
 
@@ -112,9 +113,11 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
     return () => { mounted = false; unsubscribe(); };
   }, [adapter, statusAttempt]);
   const request = useMemo(() => snapshot ? requestFrom(snapshot.sessionId, draft) : null, [draft, snapshot]);
-  const run = async (retry: boolean) => {
+  const run = async (retry: boolean, review = false) => {
     if (!request) return;
-    if (retry && snapshot?.reconfigurationRequired && !reconfiguring) { setStage(snapshot.resume?.reconfigurationStage ?? 'github'); setReconfiguring(true); return; }
+    if (review && snapshot?.reconfigurationRequired && !reconfiguring) {
+      setStage(snapshot.resume?.reconfigurationStage ?? 'github'); setReconfiguring(true); return;
+    }
     setBusy(true); setError(null);
     try {
       const nextSnapshot = retry ? reconfiguring ? await adapter.retry(request) : await adapter.retry() : await adapter.start(request);
@@ -139,7 +142,7 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
   if (!snapshot) return <div className="desktop-loading"><LoaderCircle className="desktop-spin" /> Loading setup…</div>;
   if (snapshot.phase === 'unsupported') return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon" /><h1>Local setup is unavailable</h1><p>{snapshot.error}</p><button className="desktop-primary-button" onClick={onBack}>Back to instances</button></main>;
   if (snapshot.phase === 'running') return <Running snapshot={snapshot} busy={cancelling} error={error} back={onBack} cancel={() => void cancel()} />;
-  if (['failed', 'cancelled', 'interrupted'].includes(snapshot.phase) && !reconfiguring) return <Recovery snapshot={snapshot} busy={busy} error={error} back={onBack} retry={() => void run(true)} />;
+  if (['failed', 'cancelled', 'interrupted'].includes(snapshot.phase) && !reconfiguring) return <Recovery snapshot={snapshot} busy={busy} error={error} back={onBack} retry={() => void run(true)} review={() => void run(true, true)} />;
   if (snapshot.phase === 'completed' && snapshot.profile) return <main className="desktop-setup-wizard"><div className="desktop-setup-success"><Check /></div><span className="desktop-eyebrow">Setup complete</span><h1>ProPR is ready</h1><p>The local stack is healthy. Continue through the normal identity and pairing checks to open it.</p><div className="desktop-setup-footer"><button className="desktop-primary-button" onClick={() => onComplete(snapshot.profile!)}>Connect securely</button></div></main>;
   const index = stages.indexOf(stage);
   const next = () => { setError(null); if (stage === 'github' && draft.githubMode === 'app' && (!/^\d{1,20}$/.test(draft.appId) || !/^\d{1,20}$/.test(draft.installationId) || !draft.privateKey)) return setError('Enter numeric App and installation IDs, then choose the private key.');

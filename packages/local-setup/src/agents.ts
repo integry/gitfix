@@ -67,7 +67,7 @@ export interface AgentSetupActions {
   /** Authenticate one agent through its image; hosts may present a visible interactive handoff. */
   loginAgent(rootDir: string, type: string, options?: { signal?: AbortSignal }): Promise<AgentLoginResult>;
   /** Run a live, image-only request that mirrors the worker credential mount. */
-  validateAgents(rootDir: string, types: string[]): Promise<AgentConnectivityResult[]>;
+  validateAgents(rootDir: string, types: string[], options?: { signal?: AbortSignal }): Promise<AgentConnectivityResult[]>;
 }
 
 /** Inputs for {@link runAgentSetup}. */
@@ -211,7 +211,7 @@ export async function runAgentSetup(params: AgentSetupParams): Promise<AgentSetu
   params.signal?.throwIfAborted();
   try {
     onLog?.(`checking agent connectivity through worker image${selectedAgents.length === 1 ? "" : "s"}…`);
-    const checks = await actions.validateAgents(rootDir, selectedAgents);
+    const checks = await actions.validateAgents(rootDir, selectedAgents, { signal: params.signal });
     for (const check of checks) {
       onLog?.(`${check.type}: ${check.detail}`);
       if (check.status === "ok") {
@@ -223,6 +223,7 @@ export async function runAgentSetup(params: AgentSetupParams): Promise<AgentSetu
       outcome.nextCommands.push(`propr check agents --agents ${check.type}`);
     }
   } catch (error) {
+    params.signal?.throwIfAborted();
     outcome.errors.push(`could not validate agent connectivity: ${(error as Error).message}`);
     for (const type of selectedAgents) {
       if (loginable.has(type)) outcome.nextCommands.push(`propr agent login ${type}`);

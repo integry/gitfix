@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -12,6 +12,39 @@ const request: DesktopSetupRequest = {
   reinitialize: false, agents: [], github: { mode: 'demo' }, intake: { mode: 'keep' },
   whitelist: null, repository: null,
 };
+
+const successfulActions = (rootDir: string): SetupActions => ({
+  runChecks: async () => ({ rootDir, anyFail: false, cfg: {}, results: [
+    { name: 'Docker installed', group: 'Docker', status: 'ok', detail: 'Docker version fixture' },
+    { name: 'Docker daemon', group: 'Docker', status: 'ok', detail: 'Docker daemon fixture' },
+  ] }),
+  inspectStackInit: () => ({ rootDir, envExists: true, dirs: { data: true, logs: true, repos: true }, initialized: true }),
+  inspectDatastoreAdministrators: async () => ({ status: 'has-admin', databasePath: join(rootDir, 'data', 'propr.sqlite') }),
+  scaffoldStack: async () => { throw new Error('initialized fixture must not scaffold'); },
+  persistStackRoot: async () => undefined,
+  readEnvVars: () => ({ PROPR_DEMO_MODE: 'true', GITHUB_EVENT_INTAKE_MODE: 'polling' }),
+  applyEnvSelection: () => ({ written: [], skipped: [] }),
+  clearEnvKeys: () => undefined,
+  detectGithubAuthMode: () => ({ mode: 'demo', warnings: [] }),
+  prepareAgentCredentialDir: () => undefined,
+  pullImages: async () => ({ pulledCore: ['propr/api'], pulledAgents: [], failedCore: [], failedAgents: [] }),
+  isStackRunning: async () => true,
+  startStack: async () => undefined,
+  checkBackendHealth: async () => ({ healthy: true, detail: 'API healthy' }),
+  addRepository: async () => undefined,
+  resolveUiUrl: async () => 'http://localhost:3000',
+  openUrl: async () => undefined,
+  saveWhitelistSetting: async () => undefined,
+  hasGithubToken: () => false,
+  fetchRelayInstallations: async () => ({ username: 'fixture', installations: [] }),
+  enrollRelay: async () => ({ relayUrl: 'https://relay.example.test', token: 'fixture-token' }),
+  loginWithGithub: async () => false,
+  listAgents: async () => [],
+  addAgent: async () => undefined,
+  loginableAgents: async () => [],
+  loginAgent: async () => ({ available: false, success: false }),
+  validateAgents: async () => [],
+} as unknown as SetupActions);
 
 describe('desktop local setup controller', () => {
   it('cancels admitted engine work and allows a fresh retry without touching a real stack', async () => {
@@ -100,5 +133,85 @@ describe('desktop local setup controller', () => {
       await controller.shutdown();
       rmSync(appData, { recursive: true, force: true });
     }
+  });
+
+  it('exposes credential review while preserving an ordinary transient retry', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const privateKey = join(appData, 'github-app.pem');
+    writeFileSync(privateKey, 'private test fixture', { mode: 0o600 });
+    const controller = new DesktopSetupController({
+      actions: { runChecks: async () => ({ rootDir: join(appData, 'local-runtime'), anyFail: true,
+        results: [{ name: 'Docker daemon', group: 'Docker', status: 'fail', detail: 'Transient daemon failure.' }] }) } as unknown as SetupActions,
+      platform: 'linux', appDataDir: appData, defaultRootDir: join(appData, 'local-runtime'),
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => privateKey, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const selection = await controller.selectPrivateKey();
+      assert.ok(selection);
+      const failed = await controller.start({
+        ...request,
+        github: { mode: 'app', appId: '123', installationId: '456', privateKeyCapability: selection.capability },
+      });
+      assert.equal(failed.phase, 'failed');
+      assert.equal(failed.reconfigurationRequired, true);
+      assert.equal(failed.resume?.reconfigurationStage, 'github');
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
+  it('restores the same completed profile after a controller restart', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const rootDir = join(appData, 'local-runtime');
+    const statePath = join(appData, 'setup', 'state.json');
+    const options = {
+      actions: successfulActions(rootDir), platform: 'linux' as const, appDataDir: appData,
+      defaultRootDir: rootDir, statePath, sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    };
+    const first = new DesktopSetupController(options);
+    let restarted: DesktopSetupController | undefined;
+    try {
+      const completed = await first.start(request);
+      assert.equal(completed.phase, 'completed');
+      assert.ok(completed.profile);
+      await first.shutdown();
+
+      restarted = new DesktopSetupController(options);
+      const restored = await restarted.status();
+      assert.equal(restored.phase, 'completed');
+      assert.deepEqual(restored.profile, completed.profile);
+    } finally {
+      await first.shutdown();
+      await restarted?.shutdown();
+      rmSync(appData, { recursive: true, force: true });
+    }
+  });
+
+  it('turns an unresolvable persisted completion into explicit interrupted recovery', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const statePath = join(appData, 'setup', 'state.json');
+    mkdirSync(join(appData, 'setup'), { mode: 0o700 });
+    writeFileSync(statePath, `${JSON.stringify({
+      version: 1, phase: 'completed', resume: {
+        agents: [], reinitialize: false, github: { mode: 'demo' }, intake: { mode: 'keep' },
+        whitelist: null, repository: null,
+      },
+    })}\n`, { mode: 0o600 });
+    const controller = new DesktopSetupController({
+      actions: {} as SetupActions, platform: 'linux', appDataDir: appData, defaultRootDir: join(appData, 'local-runtime'),
+      statePath, sessionId: request.sessionId, selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const restored = await controller.status();
+      assert.equal(restored.phase, 'interrupted');
+      assert.match(restored.error ?? '', /could not be restored/i);
+      assert.equal(restored.resumeAvailable, true);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
   });
 });

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync,
-  readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync,
+  readSync, realpathSync, renameSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -20,6 +20,20 @@ export class SetupCapabilityError extends Error {
 
 const assertOwner = (uid: bigint): void => {
   if (typeof process.getuid === 'function' && uid !== BigInt(process.getuid())) throw new SetupCapabilityError('The selection must be owned by the current user.');
+};
+
+const readBoundedKey = (fd: number): Buffer => {
+  const buffer = Buffer.allocUnsafe(MAX_KEY_BYTES + 1);
+  let offset = 0;
+  while (offset < buffer.length) {
+    const count = readSync(fd, buffer, offset, buffer.length - offset, null);
+    if (count === 0) break;
+    offset += count;
+  }
+  if (offset === 0 || offset > MAX_KEY_BYTES) {
+    throw new SetupCapabilityError('Choose a non-empty private key no larger than 1 MiB.');
+  }
+  return buffer.subarray(0, offset);
 };
 
 const ensurePrivateDirectory = (path: string): void => {
@@ -127,9 +141,17 @@ export class SetupFilesystemCapabilities {
     const temporary = `${target}.tmp`;
     try {
       const opened = fstatSync(source, { bigint: true });
-      if (opened.dev !== record.device || opened.ino !== record.inode) throw new SetupCapabilityError();
+      if (!opened.isFile() || opened.dev !== record.device || opened.ino !== record.inode
+        || opened.nlink !== 1n || (opened.mode & 0o077n) !== 0n
+        || opened.size <= 0n || opened.size > BigInt(MAX_KEY_BYTES)) throw new SetupCapabilityError();
+      assertOwner(opened.uid);
       signal?.throwIfAborted();
-      writeFileSync(temporary, readFileSync(source), { mode: 0o600, flag: 'wx' });
+      const contents = readBoundedKey(source);
+      const consumed = fstatSync(source, { bigint: true });
+      if (!consumed.isFile() || consumed.dev !== opened.dev || consumed.ino !== opened.ino
+        || consumed.nlink !== 1n || consumed.uid !== opened.uid || (consumed.mode & 0o077n) !== 0n
+        || consumed.size <= 0n || consumed.size > BigInt(MAX_KEY_BYTES)) throw new SetupCapabilityError();
+      writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' });
       signal?.throwIfAborted();
       renameSync(temporary, target);
       return target;

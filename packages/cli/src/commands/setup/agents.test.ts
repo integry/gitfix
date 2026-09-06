@@ -220,6 +220,32 @@ test("an aborted desktop login stops before image validation", async () => {
   assert.equal(validationCalled, false);
 });
 
+test("an aborted connectivity check receives the setup signal and is not converted to a warning", async () => {
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
+  let admitted!: () => void;
+  const started = new Promise<void>(resolve => { admitted = resolve; });
+  const setup = runAgentSetup({
+    rootDir: "/stack",
+    selectedAgents: ["codex"],
+    actions: mockAgentActions({
+      validateAgents: async (_root, _types, options) => new Promise((_resolve, reject) => {
+        receivedSignal = options?.signal;
+        admitted();
+        options?.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+        }, { once: true });
+      }),
+    }),
+    signal: controller.signal,
+  });
+  await started;
+  controller.abort();
+
+  await assert.rejects(setup, error => (error as Error).name === "AbortError");
+  assert.equal(receivedSignal, controller.signal);
+});
+
 test("a confirm choice outside the candidate set is ignored", async () => {
   const loggedIn: string[] = [];
   await runAgentSetup({

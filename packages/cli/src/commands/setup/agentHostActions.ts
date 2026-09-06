@@ -59,11 +59,15 @@ export function createDefaultAgentSetupActions(configManager?: ConfigManager, op
         rmSync(temporaryRoot, { recursive: true, force: true });
       }
     },
-    async validateAgents(rootDir, types) {
+    async validateAgents(rootDir, types, validationOptions = {}) {
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { validateAgents } = await import("../agentValidation.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
-      const rows = await validateAgents(orch, cfg, { agents: types, skipHost: true });
+      const rows = await validateAgents(orch, cfg, {
+        agents: types,
+        skipHost: true,
+        signal: validationOptions.signal,
+      });
       return rows.map((row) => ({
         type: row.type,
         status: row.image.status === "ok" ? "ok" as const : row.image.status === "fail" ? "failed" as const : "skipped" as const,

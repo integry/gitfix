@@ -136,6 +136,26 @@ describe('production local setup journey', () => {
     expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
   });
 
+  it('offers credential review without replacing ordinary retry for a transient failure', async () => {
+    const requiresReview: DesktopSetupSnapshot = {
+      ...idle, phase: 'failed', error: 'The backend was temporarily unavailable.',
+      resumeAvailable: true, reconfigurationRequired: true,
+      resume: {
+        agents: [], reinitialize: false,
+        github: { mode: 'app', appId: '123', installationId: '456', reconfigurationRequired: true },
+        intake: { mode: 'polling' }, whitelist: null, repository: null, reconfigurationStage: 'github',
+      },
+    };
+    const retry = vi.fn(async () => completed);
+    const adapter = guidedAdapter({ status: vi.fn(async () => requiresReview), retry });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(await screen.findByRole('button', { name: 'Review saved choices' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
+    expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
+    expect(retry).toHaveBeenCalledWith();
+  });
+
   it.each(['failed', 'cancelled'] as const)('returns a %s reconfigured retry to credential-free recovery', async phase => {
     const resume = {
       agents: ['codex'], reinitialize: false, github: { mode: 'keep' as const },

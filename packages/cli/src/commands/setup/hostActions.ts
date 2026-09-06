@@ -19,7 +19,18 @@ import { localhostServiceUrl } from "../../utils/dockerPort.js";
 import { createDefaultAgentSetupActions } from "./agentHostActions.js";
 import type { AuthenticationCommandHandoff, CapturedCommandRunner } from "../../auth/githubLogin.js";
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", abort);
+    resolve();
+  }, ms);
+  const abort = () => {
+    clearTimeout(timer);
+    reject(signal?.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" }));
+  };
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+});
 
 function assertSafeAgentCredentialDir(path: string, name = "Agent credential path"): void {
   if (!isAbsolute(path) || normalize(path) === "/" || path.includes(":") || /[\u0000-\u001f\u007f-\u009f]/.test(path)) {
@@ -91,7 +102,7 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
         onLog?.(`pulling ${tag}…`);
         // Async exec keeps the event loop free so the wizard's Ink spinner keeps
         // animating while the (often slow) pull runs, instead of freezing.
-        const pulled = await orch.dockerAsync(["pull", tag]);
+        const pulled = await orch.dockerAsync(["pull", tag], { signal });
         signal?.throwIfAborted();
         if (pulled.status === 0) {
           try {
@@ -106,10 +117,10 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
       }
       return result;
     },
-    async isStackRunning(rootDir) {
+    async isStackRunning(rootDir, signal) {
       const { getHostConfig } = await import("../../orchestrator/index.js");
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
-      return orch.isStackRunningAsync(cfg);
+      return orch.isStackRunningAsync(cfg, signal);
     },
     async startStack({ rootDir, ui, docs, onLog, signal }) {
       signal?.throwIfAborted();
@@ -132,11 +143,12 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
       // Use the async start path: `propr setup` drives this from behind a live
       // Ink TUI, so the blocking synchronous startStack would freeze the spinner
       // and swallow keystrokes for the seconds-to-minutes a cold start takes.
-      await orch.ensureNetworkAsync(cfg, onLog);
+      await orch.ensureNetworkAsync(cfg, onLog, signal);
       await orch.startStackAsync(cfg, {
         ui: ui ?? configManager?.getUiEnabled() ?? true,
         docs: docs ?? cfg.docsEnabled,
         onLog,
+        signal,
       });
       signal?.throwIfAborted();
     },
@@ -165,7 +177,7 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
           lastError = (error as Error).message;
         }
         if (Date.now() >= deadline) break;
-        await sleep(2_000);
+        await sleep(2_000, signal);
         signal?.throwIfAborted();
       } while (Date.now() < deadline);
       return { healthy: false, detail: `backend not healthy within ${Math.round(timeoutMs / 1000)}s (${lastError})` };

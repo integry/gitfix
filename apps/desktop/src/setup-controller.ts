@@ -24,6 +24,7 @@ interface PersistedSetup {
   version: 1;
   phase: 'running' | 'cancelled' | 'failed' | 'completed';
   resume: DesktopSetupResumeView;
+  profile?: DesktopSetupSnapshot['profile'];
 }
 
 export interface DesktopSetupControllerOptions {
@@ -41,6 +42,22 @@ export interface DesktopSetupControllerOptions {
 }
 
 const copyResume = (value: DesktopSetupResumeView): DesktopSetupResumeView => structuredClone(value);
+const SETUP_PHASES = new Set<PersistedSetup['phase']>(['running', 'cancelled', 'failed', 'completed']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const validCompletedProfile = (value: unknown): value is NonNullable<DesktopSetupSnapshot['profile']> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const profile = value as Record<string, unknown>;
+  if (Object.keys(profile).some(key => !['id', 'name', 'baseUrl', 'kind'].includes(key))
+    || typeof profile.id !== 'string' || !UUID.test(profile.id)
+    || typeof profile.name !== 'string' || profile.name.length === 0 || profile.name.length > 100
+    || profile.kind !== 'local' || typeof profile.baseUrl !== 'string' || profile.baseUrl.length > 2048) return false;
+  try {
+    const url = new URL(profile.baseUrl);
+    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+      && Boolean(url.port) && !url.username && !url.password && !url.search && !url.hash && url.pathname === '/';
+  } catch { return false; }
+};
 
 export class DesktopSetupController {
   readonly #options: DesktopSetupControllerOptions;
@@ -164,10 +181,11 @@ export class DesktopSetupController {
   }
 
   #executeResolved(resolved: ResolvedRequest, retry: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
+    const reconfigurationRequired = Boolean(this.#resume?.reconfigurationStage);
     this.#snapshot = {
       phase: 'running', capability: getLocalSetupCapability(this.#options.platform ?? process.platform),
       sessionId: this.#sessionId, logs: retry ? ['Retrying setup with a fresh host inspection…'] : [],
-      resume: copyResume(this.#resume!), resumeAvailable: true,
+      resume: copyResume(this.#resume!), resumeAvailable: true, reconfigurationRequired,
     };
     this.#publish();
     return this.#execute(resolved, retry, signal);
@@ -194,12 +212,14 @@ export class DesktopSetupController {
       this.#snapshot = {
         ...this.#snapshot, phase: result.completed ? 'completed' : result.cancelled ? 'cancelled' : 'failed',
         state: result.state, errors: result.errors, profile,
+        reconfigurationRequired: !result.completed && Boolean(this.#resume?.reconfigurationStage),
       };
     } catch (error) {
       const cancelled = signal.aborted || (error as Error).name === 'AbortError';
       if (!cancelled) this.#options.diagnose?.('desktop.setup.run_failed', { name: (error as Error).name });
-      this.#snapshot = { ...this.#snapshot, phase: cancelled ? 'cancelled' : 'failed', error: cancelled
-        ? 'Setup was cancelled safely.' : 'Local setup failed unexpectedly. Review the protected desktop log for details.' };
+      this.#snapshot = { ...this.#snapshot, phase: cancelled ? 'cancelled' : 'failed',
+        reconfigurationRequired: Boolean(this.#resume?.reconfigurationStage), error: cancelled
+          ? 'Setup was cancelled safely.' : 'Local setup failed unexpectedly. Review the protected desktop log for details.' };
     }
     this.#publish();
     return this.#publicSnapshot();
@@ -249,18 +269,28 @@ export class DesktopSetupController {
     if (this.#loaded) return; this.#loaded = true;
     try {
       const persisted = JSON.parse(readFileSync(this.#options.statePath, 'utf8')) as PersistedSetup;
-      if (persisted.version !== 1 || !persisted.resume) throw new Error('invalid');
+      if (persisted.version !== 1 || !persisted.resume || !SETUP_PHASES.has(persisted.phase)) throw new Error('invalid');
       this.#resume = copyResume(persisted.resume);
-      this.#snapshot = { ...this.#snapshot, phase: persisted.phase === 'running' ? 'interrupted' : persisted.phase,
+      const completedProfile = persisted.phase === 'completed' && validCompletedProfile(persisted.profile)
+        ? structuredClone(persisted.profile) : undefined;
+      const restorationFailed = persisted.phase === 'completed' && !completedProfile;
+      this.#snapshot = { ...this.#snapshot,
+        phase: persisted.phase === 'running' || restorationFailed ? 'interrupted' : persisted.phase,
         resume: copyResume(persisted.resume), resumeAvailable: true,
-        reconfigurationRequired: Boolean(persisted.resume.reconfigurationStage),
-        ...(persisted.phase === 'running' ? { error: 'Setup was interrupted. Review the saved choices to continue.' } : {}) };
+        reconfigurationRequired: !completedProfile && Boolean(persisted.resume.reconfigurationStage),
+        ...(completedProfile ? { profile: completedProfile } : {}),
+        ...(persisted.phase === 'running' ? { error: 'Setup was interrupted. Review the saved choices to continue.' }
+          : restorationFailed ? { error: 'Completed setup could not be restored. Review the saved choices to recover.' } : {}) };
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.#options.diagnose?.('desktop.setup.hydration_failed'); }
   }
 
   #persist(): void {
     if (!this.#resume || this.#snapshot.phase === 'idle' || this.#snapshot.phase === 'unsupported') return;
-    const value: PersistedSetup = { version: 1, phase: this.#snapshot.phase === 'interrupted' ? 'running' : this.#snapshot.phase, resume: this.#resume };
+    const value: PersistedSetup = { version: 1,
+      phase: this.#snapshot.phase === 'interrupted' ? 'running' : this.#snapshot.phase,
+      resume: this.#resume,
+      ...(this.#snapshot.phase === 'completed' && this.#snapshot.profile ? { profile: this.#snapshot.profile } : {}),
+    };
     const path = this.#options.statePath; const temp = `${path}.tmp`;
     try { mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); writeFileSync(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 }); renameSync(temp, path); }
     catch { try { unlinkSync(temp); } catch { /* not created */ } this.#snapshot = { ...this.#snapshot, resumeAvailable: false }; }

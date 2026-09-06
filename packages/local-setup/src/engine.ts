@@ -421,7 +421,7 @@ export interface SetupActions extends AgentSetupActions {
   /** Ensure a selected agent's host credential path is a directory, creating it securely when absent. */
   prepareAgentCredentialDir(path: string): void;
   pullImages(params: PullImagesParams): Promise<PullImagesResult>;
-  isStackRunning(rootDir: string): Promise<boolean>;
+  isStackRunning(rootDir: string, signal?: AbortSignal): Promise<boolean>;
   startStack(params: StartStackParams): Promise<void>;
   checkBackendHealth(params: BackendHealthParams): Promise<BackendHealth>;
   addRepository(selection: RepoSelection, rootDir: string): Promise<void>;
@@ -1219,7 +1219,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
   //    not recreated, so user data and live work are untouched.
   begin("start-stack");
   try {
-    const alreadyRunning = await actions.isStackRunning(rootDir);
+    const alreadyRunning = await actions.isStackRunning(rootDir, options.signal);
     const startConfirmed = prompts.confirmStartStack ? await prompts.confirmStartStack({ rootDir, alreadyRunning }) : true;
     if (!startConfirmed) {
       settle("start-stack", {
@@ -1343,7 +1343,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       // Prefer the settings API when the backend is up so the change applies
       // immediately (and never overwrites unrelated settings); always mirror into
       // .env so it survives a restart. Falls back to .env if the API is down.
-      const backendRunning = backendReady && await actions.isStackRunning(rootDir);
+      const backendRunning = backendReady && await actions.isStackRunning(rootDir, options.signal);
       const saved = await saveWhitelist({
         users: cleaned,
         backendRunning,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -44,6 +44,60 @@ describe('desktop setup host authentication boundary', () => {
       assert.equal(host.actions.hasGithubToken(), true);
     } finally {
       rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it('aborts and reaps a production Docker operation without waiting for its natural exit', async () => {
+    const directory = fixtureDirectory();
+    const docker = join(directory, 'docker');
+    const pidPath = join(directory, 'docker.pid');
+    const originalPath = process.env.PATH;
+    let pid: number | undefined;
+    writeFileSync(docker, `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(process.env.PROPR_TEST_DOCKER_PID, String(process.pid));
+process.on('SIGTERM', () => undefined);
+setInterval(() => undefined, 1000);
+`, { mode: 0o700 });
+    chmodSync(docker, 0o700);
+    process.env.PATH = `${directory}:${originalPath ?? ''}`;
+    process.env.PROPR_TEST_DOCKER_PID = pidPath;
+    const controller = new AbortController();
+    let operation: Promise<unknown> | undefined;
+    try {
+      const rootDir = join(directory, 'root');
+      mkdirSync(rootDir, { mode: 0o700 });
+      const host = await createDesktopSetupHost({
+        configDir: join(directory, 'config'),
+        capturedCommand: async () => ({ status: 1, stdout: '' }),
+        authenticationHandoff: async () => ({ status: 1 }),
+      });
+      operation = host.actions.pullImages({
+        rootDir,
+        agentTypes: [],
+        signal: controller.signal,
+      });
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(pidPath) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(existsSync(pidPath), true, 'fixture Docker process did not start');
+      pid = Number(readFileSync(pidPath, 'utf8'));
+
+      controller.abort();
+      await Promise.race([
+        assert.rejects(operation, error => (error as Error).name === 'AbortError'),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Docker cancellation did not settle')), 2_000)),
+      ]);
+      assert.throws(() => process.kill(pid!, 0), (error: unknown) => (error as NodeJS.ErrnoException).code === 'ESRCH');
+    } finally {
+      process.env.PATH = originalPath;
+      delete process.env.PROPR_TEST_DOCKER_PID;
+      if (pid) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ }
+      }
+      await operation?.catch(() => undefined);
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
