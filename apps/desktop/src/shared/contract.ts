@@ -29,8 +29,23 @@ export const IPC_CHANNELS = Object.freeze({
   setupAcquireWebhookSecret: 'desktop:setup-acquire-webhook-secret',
   setupProgress: 'desktop:setup-progress',
   deepLink: 'desktop:deep-link',
+  deepLinkAcknowledgement: 'desktop:deep-link-acknowledgement',
   acceptanceJourneyStage: 'desktop:acceptance-journey-stage',
 } as const);
+
+export interface DesktopDeepLinkDelivery {
+  deliveryId: number;
+  url: string;
+}
+
+export type DesktopDeepLinkConsumption = {
+  kind: 'connect-confirmation' | 'open-queued' | 'open-navigated';
+  target: string;
+};
+
+export interface DesktopDeepLinkAcknowledgement extends DesktopDeepLinkDelivery {
+  consumption: DesktopDeepLinkConsumption;
+}
 
 export type DesktopAcceptanceJourneyStage =
   | 'AUTHENTICATION_REQUIRED'
@@ -178,7 +193,9 @@ export interface DesktopSetupSnapshot {
 export interface DesktopBridge {
   app: {
     getMetadata(): Promise<DesktopAppMetadata>;
-    onDeepLink(listener: (url: string) => void): () => void;
+    onDeepLink(listener: (
+      url: string,
+    ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
   };
   auth: {
     logout(apiBaseUrl: string): Promise<void>;

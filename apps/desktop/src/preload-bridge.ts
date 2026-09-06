@@ -1,10 +1,15 @@
-import type { DesktopBridge } from './shared/contract';
+import type {
+  DesktopBridge,
+  DesktopDeepLinkAcknowledgement,
+  DesktopDeepLinkConsumption,
+  DesktopDeepLinkDelivery,
+} from './shared/contract';
 import { IPC_CHANNELS } from './shared/contract';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
-  on(channel: string, listener: (event: unknown, value: any) => void): void;
-  removeListener(channel: string, listener: (event: unknown, value: any) => void): void;
+  on(channel: string, listener: (event: unknown, value: unknown) => void): void;
+  removeListener(channel: string, listener: (event: unknown, value: unknown) => void): void;
 }
 
 const invoke = <T>(ipc: PreloadIpc, channel: string, ...args: unknown[]): Promise<T> =>
@@ -17,18 +22,49 @@ export const createDesktopBridge = (
     || process.platform === 'win32',
   connectJourneyAcceptance = false,
 ): DesktopBridge => {
-  const deepLinkListeners = new Set<(url: string) => void>();
-  const pendingDeepLinks: string[] = [];
+  const deepLinkListeners = new Set<(url: string) => (
+    DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>
+  )>();
+  const pendingDeepLinks: DesktopDeepLinkDelivery[] = [];
+  const isDelivery = (value: unknown): value is DesktopDeepLinkDelivery => Boolean(
+    value && typeof value === 'object'
+      && Number.isSafeInteger((value as DesktopDeepLinkDelivery).deliveryId)
+      && (value as DesktopDeepLinkDelivery).deliveryId > 0
+      && typeof (value as DesktopDeepLinkDelivery).url === 'string',
+  );
+  const isConsumption = (value: unknown): value is DesktopDeepLinkConsumption => Boolean(
+    value && typeof value === 'object'
+      && ['connect-confirmation', 'open-queued', 'open-navigated'].includes(
+        (value as DesktopDeepLinkConsumption).kind,
+      )
+      && typeof (value as DesktopDeepLinkConsumption).target === 'string'
+      && (value as DesktopDeepLinkConsumption).target.length > 0
+      && (value as DesktopDeepLinkConsumption).target.length <= 2_048,
+  );
+  const consume = async (delivery: DesktopDeepLinkDelivery): Promise<void> => {
+    const acknowledgements = (await Promise.all(
+      [...deepLinkListeners].map(listener => listener(delivery.url)),
+    )).filter(isConsumption);
+    if (acknowledgements.length !== 1) return;
+    const acknowledgement: DesktopDeepLinkAcknowledgement = {
+      ...delivery,
+      consumption: acknowledgements[0],
+    };
+    await invoke(ipc, IPC_CHANNELS.deepLinkAcknowledgement, acknowledgement).catch(() => undefined);
+  };
   const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
+    if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
       pendingDeepLinks.push(value);
       return;
     }
-    deepLinkListeners.forEach(listener => listener(value));
+    void consume(value).catch(() => undefined);
   });
   ipc.on(IPC_CHANNELS.setupProgress, (_event, value) => {
-    setupProgressListeners.forEach(listener => listener(value));
+    setupProgressListeners.forEach(listener => listener(
+      value as Awaited<ReturnType<DesktopBridge['localSetup']['status']>>,
+    ));
   });
 
   const bridge: DesktopBridge = {
@@ -36,7 +72,7 @@ export const createDesktopBridge = (
       getMetadata: () => invoke(ipc, IPC_CHANNELS.appMetadata),
       onDeepLink: (listener) => {
         deepLinkListeners.add(listener);
-        pendingDeepLinks.splice(0).forEach(value => listener(value));
+        pendingDeepLinks.splice(0).forEach(delivery => { void consume(delivery).catch(() => undefined); });
         return () => deepLinkListeners.delete(listener);
       },
     },
