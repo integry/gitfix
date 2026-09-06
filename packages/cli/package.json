@@ -13,6 +13,10 @@
     "./desktop-discovery": {
       "types": "./dist/desktopDiscovery.d.ts",
       "import": "./dist/desktopDiscovery.js"
+    },
+    "./desktop-local-setup": {
+      "types": "./dist/desktopLocalSetup.d.ts",
+      "import": "./dist/desktopLocalSetup.js"
     }
   },
   "bin": {

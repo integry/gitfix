@@ -544,18 +544,37 @@ export function docker(args, { capture = false, timeout, env, maxBuffer } = {}) 
  * On timeout it kills the child and reports an ETIMEDOUT error, matching the
  * spawnSync timeout contract that `dockerError` inspects.
  */
-export function dockerAsync(args, { timeout } = {}) {
-    return new Promise((resolveResult) => {
+export function dockerAsync(args, { timeout, signal } = {}) {
+    signal?.throwIfAborted();
+    return new Promise((resolveResult, reject) => {
         const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });
         let stdout = '';
         let stderr = '';
         let settled = false;
         let timeoutError = null;
+        let aborted = false;
+        let killTimer = null;
         const finish = (res) => {
             if (settled) return;
             settled = true;
             if (timer) clearTimeout(timer);
-            resolveResult(res);
+            if (killTimer) clearTimeout(killTimer);
+            signal?.removeEventListener('abort', abort);
+            if (aborted) {
+                const error = signal?.reason instanceof Error
+                    ? signal.reason
+                    : Object.assign(new Error('docker command aborted'), { name: 'AbortError' });
+                reject(error);
+            } else {
+                resolveResult(res);
+            }
+        };
+        const abort = () => {
+            if (settled || aborted) return;
+            aborted = true;
+            child.kill('SIGTERM');
+            killTimer = setTimeout(() => child.kill('SIGKILL'), 100);
+            killTimer.unref?.();
         };
         const timer = timeout
             ? setTimeout(() => {
@@ -566,7 +585,9 @@ export function dockerAsync(args, { timeout } = {}) {
         child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
         child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
         child.on('error', (error) => finish({ status: null, stdout, stderr, error }));
-        child.on('close', (code, signal) => finish({ status: code, stdout, stderr, signal, error: timeoutError || undefined }));
+        child.on('close', (code, closeSignal) => finish({ status: code, stdout, stderr, signal: closeSignal, error: timeoutError || undefined }));
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
     });
 }
 
@@ -631,6 +652,11 @@ function imagePresentLocally(tag) {
     return res.stdout.trim().length > 0;
 }
 
+async function imagePresentLocallyAsync(tag, signal) {
+    const res = await dockerAsync(['images', '-q', tag], { signal });
+    return res.stdout.trim().length > 0;
+}
+
 function firstLine(value) {
     return (value || '').trim().split('\n')[0] || '';
 }
@@ -644,6 +670,17 @@ export function normalizeDigest(value) {
 
 function localRepoDigests(tag) {
     const res = docker(['image', 'inspect', '--format', '{{json .RepoDigests}}', tag], { capture: true });
+    if (res.status !== 0) return null;
+    try {
+        const parsed = JSON.parse(res.stdout.trim() || '[]');
+        return Array.isArray(parsed) ? parsed.map(normalizeDigest).filter(Boolean) : [];
+    } catch {
+        return [];
+    }
+}
+
+async function localRepoDigestsAsync(tag, signal) {
+    const res = await dockerAsync(['image', 'inspect', '--format', '{{json .RepoDigests}}', tag], { signal });
     if (res.status !== 0) return null;
     try {
         const parsed = JSON.parse(res.stdout.trim() || '[]');
@@ -781,8 +818,8 @@ export function inspectImageFreshness(tag, { skipRemoteCheck = false } = {}) {
 }
 
 /** Async mirror of remoteManifestDigest using non-blocking docker exec. */
-async function remoteManifestDigestAsync(tag) {
-    const res = await dockerAsync(['manifest', 'inspect', '--verbose', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS });
+async function remoteManifestDigestAsync(tag, signal) {
+    const res = await dockerAsync(['manifest', 'inspect', '--verbose', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS, signal });
     if (res.status !== 0) {
         return { ok: false, error: dockerError(res, 'docker manifest inspect failed') };
     }
@@ -791,13 +828,13 @@ async function remoteManifestDigestAsync(tag) {
         if (digests.length > 0) {
             let allDigests = digests;
             if (res.stdout.trim().startsWith('[')) {
-                const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS });
+                const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS, signal });
                 if (buildx.status === 0) allDigests = appendDigest(allDigests, remoteDigestFromImagetoolsInspectOutput(buildx.stdout));
             }
             return { ok: true, digests: allDigests, digest: allDigests[0] };
         }
 
-        const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS });
+        const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS, signal });
         if (buildx.status !== 0) {
             return { ok: false, error: dockerError(buildx, 'docker buildx imagetools inspect failed') };
         }
@@ -811,16 +848,16 @@ async function remoteManifestDigestAsync(tag) {
 }
 
 /**
- * Async mirror of inspectImageFreshness. The local (fast) docker calls stay
- * synchronous; only the remote registry probe is awaited, so many tags can be
- * checked concurrently without blocking the event loop.
+ * Async mirror of inspectImageFreshness. Every Docker call accepts the same
+ * abort signal so setup can cancel local metadata and remote registry probes.
  */
-export async function inspectImageFreshnessAsync(tag, { skipRemoteCheck = false } = {}) {
-    if (!imagePresentLocally(tag)) {
+export async function inspectImageFreshnessAsync(tag, { skipRemoteCheck = false, signal } = {}) {
+    signal?.throwIfAborted();
+    if (!await imagePresentLocallyAsync(tag, signal)) {
         return { status: 'missing', tag };
     }
 
-    const localDigests = localRepoDigests(tag);
+    const localDigests = await localRepoDigestsAsync(tag, signal);
     if (!localDigests) {
         return { status: 'unknown', tag, error: 'local image metadata could not be inspected' };
     }
@@ -833,7 +870,7 @@ export async function inspectImageFreshnessAsync(tag, { skipRemoteCheck = false 
         return { status: 'unknown', tag, localDigests, localOnly: true, error: 'local image has no registry digest; pull the tag to verify freshness' };
     }
 
-    return classifyImageFreshness(tag, localDigests, await remoteManifestDigestAsync(tag));
+    return classifyImageFreshness(tag, localDigests, await remoteManifestDigestAsync(tag, signal));
 }
 
 function cachedImageFreshness(cache, tag, opts) {
@@ -1289,77 +1326,77 @@ export function runMigrationPhase(cfg, { onLog, freshnessCache } = {}) {
 // one, change the other.
 // ---------------------------------------------------------------------------
 
-async function containerExistsAsync(cfg, name) {
-    const res = await dockerAsync(['ps', '-a', '--filter', `name=^${name}$`, '--format', '{{.Names}}']);
+async function containerExistsAsync(cfg, name, signal) {
+    const res = await dockerAsync(['ps', '-a', '--filter', `name=^${name}$`, '--format', '{{.Names}}'], { signal });
     return res.stdout.trim() === name;
 }
 
-async function removeIfExistsAsync(cfg, name, onLog) {
-    if (await containerExistsAsync(cfg, name)) {
+async function removeIfExistsAsync(cfg, name, onLog, signal) {
+    if (await containerExistsAsync(cfg, name, signal)) {
         onLog?.(`  · removing stale ${name}`);
-        await dockerAsync(['rm', '-f', name]);
+        await dockerAsync(['rm', '-f', name], { signal });
     }
 }
 
-async function containerRunningAsync(cfg, name) {
-    const res = await dockerAsync(['ps', '--filter', `name=^${name}$`, '--format', '{{.Names}}']);
+async function containerRunningAsync(cfg, name, signal) {
+    const res = await dockerAsync(['ps', '--filter', `name=^${name}$`, '--format', '{{.Names}}'], { signal });
     if (res.status !== 0) {
         throw new Error(`Cannot safely inspect ${name} before database migration: ${firstLine(res.stderr || res.error?.message || 'docker ps failed')}`);
     }
     return res.stdout.trim().split('\n').includes(name);
 }
 
-async function assertNoLiveMigrationOwnerAsync(cfg, service) {
+async function assertNoLiveMigrationOwnerAsync(cfg, service, signal) {
     if (!DATABASE_SERVICES.has(service)) return;
     const migrationName = `${cfg.stack}-migrate`;
-    if (await containerRunningAsync(cfg, migrationName)) {
+    if (await containerRunningAsync(cfg, migrationName, signal)) {
         throw new Error(`Refusing to start ${cfg.stack}-${service} while database migration owner ${migrationName} is running; the existing migration container was left untouched.`);
     }
 }
 
-async function runningDatabaseServiceNamesAsync(cfg) {
+async function runningDatabaseServiceNamesAsync(cfg, signal) {
     const running = [];
     for (const service of DATABASE_SERVICES) {
         const name = `${cfg.stack}-${service}`;
-        if (await containerRunningAsync(cfg, name)) running.push(name);
+        if (await containerRunningAsync(cfg, name, signal)) running.push(name);
     }
     return running;
 }
 
-async function assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff) {
+async function assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff, signal) {
     if (!DATABASE_SERVICES.has(service)) return;
-    await assertNoLiveMigrationOwnerAsync(cfg, service);
+    await assertNoLiveMigrationOwnerAsync(cfg, service, signal);
     if (migrationHandoff === MIGRATIONS_PREAPPLIED_HANDOFF) return;
 
-    const running = await runningDatabaseServiceNamesAsync(cfg);
+    const running = await runningDatabaseServiceNamesAsync(cfg, signal);
     if (running.length > 0) throw directDatabaseStartError(cfg, service, running);
 }
 
-async function assertMigrationCanStartAsync(cfg) {
-    const running = await runningDatabaseServiceNamesAsync(cfg);
+async function assertMigrationCanStartAsync(cfg, signal) {
+    const running = await runningDatabaseServiceNamesAsync(cfg, signal);
     if (running.length > 0) {
         throw new Error(`Refusing to run database migrations while database services are running (${running.join(', ')}). Stop the stack first (for the CLI, run \`propr stop\`) and retry; existing containers were left untouched.`);
     }
 
     const migrationName = `${cfg.stack}-migrate`;
-    if (await containerRunningAsync(cfg, migrationName)) {
+    if (await containerRunningAsync(cfg, migrationName, signal)) {
         throw new Error(`Database migration owner ${migrationName} is already running; it was left untouched. Wait for it to finish, inspect its logs, or stop it explicitly before retrying.`);
     }
 }
 
-async function prepareMigrationOwnerAsync(cfg, onLog) {
-    await assertMigrationCanStartAsync(cfg);
+async function prepareMigrationOwnerAsync(cfg, onLog, signal) {
+    await assertMigrationCanStartAsync(cfg, signal);
     const migrationName = `${cfg.stack}-migrate`;
-    if (!(await containerExistsAsync(cfg, migrationName))) return;
+    if (!(await containerExistsAsync(cfg, migrationName, signal))) return;
 
     onLog?.(`  · removing stopped migration container ${migrationName}`);
-    const removed = await dockerAsync(['rm', migrationName]);
+    const removed = await dockerAsync(['rm', migrationName], { signal });
     if (removed.status !== 0) {
         throw new Error(`Could not safely remove stopped migration container ${migrationName}; it may have started and was left untouched: ${firstLine(removed.stderr || removed.error?.message || 'docker rm failed')}`);
     }
 }
 
-async function dockerRunDetachedAsync(cfg, name, service, args, networkMode = cfg.network) {
+async function dockerRunDetachedAsync(cfg, name, service, args, networkMode = cfg.network, signal) {
     const full = [
         'run', '-d', '--init', '--name', name,
         '--network', networkMode, '--restart', 'unless-stopped',
@@ -1367,18 +1404,18 @@ async function dockerRunDetachedAsync(cfg, name, service, args, networkMode = cf
         '--label', `propr.service=${service}`,
         ...args,
     ];
-    const res = await dockerAsync(full);
+    const res = await dockerAsync(full, { signal });
     if (res.status !== 0) {
         throw new Error(`Failed to start ${name}: ${res.stderr}`);
     }
 }
 
 /** Async mirror of ensureNetwork. */
-export async function ensureNetworkAsync(cfg, onLog) {
-    const res = await dockerAsync(['network', 'inspect', cfg.network]);
+export async function ensureNetworkAsync(cfg, onLog, signal) {
+    const res = await dockerAsync(['network', 'inspect', cfg.network], { signal });
     if (res.status !== 0) {
         onLog?.(`creating network ${cfg.network}`);
-        await dockerAsync(['network', 'create', cfg.network]);
+        await dockerAsync(['network', 'create', cfg.network], { signal });
     }
 }
 
@@ -1391,11 +1428,11 @@ async function cachedImageFreshnessAsync(cache, tag, opts) {
 }
 
 /** Async mirror of ensureServiceImage — pulls a missing/stale image, awaited. */
-async function ensureServiceImageAsync(cfg, service, onLog, { freshnessCache } = {}) {
+async function ensureServiceImageAsync(cfg, service, onLog, { freshnessCache, signal } = {}) {
     const tag = imageTagForService(cfg, service);
     if (!tag) return;
     const skipFreshness = skipRemoteImageCheck() || !isProprPublishedImage(cfg, tag);
-    const freshness = await cachedImageFreshnessAsync(freshnessCache, tag, { skipRemoteCheck: skipFreshness });
+    const freshness = await cachedImageFreshnessAsync(freshnessCache, tag, { skipRemoteCheck: skipFreshness, signal });
     if (freshness.status === 'current') return;
     if (freshness.status === 'unknown') {
         if (freshness.skipped) return;
@@ -1408,35 +1445,35 @@ async function ensureServiceImageAsync(cfg, service, onLog, { freshnessCache } =
     } else {
         onLog?.(`  · pulling ${tag}`);
     }
-    const res = await dockerAsync(['pull', tag]);
+    const res = await dockerAsync(['pull', tag], { signal });
     if (res.status !== 0) {
         throw new Error(`Failed to pull ${tag}: ${(res.stderr || '').trim()}`);
     }
 }
 
 /** Async mirror of startService. */
-export async function startServiceAsync(cfg, service, { onLog, pull = true, freshnessCache, migrationHandoff } = {}) {
+export async function startServiceAsync(cfg, service, { onLog, pull = true, freshnessCache, migrationHandoff, signal } = {}) {
     const name = `${cfg.stack}-${service}`;
-    await assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff);
-    if (pull) await ensureServiceImageAsync(cfg, service, onLog, { freshnessCache });
+    await assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff, signal);
+    if (pull) await ensureServiceImageAsync(cfg, service, onLog, { freshnessCache, signal });
     const spec = withMigrationPolicy(buildServiceSpec(cfg, service), service, migrationHandoff);
-    await removeIfExistsAsync(cfg, name, onLog);
+    await removeIfExistsAsync(cfg, name, onLog, signal);
     const runArgs = [...spec.args, spec.image, ...(spec.command || [])];
-    await dockerRunDetachedAsync(cfg, name, service, runArgs, spec.networkMode);
+    await dockerRunDetachedAsync(cfg, name, service, runArgs, spec.networkMode, signal);
     onLog?.(`  [ok] started ${name}`);
-    return getServiceStateAsync(cfg, service);
+    return getServiceStateAsync(cfg, service, signal);
 }
 
 /** Async mirror of stopService (used by startStackAsync's rollback). */
-async function stopServiceAsync(cfg, service, { remove = true, onLog } = {}) {
+async function stopServiceAsync(cfg, service, { remove = true, onLog, signal } = {}) {
     const name = `${cfg.stack}-${service}`;
-    if (!(await containerExistsAsync(cfg, name))) return;
-    const stopped = await dockerAsync(['stop', '-t', '10', name]);
+    if (!(await containerExistsAsync(cfg, name, signal))) return;
+    const stopped = await dockerAsync(['stop', '-t', '10', name], { signal });
     if (stopped.status !== 0) {
         throw new Error(`Failed to stop ${name}: ${(stopped.stderr || '').trim()}`);
     }
     if (remove) {
-        const removed = await dockerAsync(['rm', name]);
+        const removed = await dockerAsync(['rm', name], { signal });
         if (removed.status !== 0) {
             throw new Error(`Stopped ${name} but failed to remove it: ${(removed.stderr || '').trim()}`);
         }
@@ -1449,60 +1486,62 @@ async function stopServiceAsync(cfg, service, { remove = true, onLog } = {}) {
  * without blocking the event loop, rolling back already-started services on a
  * mid-startup failure (best effort) before rethrowing.
  */
-export async function startStackAsync(cfg, { ui = true, docs = cfg.docsEnabled, tunnel = cfg.uiTunnelEnabled, onLog } = {}) {
+export async function startStackAsync(cfg, { ui = true, docs = cfg.docsEnabled, tunnel = cfg.uiTunnelEnabled, onLog, signal } = {}) {
     const toStart = [...CORE_SERVICES, ...(ui ? ['ui'] : []), ...(docs ? ['docs'] : []), ...(tunnel ? ['tunnel'] : [])];
     const started = [];
     const freshnessCache = new Map();
     try {
-        await runMigrationPhaseAsync(cfg, { onLog, freshnessCache });
+        await runMigrationPhaseAsync(cfg, { onLog, freshnessCache, signal });
         for (const service of toStart) {
             await startServiceAsync(cfg, service, {
                 onLog,
                 freshnessCache,
                 migrationHandoff: MIGRATIONS_PREAPPLIED_HANDOFF,
                 pull: !DATABASE_SERVICES.has(service),
+                signal,
             });
             started.push(service);
         }
     } catch (err) {
+        if (signal?.aborted) throw err;
         onLog?.(`  ! startup failed (${err.message}) — rolling back already-started services`);
         for (const service of started.reverse()) {
             try {
-                await stopServiceAsync(cfg, service, { onLog });
+                await stopServiceAsync(cfg, service, { onLog, signal });
             } catch (stopErr) {
                 onLog?.(`  ! rollback: ${stopErr.message}`);
             }
         }
         throw err;
     }
-    return getStackStatusAsync(cfg);
+    return getStackStatusAsync(cfg, signal);
 }
 
 /** Async mirror of runMigrationPhase for the interactive setup UI. */
-export async function runMigrationPhaseAsync(cfg, { onLog, freshnessCache } = {}) {
-    await assertMigrationCanStartAsync(cfg);
-    await ensureServiceImageAsync(cfg, 'daemon', onLog, { freshnessCache });
-    await prepareMigrationOwnerAsync(cfg, onLog);
+export async function runMigrationPhaseAsync(cfg, { onLog, freshnessCache, signal } = {}) {
+    await assertMigrationCanStartAsync(cfg, signal);
+    await ensureServiceImageAsync(cfg, 'daemon', onLog, { freshnessCache, signal });
+    await prepareMigrationOwnerAsync(cfg, onLog, signal);
     onLog?.('  · running database migrations');
-    const res = await dockerAsync(migrationDockerArgs(cfg));
+    const res = await dockerAsync(migrationDockerArgs(cfg), { signal });
     if (res.status !== 0) throw migrationFailure(res);
     onLog?.('  [ok] database migrations completed');
 }
 
 /** Async mirror of getStackStatus. */
-export async function getStackStatusAsync(cfg) {
-    const res = await dockerAsync(stackStatusPsArgs(cfg));
+export async function getStackStatusAsync(cfg, signal) {
+    const res = await dockerAsync(stackStatusPsArgs(cfg), { signal });
     return parseStackStatus(cfg, res.stdout);
 }
 
 /** Async mirror of getServiceState. */
-async function getServiceStateAsync(cfg, service) {
-    return (await getStackStatusAsync(cfg)).services.find((s) => s.service === service);
+async function getServiceStateAsync(cfg, service, signal) {
+    return (await getStackStatusAsync(cfg, signal)).services.find((s) => s.service === service);
 }
 
 /** Async mirror of isStackRunning. */
-export async function isStackRunningAsync(cfg) {
-    const status = await getStackStatusAsync(cfg);
+export async function isStackRunningAsync(cfg, signal) {
+    const status = await getStackStatusAsync(cfg, signal);
     return status.services.some((s) => CORE_SERVICES.includes(s.service) && s.running);
 }
 

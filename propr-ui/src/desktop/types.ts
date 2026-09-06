@@ -57,8 +57,18 @@ export interface DesktopExternalBrowserAdapter {
 
 export interface DesktopLocalSetupAdapter {
   supported: boolean;
-  setup(): Promise<DesktopProfile>;
+  /** @deprecated Fixture compatibility only; production Electron uses the guided methods below. */
+  setup?(): Promise<DesktopProfile>;
+  status?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
+  start?(request: import('../../../apps/desktop/src/shared/contract').DesktopSetupRequest): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
+  retry?(request?: import('../../../apps/desktop/src/shared/contract').DesktopSetupRequest): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
+  cancel?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
+  selectPrivateKey?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopFilesystemSelection | null>;
+  acquireWebhookSecret?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSecretSelection | null>;
+  onProgress?(listener: (snapshot: import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot) => void): () => void;
 }
+
+export type DesktopGuidedLocalSetupAdapter = Required<Omit<DesktopLocalSetupAdapter, 'setup'>>;
 
 export interface DesktopConnectionAdapter {
   probe(profile: DesktopProfile): Promise<DesktopConnectionResult>;

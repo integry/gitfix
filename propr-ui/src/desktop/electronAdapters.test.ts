@@ -49,6 +49,13 @@ const bridgeFixture = () => {
     label: 'Team server',
     apiBaseUrl: 'https://t-recovered456.propr.dev',
   }));
+  const setupSnapshot = {
+    phase: 'idle' as const,
+    capability: { supported: true as const, kind: 'local' as const, platform: 'linux' as const },
+    sessionId: '11111111-1111-4111-8111-111111111111',
+    logs: [],
+  };
+  const setupStart = vi.fn(async () => setupSnapshot);
   const bridge: DesktopBridge = {
     app: {
       getMetadata: async () => ({
@@ -78,6 +85,15 @@ const bridgeFixture = () => {
       stop: async () => ({ ok: false, code: 'not-implemented', status: { state: 'disconnected' } }),
       restart: async () => ({ ok: false, code: 'not-implemented', status: { state: 'disconnected' } }),
     },
+    localSetup: {
+      status: async () => setupSnapshot,
+      start: setupStart,
+      retry: async () => setupSnapshot,
+      cancel: async () => setupSnapshot,
+      selectPrivateKey: async () => null,
+      acquireWebhookSecret: async () => null,
+      onProgress: () => () => undefined,
+    },
   };
   return { bridge, onDeepLink, pair, probe, activate, discard, discover, rediscover, profiles: () => profiles };
 };
@@ -89,13 +105,6 @@ describe('Electron remote instance adapters', () => {
     desktopConnectionState.scope = null;
     setDesktopConnectionScope.mockClear();
   });
-  it('reports local setup as unavailable in the production Electron adapter', () => {
-    const adapters = createElectronDesktopAdapters(bridgeFixture().bridge);
-
-    expect(adapters.localSetup.supported).toBe(false);
-    expect(adapters.discovery.supported).toBe(true);
-  });
-
   it('forwards the renderer deep-link subscription through the Electron adapter once', () => {
     const fixture = bridgeFixture();
     const adapters = createElectronDesktopAdapters(fixture.bridge);

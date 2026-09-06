@@ -83,8 +83,16 @@ export function ensureVibePromptCacheDir(cacheDir: string | undefined): string |
   return cacheDir;
 }
 
+let configuredStackTemplatePath: string | undefined;
+
+/** Pin the packaged desktop to its checksum-covered setup template resource. */
+export function configureStackTemplatePath(path: string | undefined): void {
+  configuredStackTemplatePath = path;
+}
+
 /** Resolve the bundled .env.example, falling back to a repo checkout. */
 function resolveEnvExample(): string | undefined {
+  if (configuredStackTemplatePath && existsSync(configuredStackTemplatePath)) return configuredStackTemplatePath;
   const here = dirname(fileURLToPath(import.meta.url));
   // Bundled copy is renamed to avoid npm's .env* exclusion from tarballs.
   const bundled = join(here, "..", "assets", "env.example.txt");
