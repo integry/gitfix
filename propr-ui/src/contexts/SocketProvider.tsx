@@ -37,6 +37,10 @@ const noDisableReasons: SocketProviderDisableReasons = {
   currentUserAbsent: false,
 };
 
+const refreshDesktopActiveWork = (): void => {
+  void window.proprDesktop?.app.refreshActiveWork().catch(() => undefined);
+};
+
 export const SocketProvider: React.FC<SocketProviderProps> = ({
   children,
   disabled = false,
@@ -134,17 +138,20 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({
       if (!isCurrentScope()) return;
       console.log('[SocketContext] Connected to WebSocket server');
       setIsConnected(true);
+      refreshDesktopActiveWork();
     };
 
     const disconnected = (reason: string) => {
       if (!isCurrentScope()) return;
       console.log('[SocketContext] Disconnected from WebSocket server:', reason);
       setIsConnected(false);
+      refreshDesktopActiveWork();
     };
 
     const connectionError = (error: Error) => {
       if (!isCurrentScope()) return;
       setIsConnected(false);
+      refreshDesktopActiveWork();
       console.error('[SocketContext] Connection error:', error.message);
       const code = (error as Error & { data?: { code?: string } }).data?.code;
       handleAuthenticationCode(code);
@@ -163,11 +170,13 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({
     newSocket.on(TASK_UPDATE, (payload: TaskUpdatePayload) => {
       console.log('[SocketContext] Received task update:', payload);
       taskUpdateCallbacksRef.current.forEach((callback) => callback(payload));
+      refreshDesktopActiveWork();
     });
 
     newSocket.on(DRAFT_UPDATE, (payload: DraftUpdatePayload) => {
       console.log('[SocketContext] Received draft update:', payload);
       draftUpdateCallbacksRef.current.forEach((callback) => callback(payload));
+      refreshDesktopActiveWork();
     });
 
     newSocket.on(INDEXING_UPDATE, (payload: IndexingUpdatePayload) => {
@@ -178,6 +187,7 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({
     newSocket.on(QUEUE_STATS_UPDATE, (payload: QueueStatsUpdatePayload) => {
       console.log('[SocketContext] Received queue stats update:', payload);
       queueStatsUpdateCallbacksRef.current.forEach((callback) => callback(payload));
+      refreshDesktopActiveWork();
     });
 
     newSocket.on(TASK_LIVE_UPDATE, (payload: TaskLiveUpdatePayload) => {

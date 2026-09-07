@@ -48,6 +48,38 @@ export interface DesktopRendererOwnershipEvidence {
   rendererOwned: boolean;
 }
 
+const expectedPackagedConnectOwnership = (
+  evidence: DesktopRendererOwnershipEvidence,
+): boolean => evidence.mainRendererPresent
+  && evidence.mainRendererLive
+  && evidence.webContentsIdMatches
+  && evidence.webContentsAbsentOrMatches
+  && evidence.mainFrameLive
+  && evidence.rendererDocumentTrusted
+  && evidence.rendererDocumentAuthorityEqual
+  && !evidence.frameOmitted
+  && evidence.framePresent
+  && evidence.frameMatchesMainFrame
+  && !evidence.frameExplicitlyForeign
+  && evidence.rendererOwned;
+
+/**
+ * Keep one proof for each expected request category during the packaged Connect
+ * journey. Every unexpected ownership decision remains individually visible.
+ */
+export const createPackagedConnectOwnershipReporter = (
+  report: (evidence: DesktopRendererOwnershipEvidence) => void,
+): ((evidence: DesktopRendererOwnershipEvidence) => void) => {
+  const reportedExpectedCategories = new Set<DesktopRendererOwnershipEvidence['resourceCategory']>();
+  return evidence => {
+    if (expectedPackagedConnectOwnership(evidence)) {
+      if (reportedExpectedCategories.has(evidence.resourceCategory)) return;
+      reportedExpectedCategories.add(evidence.resourceCategory);
+    }
+    report(evidence);
+  };
+};
+
 const rendererAuthority = (value: string): string | null => {
   try {
     const url = new URL(value);

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, net, nativeImage, Notification, protocol, safeStorage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -52,6 +52,8 @@ import {
   packagedApprovalPartition,
 } from './packaged-approval-session';
 import { createDesktopShutdownCoordinator } from './shutdown';
+import { createDesktopTrayController } from './system-tray';
+import { createMainWindowRestorer } from './main-window-restoration';
 import { DesktopSetupController } from './setup-controller';
 import { promptForWebhookSecret } from './secure-secret-prompt';
 import {
@@ -77,6 +79,7 @@ import { createPackagedSmokeEvidenceSink } from './smoke-test-evidence';
 import { configureNativeSmokeLogsPath } from './smoke-log-path';
 import {
   configureDesktopSessionSecurity,
+  createPackagedConnectOwnershipReporter,
   type DesktopNetworkPermissionEvidence,
   type DesktopRendererOwnershipEvidence,
 } from './session-security';
@@ -1423,6 +1426,16 @@ const createMainWindow = async (
   return window;
 };
 
+const mainWindowRestorer = createMainWindowRestorer({
+  getWindow: () => mainWindow,
+  setWindow: window => { mainWindow = window; },
+  createWindow: () => createMainWindow(null),
+  shutdownStarted: () => shutdownStarted,
+  creationFailed: error => log('error', 'desktop.window.restore_failed', { error }),
+});
+
+const restoreMainWindow = (): void => mainWindowRestorer.restore();
+
 app.on('open-url', (event, url) => {
   event.preventDefault();
   if (shutdownStarted) return;
@@ -1608,9 +1621,9 @@ if (!hasSingleInstanceLock) {
         reportNetworkPermissionDecision: (evidence: DesktopNetworkPermissionEvidence) => {
           log('info', 'desktop.renderer.connect_network_permission', { ...evidence });
         },
-        reportRendererOwnershipDecision: (evidence: DesktopRendererOwnershipEvidence) => {
+        reportRendererOwnershipDecision: createPackagedConnectOwnershipReporter(evidence => {
           log('info', PACKAGED_CONNECT_RENDERER_OWNERSHIP_EVENT, { ...evidence });
-        },
+        }),
       } : {}),
     });
     const credentialInitialization = await credentials.initialize();
@@ -1678,6 +1691,27 @@ if (!hasSingleInstanceLock) {
       log: (level, event) => log(level, event),
     });
     nativeProfiles = profiles;
+    const trayArtworkPath = app.isPackaged
+      ? join(process.resourcesPath, 'logo-only-small.png')
+      : join(app.getAppPath(), '..', '..', 'media', 'logo-only-small.png');
+    const trayArtwork = nativeImage.createFromPath(trayArtworkPath);
+    const trayIcon = trayArtwork.isEmpty()
+      ? trayArtwork
+      : trayArtwork.resize({ width: process.platform === 'darwin' ? 18 : 22 });
+    if (process.platform === 'darwin' && !trayIcon.isEmpty()) trayIcon.setTemplateImage(true);
+    const desktopTray = createDesktopTrayController({
+      platform: process.platform,
+      icon: trayIcon,
+      createTray: icon => new Tray(icon),
+      buildMenu: template => Menu.buildFromTemplate(template),
+      setBadgeCount: count => {
+        try { return app.setBadgeCount(count); } catch { return false; }
+      },
+      fetchActiveWork: signal => credentials.fetchActiveWork(signal),
+      openWindow: restoreMainWindow,
+      quit: () => app.quit(),
+      log: (level, event, fields) => log(level, event, fields),
+    });
     const setupHost = process.platform === 'linux'
       ? await createDesktopSetupHost({
           configDir: join(app.getPath('userData'), 'local-setup', 'cli'),
@@ -1727,6 +1761,9 @@ if (!hasSingleInstanceLock) {
       },
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinkDelivery.acknowledgeSender(event.sender, acknowledgement),
+      onActiveWorkConnectionAvailable: () => desktopTray.connectionAvailable(),
+      onActiveWorkConnectionUnavailable: reason => desktopTray.connectionUnavailable(reason),
+      onActiveWorkRefresh: () => desktopTray.refresh(),
       ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {
         onRendererActiveProfileChanged: (origin: string | null) => {
           notifications.clear();
@@ -1760,6 +1797,7 @@ if (!hasSingleInstanceLock) {
       credentials,
       lifecycle: shutdownLifecycle,
       deepLinks: deepLinkDelivery,
+      tray: desktopTray,
       setup,
       ipc: registeredIpc,
       profiles,
@@ -1774,6 +1812,7 @@ if (!hasSingleInstanceLock) {
     app.on('before-quit', event => shutdown.beforeQuit(event));
 
     mainWindow = await createMainWindow();
+    desktopTray.start();
 
     if (connectSmoke) {
       reportPackagedConnectJourneyStage('JOURNEY_DISCOVERY_RENDERER');

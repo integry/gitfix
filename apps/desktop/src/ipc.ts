@@ -47,6 +47,9 @@ interface RegisterIpcOptions {
   rendererConsumerReady?(event: IpcMainInvokeEvent): boolean;
   acknowledgeDeepLink?(event: IpcMainInvokeEvent, acknowledgement: DesktopDeepLinkAcknowledgement): boolean;
   onRendererActiveProfileChanged?(origin: string | null): void;
+  onActiveWorkConnectionAvailable?(): void;
+  onActiveWorkConnectionUnavailable?(reason: 'disconnected' | 'logged-out' | 'revoked' | 'profile-changed'): void;
+  onActiveWorkRefresh?(): void;
   /** @internal Deterministic admitted-work accounting for lifecycle proof. */
   observeInvocation?(phase: 'entry' | 'exit', channel: string): void;
   /** @internal Fixed, secret-free packaged Connect acceptance evidence. */
@@ -176,6 +179,11 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       options.onRendererActiveProfileChanged(activeOrigin);
     }
   };
+  const reconcileActiveWorkConnection = (): void => {
+    if (!options.onActiveWorkRefresh && !options.onActiveWorkConnectionUnavailable) return;
+    if (options.credentials.hasActiveRendererBinding()) options.onActiveWorkRefresh?.();
+    else options.onActiveWorkConnectionUnavailable?.('profile-changed');
+  };
 
   handle(IPC_CHANNELS.appMetadata, () => ({
     name: options.app.getName(),
@@ -184,6 +192,10 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     arch: process.arch,
     packaged: options.app.isPackaged,
   }));
+  handle(IPC_CHANNELS.activeWorkRefresh, (_event, ...args) => {
+    if (args.length) throw new Error('Invalid active work refresh request');
+    options.onActiveWorkRefresh?.();
+  });
   handle(IPC_CHANNELS.deepLinkAcknowledgement, (event, acknowledgement, ...args) => {
     if (args.length || !isValidDesktopDeepLinkAcknowledgement(acknowledgement)) {
       throw new Error('Invalid desktop deep-link acknowledgement');
@@ -197,7 +209,10 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       throw new Error('Unexpected desktop deep-link consumer readiness');
     }
   });
-  handle(IPC_CHANNELS.authLogout, (_event, apiBaseUrl) => logoutDesktopSession(options.desktopSession, apiBaseUrl));
+  handle(IPC_CHANNELS.authLogout, async (_event, apiBaseUrl) => {
+    await logoutDesktopSession(options.desktopSession, apiBaseUrl);
+    options.onActiveWorkConnectionUnavailable?.('logged-out');
+  });
   handle(IPC_CHANNELS.openExternal, async (_event, value: unknown) => {
     if (typeof value !== 'string' || !isSafeExternalUrl(value)) throw new Error('External URL is not allowed');
     await options.openExternal(value);
@@ -237,6 +252,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       ),
     );
     await reconcileRendererActiveProfile();
+    reconcileActiveWorkConnection();
     return profile;
   });
   handle(IPC_CHANNELS.profilesRemove, async (_event, profileId) => {
@@ -245,6 +261,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       origin => clearDesktopInstanceCookies(options.desktopSession, [origin]),
     );
     await reconcileRendererActiveProfile();
+    reconcileActiveWorkConnection();
   });
   handle(IPC_CHANNELS.profilesSetActive, async (_event, profileId) => {
     const current = await options.credentials.listProfiles();
@@ -257,6 +274,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     ]);
     await options.credentials.setActiveProfile(profileId);
     await reconcileRendererActiveProfile();
+    options.onActiveWorkConnectionUnavailable?.('profile-changed');
   });
   handle(IPC_CHANNELS.authenticationPairAdmit, (_event, profileId, ...args) => {
     if (args.length || typeof profileId !== 'string'
@@ -278,6 +296,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     try {
       const paired = await options.credentials.pair(profile, operationId);
       await reconcileRendererActiveProfile();
+      reconcileActiveWorkConnection();
       return paired;
     } catch (error) {
       // A shutdown-owned cancellation must retain the admitted-work fence: do not
@@ -309,6 +328,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       await clearDesktopInstanceCookies(options.desktopSession, origins);
       if (!activatedOrigin) throw new Error('Desktop activation did not establish a renderer origin');
       await reconcileRendererActiveProfile();
+      options.onActiveWorkConnectionAvailable?.();
       return activated;
     } catch (error) {
       try {
@@ -324,10 +344,17 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
   });
   handle(IPC_CHANNELS.connectionDiscard, async (_event, value) => {
     const discarded = await options.credentials.discardActivation(value);
-    if (discarded.discarded) await reconcileRendererActiveProfile();
+    if (discarded.discarded) {
+      await reconcileRendererActiveProfile();
+      options.onActiveWorkConnectionUnavailable?.('disconnected');
+    }
     return discarded;
   });
-  handle(IPC_CHANNELS.connectionInvalidate, (_event, value) => options.credentials.invalidate(value));
+  handle(IPC_CHANNELS.connectionInvalidate, async (_event, value) => {
+    const invalidated = await options.credentials.invalidate(value);
+    if (invalidated.invalidated) options.onActiveWorkConnectionUnavailable?.('revoked');
+    return invalidated;
+  });
   handle(IPC_CHANNELS.connectDiscover, (_event, ...args) => {
     if (args.length) throw new Error('Invalid Connect discovery request');
     return options.connectDiscovery.discover();

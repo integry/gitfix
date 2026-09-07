@@ -2,6 +2,7 @@ export const DESKTOP_PROTOCOL = 'propr';
 
 export const IPC_CHANNELS = Object.freeze({
   appMetadata: 'desktop:app-metadata',
+  activeWorkRefresh: 'desktop:active-work-refresh',
   authLogout: 'desktop:auth-logout',
   openExternal: 'desktop:open-external',
   storageSecurity: 'desktop:storage-security',
@@ -294,6 +295,8 @@ export interface DesktopSetupSnapshot {
 export interface DesktopBridge {
   app: {
     getMetadata(): Promise<DesktopAppMetadata>;
+    /** Request a main-owned reconciliation; the renderer cannot supply counts or native resources. */
+    refreshActiveWork(): Promise<void>;
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
