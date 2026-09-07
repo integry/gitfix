@@ -4,7 +4,7 @@ import type { Job, Queue } from 'bullmq';
 import { isDemoMode } from '../demoMode.js';
 
 export const ACTIVE_WORK_DEFINITION =
-  'Running tasks + generating or refining plans + standalone incomplete goals';
+  'Running tasks + generating or refining plans; open goals are reported separately';
 
 interface ActiveWorkRoutesDependencies {
   db: Knex;
@@ -15,9 +15,17 @@ interface CountRow {
   count?: string | number;
 }
 
-const countActiveJobs = (jobs: readonly Pick<Job, 'id'>[]): number => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const countActiveJobs = (
+  jobs: readonly Pick<Job, 'id' | 'data'>[],
+  userId: string,
+  sharedInstance: boolean,
+): number => {
   const ids = new Set<string>();
   for (const job of jobs) {
+    if (!sharedInstance && (!isRecord(job.data) || job.data.userId !== userId)) continue;
     if (typeof job.id === 'string' && job.id.length > 0) ids.add(job.id);
   }
   return ids.size;
@@ -33,8 +41,10 @@ const rowCount = (row: CountRow | undefined): number => {
 
 /**
  * A single authenticated reconciliation snapshot for native desktop surfaces.
- * Goals are uncompleted repository todos which have not been converted into a
- * plan. Excluding linked goals makes the three categories disjoint.
+ * This branch has no authoritative executing state for goals. Standalone
+ * incomplete repository todos are therefore reported as open backlog, never
+ * as active work. Queue jobs without authoritative recipient metadata fail
+ * closed outside the explicitly shared demo instance.
  */
 export const createActiveWorkRoutes = ({ db, taskQueue }: ActiveWorkRoutesDependencies) => ({
   async getActiveWork(req: Request, res: Response): Promise<void> {
@@ -44,32 +54,39 @@ export const createActiveWorkRoutes = ({ db, taskQueue }: ActiveWorkRoutesDepend
     }
 
     try {
+      const sharedInstance = isDemoMode();
       let plansQuery = db('task_drafts')
         .count('* as count')
         .whereIn('status', ['generating', 'refining']);
-      let goalsQuery = db('repo_todos')
+      let openGoalsQuery = db('repo_todos')
         .count('* as count')
         .where({ is_completed: false })
         .whereNull('linked_draft_id');
-      if (!isDemoMode()) {
+      if (!sharedInstance) {
         plansQuery = plansQuery.andWhere({ user_id: req.user.id });
-        goalsQuery = goalsQuery.andWhere({ user_id: req.user.id });
+        openGoalsQuery = openGoalsQuery.andWhere({ user_id: req.user.id });
       }
 
-      const [activeJobs, planRow, goalRow] = await Promise.all([
+      const [activeJobs, planRow, openGoalRow] = await Promise.all([
         taskQueue.getJobs(['active']),
         plansQuery.first() as Promise<CountRow | undefined>,
-        goalsQuery.first() as Promise<CountRow | undefined>,
+        openGoalsQuery.first() as Promise<CountRow | undefined>,
       ]);
-      const tasks = countActiveJobs(activeJobs);
+      const tasks = countActiveJobs(activeJobs, req.user.id, sharedInstance);
       const plans = rowCount(planRow);
-      const goals = rowCount(goalRow);
+      const openGoals = rowCount(openGoalRow);
 
       res.json({
-        schemaVersion: 1,
+        schemaVersion: 2,
         label: 'Active work',
         definition: ACTIVE_WORK_DEFINITION,
-        counts: { tasks, plans, goals, total: tasks + plans + goals },
+        availability: {
+          tasks: 'available',
+          plans: 'available',
+          goals: 'unsupported',
+          openGoals: 'available',
+        },
+        counts: { tasks, plans, goals: null, openGoals, total: tasks + plans },
       });
     } catch (error) {
       console.error('Error in /api/desktop/active-work:', error);
@@ -77,4 +94,3 @@ export const createActiveWorkRoutes = ({ db, taskQueue }: ActiveWorkRoutesDepend
     }
   },
 });
-

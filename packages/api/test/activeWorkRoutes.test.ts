@@ -37,7 +37,7 @@ const responseRecorder = (): {
   return { response, status: () => statusCode, body: () => body };
 };
 
-test('active work is account-scoped and partitions linked goals from plans', async () => {
+test('idle goal backlog is reported as open and cannot inflate active work', async () => {
   await database('task_drafts').del();
   await database('repo_todos').del();
   await database('task_drafts').insert([
@@ -48,6 +48,7 @@ test('active work is account-scoped and partitions linked goals from plans', asy
   ]);
   await database('repo_todos').insert([
     { todo_id: 'standalone-a', user_id: 'user-a', is_completed: false, linked_draft_id: null },
+    { todo_id: 'standalone-a-2', user_id: 'user-a', is_completed: false, linked_draft_id: null },
     { todo_id: 'linked-a', user_id: 'user-a', is_completed: false, linked_draft_id: 'generating-a' },
     { todo_id: 'completed-a', user_id: 'user-a', is_completed: true, linked_draft_id: null },
     { todo_id: 'standalone-b', user_id: 'user-b', is_completed: false, linked_draft_id: null },
@@ -58,7 +59,12 @@ test('active work is account-scoped and partitions linked goals from plans', asy
     taskQueue: {
       getJobs: async (states: string[]) => {
         requestedStates.push(states);
-        return [{ id: 'task-1' }, { id: 'task-2' }, { id: 'task-1' }, { id: undefined }] as never;
+        return [
+          { id: 'task-1', data: { userId: 'user-a' } },
+          { id: 'task-2', data: { userId: 'user-a' } },
+          { id: 'task-1', data: { userId: 'user-a' } },
+          { id: undefined, data: { userId: 'user-a' } },
+        ] as never;
       },
     } as never,
   });
@@ -69,11 +75,44 @@ test('active work is account-scoped and partitions linked goals from plans', asy
   assert.equal(recorded.status(), 200);
   assert.deepEqual(requestedStates, [['active']]);
   assert.deepEqual(recorded.body(), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     label: 'Active work',
     definition: ACTIVE_WORK_DEFINITION,
-    counts: { tasks: 2, plans: 2, goals: 1, total: 5 },
+    availability: {
+      tasks: 'available',
+      plans: 'available',
+      goals: 'unsupported',
+      openGoals: 'available',
+    },
+    counts: { tasks: 2, plans: 2, goals: null, openGoals: 2, total: 4 },
   });
+});
+
+test('active queue jobs are scoped to the authenticated account', async () => {
+  await database('task_drafts').del();
+  await database('repo_todos').del();
+  const jobs = [
+    { id: 'task-a-1', data: { userId: 'user-a' } },
+    { id: 'task-a-2', data: { userId: 'user-a' } },
+    { id: 'task-a-1', data: { userId: 'user-a' } },
+    { id: 'task-b', data: { userId: 'user-b' } },
+    { id: 'forged-owner', data: { ownerId: 'user-a' } },
+    { id: 'unowned', data: {} },
+  ];
+  const routes = createActiveWorkRoutes({
+    db: database,
+    taskQueue: { getJobs: async () => jobs } as never,
+  });
+
+  const userA = responseRecorder();
+  await routes.getActiveWork({ user: { id: 'user-a' } } as Request, userA.response);
+  const userB = responseRecorder();
+  await routes.getActiveWork({ user: { id: 'user-b' } } as Request, userB.response);
+
+  assert.equal(userA.status(), 200);
+  assert.equal(userB.status(), 200);
+  assert.deepEqual((userA.body().counts as Record<string, unknown>).tasks, 2);
+  assert.deepEqual((userB.body().counts as Record<string, unknown>).tasks, 1);
 });
 
 test('active work does not present unavailable data as a verified zero', async () => {

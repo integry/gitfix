@@ -8,7 +8,8 @@ const DEFAULT_MINIMUM_REFRESH_INTERVAL_MS = 2_000;
 export interface ActiveWorkCounts {
   tasks: number;
   plans: number;
-  goals: number;
+  goals: null;
+  openGoals: number;
   total: number;
 }
 
@@ -46,17 +47,23 @@ const isCount = (value: unknown): value is number =>
 export const parseActiveWorkSnapshot = (value: unknown): ActiveWorkCounts | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const snapshot = value as Record<string, unknown>;
-  if (snapshot.schemaVersion !== 1 || snapshot.label !== 'Active work'
+  if (snapshot.schemaVersion !== 2 || snapshot.label !== 'Active work'
     || typeof snapshot.definition !== 'string' || !snapshot.counts
     || typeof snapshot.counts !== 'object' || Array.isArray(snapshot.counts)) return null;
+  if (!snapshot.availability || typeof snapshot.availability !== 'object'
+    || Array.isArray(snapshot.availability)) return null;
+  const availability = snapshot.availability as Record<string, unknown>;
+  if (availability.tasks !== 'available' || availability.plans !== 'available'
+    || availability.goals !== 'unsupported' || availability.openGoals !== 'available') return null;
   const counts = snapshot.counts as Record<string, unknown>;
-  if (!isCount(counts.tasks) || !isCount(counts.plans) || !isCount(counts.goals)
-    || !isCount(counts.total)
-    || counts.total !== counts.tasks + counts.plans + counts.goals) return null;
+  if (!isCount(counts.tasks) || !isCount(counts.plans) || counts.goals !== null
+    || !isCount(counts.openGoals) || !isCount(counts.total)
+    || counts.total !== counts.tasks + counts.plans) return null;
   return {
     tasks: counts.tasks,
     plans: counts.plans,
-    goals: counts.goals,
+    goals: null,
+    openGoals: counts.openGoals,
     total: counts.total,
   };
 };
@@ -129,7 +136,7 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
       const { counts } = state;
       const exact = (count: number): string => count.toLocaleString('en-US');
       tray.setToolTip(
-        `ProPR — Active work: ${exact(counts.total)} — Tasks ${exact(counts.tasks)}, Plans ${exact(counts.plans)}, Goals ${exact(counts.goals)}`,
+        `ProPR — Active work: ${exact(counts.total)} — Tasks ${exact(counts.tasks)}, Plans ${exact(counts.plans)}, Goals unsupported; Open goals ${exact(counts.openGoals)} (not active)`,
       );
       if (options.platform === 'darwin') tray.setTitle(formatTrayCount(counts.total));
       options.setBadgeCount(counts.total);
@@ -139,8 +146,9 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
         { label: `Active work total: ${exact(counts.total)}`, enabled: false },
         { label: `Tasks: ${exact(counts.tasks)}`, enabled: false },
         { label: `Plans: ${exact(counts.plans)}`, enabled: false },
-        { label: `Goals: ${exact(counts.goals)}`, enabled: false },
-        { label: 'Running tasks + active plans + standalone goals', enabled: false },
+        { label: 'Goals: Unsupported (no executing state)', enabled: false },
+        { label: `Open goals (not active): ${exact(counts.openGoals)}`, enabled: false },
+        { label: 'Running tasks + active plans; open goals excluded', enabled: false },
         { type: 'separator' },
         { label: 'Quit ProPR', click: options.quit },
       ];
