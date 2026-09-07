@@ -84,7 +84,11 @@ const SYSTEM_HEALTH_RULES: Readonly<Record<string, ReadonlySet<string>>> = {
   worker: new Set(['running']),
   githubAuth: new Set(['connected']),
   githubEventIntakeStatus: new Set(['connected', 'active']),
-  claudeAuth: new Set(['connected']),
+  // Claude auth is healthy both when an enabled Claude agent can authenticate
+  // and when no enabled Claude agent makes that provider applicable. Treating
+  // not_applicable as healthy also drives the normal reconciliation path that
+  // dismisses stale Claude failure cards without creating a recovery event.
+  claudeAuth: new Set(['connected', 'not_applicable']),
   indexing: new Set(['idle', 'active', 'queued']),
 };
 

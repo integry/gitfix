@@ -37,6 +37,9 @@ export const getSystemStatus = async (): Promise<SystemStatus> => {
   const workers: { id: number; status: string }[] = [];
   for (let i = 0; i < (data.workerCount || 0); i++) workers.push({ id: i + 1, status: 'active' });
   const mapAuthStatus = (status?: string) => status === 'connected' ? 'Authenticated' : 'Failed';
+  const mapClaudeAuthStatus = (status?: string) => status === 'not_applicable'
+    ? 'Not applicable'
+    : mapAuthStatus(status);
   const mapAgentStatus = (status?: string) => status === 'connected' ? 'Ready' : status === 'degraded' ? 'Degraded' : 'Failed';
   const mapIndexingStatus = (status?: string) => {
     switch (status) {
@@ -89,7 +92,7 @@ export const getSystemStatus = async (): Promise<SystemStatus> => {
     workers,
     redis: data.redis === 'connected' ? 'Connected' : 'Disconnected',
     githubAuth: mapAuthStatus(data.githubAuth),
-    claudeAuth: mapAuthStatus(data.claudeAuth),
+    claudeAuth: mapClaudeAuthStatus(data.claudeAuth),
     indexing: mapIndexingStatus(data.indexing),
     githubEventIntake: mapIntakeLabel(data.githubEventIntake),
     githubEventIntakeStatus: mapIntakeStatus(data.githubEventIntakeStatus),

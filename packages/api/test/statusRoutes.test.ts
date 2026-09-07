@@ -50,10 +50,9 @@ type StatusAgentRegistry = {
   };
 };
 
-// Env vars that influence the resolved auth mode, intake mode, and legacy
-// githubAuth health. They are snapshotted before each test and restored after so
-// a developer shell or CI runner with any of them set can't make the assertions
-// nondeterministic.
+// Env vars that influence resolved auth, intake, and agent status. They are
+// snapshotted before each test and restored after so a developer shell or CI
+// runner with any of them set can't make the assertions nondeterministic.
 const MANAGED_ENV_VARS = [
   'NODE_ENV',
   'PROPR_DEMO_MODE',
@@ -66,6 +65,8 @@ const MANAGED_ENV_VARS = [
   'GITHUB_EVENT_INTAKE_MODE',
   'ENABLE_GITHUB_WEBHOOKS',
   'API_PUBLIC_URL',
+  'AGENT_DOCKER_IMAGE',
+  'CLAUDE_CONFIG_PATH',
 ] as const;
 
 const originalEnv: Record<string, string | undefined> = Object.fromEntries(
@@ -212,7 +213,7 @@ test('/api/status omits disabled configured agents', async () => {
   assert.equal(body.apiCompatibility, PROPR_API_COMPATIBILITY);
   assert.equal(body.uiCompatibility, PROPR_UI_COMPATIBILITY);
   assert.deepEqual(body.agents, []);
-  assert.equal(body.claudeAuth, 'disconnected');
+  assert.equal(body.claudeAuth, 'not_applicable');
 });
 
 test('/api/compatibility returns public version contract metadata', async () => {
@@ -289,8 +290,31 @@ test('/api/desktop/discovery redacts identity persistence failures', async () =>
   assert.equal(JSON.stringify(body()).includes('SENTINEL'), false);
 });
 
-test('/api/status returns default Claude fallback when no agents are configured', async () => {
-  const body = await readStatus();
+test('/api/status reports Claude auth not applicable when no agents are configured', async () => {
+  const implicitDefault = createAgentConfig({
+    id: 'default-claude-agent', type: 'claude', alias: 'default',
+  });
+  const body = await readStatus({
+    agentRegistry: createRegistry([createAgent(implicitDefault, async () => false)]),
+  });
+
+  assert.deepEqual(body.agents, []);
+  assert.equal(body.claudeAuth, 'not_applicable');
+});
+
+test('/api/status preserves an explicitly environment-configured legacy Claude agent', async () => {
+  const legacyClaude = createAgentConfig({
+    id: 'default-claude-agent',
+    type: 'claude',
+    alias: 'default',
+    dockerImage: 'registry.example/propr/claude:legacy',
+    configPath: '/tmp/legacy-claude',
+  });
+  const body = await readStatus({
+    agentRegistry: createRegistry([createAgent(legacyClaude, async () => false)]),
+  }, () => {
+    process.env.CLAUDE_CONFIG_PATH = legacyClaude.configPath;
+  });
 
   assert.deepEqual(body.agents, [{
     id: 'default-claude-agent',
@@ -298,6 +322,98 @@ test('/api/status returns default Claude fallback when no agents are configured'
     alias: 'default',
     status: 'disconnected',
   }]);
+  assert.equal(body.claudeAuth, 'disconnected');
+});
+
+test('/api/status derives Claude applicability and health from enabled configured agents', async () => {
+  const codex = createAgentConfig();
+  const healthyClaude = createAgentConfig({
+    id: 'claude-healthy', type: 'claude', alias: 'claude-healthy',
+  });
+  const unhealthyClaude = createAgentConfig({
+    id: 'claude-unhealthy', type: 'claude', alias: 'claude-unhealthy',
+  });
+
+  const cases = [
+    {
+      name: 'Codex only',
+      configs: [codex],
+      agents: [createAgent(codex, async () => true)],
+      expected: 'not_applicable',
+    },
+    {
+      name: 'disabled Claude',
+      configs: [codex, { ...unhealthyClaude, enabled: false }],
+      agents: [createAgent(codex, async () => true)],
+      expected: 'not_applicable',
+    },
+    {
+      name: 'healthy Claude',
+      configs: [healthyClaude],
+      agents: [createAgent(healthyClaude, async () => true)],
+      expected: 'connected',
+    },
+    {
+      name: 'unhealthy Claude',
+      configs: [unhealthyClaude],
+      agents: [createAgent(unhealthyClaude, async () => false)],
+      expected: 'disconnected',
+    },
+    {
+      name: 'mixed providers with unhealthy Claude',
+      configs: [codex, unhealthyClaude],
+      agents: [
+        createAgent(codex, async () => true),
+        createAgent(unhealthyClaude, async () => false),
+      ],
+      expected: 'disconnected',
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    const body = await readStatus({
+      loadAgents: async () => [...scenario.configs],
+      agentRegistry: createRegistry([...scenario.agents]),
+    });
+    assert.equal(body.claudeAuth, scenario.expected, scenario.name);
+  }
+});
+
+test('/api/status preserves unknown Claude applicability when agent config cannot be loaded', async () => {
+  const body = await readStatus({
+    loadAgents: async () => { throw new Error('configuration unavailable'); },
+  });
+
+  assert.deepEqual(body.agents, []);
+  assert.equal(body.claudeAuth, 'unknown');
+});
+
+test('/api/status projects enabled, disabled, and re-enabled Claude transitions', async () => {
+  configureStatusEnv();
+  let currentTime = 1_000;
+  let config = createAgentConfig({ id: 'claude-1', type: 'claude', alias: 'claude-prod' });
+  const registered = createAgent(config, async () => false);
+  const snapshots: Array<Record<string, unknown>> = [];
+  const routes = await createRoutes({
+    redisClient: createRedisClient() as never,
+    loadAgents: async () => [config],
+    agentRegistry: createRegistry([registered]),
+    getIndexingQueue: async () => createIndexingQueue(),
+    now: () => currentTime,
+    agentStatusCacheTtlMs: 5_000,
+    projectSystemSnapshot: async snapshot => { snapshots.push(snapshot); },
+  });
+
+  for (const enabled of [true, false, true]) {
+    config = { ...config, enabled };
+    currentTime += 6_000;
+    const response = createJsonResponse();
+    await routes.getStatus({} as Request, response.response);
+  }
+
+  assert.deepEqual(snapshots.map(snapshot => snapshot.claudeAuth), [
+    'disconnected', 'not_applicable', 'disconnected',
+  ]);
 });
 
 test('/api/status isolates system notification projection failures', async () => {

@@ -21,6 +21,10 @@ import { classifyApiError, presentApiError } from "../utils/apiErrorPresentation
 function formatStatusIndicator(status: string): string {
   const normalizedStatus = status.toLowerCase();
 
+  if (normalizedStatus === "not_applicable") {
+    return "[--] not applicable";
+  }
+
   if (
     normalizedStatus === "healthy" ||
     normalizedStatus === "connected" ||
@@ -146,6 +150,8 @@ function displaySystemStatus(status: SystemStatus): void {
   const routingHealthy = status.routing
     ? status.routing.connected === true
     : !routingIntakeActive;
+  const claudeHealthy = status.claudeAuth === "connected" ||
+    status.claudeAuth === "not_applicable";
 
   const allHealthy =
     status.api === "healthy" &&
@@ -153,6 +159,7 @@ function displaySystemStatus(status: SystemStatus): void {
     status.daemon === "running" &&
     status.worker === "running" &&
     status.githubAuth === "connected" &&
+    claudeHealthy &&
     routingHealthy;
 
   console.log("");
@@ -177,7 +184,7 @@ function displaySystemStatus(status: SystemStatus): void {
         `  - GitHub auth not configured (mode: ${status.githubAuthMode ?? "unknown"}). Set GH_APP_ID, GH_PRIVATE_KEY_PATH, and GH_INSTALLATION_ID for app auth, or PROPR_GH_RELAY_URL and PROPR_GH_RELAY_TOKEN for relay auth.`
       );
     }
-    if (status.claudeAuth !== "connected") {
+    if (!claudeHealthy) {
       console.log("  - Claude auth status unknown or no recent activity.");
     }
     if (routingStateMissing) {
