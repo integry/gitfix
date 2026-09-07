@@ -80,6 +80,7 @@ describe('packaged smoke evidence', () => {
       const first = createPackagedSmokeEvidenceSink(directory, 'first');
       const relaunch = createPackagedSmokeEvidenceSink(directory, 'relaunch');
       assert.ok(first && relaunch);
+      first.write('desktop.deeplink.consumer_ready');
       first.write('desktop.native.profile_fresh');
       first.write('desktop.native.cold_confirmation_not_visible');
       first.write('desktop.renderer.gone');
@@ -93,6 +94,7 @@ describe('packaged smoke evidence', () => {
         'utf8',
       ).trimEnd().split('\n').map(line => JSON.parse(line));
       assert.deepEqual(firstRecords, [
+        { event: 'desktop.deeplink.consumer_ready' },
         { event: 'desktop.native.profile_fresh' },
         { event: 'desktop.native.cold_confirmation_not_visible' },
         { event: 'desktop.renderer.gone' },

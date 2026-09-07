@@ -37,6 +37,7 @@ interface RegisterIpcOptions {
   devServerUrl: string | undefined;
   packagedRendererUrl: string;
   openExternal(url: string): Promise<void>;
+  rendererConsumerReady?(event: IpcMainInvokeEvent): boolean;
   acknowledgeDeepLink?(event: IpcMainInvokeEvent, acknowledgement: DesktopDeepLinkAcknowledgement): boolean;
   onRendererActiveProfileChanged?(origin: string | null): void;
   /** @internal Deterministic admitted-work accounting for lifecycle proof. */
@@ -181,6 +182,11 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       throw new Error('Unexpected desktop deep-link acknowledgement');
     }
   }, true);
+  handle(IPC_CHANNELS.deepLinkConsumerReady, (event, ...args) => {
+    if (args.length || !options.rendererConsumerReady?.(event)) {
+      throw new Error('Unexpected desktop deep-link consumer readiness');
+    }
+  });
   handle(IPC_CHANNELS.authLogout, (_event, apiBaseUrl) => logoutDesktopSession(options.desktopSession, apiBaseUrl));
   handle(IPC_CHANNELS.openExternal, async (_event, value: unknown) => {
     if (typeof value !== 'string' || !isSafeExternalUrl(value)) throw new Error('External URL is not allowed');

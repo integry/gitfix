@@ -312,6 +312,11 @@ describe('native staged artifact lifecycle authority', () => {
         { event: 'desktop.smoke.authorized', milestone: 'AUTHORIZED', stage: 'FIRST_INITIAL_EVIDENCE' },
         { event: 'desktop.native.identity_verified', milestone: 'IDENTITY', stage: 'FIRST_INITIAL_EVIDENCE' },
         {
+          event: 'desktop.deeplink.consumer_ready',
+          milestone: 'CONSUMER_READY',
+          stage: 'FIRST_INITIAL_EVIDENCE',
+        },
+        {
           event: 'desktop.native.secure_storage_backend_invalid',
           milestone: 'SECURE_STORAGE_BACKEND',
           stage: 'FIRST_INITIAL_EVIDENCE',
@@ -320,6 +325,7 @@ describe('native staged artifact lifecycle authority', () => {
           event: 'desktop.deeplink.delivery_failed',
           milestone: 'DEEP_LINK_DELIVERY_FAILURE',
           stage: 'FIRST_INITIAL_EVIDENCE',
+          failureCategory: 'DEEP_LINK_DELIVERY_FAILED',
         },
         { event: 'desktop.deeplink.cold_manual_once', milestone: 'COLD_ACK', stage: 'FIRST_INITIAL_EVIDENCE' },
         {
@@ -340,6 +346,7 @@ describe('native staged artifact lifecycle authority', () => {
           milestone: fixture.milestone,
           resultClass: 'FAILED_EXIT',
           stage: fixture.stage,
+          ...(fixture.failureCategory ? { failureCategory: fixture.failureCategory } : {}),
         });
       }
 
@@ -368,6 +375,19 @@ describe('native staged artifact lifecycle authority', () => {
           failureCategory: fixture.failureCategory,
         });
       }
+
+      await writeFile(evidence, [
+        JSON.stringify({ event: 'desktop.deeplink.consumer_ready' }),
+        JSON.stringify({ event: 'desktop.deeplink.delivery_failed' }),
+        JSON.stringify({ event: 'desktop.app.start_failed' }),
+        JSON.stringify({ event: 'desktop.native.cold_confirmation_inspection_failed' }),
+      ].join('\n'));
+      assert.deepEqual(await classifyFirstEvidenceFailure(evidence, 'FAILED_EXIT'), {
+        milestone: 'DEEP_LINK_DELIVERY_FAILURE',
+        resultClass: 'FAILED_EXIT',
+        stage: 'FIRST_INITIAL_EVIDENCE',
+        failureCategory: 'DEEP_LINK_DELIVERY_FAILED',
+      });
 
       await writeFile(evidence, [
         JSON.stringify({ event: 'desktop.renderer.ready' }),

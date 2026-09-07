@@ -30,6 +30,7 @@ export const IPC_CHANNELS = Object.freeze({
   setupGithubInstallationDecision: 'desktop:setup-github-installation-decision',
   setupProgress: 'desktop:setup-progress',
   deepLink: 'desktop:deep-link',
+  deepLinkConsumerReady: 'desktop:deep-link-consumer-ready',
   deepLinkAcknowledgement: 'desktop:deep-link-acknowledgement',
   acceptanceJourneyStage: 'desktop:acceptance-journey-stage',
 } as const);
