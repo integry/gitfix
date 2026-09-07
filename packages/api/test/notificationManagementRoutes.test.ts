@@ -66,9 +66,12 @@ function recorder(): { response: Response; status: () => number; body: () => unk
 function vapidPair(): { publicKey: string; privateKey: string } {
     const ecdh = createECDH('prime256v1');
     ecdh.generateKeys();
+    const privateKey = ecdh.getPrivateKey();
     return {
         publicKey: ecdh.getPublicKey(undefined, 'uncompressed').toString('base64url'),
-        privateKey: ecdh.getPrivateKey().toString('base64url')
+        privateKey: Buffer.concat([
+            Buffer.alloc(32 - privateKey.length), privateKey
+        ]).toString('base64url')
     };
 }
 
