@@ -139,7 +139,6 @@ export interface DesktopSetupRequest {
   agents: string[];
   github:
     | { mode: 'keep' }
-    | { mode: 'demo' }
     | { mode: 'relay' }
     | { mode: 'app'; appId: string; privateKeyCapability: string; installationId: string };
   intake:

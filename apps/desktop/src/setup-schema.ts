@@ -34,7 +34,7 @@ export const parseDesktopSetupRequest = (input: unknown): DesktopSetupRequest =>
     || !value.agents.every(item => typeof item === 'string' && AGENTS.has(item))
     || new Set(value.agents).size !== value.agents.length) throw new SetupRequestError('Invalid agent selection');
   const github = record(value.github);
-  if (github.mode === 'keep' || github.mode === 'demo' || github.mode === 'relay') exact(github, ['mode']);
+  if (github.mode === 'keep' || github.mode === 'relay') exact(github, ['mode']);
   else if (github.mode === 'app') {
     exact(github, ['mode', 'appId', 'privateKeyCapability', 'installationId']);
     if (!bounded(github.appId, 20) || !INTEGER.test(github.appId) || !bounded(github.installationId, 20)
@@ -47,8 +47,10 @@ export const parseDesktopSetupRequest = (input: unknown): DesktopSetupRequest =>
     exact(intake, ['mode', 'secretCapability']);
     if (typeof intake.secretCapability !== 'string' || !CAPABILITY.test(intake.secretCapability)) throw new SetupRequestError('Invalid webhook secret capability');
   } else throw new SetupRequestError('Invalid GitHub intake configuration');
-  if ((github.mode === 'relay' && intake.mode === 'direct_webhook') || (github.mode === 'app' && intake.mode === 'routing_websocket')
-    || (github.mode === 'demo' && intake.mode !== 'keep')) throw new SetupRequestError('Incompatible GitHub intake mode');
+  if (github.mode === 'relay' && intake.mode !== 'routing_websocket') {
+    throw new SetupRequestError('ProPR Connect requires WebSocket intake');
+  }
+  if (github.mode === 'app' && intake.mode === 'routing_websocket') throw new SetupRequestError('Incompatible GitHub intake mode');
   if (value.whitelist !== null && (!Array.isArray(value.whitelist) || value.whitelist.length > 100
     || !value.whitelist.every(item => typeof item === 'string' && USERNAME.test(item))
     || new Set(value.whitelist.map(item => String(item).toLowerCase())).size !== value.whitelist.length)) throw new SetupRequestError('Invalid GitHub whitelist');

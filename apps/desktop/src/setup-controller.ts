@@ -59,6 +59,29 @@ const validCompletedProfile = (value: unknown): value is NonNullable<DesktopSetu
   } catch { return false; }
 };
 
+const enforceDesktopResumePolicy = (value: DesktopSetupResumeView): {
+  resume: DesktopSetupResumeView;
+  message?: string;
+} => {
+  const resume = copyResume(value);
+  if (resume.github.mode === 'demo') {
+    resume.reconfigurationStage = 'github';
+    return {
+      resume,
+      message: 'Demo mode is no longer available in desktop setup. Review saved choices and select ProPR Connect or Custom GitHub App.',
+    };
+  }
+  if (resume.github.mode === 'relay' && resume.intake.mode !== 'routing_websocket') {
+    resume.intake = { mode: 'routing_websocket' };
+    resume.reconfigurationStage = 'intake';
+    return {
+      resume,
+      message: 'ProPR Connect now requires WebSocket intake. Review and confirm the corrected saved choice before retrying.',
+    };
+  }
+  return { resume };
+};
+
 export class DesktopSetupController {
   readonly #options: DesktopSetupControllerOptions;
   readonly #sessionId: string;
@@ -232,7 +255,6 @@ export class DesktopSetupController {
       selectAgents: async () => [...request.agents],
       configureGithubAuth: async (): Promise<GithubAuthDecision> => {
         if (request.github.mode === 'keep') return { keep: true };
-        if (request.github.mode === 'demo') return { mode: 'demo', vars: { PROPR_DEMO_MODE: 'true' } };
         if (request.github.mode === 'relay') return { mode: 'relay', enrollRelay: { relayUrl: DEFAULT_PROPR_GH_RELAY_URL } };
         if (!resolved.privateKeyPath) throw new SetupRequestError('Select the GitHub App private key again.');
         return { mode: 'app', vars: { PROPR_DEMO_MODE: 'false', GH_AUTH_MODE: 'app', GH_APP_ID: request.github.appId,
@@ -270,17 +292,19 @@ export class DesktopSetupController {
     try {
       const persisted = JSON.parse(readFileSync(this.#options.statePath, 'utf8')) as PersistedSetup;
       if (persisted.version !== 1 || !persisted.resume || !SETUP_PHASES.has(persisted.phase)) throw new Error('invalid');
-      this.#resume = copyResume(persisted.resume);
-      const completedProfile = persisted.phase === 'completed' && validCompletedProfile(persisted.profile)
+      const policy = enforceDesktopResumePolicy(persisted.resume);
+      this.#resume = policy.resume;
+      const completedProfile = persisted.phase === 'completed' && !policy.message && validCompletedProfile(persisted.profile)
         ? structuredClone(persisted.profile) : undefined;
-      const restorationFailed = persisted.phase === 'completed' && !completedProfile;
+      const restorationFailed = persisted.phase === 'completed' && !completedProfile && !policy.message;
       this.#snapshot = { ...this.#snapshot,
-        phase: persisted.phase === 'running' || restorationFailed ? 'interrupted' : persisted.phase,
-        resume: copyResume(persisted.resume), resumeAvailable: true,
-        reconfigurationRequired: !completedProfile && Boolean(persisted.resume.reconfigurationStage),
+        phase: persisted.phase === 'running' || restorationFailed || Boolean(policy.message) ? 'interrupted' : persisted.phase,
+        resume: copyResume(policy.resume), resumeAvailable: true,
+        reconfigurationRequired: !completedProfile && Boolean(policy.resume.reconfigurationStage),
         ...(completedProfile ? { profile: completedProfile } : {}),
-        ...(persisted.phase === 'running' ? { error: 'Setup was interrupted. Review the saved choices to continue.' }
-          : restorationFailed ? { error: 'Completed setup could not be restored. Review the saved choices to recover.' } : {}) };
+        ...(policy.message && !completedProfile ? { error: policy.message }
+          : persisted.phase === 'running' ? { error: 'Setup was interrupted. Review the saved choices to continue.' }
+            : restorationFailed ? { error: 'Completed setup could not be restored. Review the saved choices to recover.' } : {}) };
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.#options.diagnose?.('desktop.setup.hydration_failed'); }
   }
 

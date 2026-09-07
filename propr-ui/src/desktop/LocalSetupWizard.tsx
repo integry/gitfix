@@ -1,39 +1,59 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Check, ChevronRight, CircleAlert, KeyRound, LoaderCircle, RotateCcw, X } from 'lucide-react';
 import type {
-  DesktopFilesystemSelection, DesktopSecretSelection, DesktopSetupRequest, DesktopSetupSnapshot,
+  DesktopFilesystemSelection, DesktopSecretSelection, DesktopSetupRequest, DesktopSetupResumeView, DesktopSetupSnapshot,
 } from '../../../apps/desktop/src/shared/contract';
 import type { DesktopGuidedLocalSetupAdapter, DesktopProfile } from './types';
 
 type Stage = 'prerequisites' | 'directory' | 'github' | 'intake' | 'agents' | 'summary';
 type GithubMode = DesktopSetupRequest['github']['mode'];
+type DraftGithubMode = GithubMode | 'demo';
 type IntakeMode = DesktopSetupRequest['intake']['mode'];
 const stages: Stage[] = ['prerequisites', 'directory', 'github', 'intake', 'agents', 'summary'];
 const agents = ['codex', 'claude', 'antigravity', 'opencode', 'vibe'];
 
 interface Draft {
-  githubMode: GithubMode; appId: string; installationId: string; privateKey: DesktopFilesystemSelection | null;
+  githubMode: DraftGithubMode; appId: string; installationId: string; privateKey: DesktopFilesystemSelection | null;
   intakeMode: IntakeMode; webhookSecret: DesktopSecretSelection | null; selectedAgents: string[];
   whitelist: string; reinitialize: boolean;
 }
 
-const requestFrom = (sessionId: string, draft: Draft): DesktopSetupRequest => ({
-  sessionId, root: { mode: 'default' }, reinitialize: draft.reinitialize, agents: draft.selectedAgents,
-  github: draft.githubMode === 'app' ? { mode: 'app', appId: draft.appId, installationId: draft.installationId,
-    privateKeyCapability: draft.privateKey?.capability ?? '' } : { mode: draft.githubMode },
-  intake: draft.intakeMode === 'direct_webhook' ? { mode: 'direct_webhook', secretCapability: draft.webhookSecret?.capability ?? '' }
-    : { mode: draft.intakeMode },
-  whitelist: draft.whitelist.trim()
-    ? draft.whitelist.split(',').map(value => value.trim()).filter(Boolean)
-    : null,
-  repository: null,
-});
+const requestFrom = (sessionId: string, draft: Draft): DesktopSetupRequest | null => {
+  if (draft.githubMode === 'demo') return null;
+  return {
+    sessionId, root: { mode: 'default' }, reinitialize: draft.reinitialize, agents: draft.selectedAgents,
+    github: draft.githubMode === 'app' ? { mode: 'app', appId: draft.appId, installationId: draft.installationId,
+      privateKeyCapability: draft.privateKey?.capability ?? '' } : { mode: draft.githubMode },
+    intake: draft.intakeMode === 'direct_webhook' ? { mode: 'direct_webhook', secretCapability: draft.webhookSecret?.capability ?? '' }
+      : { mode: draft.intakeMode },
+    whitelist: draft.whitelist.trim()
+      ? draft.whitelist.split(',').map(value => value.trim()).filter(Boolean)
+      : null,
+    repository: null,
+  };
+};
+
+const githubModeLabel = (mode: DraftGithubMode): string => mode === 'relay' ? 'ProPR Connect'
+  : mode === 'app' ? 'Custom GitHub App'
+    : mode === 'keep' ? 'Keep existing configuration' : 'Demo mode (unsupported)';
+
+const intakeModeLabel = (mode: IntakeMode): string => mode === 'routing_websocket' ? 'WebSocket'
+  : mode === 'polling' ? 'Polling'
+    : mode === 'direct_webhook' ? 'Direct webhook' : 'Keep existing configuration';
 
 const InlineError: React.FC<{ message: string | null }> = ({ message }) => message
   ? <div className="desktop-inline-error" role="alert">{message}</div>
   : null;
 
 const hasSavedChoices = (snapshot: DesktopSetupSnapshot): boolean => Boolean(snapshot.resumeAvailable && snapshot.resume);
+
+const RecoveryConfiguration: React.FC<{ resume?: DesktopSetupResumeView }> = ({ resume }) => {
+  if (!resume) return null;
+  return <dl className="desktop-setup-summary" aria-label="Selected configuration">
+    <div><dt>GitHub</dt><dd>{githubModeLabel(resume.github.mode)}</dd></div>
+    <div><dt>Intake</dt><dd>{intakeModeLabel(resume.intake.mode)}</dd></div>
+  </dl>;
+};
 
 const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; cancel(): void }> = ({ snapshot, busy, error, back, cancel }) => {
   const complete = snapshot.state?.steps.filter(step => ['done', 'skipped', 'warning'].includes(step.status)).length ?? 0;
@@ -58,6 +78,7 @@ const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error:
     <span className="desktop-eyebrow">Recovery</span><h1>{snapshot.phase === 'interrupted' ? 'Continue your setup' : 'Setup needs attention'}</h1>
     <p>{failed?.detail || snapshot.error || snapshot.errors?.[0]?.message || 'Setup stopped safely.'}</p>
     {(failed?.nextAction || snapshot.errors?.[0]?.nextAction) && <div className="desktop-setup-recovery">{failed?.nextAction || snapshot.errors?.[0]?.nextAction}</div>}
+    <RecoveryConfiguration resume={snapshot.resume} />
     <InlineError message={error} />
     <div className="desktop-setup-footer"><button className="desktop-secondary-button" type="button" onClick={back}>Back</button>
       {hasSavedChoices(snapshot) && <button className="desktop-secondary-button" type="button" disabled={busy} onClick={review}>Review saved choices</button>}
@@ -70,25 +91,28 @@ const Form: React.FC<{ stage: Stage; draft: Draft; busy: boolean; error: string 
   const { stage, draft, setDraft } = props;
   const index = stages.indexOf(stage);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft(current => ({ ...current, [key]: value }));
+  const selectGithubMode = (mode: GithubMode) => setDraft(current => ({ ...current, githubMode: mode,
+    intakeMode: mode === 'relay' ? 'routing_websocket'
+      : mode === 'app' && current.intakeMode === 'routing_websocket' ? 'polling' : current.intakeMode }));
   return <main className="desktop-setup-wizard"><button type="button" className="desktop-back-button" onClick={props.back}><ArrowLeft /> Back</button>
     <span className="desktop-eyebrow">Local setup · {index + 1} of {stages.length}</span>
     {stage === 'prerequisites' && <><h1>Check the essentials</h1><p>ProPR needs Linux and a running Docker Engine. Setup checks Docker before changing the local stack and reports anything you need to fix.</p></>}
     {stage === 'directory' && <><h1>Private local storage</h1><p>Environment, data, logs, and repositories stay in a fixed owner-only directory managed by ProPR Desktop.</p><div className="desktop-setup-note">Desktop-managed local runtime</div></>}
     {stage === 'github' && <><h1>Connect GitHub</h1><p>Secrets stay in the trusted desktop process and are never returned to this page.</p>
-      <div className="desktop-setup-options">{(['relay', 'app', 'demo', 'keep'] as GithubMode[]).map(mode => <label key={mode}><input type="radio" checked={draft.githubMode === mode} onChange={() => {
-        set('githubMode', mode); if (mode === 'relay' && draft.intakeMode === 'direct_webhook') set('intakeMode', 'routing_websocket');
-        if (mode === 'app' && draft.intakeMode === 'routing_websocket') set('intakeMode', 'polling'); if (mode === 'demo') set('intakeMode', 'keep');
-      }} /><span><strong>{mode === 'relay' ? 'ProPR Connect' : mode === 'app' ? 'Custom GitHub App' : mode === 'demo' ? 'Demo mode' : 'Keep existing configuration'}</strong></span></label>)}</div>
+      {draft.githubMode === 'demo' && <div className="desktop-setup-recovery">Demo mode is no longer available in desktop setup. Select a supported GitHub configuration to continue.</div>}
+      <div className="desktop-setup-options">{(['relay', 'app', 'keep'] as GithubMode[]).map(mode => <label key={mode}><input type="radio" checked={draft.githubMode === mode} onChange={() => selectGithubMode(mode)} /><span><strong>{githubModeLabel(mode)}</strong></span></label>)}</div>
       {draft.githubMode === 'app' && <div className="desktop-setup-grid"><label>App ID<input value={draft.appId} onChange={event => set('appId', event.target.value)} /></label>
         <label>Installation ID<input value={draft.installationId} onChange={event => set('installationId', event.target.value)} /></label>
         <div className="desktop-setup-wide"><button type="button" className="desktop-secondary-button" onClick={props.chooseKey}><KeyRound /> Choose private key</button><small>{draft.privateKey?.label ?? ' No key selected'}</small></div></div>}</>}
-    {stage === 'intake' && <><h1>Choose GitHub event intake</h1><div className="desktop-setup-options">
-      {(draft.githubMode === 'relay' ? ['keep', 'routing_websocket', 'polling'] : draft.githubMode === 'app' ? ['keep', 'polling', 'direct_webhook'] : draft.githubMode === 'demo' ? ['keep'] : ['keep', 'routing_websocket', 'polling', 'direct_webhook']).map(mode =>
-        <label key={mode}><input type="radio" checked={draft.intakeMode === mode} onChange={() => set('intakeMode', mode as IntakeMode)} /><span><strong>{mode.replace(/_/g, ' ')}</strong></span></label>)}</div>
+    {stage === 'intake' && <><h1>GitHub event intake</h1>{draft.githubMode === 'relay'
+      ? <div className="desktop-setup-note"><strong>WebSocket</strong><br />ProPR Connect uses a persistent WebSocket connection for GitHub events.</div>
+      : <div className="desktop-setup-options">
+        {(draft.githubMode === 'app' ? ['keep', 'polling', 'direct_webhook'] : ['keep', 'routing_websocket', 'polling', 'direct_webhook']).map(mode =>
+          <label key={mode}><input type="radio" checked={draft.intakeMode === mode} onChange={() => set('intakeMode', mode as IntakeMode)} /><span><strong>{intakeModeLabel(mode as IntakeMode)}</strong></span></label>)}</div>}
       {draft.intakeMode === 'direct_webhook' && <div className="desktop-setup-wide"><button type="button" className="desktop-secondary-button" onClick={props.acquireSecret}><KeyRound /> Enter webhook secret securely</button><small>{draft.webhookSecret?.label ?? ' No secret entered'}</small></div>}</>}
     {stage === 'agents' && <><h1>Select coding agents</h1><div className="desktop-agent-options">{agents.map(agent => <label key={agent}><input type="checkbox" checked={draft.selectedAgents.includes(agent)} onChange={() => set('selectedAgents', draft.selectedAgents.includes(agent) ? draft.selectedAgents.filter(value => value !== agent) : [...draft.selectedAgents, agent])} /><span>{agent}</span></label>)}</div>
       {draft.githubMode !== 'demo' && <label className="desktop-setup-field"><span>Allowed GitHub users (comma-separated, optional)</span><div><input value={draft.whitelist} onChange={event => set('whitelist', event.target.value)} /></div></label>}</>}
-    {stage === 'summary' && <><h1>Ready to install</h1><dl className="desktop-setup-summary"><div><dt>Directory</dt><dd>Desktop-managed local runtime</dd></div><div><dt>GitHub</dt><dd>{draft.githubMode}</dd></div><div><dt>Intake</dt><dd>{draft.intakeMode}</dd></div><div><dt>Agents</dt><dd>{draft.selectedAgents.join(', ') || 'None'}</dd></div></dl></>}
+    {stage === 'summary' && <><h1>Ready to install</h1><dl className="desktop-setup-summary" aria-label="Selected configuration"><div><dt>Directory</dt><dd>Desktop-managed local runtime</dd></div><div><dt>GitHub</dt><dd>{githubModeLabel(draft.githubMode)}</dd></div><div><dt>Intake</dt><dd>{intakeModeLabel(draft.intakeMode)}</dd></div><div><dt>Agents</dt><dd>{draft.selectedAgents.join(', ') || 'None'}</dd></div></dl></>}
     {props.error && <div className="desktop-inline-error" role="alert">{props.error}</div>}
     <div className="desktop-setup-footer"><button type="button" className="desktop-primary-button" disabled={props.busy} onClick={props.next}>{stage === 'summary' ? 'Install ProPR' : 'Continue'} <ChevronRight /></button></div>
   </main>;
@@ -109,17 +133,18 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
     let mounted = true; const unsubscribe = adapter.onProgress(value => { if (mounted) setSnapshot(value); });
     void adapter.status().then(value => { if (!mounted) return; setSnapshot(value); if (value.resume) setDraft(current => ({ ...current,
       githubMode: value.resume!.github.mode, appId: value.resume!.github.mode === 'app' ? value.resume!.github.appId : '',
-      installationId: value.resume!.github.mode === 'app' ? value.resume!.github.installationId : '', intakeMode: value.resume!.intake.mode,
+      installationId: value.resume!.github.mode === 'app' ? value.resume!.github.installationId : '',
+      intakeMode: value.resume!.github.mode === 'relay' ? 'routing_websocket' : value.resume!.intake.mode,
       selectedAgents: value.resume!.agents, whitelist: value.resume!.whitelist?.join(', ') ?? '', reinitialize: value.resume!.reinitialize })); })
       .catch(() => { if (mounted) setError('Setup status is unavailable.'); });
     return () => { mounted = false; unsubscribe(); };
   }, [adapter, statusAttempt]);
   const request = useMemo(() => snapshot ? requestFrom(snapshot.sessionId, draft) : null, [draft, snapshot]);
   const run = async (retry: boolean, review = false) => {
-    if (!request) return;
     if (review && snapshot?.resumeAvailable && snapshot.resume && !reconfiguring) {
       setStage(snapshot.resume?.reconfigurationStage ?? 'github'); setReconfiguring(true); return;
     }
+    if (!request) return;
     setBusy(true); setError(null);
     try {
       const nextSnapshot = retry ? reconfiguring ? await adapter.retry(request) : await adapter.retry() : await adapter.start(request);
@@ -147,7 +172,8 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
   if (['failed', 'cancelled', 'interrupted'].includes(snapshot.phase) && !reconfiguring) return <Recovery snapshot={snapshot} busy={busy} error={error} back={onBack} retry={() => void run(true)} review={() => void run(true, true)} />;
   if (snapshot.phase === 'completed' && snapshot.profile) return <main className="desktop-setup-wizard"><div className="desktop-setup-success"><Check /></div><span className="desktop-eyebrow">Setup complete</span><h1>ProPR is ready</h1><p>The local stack is healthy. Continue through the normal identity and pairing checks to open it.</p><div className="desktop-setup-footer"><button className="desktop-primary-button" onClick={() => onComplete(snapshot.profile!)}>Connect securely</button></div></main>;
   const index = stages.indexOf(stage);
-  const next = () => { setError(null); if (stage === 'github' && draft.githubMode === 'app' && (!/^\d{1,20}$/.test(draft.appId) || !/^\d{1,20}$/.test(draft.installationId) || !draft.privateKey)) return setError('Enter numeric App and installation IDs, then choose the private key.');
+  const next = () => { setError(null); if (stage === 'github' && draft.githubMode === 'demo') return setError('Select ProPR Connect, Custom GitHub App, or keep an existing supported configuration.');
+    if (stage === 'github' && draft.githubMode === 'app' && (!/^\d{1,20}$/.test(draft.appId) || !/^\d{1,20}$/.test(draft.installationId) || !draft.privateKey)) return setError('Enter numeric App and installation IDs, then choose the private key.');
     if (stage === 'intake' && draft.intakeMode === 'direct_webhook' && !draft.webhookSecret) return setError('Enter the webhook secret securely.');
     if (index === stages.length - 1) void run(reconfiguring); else setStage(stages[index + 1]); };
   return <Form stage={stage} draft={draft} setDraft={setDraft} busy={busy} error={error} chooseKey={() => void chooseKey()} acquireSecret={() => void acquireSecret()} next={next} back={index ? () => setStage(stages[index - 1]) : onBack} />;
