@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- aggregation, deduplication, and output sanitization form one privacy boundary */
 import type { Job, Queue } from 'bullmq';
 import type { Knex } from 'knex';
 import type { NotificationService } from '@propr/core';
@@ -478,9 +479,22 @@ function compareText(left: string, right: string): number {
 
 function assignReferences(candidates: CandidateItem[]): VoiceBriefingItem[] {
   const positions: Record<VoiceBriefingItemKind, number> = { task: 0, plan: 0, system: 0 };
-  return candidates.map(({ identities: _identities, priority: _priority, workClass: _workClass, ...item }) => {
-    const position = ++positions[item.kind];
-    return { ...item, position, reference: `${item.kind} ${position}` };
+  return candidates.map(candidate => {
+    const position = ++positions[candidate.kind];
+    return {
+      kind: candidate.kind,
+      id: candidate.id,
+      title: candidate.title,
+      repository: candidate.repository,
+      status: candidate.status,
+      summary: candidate.summary,
+      href: candidate.href,
+      requiresAttention: candidate.requiresAttention,
+      actions: candidate.actions,
+      updatedAt: candidate.updatedAt,
+      position,
+      reference: `${candidate.kind} ${position}`,
+    };
   });
 }
 
@@ -526,7 +540,7 @@ function safeTitle(value: string): string {
 
 function boundedText(value: string, maximum: number, fallback: string): string {
   const normalized = value
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\p{Cc}/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return fallback;
