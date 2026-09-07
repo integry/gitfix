@@ -1,7 +1,7 @@
 import { after, test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildDockerArgs } from '../packages/core/src/agents/impl/utils/dockerArgsBuilder.js';
@@ -363,27 +363,32 @@ test('OpenCode scout Docker args use the inline deny-first config and isolated r
     assert.equal(inlineConfig.permission['propr_repository_*'], 'allow');
 });
 
-test('Codex scout Docker args disable shell access and omit review credentials', () => {
+test('Codex scout Docker args disable shell access and omit review credentials', async () => {
+    const configPath = await mkdtemp(join(tmpdir(), 'propr-codex-scout-config-'));
     const config: AgentConfig = {
         id: 'codex-scout', type: 'codex', alias: 'codex-scout', enabled: true,
-        dockerImage: 'propr/agent:latest', configPath: '/tmp/codex-scout-config', supportedModels: [],
+        dockerImage: 'propr/agent:latest', configPath, supportedModels: [],
         envVars: { GITHUB_TOKEN: 'config-secret', SAFE_VALUE: 'kept' },
     };
-    const agent = new CodexAgent(config);
-    const build = (agent as unknown as {
-        buildDockerArgs: (params: Record<string, unknown>) => string[];
-    }).buildDockerArgs.bind(agent);
-    const args = build({
-        worktreePath: '/tmp/scout-worktree', githubToken: 'direct-secret', issueNumber: 0,
-        readOnlyWorkspace: true, repositoryInspection: true,
-    });
+    try {
+        const agent = new CodexAgent(config);
+        const build = (agent as unknown as {
+            buildDockerArgs: (params: Record<string, unknown>) => string[];
+        }).buildDockerArgs.bind(agent);
+        const args = build({
+            worktreePath: '/tmp/scout-worktree', githubToken: 'direct-secret', issueNumber: 0,
+            readOnlyWorkspace: true, repositoryInspection: true,
+        });
 
-    assert.ok(args.includes(`/tmp/scout-worktree:${REPOSITORY_SCOUT_CONTAINER_ROOT}:ro`));
-    assert.ok(args.includes('features.shell_tool=false'));
-    assert.ok(args.includes('--ignore-user-config'));
-    assert.ok(!args.includes('--dangerously-bypass-approvals-and-sandbox'));
-    assert.ok(!args.some(arg => arg.includes('direct-secret') || arg.includes('config-secret')));
-    assert.ok(!args.some(arg => arg.startsWith('/tmp/git-processor:/tmp/git-processor:')));
+        assert.ok(args.includes(`/tmp/scout-worktree:${REPOSITORY_SCOUT_CONTAINER_ROOT}:ro`));
+        assert.ok(args.includes('features.shell_tool=false'));
+        assert.ok(args.includes('--ignore-user-config'));
+        assert.ok(!args.includes('--dangerously-bypass-approvals-and-sandbox'));
+        assert.ok(!args.some(arg => arg.includes('direct-secret') || arg.includes('config-secret')));
+        assert.ok(!args.some(arg => arg.startsWith('/tmp/git-processor:/tmp/git-processor:')));
+    } finally {
+        await rm(configPath, { recursive: true, force: true });
+    }
 });
 
 test('Vibe scout Docker args allowlist only the prefixed repository MCP tools', () => {

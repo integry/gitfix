@@ -7,7 +7,8 @@ import { verifyWorktreeStructure, verifyWorktreePostExecution, setWorktreeOwners
 import { buildCodexPrompt, parseCodexStreamOutput, storeCodexPromptInRedis } from '../../codex/codexHelpers.js';
 import {
     assertReasoningLevelCliVersionSupported,
-    loadModelReasoningLevel, resolveAgentModelReasoningLevel, resolveCodexReasoningLevel, type CodexRuntimeReasoningLevel,
+    assertCodexConfigPathAvailable, loadModelReasoningLevel, resolveAgentModelReasoningLevel,
+    resolveCodexConfigPath, resolveCodexReasoningLevel, type CodexRuntimeReasoningLevel,
     type ModelReasoningLevel
 } from '../../config/configManager.js';
 import { AGENT_DEFAULT_VERSIONS } from '../version/types.js';
@@ -360,6 +361,8 @@ export class CodexAgent implements Agent {
         const dockerImage = this.config.dockerImage;
         logger.debug({ agentAlias, dockerImage }, 'Running health check for Codex agent...');
         try {
+            const configPath = resolveCodexConfigPath(this.config.configPath);
+            assertCodexConfigPathAvailable(configPath);
             const result = await executeDockerCommand('docker', ['images', '-q', dockerImage], { timeout: 10000 });
             const imageExists = !!result.stdout.trim();
             logger.info({ agentAlias, dockerImage, imageExists }, imageExists ? 'Health check passed' : 'Health check failed: Docker image not found');
