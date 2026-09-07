@@ -172,6 +172,7 @@ describe('DesktopExperience', () => {
     render(<DesktopExperience adapters={adapters} deepLinks={deepLinks}><div>Connected app</div></DesktopExperience>);
 
     expect(await screen.findByText('Connected app')).toBeInTheDocument();
+    await act(async () => { await Promise.resolve(); });
     let consumption: ReturnType<DesktopDeepLinkInbox['receive']> = null;
     act(() => {
       consumption = deepLinks.receive('propr://open?path=%2Ftasks%3Fstatus%3Dopen');
