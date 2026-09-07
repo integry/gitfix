@@ -1,11 +1,11 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { createDesktopBridge, type PreloadIpc } from '../../../apps/desktop/src/preload-bridge';
-import { IPC_CHANNELS } from '../../../apps/desktop/src/shared/contract';
+import { IPC_CHANNELS, type DesktopSetupSnapshot } from '../../../apps/desktop/src/shared/contract';
 import { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopExperience } from './DesktopExperience';
-import { adaptersFor, deferred } from './DesktopExperience.testSupport';
-import type { DesktopProfile } from './types';
+import { adaptersFor, deferred, localProfile } from './DesktopExperience.testSupport';
+import type { DesktopGuidedLocalSetupAdapter, DesktopProfile } from './types';
 
 it('does not acknowledge a cold Connect link until its confirmation editor is presented', async () => {
   const invocations: Array<{ channel: string; args: unknown[]; visibleEndpoint: string | null }> = [];
@@ -65,4 +65,84 @@ it('does not acknowledge a cold Connect link until its confirmation editor is pr
     unsubscribe();
     rendered.unmount();
   }
+});
+
+it('presents Connect during guided setup and settles setup cancellation before connecting', async () => {
+  const idle: DesktopSetupSnapshot = {
+    phase: 'idle', capability: { supported: true, kind: 'local', platform: 'linux' },
+    sessionId: '11111111-1111-4111-8111-111111111111', logs: [],
+  };
+  const running: DesktopSetupSnapshot = { ...idle, phase: 'running' };
+  const cancelled: DesktopSetupSnapshot = { ...idle, phase: 'cancelled', error: 'Setup was cancelled safely.' };
+  const startResult = deferred<DesktopSetupSnapshot>();
+  const cancellation = deferred<DesktopSetupSnapshot>();
+  let progress: ((snapshot: DesktopSetupSnapshot) => void) | undefined;
+  const releaseProgressOwner = vi.fn();
+  const adapter: DesktopGuidedLocalSetupAdapter = {
+    supported: true,
+    status: vi.fn(async () => idle),
+    start: vi.fn(() => {
+      progress?.(running);
+      return startResult.promise;
+    }),
+    retry: vi.fn(async () => cancelled),
+    cancel: vi.fn(async () => {
+      const result = await cancellation.promise;
+      startResult.resolve(result);
+      return result;
+    }),
+    selectPrivateKey: vi.fn(async () => null),
+    acquireWebhookSecret: vi.fn(async () => null),
+    onProgress: vi.fn(listener => {
+      progress = listener;
+      return () => {
+        progress = undefined;
+        releaseProgressOwner();
+      };
+    }),
+  };
+  const adapters = adaptersFor();
+  adapters.localSetup = adapter;
+  const deepLinks = new DesktopDeepLinkInbox();
+  render(<DesktopExperience adapters={adapters} deepLinks={deepLinks}><div>Shared route tree</div></DesktopExperience>);
+
+  fireEvent.click(await screen.findByRole('button', { name: /Set up this computer/i }));
+  await screen.findByRole('heading', { name: 'Check the essentials' });
+  for (const heading of ['Private local storage', 'Connect GitHub', 'Choose GitHub event intake', 'Select coding agents', 'Ready to install']) {
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    await screen.findByRole('heading', { name: heading });
+  }
+  fireEvent.click(screen.getByRole('button', { name: /Install ProPR/i }));
+  expect(await screen.findByRole('heading', { name: 'Setting up ProPR' })).toBeInTheDocument();
+
+  let consumption: ReturnType<DesktopDeepLinkInbox['receive']> = null;
+  act(() => {
+    consumption = deepLinks.receive('propr://connect?api=https%3A%2F%2Fconnect.propr.dev');
+  });
+
+  expect(await screen.findByLabelText('Instance URL')).toHaveValue('https://connect.propr.dev');
+  await expect(consumption).resolves.toEqual({
+    kind: 'connect-confirmation',
+    target: 'https://connect.propr.dev',
+  });
+  expect(adapter.cancel).not.toHaveBeenCalled();
+  expect(adapters.connection.probe).not.toHaveBeenCalled();
+  expect(releaseProgressOwner).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await waitFor(() => expect(adapter.cancel).toHaveBeenCalledOnce());
+  expect(adapters.connection.probe).not.toHaveBeenCalled();
+  expect(releaseProgressOwner).not.toHaveBeenCalled();
+
+  await act(async () => {
+    cancellation.resolve(cancelled);
+    await cancellation.promise;
+  });
+
+  await waitFor(() => expect(adapters.connection.probe).toHaveBeenCalledOnce());
+  expect(adapters.connection.probe).toHaveBeenCalledWith(expect.objectContaining({
+    baseUrl: 'https://connect.propr.dev',
+  }));
+  expect(releaseProgressOwner).toHaveBeenCalledOnce();
+  expect(adapters.connection.probe).not.toHaveBeenCalledWith(localProfile);
 });

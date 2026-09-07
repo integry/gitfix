@@ -230,15 +230,34 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
   };
 
+  const settleSetupBeforeConnectCandidate = async (): Promise<boolean> => {
+    if (!hasPendingConnectCandidate()) return true;
+    if (localSetupOpen && isGuidedLocalSetup(adapters.localSetup)) {
+      try {
+        const settled = await adapters.localSetup.cancel();
+        if (settled.phase === 'running') throw new Error('Local setup cancellation did not settle');
+      } catch {
+        setOperationError('Local setup could not be cancelled safely. Try Connect again or return to setup.');
+        return false;
+      }
+      setLocalSetupOpen(false);
+    }
+    setAcceptanceSetup(null);
+    return true;
+  };
+
   const saveProfile = async (profile: DesktopProfile, shouldConnect = true) => {
     cancelDiscovery();
-    clearConnectCandidate();
     setOperationError(null);
     if (shouldConnect) {
+      if (!await settleSetupBeforeConnectCandidate()) return;
+      clearConnectCandidate();
       closeManager();
       await connect(profile);
       return;
     }
+
+    clearConnectCandidate();
 
     try {
       await enqueueProfileMutation(() => adapters.profiles.save(profile));
@@ -394,16 +413,27 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   };
 
   const content = () => {
+    const profileEditor = editing
+      ? <main className="desktop-welcome-card"><DesktopBrand /><ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate()} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate() && editing !== 'new' ? () => connectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={profile => void saveProfile(profile)} /></main>
+      : null;
+    const setupSuspended = Boolean(profileEditor && hasPendingConnectCandidate());
+    const setupLayer = (surface: React.ReactNode) => <>
+      <div hidden={setupSuspended} inert={setupSuspended} aria-hidden={setupSuspended || undefined} style={setupSuspended ? undefined : { display: 'contents' }}>
+        {surface}
+      </div>
+      {setupSuspended && profileEditor}
+    </>;
+
     if (state.phase === 'loading') return <div className="desktop-loading"><LoaderCircle className="desktop-spin" /><span>Opening ProPR…</span></div>;
-    if (acceptanceSetup) return <PackagedAcceptanceLocalSetup initial={acceptanceSetup} onBack={() => setAcceptanceSetup(null)} />;
+    if (acceptanceSetup) return setupLayer(<PackagedAcceptanceLocalSetup initial={acceptanceSetup} onBack={() => setAcceptanceSetup(null)} />);
     if (state.phase === 'connecting') return <ConnectionPanel profile={state.profile} onBack={choose} onRetry={retry} onAuthenticate={() => undefined} onHelp={() => undefined} onReenter={() => undefined} onRediscover={() => undefined} />;
     if (state.phase === 'recovery-review') return <ManagedRecoveryReview profile={state.profile} onCancel={() => { cancelDiscovery(); setState({ phase: 'blocked', profile: state.profile, result: { status: 'offline', message: managedRecoveryMessage } }); }} onConfirm={() => void connect(state.candidate)} />;
     if (state.phase === 'blocked') return <ConnectionPanel profile={state.profile} result={state.result} onBack={choose} onRetry={retry} onAuthenticate={() => void runBlockedAction(state.profile, async () => {
       await adapters.authentication.authenticate(state.profile);
       await reportAcceptanceStage('CREDENTIAL_COMMITTED');
     }, 'ProPR Desktop could not open sign in.', 'ProPR Connect pairing could not be completed.', () => connect(state.profile))} onHelp={() => void runBlockedAction(state.profile, () => adapters.externalBrowser.open('https://propr.dev'), 'ProPR Desktop could not open connection help.')} onReenter={() => reenterManagedEndpoint(state.profile)} onRediscover={() => void rediscoverManagedEndpoint(state.profile)} />;
-    if (localSetupOpen && isGuidedLocalSetup(adapters.localSetup)) return <LocalSetupWizard adapter={adapters.localSetup} onBack={() => setLocalSetupOpen(false)} onComplete={profile => { setLocalSetupOpen(false); void saveProfile(profile); }} />;
-    if (editing) return <main className="desktop-welcome-card"><DesktopBrand /><ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate()} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate() && editing !== 'new' ? () => connectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={profile => void saveProfile(profile)} /></main>;
+    if (localSetupOpen && isGuidedLocalSetup(adapters.localSetup)) return setupLayer(<LocalSetupWizard adapter={adapters.localSetup} onBack={() => setLocalSetupOpen(false)} onComplete={profile => { setLocalSetupOpen(false); void saveProfile(profile); }} />);
+    if (profileEditor) return profileEditor;
     return <InstanceChooser profiles={profiles} busy={busy} error={operationError} localSetupSupported={adapters.platform === 'linux' && adapters.localSetup.supported} networkDiscoverySupported={adapters.discovery.supported} onLocalSetup={() => void setupLocal()} onConnectNew={() => openEditor('new')} onDiscover={() => void discover()} onConnect={profile => void connect(profile)} onEdit={openEditor} onRemove={profile => void removeProfile(profile)} />;
   };
 

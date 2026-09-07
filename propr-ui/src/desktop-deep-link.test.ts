@@ -118,6 +118,18 @@ describe('desktop deep-link inbox', () => {
     unsubscribeSecond();
   });
 
+  it('forwards a buffered async consumer rejection to the original receiver', async () => {
+    const inbox = new DesktopDeepLinkInbox();
+    const failure = new Error('presentation failed');
+    const eventualConsumption = inbox.receive('propr://connect?api=https%3A%2F%2Ffirst.example');
+    const rejection = expect(eventualConsumption).rejects.toBe(failure);
+
+    const unsubscribe = inbox.subscribe(async () => { throw failure; });
+
+    await rejection;
+    unsubscribe();
+  });
+
   it('fails closed when a competing consumer subscribes', () => {
     const inbox = new DesktopDeepLinkInbox();
     const first = vi.fn();
