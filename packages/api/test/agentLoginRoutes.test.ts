@@ -25,6 +25,8 @@ import {
   resolveAgentLoginConfigPath,
 } from '../services/agentLoginDocker.js';
 
+const defaultCodexConfigPath = os.tmpdir();
+
 function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     id: 'codex-1',
@@ -32,7 +34,7 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
     alias: 'codex',
     enabled: true,
     dockerImage: 'propr/agent:test',
-    configPath: '/tmp/propr-test-codex',
+    configPath: defaultCodexConfigPath,
     supportedModels: ['gpt-test'],
     ...overrides,
   };
@@ -98,12 +100,12 @@ describe('agent login session manager', () => {
     const args = buildAgentLoginCreateArgs(
       agent(),
       AGENT_LOGIN_DESCRIPTORS.codex,
-      '/tmp/propr-test-codex',
+      defaultCodexConfigPath,
       'propr-agent-login-test',
     );
 
     assert.deepEqual(args.slice(-3), ['codex', 'login', '--device-auth']);
-    assert.ok(args.includes('/tmp/propr-test-codex:/home/node/.codex:rw'));
+    assert.ok(args.includes(`${defaultCodexConfigPath}:/home/node/.codex:rw`));
     assert.ok(args.includes('PROPR_AGENT_TYPE=codex'));
     assert.equal(args.some(value => value.includes('GH_TOKEN')), false);
     assert.equal(args.some(value => value.includes('ANTHROPIC_API_KEY')), false);
@@ -190,17 +192,14 @@ describe('agent login session manager', () => {
     try {
       process.env.HOME = '/root';
       process.env.PROPR_CONTAINERIZED = '1';
-      process.env.CODEX_CONFIG_PATH = '/home/desktop-user/.codex';
+      process.env.CODEX_CONFIG_PATH = defaultCodexConfigPath;
       process.env.HOST_CODEX_DIR = '/home/wrong-account/.codex';
 
       assert.equal(
         resolveAgentLoginConfigPath(agent({ configPath: '~/.codex' })),
-        '/home/desktop-user/.codex',
+        defaultCodexConfigPath,
       );
-      assert.equal(
-        resolveAgentLoginConfigPath(agent({ configPath: '/srv/custom-codex' })),
-        '/srv/custom-codex',
-      );
+      assert.equal(resolveAgentLoginConfigPath(agent({ configPath: os.tmpdir() })), os.tmpdir());
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -210,6 +209,23 @@ describe('agent login session manager', () => {
       else process.env.CODEX_CONFIG_PATH = previousCodexPath;
       if (previousHostCodexPath === undefined) delete process.env.HOST_CODEX_DIR;
       else process.env.HOST_CODEX_DIR = previousHostCodexPath;
+    }
+  });
+
+  test('rejects unavailable non-managed Codex directories before Docker can create them', () => {
+    const previousCodexPath = process.env.CODEX_CONFIG_PATH;
+    const missingPath = path.join(os.tmpdir(), `propr-agent-login-missing-${process.pid}`);
+    try {
+      process.env.CODEX_CONFIG_PATH = missingPath;
+      const isUnavailableInputError = (error: unknown) => error instanceof AgentLoginInputError
+        && /credential directory is unavailable/.test(error.message);
+      assert.throws(
+        () => resolveAgentLoginConfigPath(agent({ configPath: '~/.codex' })),
+        isUnavailableInputError,
+      );
+    } finally {
+      if (previousCodexPath === undefined) delete process.env.CODEX_CONFIG_PATH;
+      else process.env.CODEX_CONFIG_PATH = previousCodexPath;
     }
   });
 

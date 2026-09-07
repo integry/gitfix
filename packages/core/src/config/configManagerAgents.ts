@@ -63,7 +63,9 @@ export class AgentConfigPathUnavailableError extends Error {
 type ConfigPathEnvironment = Record<string, string | undefined>;
 
 function isContainerizedEnvironment(environment: ConfigPathEnvironment): boolean {
-    return environment.PROPR_CONTAINERIZED === '1' || environment.PROPR_CONTAINERIZED === 'true';
+    return environment.PROPR_CONTAINERIZED === '1'
+        || environment.PROPR_CONTAINERIZED === 'true'
+        || (environment === process.env && fs.existsSync('/.dockerenv'));
 }
 
 function validateCodexCredentialMapping(value: string, source: string): string {

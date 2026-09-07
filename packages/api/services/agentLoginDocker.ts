@@ -12,6 +12,7 @@ import {
 } from '@propr/shared';
 import {
   AgentConfigPathUnavailableError,
+  assertCodexConfigPathAvailable,
   resolveCodexConfigPath,
   type AgentConfig,
 } from '@propr/core';
@@ -57,6 +58,18 @@ function validateAbsoluteCredentialPath(value: string, label: string): string {
   return normalized;
 }
 
+function assertCodexLoginPathAvailable(credentialPath: string): string {
+  try {
+    assertCodexConfigPathAvailable(credentialPath);
+    return credentialPath;
+  } catch (error) {
+    if (error instanceof AgentConfigPathUnavailableError) {
+      throw new AgentLoginInputError(error.message);
+    }
+    throw error;
+  }
+}
+
 /**
  * Expand a saved config path into the absolute path understood by the host
  * Docker daemon. ProPR-managed paths resolve below the deployment's managed
@@ -95,10 +108,11 @@ export function resolveAgentLoginConfigPath(agent: AgentConfig): string {
 
   if (agent.type === 'codex' && configured === AGENT_DEFAULTS.codex.configPath) {
     try {
-      return validateAbsoluteCredentialPath(
+      const resolved = validateAbsoluteCredentialPath(
         resolveCodexConfigPath(configured),
         'Agent credential path',
       );
+      return assertCodexLoginPathAvailable(resolved);
     } catch (error) {
       if (error instanceof AgentConfigPathUnavailableError) {
         throw new AgentLoginInputError(error.message);
@@ -124,7 +138,9 @@ export function resolveAgentLoginConfigPath(agent: AgentConfig): string {
         : path.join(os.homedir(), configured.slice(2));
     }
   }
-  return validateAbsoluteCredentialPath(resolved, 'Agent credential path');
+  const credentialPath = validateAbsoluteCredentialPath(resolved, 'Agent credential path');
+  if (agent.type === 'codex') return assertCodexLoginPathAvailable(credentialPath);
+  return credentialPath;
 }
 
 export function resolveOpenCodeDataPath(configPath: string, managedCredentials = false): string {

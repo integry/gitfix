@@ -1,5 +1,6 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
 import { AGENT_DEFAULTS, getManagedAgentConfigPath } from '@propr/shared';
 import type { AgentConfig } from '../packages/core/src/config/configManagerAgents.js';
 import { AGENT_DEFAULT_VERSIONS } from '../packages/core/src/agents/version/types.js';
@@ -94,6 +95,29 @@ describe('agent config migration', () => {
             () => resolveCodexConfigPath('~/.codex', { HOME: '/root', PROPR_CONTAINERIZED: '1' }),
             /has no host mapping.*HOST_CODEX_DIR/
         );
+    });
+
+    test('detects a Docker container without requiring PROPR_CONTAINERIZED', (t) => {
+        const keys = ['HOME', 'PROPR_CONTAINERIZED', 'CODEX_CONFIG_PATH', 'HOST_CODEX_DIR'] as const;
+        const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+        t.mock.method(fs, 'existsSync', value => value === '/.dockerenv');
+        try {
+            process.env.HOME = '/root';
+            delete process.env.PROPR_CONTAINERIZED;
+            delete process.env.CODEX_CONFIG_PATH;
+            delete process.env.HOST_CODEX_DIR;
+
+            assert.throws(
+                () => resolveCodexConfigPath('~/.codex'),
+                /has no host mapping.*HOST_CODEX_DIR/
+            );
+        } finally {
+            for (const key of keys) {
+                const value = previous[key];
+                if (value === undefined) delete process.env[key];
+                else process.env[key] = value;
+            }
+        }
     });
 
     test('resolves portable managed credentials through the deployment root', () => {
