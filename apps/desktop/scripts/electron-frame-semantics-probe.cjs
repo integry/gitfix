@@ -49,7 +49,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('ready', event => {
     const firstGetter = event.sender.mainFrame;
     const secondGetter = event.sender.mainFrame;
-    process.stdout.write(`${JSON.stringify({
+    const report = {
       navigationStarted,
       navigationCommitted,
       readiness: {
@@ -58,8 +58,29 @@ app.whenReady().then(async () => {
         initialFrameMatchesGetter: initialFrame === firstGetter,
         initialDocumentIdMatches: initialDocumentId === `${firstGetter.processId}:${firstGetter.frameToken}`,
       },
-    })}\n`);
-    setTimeout(() => app.quit(), 50);
+    };
+    const webContents = window.webContents;
+    window.once('closed', () => {
+      let getterError;
+      try {
+        void window.webContents;
+      } catch (error) {
+        getterError = {
+          name: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+      process.stdout.write(`${JSON.stringify({
+        ...report,
+        teardown: {
+          windowDestroyed: window.isDestroyed(),
+          cachedWebContentsAccessible: typeof webContents.isDestroyed() === 'boolean',
+          getterError,
+        },
+      })}\n`);
+      app.quit();
+    });
+    setTimeout(() => window.destroy(), 50);
   });
   await window.loadURL('propr-readiness-fixture://app/renderer.html');
 }).catch(error => {

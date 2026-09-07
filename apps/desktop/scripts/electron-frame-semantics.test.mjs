@@ -47,8 +47,8 @@ const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   });
 });
 
-describe('Electron renderer readiness frame semantics', () => {
-  it('uses one stable main-frame identity across initial navigation and incoming readiness', {
+describe('Electron BrowserWindow lifecycle semantics', () => {
+  it('keeps initial frame identity stable and invalidates the window getter after destruction', {
     timeout: 25_000,
   }, async context => {
     const xvfbRun = process.platform === 'linux' && !process.env.DISPLAY
@@ -86,6 +86,14 @@ describe('Electron renderer readiness frame semantics', () => {
         firstGetterMatchesSecondGetter: true,
         initialFrameMatchesGetter: true,
         initialDocumentIdMatches: true,
+      },
+      teardown: {
+        windowDestroyed: true,
+        cachedWebContentsAccessible: true,
+        getterError: {
+          name: 'TypeError',
+          message: 'Object has been destroyed',
+        },
       },
     });
   });

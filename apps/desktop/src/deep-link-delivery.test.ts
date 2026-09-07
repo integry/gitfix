@@ -232,6 +232,39 @@ describe('desktop deep-link delivery', () => {
     assert.deepEqual(failures, []);
   });
 
+  it('clears renderer state without reading webContents from a destroyed window', () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const webContents = {
+      isLoading: () => false,
+      mainFrame: { frameToken: 'destroyed-window-document', processId: 1 },
+      send: (_channel: string, value: DesktopDeepLinkDelivery) => sent.push(value),
+    };
+    let destroyed = false;
+    const window: DeepLinkWindow = {
+      isDestroyed: () => destroyed,
+      get webContents() {
+        if (destroyed) throw new Error('Object has been destroyed');
+        return webContents;
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link', [], undefined, undefined, Date.now, 1_000, 20, true,
+    );
+
+    activateWindow(delivery, window);
+    delivery.didStartMainFrameNavigation(window);
+    destroyed = true;
+
+    assert.doesNotThrow(() => delivery.clearWindow(window));
+
+    const replacement: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents,
+    };
+    delivery.setWindow(replacement);
+    assert.equal(delivery.rendererConsumerReady(webContents, webContents.mainFrame), true);
+  });
+
   it('deduplicates a cold link reported through argv and open-url before delivery', async () => {
     const sent: DesktopDeepLinkDelivery[] = [];
     const link = 'propr://connect?api=https%3A%2F%2Ft-native-evidence.propr.dev';

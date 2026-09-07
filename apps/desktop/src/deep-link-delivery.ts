@@ -25,6 +25,8 @@ export interface DeepLinkWindow {
   };
 }
 
+type DeepLinkWebContents = DeepLinkWindow['webContents'];
+
 const rendererDocumentId = (frame: unknown): string | null => {
   if ((typeof frame !== 'object' && typeof frame !== 'function') || frame === null
     || !('frameToken' in frame) || typeof frame.frameToken !== 'string'
@@ -36,6 +38,7 @@ const rendererDocumentId = (frame: unknown): string | null => {
 /** Coordinates protocol delivery across the window creation/load boundary. */
 export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   private window: TWindow | null = null;
+  private windowWebContents: DeepLinkWebContents | null = null;
   private readonly readyRendererDocuments = new WeakMap<object, string>();
   private readonly staleRendererDocuments = new WeakMap<object, Set<string>>();
   private readonly pendingMainFrameNavigations = new WeakSet<object>();
@@ -131,22 +134,27 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
       || this.pendingMainFrameNavigations.has(sender)
       || this.staleRendererDocuments.get(sender)?.has(documentId)) return false;
     this.readyRendererDocuments.set(sender, documentId);
-    if (this.window?.webContents === sender) void this.drain();
+    if (this.windowWebContents === sender) void this.drain();
     return true;
   }
 
   setWindow(window: TWindow): void {
+    const { webContents } = window;
     this.window = window;
+    this.windowWebContents = webContents;
     void this.drain();
   }
 
   clearWindow(window: TWindow): void {
     if (this.window === window) {
+      const webContents = this.windowWebContents;
       this.window = null;
-      this.readyRendererDocuments.delete(window.webContents);
-      this.staleRendererDocuments.delete(window.webContents);
-      this.pendingMainFrameNavigations.delete(window.webContents);
-      this.outgoingRendererDocuments.delete(window.webContents);
+      this.windowWebContents = null;
+      if (!webContents) return;
+      this.readyRendererDocuments.delete(webContents);
+      this.staleRendererDocuments.delete(webContents);
+      this.pendingMainFrameNavigations.delete(webContents);
+      this.outgoingRendererDocuments.delete(webContents);
     }
   }
 
