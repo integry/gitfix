@@ -270,6 +270,48 @@ exit 0
     }
   });
 
+  it('rechecks completion published after the initial result read before admitting cancellation', { timeout: 5_000 }, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-auth-admission-race-test-'));
+    const terminal = join(directory, 'terminal');
+    const authentication = join(directory, 'authentication');
+    const statePath = join(directory, 'authentication.state');
+    const initialReadCompletedPath = join(directory, 'authentication.initial-read-completed');
+    const releaseStartedReadPath = join(directory, 'authentication.release-started-read');
+    const controller = new AbortController();
+    try {
+      await writeExecutable(terminal, `#!/bin/sh
+state_base=$2
+mkfifo "$state_base.started" || exit 91
+printf '%s' "$state_base" > "${statePath}"
+# Opening the FIFO for writing completes only after the handoff has finished
+# its first result read and started awaiting the following started-marker read.
+exec 3>"$state_base.started"
+printf ready > "${initialReadCompletedPath}"
+while [ ! -f "${releaseStartedReadPath}" ]; do sleep 0.01; done
+printf 'process:%s\n' "$$" >&3
+exec 3>&-
+`);
+      await writeExecutable(authentication, '#!/bin/sh\nexit 0\n');
+
+      const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
+      const handoff = launch(authentication, [], { title: 'Controlled cancellation admission race', signal: controller.signal });
+      await waitForFile(initialReadCompletedPath);
+      const stateBase = await readFile(statePath, 'utf8');
+
+      // Publish completion only after the first result read returned no status,
+      // then abort while the started-marker read still blocks admission.
+      writeFileSync(`${stateBase}.result`, '0\n', { mode: 0o600 });
+      controller.abort();
+      writeFileSync(releaseStartedReadPath, '', { mode: 0o600 });
+
+      assert.deepEqual(await handoff, { status: 0 });
+    } finally {
+      controller.abort();
+      await writeFile(releaseStartedReadPath, '', { mode: 0o600 });
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('drains a TERM-resistant command after HUP following admission', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-hup-test-'));
     const terminal = join(directory, 'terminal');
