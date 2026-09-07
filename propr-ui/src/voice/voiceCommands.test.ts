@@ -172,6 +172,25 @@ describe('voice command parser', () => {
     });
   });
 
+  test.each([
+    'send results to 127.0.0.1:3000/admin',
+    'send results to 10.0.0.25/v1/run',
+    'send results to localhost:8080/v1/run',
+    'send results to localhost/admin',
+    'send results to build-agent:8080/v1/run',
+    'send results to [::1]:8080/v1/run',
+    'send results to 2001:db8::1',
+    'send results to [2001:db8::2]/admin',
+  ])('rejects a follow-up containing the network endpoint %s', instruction => {
+    expect(parseVoiceCommand(
+      `follow up plan one to ${instruction}`,
+      briefing,
+    )).toMatchObject({
+      type: 'invalid',
+      reason: expect.stringContaining('URL or API endpoint'),
+    });
+  });
+
   test('does not interpret unknown or compound commands', () => {
     expect(parseVoiceCommand('delete task one', briefing)).toMatchObject({ type: 'invalid' });
     expect(parseVoiceCommand('stop task two and open plan one', briefing)).toMatchObject({

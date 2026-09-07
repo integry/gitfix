@@ -185,12 +185,62 @@ const BARE_HOST_PATTERN = new RegExp(
     + '[a-z]{2,63}(?::\\d{1,5})?(?:[/?#]\\S*)?',
   'i',
 );
+const NETWORK_HOST_PATTERN = new RegExp(
+  '(?:^|[^@\\w.-])(?:'
+    + 'localhost(?::\\d{1,5})?(?:[/?#]\\S*)?'
+    + '|[a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?:\\d{1,5}(?:[/?#]\\S*)?'
+    + ')',
+  'i',
+);
 const API_PATH_PATTERN = /(?:^|[\s"'(\[{<=>:])\/api(?:\/|\?|\s|$)/i;
+
+function isIpLiteral(value: string): boolean {
+  const ipv4Parts = value.split('.');
+  if (ipv4Parts.length === 4) {
+    return ipv4Parts.every(part => (
+      /^\d{1,3}$/.test(part) && Number(part) <= 255
+    ));
+  }
+
+  if (!value.includes(':')) return false;
+  try {
+    // URL provides the same deterministic IPv6 validation in browsers and tests.
+    return new URL(`http://[${value}]/`).hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function containsIpEndpoint(value: string): boolean {
+  return value.split(/\s+/).some(rawToken => {
+    const token = rawToken
+      .replace(/^["'({<=>]+/, '')
+      .replace(/["')}>.,!?;]+$/, '');
+
+    if (token.startsWith('[')) {
+      const closingBracket = token.indexOf(']');
+      if (closingBracket < 0) return false;
+      const suffix = token.slice(closingBracket + 1);
+      if (!/^(?::\d{1,5})?(?:[/?#]\S*)?$/.test(suffix)) return false;
+      return isIpLiteral(token.slice(1, closingBracket));
+    }
+
+    const authority = token.split(/[/?#]/, 1)[0];
+    const ipv4WithOptionalPort = authority.match(
+      /^((?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?$/,
+    );
+    if (ipv4WithOptionalPort) return isIpLiteral(ipv4WithOptionalPort[1]);
+
+    return isIpLiteral(authority);
+  });
+}
 
 function containsEndpoint(value: string): boolean {
   return URL_SCHEME_PATTERN.test(value)
     || NETWORK_PATH_PATTERN.test(value)
     || BARE_HOST_PATTERN.test(value)
+    || NETWORK_HOST_PATTERN.test(value)
+    || containsIpEndpoint(value)
     || API_PATH_PATTERN.test(value);
 }
 
