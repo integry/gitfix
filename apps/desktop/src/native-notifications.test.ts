@@ -237,6 +237,48 @@ test('honors every event toggle and suppresses snapshots, old events, and duplic
   }
 });
 
+test('allows failed and completed retries after newer processing cycles when started alerts are disabled', async () => {
+  const item = await fixture();
+  try {
+    await item.service.update(scope, { enabled: true, taskCompleted: true });
+    for (const kind of ['failed', 'completed'] as const) {
+      const taskId = `${kind}-retry`;
+      assert.equal((await item.service.publish(
+        scope, transition(kind, 'processing', taskId, 2),
+      )).accepted, true);
+      assert.equal((await item.service.publish(
+        scope, transition(kind, 'processing', taskId, 2),
+      )).accepted, false);
+
+      assert.equal((await item.service.publish(
+        scope, transition('processing', kind, taskId, 3),
+      )).accepted, false);
+      assert.equal((await item.service.publish(
+        scope, transition(kind, 'processing', taskId, 4),
+      )).accepted, true);
+      assert.equal((await item.service.publish(
+        scope, transition(kind, 'processing', taskId, 4),
+      )).accepted, false);
+
+      assert.equal((await item.service.publish(
+        scope, transition('processing', kind, taskId, 1),
+      )).accepted, false);
+      assert.equal((await item.service.publish(
+        scope, transition(kind, 'processing', taskId, 5),
+      )).accepted, false);
+    }
+    await settleBatch();
+    assert.equal(item.shown.length, 1);
+    assert.equal(item.shown[0].payload.title, '4 task updates');
+    assert.match(item.shown[0].payload.body, /2 failed/);
+    assert.match(item.shown[0].payload.body, /2 completed/);
+    assert.doesNotMatch(item.shown[0].payload.body, /started/);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
 test('each event preference independently blocks its matching transition', async () => {
   const item = await fixture();
   try {
@@ -387,6 +429,26 @@ test('account switches invalidate old pending clicks even when the transport sco
     item.shown[0].click();
     assert.deepEqual(item.navigated, []);
     assert.equal(item.shown[0].closed, true);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
+test('clearing an old scope leaves the active scope notification open', async () => {
+  const item = await fixture();
+  const nextScope = { ...scope, userId: 'user-b' };
+  try {
+    await item.service.get(scope);
+    item.setUser(nextScope.userId);
+    await item.service.update(nextScope, { enabled: true });
+    assert.equal((await item.service.test(nextScope)).invoked, true);
+
+    item.service.clear(scope);
+
+    assert.equal(item.shown[0].closed, false);
+    item.shown[0].click();
+    assert.deepEqual(item.navigated, ['/tasks']);
   } finally {
     item.service.close();
     await item.cleanup();

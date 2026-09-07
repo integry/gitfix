@@ -43,6 +43,11 @@ interface PendingNotice {
   issueNumber?: number;
 }
 
+interface TaskTransitionCursor {
+  occurredAt: number;
+  version?: number;
+}
+
 export interface NativeNotificationServiceOptions {
   statePath: string;
   platform: DesktopPlatform;
@@ -153,6 +158,19 @@ const sameScope = (left: DesktopNotificationScope, right: DesktopNotificationSco
   && left.transportScope === right.transportScope
   && left.userId === right.userId;
 
+const isNewerTransition = (
+  previous: TaskTransitionCursor | undefined,
+  transition: DesktopTaskTransition,
+  occurredAt: number,
+): boolean => {
+  if (!previous) return true;
+  if (previous.version !== undefined) {
+    return transition.version !== undefined && transition.version > previous.version;
+  }
+  if (transition.version !== undefined) return true;
+  return occurredAt > previous.occurredAt;
+};
+
 const taskContext = (notice: PendingNotice): string => {
   const task = notice.issueNumber ? `Task #${notice.issueNumber}` : 'Task';
   return notice.repository ? `${notice.repository} · ${task}` : task;
@@ -188,6 +206,7 @@ export class NativeNotificationService {
   #batchTimer: ReturnType<typeof setTimeout> | null = null;
   #seen = new Map<string, true>();
   #terminal = new Map<string, true>();
+  #taskTransitions = new Map<string, TaskTransitionCursor>();
   #live = new Set<NativeNotificationHandle>();
   #accountScope: DesktopNotificationScope | null = null;
   #deliveryTimes: number[] = [];
@@ -264,16 +283,27 @@ export class NativeNotificationService {
     }
     await this.#load();
     const preferences = this.#state.accounts[scopeStorageKey(scope)] ?? copyDefaults();
-    if (!preferences.enabled || !this.capability().supported || !preferenceForKind(preferences, kind)) {
+    if (!preferences.enabled || !this.capability().supported) {
       return { accepted: false };
     }
     const scopeKey = scopeStorageKey(scope);
     const eventKey = `${scopeKey}:${transition.taskId}:${kind}:${transition.version ?? transition.timestamp}`;
-    const terminalKey = `${scopeKey}:${transition.taskId}:${kind}`;
-    if (this.#seen.has(eventKey) || (TERMINAL_KINDS.has(kind) && this.#terminal.has(terminalKey))) {
+    const taskKey = `${scopeKey}:${transition.taskId}`;
+    if (this.#seen.has(eventKey)
+      || !isNewerTransition(this.#taskTransitions.get(taskKey), transition, occurredAt)) {
       return { accepted: false };
     }
     this.#remember(this.#seen, eventKey);
+    this.#rememberTransition(taskKey, { occurredAt, version: transition.version });
+    if (kind === 'started') {
+      this.#terminal.delete(`${taskKey}:completed`);
+      this.#terminal.delete(`${taskKey}:failed`);
+    }
+    if (!preferenceForKind(preferences, kind)) return { accepted: false };
+    const terminalKey = `${scopeKey}:${transition.taskId}:${kind}`;
+    if (TERMINAL_KINDS.has(kind) && this.#terminal.has(terminalKey)) {
+      return { accepted: false };
+    }
     if (TERMINAL_KINDS.has(kind)) this.#remember(this.#terminal, terminalKey);
     this.#pending.push({
       scope: { ...scope }, kind, taskId: transition.taskId,
@@ -295,8 +325,10 @@ export class NativeNotificationService {
       clearTimeout(this.#batchTimer);
       this.#batchTimer = null;
     }
-    for (const notification of this.#live) notification.close();
-    this.#live.clear();
+    if (!scope || (this.#accountScope && sameScope(this.#accountScope, scope))) {
+      for (const notification of this.#live) notification.close();
+      this.#live.clear();
+    }
   }
 
   #removeDisabledPending(
@@ -323,6 +355,7 @@ export class NativeNotificationService {
     this.clear();
     this.#seen.clear();
     this.#terminal.clear();
+    this.#taskTransitions.clear();
     this.#deliveryTimes = [];
   }
 
@@ -341,6 +374,7 @@ export class NativeNotificationService {
       this.#clearDeliveries();
       this.#seen.clear();
       this.#terminal.clear();
+      this.#taskTransitions.clear();
     }
     this.#accountScope = { ...scope };
   }
@@ -363,6 +397,15 @@ export class NativeNotificationService {
     if (map.size > MAX_REMEMBERED_EVENTS) {
       const oldest = map.keys().next().value;
       if (oldest) map.delete(oldest);
+    }
+  }
+
+  #rememberTransition(key: string, cursor: TaskTransitionCursor): void {
+    this.#taskTransitions.delete(key);
+    this.#taskTransitions.set(key, cursor);
+    if (this.#taskTransitions.size > MAX_REMEMBERED_EVENTS) {
+      const oldest = this.#taskTransitions.keys().next().value;
+      if (oldest) this.#taskTransitions.delete(oldest);
     }
   }
 
