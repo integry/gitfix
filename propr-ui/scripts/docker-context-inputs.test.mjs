@@ -6,6 +6,7 @@ import test from 'node:test';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const dockerfilePath = join(repoRoot, 'propr-ui', 'Dockerfile');
+const packageJsonPath = join(repoRoot, 'propr-ui', 'package.json');
 const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs'];
 
 const productionUiSources = (directory) => readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -42,6 +43,15 @@ const dockerCopySources = () => readFileSync(dockerfilePath, 'utf8').split('\n')
 const isCopied = (path, copiedSources) => copiedSources.some(source => (
   path === source || path.startsWith(`${source}${sep}`)
 ));
+
+test('focused UI selectors are forwarded only to Vitest', () => {
+  const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+
+  assert.equal(manifest.scripts.test, 'vitest run');
+  assert.equal(manifest.scripts.posttest, 'npm run test:docker-context');
+  assert.equal(manifest.scripts['test:docker-context'],
+    'node --test scripts/docker-context-inputs.test.mjs');
+});
 
 test('the UI Docker context contains its complete non-type external source import closure', () => {
   const queue = productionUiSources(join(repoRoot, 'propr-ui', 'src'));
