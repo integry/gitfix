@@ -88,6 +88,7 @@ describe('Electron BrowserWindow lifecycle semantics', () => {
         initialDocumentIdMatches: true,
       },
       teardown: {
+        initialNavigationCompleted: true,
         windowDestroyed: true,
         cachedWebContentsAccessible: true,
         getterError: {
