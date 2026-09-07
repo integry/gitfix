@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import {
   readCompleteEnvironmentGroup,
@@ -13,6 +14,9 @@ import {
 const publicKey = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
 const certificatePin = `certificate-sha256:${'1'.repeat(64)}`;
 const spkiPin = `spki-sha256:${'2'.repeat(64)}`;
+const desktopPackage = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+) as { scripts: Record<string, string> };
 
 interface LinuxMaker {
   name: 'deb' | 'rpm';
@@ -26,7 +30,7 @@ const isLinuxMaker = (maker: unknown): maker is LinuxMaker => {
 };
 
 describe('desktop release configuration', () => {
-  test('keeps Linux maker executables aligned with the packaged executable', async () => {
+  test('selects configured Linux makers and keeps their executables aligned', async () => {
     const previousDeb = process.env.PROPR_DESKTOP_ENABLE_DEB;
     const previousRpm = process.env.PROPR_DESKTOP_ENABLE_RPM;
     process.env.PROPR_DESKTOP_ENABLE_DEB = '1';
@@ -38,7 +42,19 @@ describe('desktop release configuration', () => {
 
       const linuxMakers = forgeConfig.makers?.filter(isLinuxMaker) ?? [];
       assert.deepEqual(linuxMakers.map(maker => maker.name).sort(), ['deb', 'rpm']);
-      for (const maker of linuxMakers) {
+
+      for (const [scriptName, expectedTarget] of [
+        ['make:deb', 'deb'],
+        ['make:rpm', 'rpm'],
+      ] as const) {
+        const command = desktopPackage.scripts[scriptName];
+        const targetArgument = /(?:^|\s)--targets\s+([^\s]+)/u.exec(command)?.[1];
+        assert.equal(targetArgument, expectedTarget);
+
+        // Forge 8 resolves string overrides by exact maker.name before falling
+        // back to constructing a new, unconfigured maker from the target.
+        const maker = linuxMakers.find(candidate => candidate.name === targetArgument);
+        assert.ok(maker, `${scriptName} must select its configured maker instance`);
         await maker.prepareConfig('x64');
         assert.equal(maker.config.options?.bin, executableName);
         assert.notEqual(maker.config.options?.bin, '@propr/desktop');
