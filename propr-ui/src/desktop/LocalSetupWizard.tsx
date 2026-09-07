@@ -37,6 +37,29 @@ const InlineError: React.FC<{ message: string | null }> = ({ message }) => messa
 
 const hasSavedChoices = (snapshot: DesktopSetupSnapshot): boolean => Boolean(snapshot.resumeAvailable && snapshot.resume);
 
+const recoveryDetailsFrom = (snapshot: DesktopSetupSnapshot) => {
+  const failed = snapshot.state?.steps.find(step => step.status === 'failed');
+  return {
+    title: snapshot.phase === 'interrupted' ? 'Continue your setup' : 'Setup needs attention',
+    message: failed?.detail || snapshot.error || snapshot.errors?.[0]?.message || 'Setup stopped safely.',
+    nextAction: failed?.nextAction || snapshot.errors?.[0]?.nextAction,
+    identity: snapshot.resume?.github.mode === 'relay' ? snapshot.resume.github.identity : undefined,
+  };
+};
+
+const SetupSummary: React.FC<{ draft: Draft }> = ({ draft }) => <>
+  <h1>Ready to install</h1>
+  <dl className="desktop-setup-summary">
+    <div><dt>Directory</dt><dd>Desktop-managed local runtime</dd></div>
+    <div><dt>GitHub</dt><dd>{draft.githubMode}{draft.githubIdentity
+      ? ` · @${draft.githubIdentity.username}`
+      : draft.githubMode === 'relay' ? ' · identity verified next' : ''}</dd></div>
+    {draft.githubIdentity && <div><dt>Installation</dt><dd>{draft.githubIdentity.installation.accountLogin} ({draft.githubIdentity.installation.accountType})</dd></div>}
+    <div><dt>Intake</dt><dd>{draft.intakeMode}</dd></div>
+    <div><dt>Agents</dt><dd>{draft.selectedAgents.join(', ') || 'None'}</dd></div>
+  </dl>
+</>;
+
 const GithubInstallationChoice: React.FC<{
   snapshot: DesktopSetupSnapshot; busy: boolean;
   choose(decision: DesktopGithubInstallationDecision): void;
@@ -93,12 +116,11 @@ const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; choiceB
 };
 
 const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; retry(): void; review(): void }> = ({ snapshot, busy, error, back, retry, review }) => {
-  const failed = snapshot.state?.steps.find(step => step.status === 'failed');
-  const identity = snapshot.resume?.github.mode === 'relay' ? snapshot.resume.github.identity : undefined;
+  const { title, message, nextAction, identity } = recoveryDetailsFrom(snapshot);
   return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon desktop-setup-error-icon" />
-    <span className="desktop-eyebrow">Recovery</span><h1>{snapshot.phase === 'interrupted' ? 'Continue your setup' : 'Setup needs attention'}</h1>
-    <p>{failed?.detail || snapshot.error || snapshot.errors?.[0]?.message || 'Setup stopped safely.'}</p>
-    {(failed?.nextAction || snapshot.errors?.[0]?.nextAction) && <div className="desktop-setup-recovery">{failed?.nextAction || snapshot.errors?.[0]?.nextAction}</div>}
+    <span className="desktop-eyebrow">Recovery</span><h1>{title}</h1>
+    <p>{message}</p>
+    {nextAction && <div className="desktop-setup-recovery">{nextAction}</div>}
     {identity && <div className="desktop-github-identity"><Github aria-hidden="true" /><div><small>Saved GitHub choice</small><strong>@{identity.username} · {identity.installation.accountLogin} ({identity.installation.accountType})</strong></div></div>}
     <InlineError message={error} />
     <div className="desktop-setup-footer"><button className="desktop-secondary-button" type="button" onClick={back}>Back</button>
@@ -130,7 +152,7 @@ const Form: React.FC<{ stage: Stage; draft: Draft; busy: boolean; error: string 
       {draft.intakeMode === 'direct_webhook' && <div className="desktop-setup-wide"><button type="button" className="desktop-secondary-button" onClick={props.acquireSecret}><KeyRound /> Enter webhook secret securely</button><small>{draft.webhookSecret?.label ?? ' No secret entered'}</small></div>}</>}
     {stage === 'agents' && <><h1>Select coding agents</h1><div className="desktop-agent-options">{agents.map(agent => <label key={agent}><input type="checkbox" checked={draft.selectedAgents.includes(agent)} onChange={() => set('selectedAgents', draft.selectedAgents.includes(agent) ? draft.selectedAgents.filter(value => value !== agent) : [...draft.selectedAgents, agent])} /><span>{agent}</span></label>)}</div>
       {draft.githubMode !== 'demo' && <label className="desktop-setup-field"><span>Allowed GitHub users (comma-separated, optional)</span><div><input value={draft.whitelist} onChange={event => set('whitelist', event.target.value)} /></div></label>}</>}
-    {stage === 'summary' && <><h1>Ready to install</h1><dl className="desktop-setup-summary"><div><dt>Directory</dt><dd>Desktop-managed local runtime</dd></div><div><dt>GitHub</dt><dd>{draft.githubMode}{draft.githubIdentity ? ` · @${draft.githubIdentity.username}` : draft.githubMode === 'relay' ? ' · identity verified next' : ''}</dd></div>{draft.githubIdentity && <div><dt>Installation</dt><dd>{draft.githubIdentity.installation.accountLogin} ({draft.githubIdentity.installation.accountType})</dd></div>}<div><dt>Intake</dt><dd>{draft.intakeMode}</dd></div><div><dt>Agents</dt><dd>{draft.selectedAgents.join(', ') || 'None'}</dd></div></dl></>}
+    {stage === 'summary' && <SetupSummary draft={draft} />}
     {props.error && <div className="desktop-inline-error" role="alert">{props.error}</div>}
     <div className="desktop-setup-footer"><button type="button" className="desktop-primary-button" disabled={props.busy} onClick={props.next}>{stage === 'summary' ? 'Install ProPR' : 'Continue'} <ChevronRight /></button></div>
   </main>;
