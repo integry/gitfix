@@ -47,7 +47,7 @@ const successfulActions = (rootDir: string): SetupActions => ({
 } as unknown as SetupActions);
 
 const relayRequest: DesktopSetupRequest = {
-  ...request, github: { mode: 'relay' }, intake: { mode: 'polling' },
+  ...request, github: { mode: 'relay' }, intake: { mode: 'routing_websocket' },
 };
 
 const waitForSnapshot = async (
@@ -63,7 +63,7 @@ const waitForSnapshot = async (
 };
 
 const relayActions = (rootDir: string, overrides: Partial<SetupActions> = {}): SetupActions => {
-  const env: Record<string, string> = { GITHUB_EVENT_INTAKE_MODE: 'polling' };
+  const env: Record<string, string> = { GITHUB_EVENT_INTAKE_MODE: 'routing_websocket' };
   return {
     ...successfulActions(rootDir),
     readEnvVars: () => ({ ...env }),
