@@ -288,6 +288,86 @@ test('advertises plan stop only for draft-scoped generating and refining operati
   );
 });
 
+test('advertises notification mutations only for canonical task and draft targets', async () => {
+  const queue: VoiceBriefingQueueSnapshot = { active: [], waiting: [], delayed: [] };
+  const advertisedActions: Notification['actions'] = ['stop', 'follow_up'];
+  const notifications = [
+    notification({
+      id: 'system-warning',
+      severity: 'warning',
+      title: 'System needs attention',
+      target: { type: 'system_failure', component: 'worker' },
+      occurredAt: '2026-09-07T01:20:00.000Z',
+      actions: advertisedActions,
+    }),
+    notification({
+      id: 'indexing-warning',
+      severity: 'warning',
+      title: 'Indexing needs attention',
+      target: { type: 'indexing', repository: 'integry/propr' },
+      occurredAt: '2026-09-07T01:19:00.000Z',
+      actions: advertisedActions,
+    }),
+    notification({
+      id: 'pull-request-warning',
+      severity: 'warning',
+      title: 'Pull request needs attention',
+      target: { type: 'pull_request', repository: 'integry/propr', prNumber: 42 },
+      occurredAt: '2026-09-07T01:18:00.000Z',
+      actions: advertisedActions,
+    }),
+    notification({
+      id: 'review-without-task',
+      severity: 'warning',
+      title: 'Review needs attention',
+      target: { type: 'review', repository: 'integry/propr', prNumber: 43 },
+      occurredAt: '2026-09-07T01:17:00.000Z',
+      actions: advertisedActions,
+    }),
+    notification({
+      id: 'review-with-task',
+      severity: 'warning',
+      title: 'Task review needs attention',
+      target: {
+        type: 'review', repository: 'integry/propr', prNumber: 44, taskId: 'review-task',
+      },
+      occurredAt: '2026-09-07T01:16:00.000Z',
+      actions: advertisedActions,
+    }),
+    notification({
+      id: 'task-warning',
+      severity: 'warning',
+      title: 'Task needs attention',
+      target: { type: 'task', repository: 'integry/propr', taskId: 'task-target' },
+      occurredAt: '2026-09-07T01:15:30.000Z',
+      actions: advertisedActions,
+    }),
+    notification({
+      id: 'plan-warning',
+      severity: 'warning',
+      title: 'Plan needs attention',
+      target: { type: 'plan', repository: 'integry/propr', draftId: 'draft-target' },
+      occurredAt: '2026-09-07T01:15:00.000Z',
+      actions: advertisedActions,
+    }),
+  ];
+  const service = new VoiceBriefingService({
+    loaders: loaders({ queue, notifications }),
+    now: () => NOW,
+  });
+
+  const briefing = await service.getBriefing('authenticated-user');
+  const actionsById = Object.fromEntries(briefing.items.map(item => [item.id, item.actions]));
+
+  assert.deepEqual(actionsById['system-warning'], []);
+  assert.deepEqual(actionsById['indexing-warning'], []);
+  assert.deepEqual(actionsById['pull-request-warning'], ['open']);
+  assert.deepEqual(actionsById['review-without-task'], ['open']);
+  assert.deepEqual(actionsById['review-task'], ['open', 'stop', 'follow_up']);
+  assert.deepEqual(actionsById['task-target'], ['open', 'stop', 'follow_up']);
+  assert.deepEqual(actionsById['draft-target'], ['open', 'follow_up']);
+});
+
 test('running scope retains an active task that also has an attention notification', async () => {
   const queue: VoiceBriefingQueueSnapshot = {
     active: [job('active-task', 'Active task', '2026-09-07T01:20:00.000Z')],

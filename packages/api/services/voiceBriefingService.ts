@@ -346,10 +346,17 @@ function notificationCandidate(notification: Notification): CandidateItem[] {
   const repository = target.type === 'system_failure'
     ? null
     : safeRepository(target.repository);
+  const hasMutationTarget = target.type === 'plan'
+    || target.type === 'task'
+    || (target.type === 'review' && Boolean(target.taskId));
   const actions: VoiceBriefingAction[] = [
     ...(kind === 'system' ? [] : ['open' as const]),
-    ...(kind !== 'plan' && notification.actions.includes('stop') ? ['stop' as const] : []),
-    ...(notification.actions.includes('follow_up') ? ['follow_up' as const] : []),
+    ...(hasMutationTarget && kind !== 'plan' && notification.actions.includes('stop')
+      ? ['stop' as const]
+      : []),
+    ...(hasMutationTarget && notification.actions.includes('follow_up')
+      ? ['follow_up' as const]
+      : []),
   ];
 
   return [{
