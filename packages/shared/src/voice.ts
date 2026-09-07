@@ -15,6 +15,9 @@ export type VoiceBriefingItemKind = (typeof VOICE_BRIEFING_ITEM_KINDS)[number];
 export const VOICE_BRIEFING_ACTIONS = ['open', 'stop', 'follow_up'] as const;
 export type VoiceBriefingAction = (typeof VOICE_BRIEFING_ACTIONS)[number];
 
+/** Maximum number of prioritized entries included in a short briefing. */
+export const VOICE_BRIEFING_MAX_ITEMS = 10;
+
 export interface VoiceBriefingItem {
   /** Human-speakable stable reference within this response, such as task 2. */
   reference: string;
@@ -239,6 +242,12 @@ export function parseVoiceBriefingResponse(value: unknown): VoiceBriefingRespons
   if (!Array.isArray(response.items)) {
     return invalid('voiceBriefing.items', 'an array');
   }
+  if (response.items.length > VOICE_BRIEFING_MAX_ITEMS) {
+    return invalid(
+      'voiceBriefing.items',
+      `an array with at most ${VOICE_BRIEFING_MAX_ITEMS} entries`,
+    );
+  }
 
   const counts: VoiceBriefingCounts = {
     running: nonnegativeInteger(countsValue.running, 'voiceBriefing.counts.running'),
@@ -248,6 +257,25 @@ export function parseVoiceBriefingResponse(value: unknown): VoiceBriefingRespons
     total: nonnegativeInteger(countsValue.total, 'voiceBriefing.counts.total'),
   };
   const items = response.items.map(parseVoiceBriefingItem);
+  const references = new Set<string>();
+  const kindPositions = new Set<string>();
+  items.forEach((item, index) => {
+    const kindPosition = `${item.kind}:${item.position}`;
+    if (references.has(item.reference)) {
+      invalid(
+        `voiceBriefing.items[${index}].reference`,
+        'a unique spoken reference within the response',
+      );
+    }
+    if (kindPositions.has(kindPosition)) {
+      invalid(
+        `voiceBriefing.items[${index}]`,
+        'a unique kind and position pair within the response',
+      );
+    }
+    references.add(item.reference);
+    kindPositions.add(kindPosition);
+  });
   if (counts.total < items.length) {
     return invalid(
       'voiceBriefing.counts.total',
@@ -257,7 +285,7 @@ export function parseVoiceBriefingResponse(value: unknown): VoiceBriefingRespons
 
   return {
     generatedAt: timestampValue(response.generatedAt, 'voiceBriefing.generatedAt'),
-    scope: parseVoiceBriefingScope(response.scope),
+    scope: enumValue(response.scope, VOICE_BRIEFING_SCOPES, 'voiceBriefing.scope'),
     headline: stringValue(response.headline, 'voiceBriefing.headline', 500),
     speechText: stringValue(response.speechText, 'voiceBriefing.speechText', 4_000),
     counts,

@@ -358,6 +358,7 @@ export {
   VOICE_BRIEFING_SCOPES,
   VOICE_BRIEFING_ITEM_KINDS,
   VOICE_BRIEFING_ACTIONS,
+  VOICE_BRIEFING_MAX_ITEMS,
   parseVoiceBriefingScope,
   parseVoiceBriefingItem,
   parseVoiceBriefingResponse,
