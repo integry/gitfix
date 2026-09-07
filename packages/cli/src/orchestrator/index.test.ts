@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ConfigManager } from "../config/ConfigManager.js";
-import { connectExecutionEnvironment, getHostConfig } from "./index.js";
+import { connectExecutionEnvironment, getHostConfig, loadOrchestrator } from "./index.js";
 
 function createStackRoot(parent: string, name: string): string {
   const root = join(parent, name);
@@ -44,6 +44,36 @@ test("explicit new root does not inherit legacy tunnel intent during start prefl
     assert.equal(configManager.getTunnelEnabled(rootA), true);
     assert.equal(configManager.getTunnelEnabled(rootB), undefined);
   } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("owned-stack replacement touches only labelled containers and retains host state", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "propr-owned-replacement-test-"));
+  const docker = join(tempDir, "docker");
+  const log = join(tempDir, "docker.jsonl");
+  const originalPath = process.env.PATH;
+  process.env.PROPR_TEST_DOCKER_LOG = log;
+  writeFileSync(docker, `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.appendFileSync(process.env.PROPR_TEST_DOCKER_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.argv[2] === 'ps') process.stdout.write('desktop-api\\ndesktop-ui\\n');
+`, { mode: 0o700 });
+  chmodSync(docker, 0o700);
+  process.env.PATH = `${tempDir}:${originalPath ?? ""}`;
+  try {
+    const orch = await loadOrchestrator();
+    await orch.replaceStackContainersAsync({ stack: "desktop-owned" } as never);
+    const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(calls, [
+      ["ps", "-a", "--filter", "label=propr.stack=desktop-owned", "--format", "{{.Names}}"],
+      ["stop", "-t", "10", "desktop-api"], ["rm", "desktop-api"],
+      ["stop", "-t", "10", "desktop-ui"], ["rm", "desktop-ui"],
+    ]);
+    assert.equal(calls.flat().some((argument: string) => /volume|network|data|credential/i.test(argument)), false);
+  } finally {
+    process.env.PATH = originalPath;
+    delete process.env.PROPR_TEST_DOCKER_LOG;
     rmSync(tempDir, { recursive: true, force: true });
   }
 });

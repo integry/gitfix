@@ -98,7 +98,8 @@ export const bindRootOperations = (actions: SetupActions, authority: RootDirecto
     if (typeof value !== 'function') return value;
     return (...args: unknown[]) => {
       authority.validate();
-      if ((property === 'pullImages' || property === 'startStack' || property === 'checkBackendHealth') && args[0] && typeof args[0] === 'object') {
+      if ((property === 'pullImages' || property === 'startStack' || property === 'replaceRunningStack'
+        || property === 'checkBackendHealth') && args[0] && typeof args[0] === 'object') {
         args[0] = { ...(args[0] as Record<string, unknown>), assertRootAuthority: () => authority.validate() };
       }
       const result = Reflect.apply(value, target, args);

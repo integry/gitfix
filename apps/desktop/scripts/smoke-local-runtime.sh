@@ -44,6 +44,9 @@ trap cleanup EXIT
 
 docker image inspect "$APP_IMAGE" >/dev/null
 mkdir -p "$SMOKE_ROOT/data" "$SMOKE_ROOT/logs"
+# publicInstanceIdentity deliberately rejects group/world-accessible data roots.
+# Establish the required authority independently of the caller's umask.
+chmod 700 "$SMOKE_ROOT/data" "$SMOKE_ROOT/logs"
 openssl genrsa -out "$SMOKE_ROOT/data/gh-app.pem" 2048 2>/dev/null
 chmod 600 "$SMOKE_ROOT/data/gh-app.pem"
 cat > "$SMOKE_ROOT/runtime.env" <<EOF

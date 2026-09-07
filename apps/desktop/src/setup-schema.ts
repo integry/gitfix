@@ -1,4 +1,4 @@
-import type { DesktopSetupRequest } from './shared/contract';
+import type { DesktopSetupRecoveryRequest, DesktopSetupRequest } from './shared/contract';
 
 const AGENTS = new Set(['claude', 'codex', 'antigravity', 'opencode', 'vibe']);
 const CAPABILITY = /^[A-Za-z0-9_-]{32,128}$/;
@@ -64,4 +64,12 @@ export const parseDesktopSetupRequest = (input: unknown): DesktopSetupRequest =>
       || (repository.baseBranch !== undefined && (typeof repository.baseBranch !== 'string' || !BRANCH.test(repository.baseBranch)))) throw new SetupRequestError('Invalid repository selection');
   }
   return structuredClone(value) as unknown as DesktopSetupRequest;
+};
+
+export const parseDesktopSetupRecoveryRequest = (input: unknown): DesktopSetupRecoveryRequest => {
+  const value = record(input);
+  exact(value, ['sessionId', 'recoveryAction']);
+  if (typeof value.sessionId !== 'string' || !SESSION.test(value.sessionId)
+    || value.recoveryAction !== 'replace-running-stack') throw new SetupRequestError('Invalid local setup recovery request');
+  return { sessionId: value.sessionId, recoveryAction: value.recoveryAction };
 };

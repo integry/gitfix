@@ -160,10 +160,10 @@ const rewriteVendoredImports = (dir) => {
     } else if (entry.name.endsWith(".js")) {
       let src = readFileSync(full, "utf8");
       for (const [specifier, target] of vendoredImports) {
-        if (!src.includes(`"${specifier}"`)) continue;
         let vendorPath = relative(dirname(full), target).split(sep).join("/");
         if (!vendorPath.startsWith(".")) vendorPath = `./${vendorPath}`;
         src = src.replaceAll(`"${specifier}"`, `"${vendorPath}"`);
+        src = src.replaceAll(`'${specifier}'`, `'${vendorPath}'`);
       }
       writeFileSync(full, src);
     }

@@ -1546,6 +1546,34 @@ export async function isStackRunningAsync(cfg, signal) {
 }
 
 /**
+ * Stop and remove only containers carrying this resolved stack's ownership
+ * label. Bind-mounted data, credentials, logs, repositories, and the network
+ * are deliberately retained so an aligned runtime can be started in place.
+ */
+export async function replaceStackContainersAsync(cfg, { onLog, signal } = {}) {
+    signal?.throwIfAborted();
+    const listed = await dockerAsync([
+        'ps', '-a', '--filter', `label=propr.stack=${cfg.stack}`, '--format', '{{.Names}}',
+    ], { signal });
+    if (listed.status !== 0) {
+        throw new Error(`Failed to list ${cfg.stack} containers: ${(listed.stderr || '').trim()}`);
+    }
+    const names = [...new Set(listed.stdout.split('\n').map((name) => name.trim()).filter(Boolean))];
+    for (const name of names) {
+        signal?.throwIfAborted();
+        const stopped = await dockerAsync(['stop', '-t', '10', name], { signal });
+        if (stopped.status !== 0) {
+            throw new Error(`Failed to stop ${name}: ${(stopped.stderr || '').trim()}`);
+        }
+        const removed = await dockerAsync(['rm', name], { signal });
+        if (removed.status !== 0) {
+            throw new Error(`Stopped ${name} but failed to remove it: ${(removed.stderr || '').trim()}`);
+        }
+        onLog?.(`  [ok] replaced ${name}`);
+    }
+}
+
+/**
  * Stop every container belonging to this stack, discovered by the stack label.
  * Returns `{ failed }` listing containers that could not be stopped/removed so
  * callers can surface partial failures.

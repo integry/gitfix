@@ -85,6 +85,12 @@ manifest. The wizard inspects those exact local images instead of attempting a r
 labelled network, Redis/API containers, random loopback port, and private temporary data root; its cleanup refuses any
 container or network it does not own. It does not address or replace an existing ProPR stack.
 
+If the compatibility gate finds an already-running legacy stack under Desktop's private managed root, ordinary Retry
+continues to preserve it. The explicit **Restart with aligned runtime** recovery instead enumerates only containers with
+that resolved stack's ownership label, removes those containers, and starts the manifest-selected images. Bind-mounted
+data, credentials, logs, repositories, and the existing network remain in place; no default or personal CLI stack is
+targeted.
+
 Run the focused non-Docker regressions with:
 
 ```sh

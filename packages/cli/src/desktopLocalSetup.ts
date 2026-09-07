@@ -36,12 +36,20 @@ export interface DesktopRuntimeCompatibilityResult {
   compatible: boolean;
   detail: string;
   nextAction?: string;
+  recoveryAction?: 'replace-running-stack';
 }
 
-const incompatibleRuntime = (image: string, reason: string): DesktopRuntimeCompatibilityResult => ({
+const incompatibleRuntime = (
+  image: string,
+  reason: string,
+  replaceRunningStack = false,
+): DesktopRuntimeCompatibilityResult => ({
   compatible: false,
   detail: `desktop runtime ${image} is incompatible: ${reason}`,
-  nextAction: `Install the app image released for API compatibility ${PROPR_API_COMPATIBILITY}, then retry local setup. Source builds can use \`npm run desktop:runtime:build\` and package with its generated manifest.`,
+  nextAction: replaceRunningStack
+    ? `After aligned images for API compatibility ${PROPR_API_COMPATIBILITY} are available, choose Restart with aligned runtime. Source builds can use \`npm run desktop:runtime:build\` and package with its generated manifest. Only this Desktop-managed stack's containers are replaced; data and credentials are retained.`
+    : `Install the app image released for API compatibility ${PROPR_API_COMPATIBILITY}, then retry local setup. Source builds can use \`npm run desktop:runtime:build\` and package with its generated manifest.`,
+  ...(replaceRunningStack ? { recoveryAction: 'replace-running-stack' as const } : {}),
 });
 
 /**
@@ -77,7 +85,11 @@ export async function checkDesktopRuntimeCompatibility(options: {
   }
   if (!response.ok || response.redirected) {
     try { await response.body?.cancel(); } catch { /* best-effort disposal */ }
-    return incompatibleRuntime(options.image, `the public desktop discovery endpoint returned HTTP ${response.status}`);
+    return incompatibleRuntime(
+      options.image,
+      `the public desktop discovery endpoint returned HTTP ${response.status}`,
+      response.status === 404,
+    );
   }
   const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   const declared = response.headers.get('content-length');
@@ -118,14 +130,14 @@ export async function checkDesktopRuntimeCompatibility(options: {
   catch { return incompatibleRuntime(options.image, 'the public desktop discovery response is not valid UTF-8'); }
   const discovery = parseProprDesktopDiscoveryJson(contents);
   if (!discovery) {
-    return incompatibleRuntime(options.image, 'it does not expose the required discovery, identity, and desktop authentication contract');
+    return incompatibleRuntime(options.image, 'it does not expose the required discovery, identity, and desktop authentication contract', true);
   }
   const compatibility = evaluateProprApiCompatibility(discovery);
-  if (!compatibility.compatible) return incompatibleRuntime(options.image, compatibility.message);
+  if (!compatibility.compatible) return incompatibleRuntime(options.image, compatibility.message, true);
   if (!discovery.desktopAuthentication.browserPairing
     || !discovery.desktopAuthentication.instanceBearerTokens
     || !discovery.desktopAuthentication.socketIoBearerAuthentication) {
-    return incompatibleRuntime(options.image, 'it does not enable browser pairing, REST bearer tokens, and Socket.IO bearer authentication');
+    return incompatibleRuntime(options.image, 'it does not enable browser pairing, REST bearer tokens, and Socket.IO bearer authentication', true);
   }
   return {
     compatible: true,
@@ -169,7 +181,12 @@ export async function createDesktopSetupHost(options: {
       });
       return desktop.compatible
         ? { ...health, detail: `${health.detail}; ${desktop.detail}` }
-        : { healthy: false, detail: desktop.detail, nextAction: desktop.nextAction };
+        : {
+            healthy: false,
+            detail: desktop.detail,
+            nextAction: desktop.nextAction,
+            recoveryAction: desktop.recoveryAction,
+          };
     },
   };
   return {

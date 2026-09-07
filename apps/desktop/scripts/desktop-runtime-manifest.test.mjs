@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   createDesktopRuntimeManifest,
@@ -57,5 +59,22 @@ describe('desktop runtime manifest alignment', () => {
     assert.throws(() => validateDesktopRuntimeManifest(manifest, {
       apiCompatibility: '2025-01-01',
     }), /compatibility contract/);
+  });
+});
+
+describe('desktop source runtime build inputs', () => {
+  test('copies the client workspace manifest and source into the UI image build', () => {
+    const dockerfile = readFileSync(resolve(import.meta.dirname, '../../../propr-ui/Dockerfile'), 'utf8');
+    assert.match(dockerfile, /COPY packages\/client\/package\*\.json \.\/packages\/client\//);
+    assert.match(dockerfile, /COPY packages\/client \.\/packages\/client/);
+    assert.match(dockerfile, /cd packages\/client && npm run build/);
+  });
+
+  test('makes the isolated smoke data root private independently of caller umask', () => {
+    const smoke = readFileSync(resolve(import.meta.dirname, 'smoke-local-runtime.sh'), 'utf8');
+    const create = smoke.indexOf('mkdir -p "$SMOKE_ROOT/data" "$SMOKE_ROOT/logs"');
+    const protect = smoke.indexOf('chmod 700 "$SMOKE_ROOT/data" "$SMOKE_ROOT/logs"');
+    const launch = smoke.indexOf('docker run -d --name "$API_CONTAINER"');
+    assert.ok(create >= 0 && protect > create && launch > protect);
   });
 });

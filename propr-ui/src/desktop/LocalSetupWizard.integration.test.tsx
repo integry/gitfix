@@ -174,6 +174,39 @@ describe('production local setup journey', () => {
     expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
   });
 
+  it('requires the dedicated recovery control before replacing an incompatible running stack', async () => {
+    const incompatible: DesktopSetupSnapshot = {
+      ...idle,
+      phase: 'failed',
+      state: {
+        rootDir: '/redacted',
+        steps: [{
+          id: 'start-stack', title: 'Start stack', description: 'Launch services.', optional: false,
+          status: 'failed', detail: 'The retained runtime is incompatible.',
+          nextAction: 'Only this Desktop-managed stack is replaced; data and credentials are retained.',
+          recoveryAction: 'replace-running-stack',
+        }],
+      },
+      resumeAvailable: true,
+      resume: {
+        agents: [], reinitialize: false, github: { mode: 'relay' }, intake: { mode: 'routing_websocket' },
+        whitelist: null, repository: null,
+      },
+    };
+    const retry = vi.fn(async () => completed);
+    render(<LocalSetupWizard adapter={guidedAdapter({ status: vi.fn(async () => incompatible), retry })} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    const replace = await screen.findByRole('button', { name: 'Restart with aligned runtime' });
+    expect(screen.getByText(/data and credentials are retained/i)).toBeInTheDocument();
+    expect(retry).not.toHaveBeenCalled();
+    fireEvent.click(replace);
+    expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
+    expect(retry).toHaveBeenCalledWith({
+      sessionId: idle.sessionId,
+      recoveryAction: 'replace-running-stack',
+    });
+  });
+
   it('offers credential review without replacing ordinary retry for a transient failure', async () => {
     const requiresReview: DesktopSetupSnapshot = {
       ...idle, phase: 'failed', error: 'The backend was temporarily unavailable.',

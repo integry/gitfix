@@ -83,7 +83,10 @@ See [Desktop pairing protocol](./desktop-pairing.md) for the wire contract and t
 - **Offline:** restore DNS/network/API reachability and retry the saved profile. The profile is not deleted.
 - **Revoked or expired:** pair again in the browser. A role/allowlist change can also require fresh authorization.
 - **Incompatible:** follow the setup recovery action, which names the selected app image and required API contract. Upgrade
-  to a desktop-aligned runtime; retrying an unchanged legacy image cannot complete setup.
+  to a desktop-aligned runtime; retrying an unchanged legacy image cannot complete setup. When the incompatible runtime
+  is an already-running Desktop-managed stack, use **Restart with aligned runtime**. The app explicitly replaces only
+  containers owned by that private stack root and starts the currently packaged images; its bind-mounted database,
+  credentials, logs, repositories, and network are retained. Ordinary **Retry setup** continues to leave it untouched.
 - **Tunnel root returns 404:** this can be correct. Connect tunnels expose canonical `/api/*` and `/socket.io/*` routes;
   validation uses discovery/status rather than assuming `/` is served.
 

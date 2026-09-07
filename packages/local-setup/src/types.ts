@@ -61,6 +61,8 @@ export interface SetupStep {
    * input — shown by both renderers so the user knows how to proceed.
    */
   nextAction?: string;
+  /** Fixed host action that a renderer may offer after explicit confirmation. */
+  recoveryAction?: "replace-running-stack";
 }
 
 /** Aggregate state for the whole setup flow. */
@@ -76,7 +78,7 @@ export interface SetupState {
  * presentation fields — the static flow definition (title, description,
  * optional) is canonical and cannot be altered through a patch.
  */
-export type SetupStepPatch = Partial<Pick<SetupStep, "status" | "detail" | "nextAction">>;
+export type SetupStepPatch = Partial<Pick<SetupStep, "status" | "detail" | "nextAction" | "recoveryAction">>;
 
 /**
  * Canonical, ordered step definitions. All start `pending`; renderers and the

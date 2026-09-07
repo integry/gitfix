@@ -7,7 +7,7 @@ import {
 } from '@propr/local-setup';
 import { DEFAULT_PROPR_GH_RELAY_URL, PROPR_API_COMPATIBILITY } from '@propr/shared';
 import { bindRootOperations, RootDirectoryAuthority, SetupFilesystemCapabilities, SetupSecretCapabilities } from './setup-capabilities';
-import { parseDesktopSetupRequest, SetupRequestError } from './setup-schema';
+import { parseDesktopSetupRecoveryRequest, parseDesktopSetupRequest, SetupRequestError } from './setup-schema';
 import type {
   DesktopFilesystemSelection, DesktopSecretSelection, DesktopSetupRequest,
   DesktopSetupResumeView, DesktopSetupSnapshot,
@@ -127,12 +127,23 @@ export class DesktopSetupController {
   async retry(input?: unknown): Promise<DesktopSetupSnapshot> {
     this.#load(); this.#assertSupported();
     if (input !== undefined) {
+      if (typeof input === 'object' && input !== null && 'recoveryAction' in input) {
+        const recovery = parseDesktopSetupRecoveryRequest(input);
+        if (recovery.sessionId !== this.#sessionId) throw new SetupRequestError('The setup session expired. Start again.');
+        const failed = this.#snapshot.state?.steps.find(step => step.status === 'failed');
+        if (failed?.recoveryAction !== recovery.recoveryAction) throw new SetupRequestError('The requested recovery is unavailable.');
+        return this.#retrySaved(true);
+      }
       const request = parseDesktopSetupRequest(input);
       if (this.#resume?.github.mode === 'demo' && request.github.mode === 'keep') {
         throw new SetupRequestError('Select ProPR Connect or Custom GitHub App before retrying a legacy Demo configuration.');
       }
-      return this.#begin(request, true);
+      return this.#begin(request, true, false);
     }
+    return this.#retrySaved(false);
+  }
+
+  #retrySaved(replaceRunningStack: boolean): Promise<DesktopSetupSnapshot> {
     if (this.#current) throw new SetupRequestError('Local setup is already running.');
     if (!this.#resume) throw new SetupRequestError('There is no local setup to retry.');
     if (!this.#resolved) {
@@ -142,9 +153,9 @@ export class DesktopSetupController {
         agents: this.#resume.agents, github: this.#resume.github, intake: this.#resume.intake,
         whitelist: this.#resume.whitelist, repository: this.#resume.repository,
       });
-      return this.#begin(request, true);
+      return this.#begin(request, true, replaceRunningStack);
     }
-    return this.#runResolved(this.#resolved, true);
+    return this.#runResolved(this.#resolved, true, replaceRunningStack);
   }
 
   async cancel(): Promise<DesktopSetupSnapshot> {
@@ -159,15 +170,15 @@ export class DesktopSetupController {
     this.#filesystem.clear(); this.#secrets.clear(); this.#resolved?.authority.close();
   }
 
-  async #begin(request: DesktopSetupRequest, retry: boolean): Promise<DesktopSetupSnapshot> {
+  async #begin(request: DesktopSetupRequest, retry: boolean, replaceRunningStack = false): Promise<DesktopSetupSnapshot> {
     this.#load(); this.#assertSupported();
     if (this.#current) throw new SetupRequestError('Local setup is already running.');
     if (request.sessionId !== this.#sessionId) throw new SetupRequestError('The setup session expired. Start again.');
     const authority = RootDirectoryAuthority.open(this.#options.defaultRootDir, this.#options.appDataDir);
-    return this.#admit(signal => this.#resolveAndRun(request, authority, retry, signal));
+    return this.#admit(signal => this.#resolveAndRun(request, authority, retry, replaceRunningStack, signal));
   }
 
-  async #resolveAndRun(request: DesktopSetupRequest, authority: RootDirectoryAuthority, retry: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
+  async #resolveAndRun(request: DesktopSetupRequest, authority: RootDirectoryAuthority, retry: boolean, replaceRunningStack: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
     try {
       const privateKeyPath = request.github.mode === 'app'
         ? await this.#filesystem.consume(request.github.privateKeyCapability, this.#sessionId, `${this.#options.statePath}.keys`, signal)
@@ -179,7 +190,7 @@ export class DesktopSetupController {
       if (this.#resolved?.authority !== authority) this.#resolved?.authority.close();
       this.#resolved = resolved;
       this.#resume = this.#resumeFrom(request);
-      return await this.#executeResolved(resolved, retry, signal);
+      return await this.#executeResolved(resolved, retry, replaceRunningStack, signal);
     } catch (error) {
       if (this.#resolved?.authority !== authority) authority.close();
       if (signal.aborted || (error as Error).name === 'AbortError') {
@@ -196,9 +207,9 @@ export class DesktopSetupController {
     }
   }
 
-  #runResolved(resolved: ResolvedRequest, retry: boolean): Promise<DesktopSetupSnapshot> {
+  #runResolved(resolved: ResolvedRequest, retry: boolean, replaceRunningStack = false): Promise<DesktopSetupSnapshot> {
     if (this.#current) throw new SetupRequestError('Local setup is already running.');
-    return this.#admit(signal => this.#executeResolved(resolved, retry, signal));
+    return this.#admit(signal => this.#executeResolved(resolved, retry, replaceRunningStack, signal));
   }
 
   #admit(run: (signal: AbortSignal) => Promise<DesktopSetupSnapshot>): Promise<DesktopSetupSnapshot> {
@@ -211,7 +222,7 @@ export class DesktopSetupController {
     return operation;
   }
 
-  #executeResolved(resolved: ResolvedRequest, retry: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
+  #executeResolved(resolved: ResolvedRequest, retry: boolean, replaceRunningStack: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
     const reconfigurationRequired = Boolean(this.#resume?.reconfigurationStage);
     this.#snapshot = {
       phase: 'running', capability: getLocalSetupCapability(this.#options.platform ?? process.platform),
@@ -219,17 +230,17 @@ export class DesktopSetupController {
       resume: copyResume(this.#resume!), resumeAvailable: true, reconfigurationRequired,
     };
     this.#publish();
-    return this.#execute(resolved, retry, signal);
+    return this.#execute(resolved, retry, replaceRunningStack, signal);
   }
 
-  async #execute(resolved: ResolvedRequest, retry: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
+  async #execute(resolved: ResolvedRequest, retry: boolean, replaceRunningStack: boolean, signal: AbortSignal): Promise<DesktopSetupSnapshot> {
     const reporter = {
       onState: (state: SetupRunResult['state']) => { this.#snapshot = { ...this.#snapshot, state }; this.#publish(); },
       onLog: (line: string) => { this.#snapshot = { ...this.#snapshot, logs: [...this.#snapshot.logs, line].slice(-200) }; this.#publish(); },
     };
     try {
       const actions = bindRootOperations(this.#options.actions, resolved.authority);
-      const options = { actions, prompts: this.#prompts(resolved), reporter, platform: this.#options.platform ?? process.platform, signal };
+      const options = { actions, prompts: this.#prompts(resolved, replaceRunningStack), reporter, platform: this.#options.platform ?? process.platform, signal };
       const result = retry && this.#result ? await retrySetup(this.#result, options) : await runSetup({ ...options, root: this.#options.defaultRootDir });
       this.#result = result;
       signal.throwIfAborted();
@@ -256,7 +267,7 @@ export class DesktopSetupController {
     return this.#publicSnapshot();
   }
 
-  #prompts(resolved: ResolvedRequest) {
+  #prompts(resolved: ResolvedRequest, replaceRunningStack: boolean) {
     const request = resolved.request;
     return {
       resolveStackRoot: async () => ({ rootDir: this.#options.defaultRootDir, reinitialize: request.reinitialize }),
@@ -275,6 +286,7 @@ export class DesktopSetupController {
         : request.intake.mode === 'direct_webhook' ? { mode: 'direct_webhook' as const, webhookSecret: resolved.webhookSecret }
         : { mode: request.intake.mode },
       confirmStartStack: async () => true,
+      confirmReplaceRunningStack: async () => replaceRunningStack,
       confirmAgentLogin: async ({ candidates }: { candidates: string[] }) => candidates.filter(value => request.agents.includes(value)),
       configureWhitelist: async () => request.whitelist,
       addRepository: async () => request.repository,

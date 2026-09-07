@@ -66,7 +66,8 @@ export interface DesktopLocalSetupAdapter {
   setup?(): Promise<DesktopProfile>;
   status?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
   start?(request: import('../../../apps/desktop/src/shared/contract').DesktopSetupRequest): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
-  retry?(request?: import('../../../apps/desktop/src/shared/contract').DesktopSetupRequest): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
+  retry?(request?: import('../../../apps/desktop/src/shared/contract').DesktopSetupRequest
+    | import('../../../apps/desktop/src/shared/contract').DesktopSetupRecoveryRequest): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
   cancel?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
   selectPrivateKey?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopFilesystemSelection | null>;
   acquireWebhookSecret?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSecretSelection | null>;
