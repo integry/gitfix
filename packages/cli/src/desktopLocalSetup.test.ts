@@ -154,7 +154,7 @@ describe('desktop local runtime compatibility gate', () => {
   });
 
   test('offers owned-stack replacement for the exact discovery-401 legacy compatibility runtime', async () => {
-    const requests: Array<{ url: string; authorization: string | null; credentials?: RequestCredentials }> = [];
+    const requests: Array<{ url: string; authorization: string | null; credentials?: RequestInit['credentials'] }> = [];
     const result = await checkDesktopRuntimeCompatibility({
       baseUrl: 'http://127.0.0.1:14000', image: 'propr/app:0.8.15',
       fetch: async (input, init) => {
