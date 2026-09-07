@@ -200,6 +200,7 @@ async function loadImplementationTarget(params: {
   draftId: string;
   issueNumber: number;
 }): Promise<{
+  userId: string;
   owner: string;
   repo: string;
   draft: Record<string, unknown>;
@@ -229,6 +230,7 @@ async function loadImplementationTarget(params: {
   const planIssue = await getPlanIssue(draftId, issueNumber);
   if (!planIssue) throw new ImplementationRequestError(404, 'Issue not found in this plan');
   return {
+    userId: req.user!.id,
     owner: repositoryParts.owner,
     repo: repositoryParts.repo,
     draft: draft as Record<string, unknown>,
@@ -243,6 +245,7 @@ async function loadImplementationTarget(params: {
 async function implementLoadedIssue(params: {
   draftId: string;
   issueNumber: number;
+  userId: string;
   owner: string;
   repo: string;
   draft: Record<string, unknown>;
@@ -252,7 +255,7 @@ async function implementLoadedIssue(params: {
   models?: ImplementationModel[];
   planIssue: PlanIssue;
 }): Promise<unknown> {
-  const { draftId, issueNumber, owner, repo, draft, contextConfig, implementationSettings, body, models, planIssue } = params;
+  const { draftId, issueNumber, userId, owner, repo, draft, contextConfig, implementationSettings, body, models, planIssue } = params;
   const [issueForImplementation] = await persistEffectiveUltrafixSettings({ draftId, issues: [planIssue], contextConfig });
   const processingLabels = await loadPrimaryProcessingLabels();
   const implementLabel = processingLabels[0] || 'AI';
@@ -264,7 +267,7 @@ async function implementLoadedIssue(params: {
   const firstIssueNumber = firstPendingIssue.issues[0]?.issue_number ?? issueNumber;
   const epicLabelName = await resolveEpicLabel(useEpic, { draftId, owner, repo, draft, firstIssueNumber, contextConfig, correlationId, labelLogger });
   const context: ImplementIssueContext = {
-    octokit, owner, repo, issueNumber, implementLabel, epicLabelName, autoMerge: autoMerge as boolean, labelLogger
+    octokit, owner, repo, issueNumber, userId, implementLabel, epicLabelName, autoMerge: autoMerge as boolean, labelLogger
   };
   const effectivePlanIssue = buildEffectivePlanIssue(issueForImplementation, body);
   return runIssueImplementation({ ...context, draftId, planIssue: effectivePlanIssue, models });

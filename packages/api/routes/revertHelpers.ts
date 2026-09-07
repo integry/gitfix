@@ -370,6 +370,7 @@ export function buildRevertJobData(params: {
     owner,
     repoName: repo,
     prNumber,
+    userId,
     requestingUser,
     commitHash: commit,
     targetCommentId,

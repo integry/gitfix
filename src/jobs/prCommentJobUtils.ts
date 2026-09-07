@@ -295,12 +295,13 @@ export interface CleanupOptions {
     localRepoPath: string | undefined; worktreeInfo: WorktreeInfo | undefined;
     repoOwner: string; repoName: string; pullRequestNumber: number;
     jobBranchName: string | undefined; jobLlm: string | null | undefined;
+    jobUserId?: string;
     jobReasoningLevel?: ReasoningLevel;
     correlatedLogger: Logger; redisClient: Redis;
 }
 
 export async function cleanupJob(options: CleanupOptions): Promise<void> {
-    const { lockKey, lockToken, localRepoPath, worktreeInfo, repoOwner, repoName, pullRequestNumber, jobBranchName, jobLlm, jobReasoningLevel, correlatedLogger, redisClient } = options;
+    const { lockKey, lockToken, localRepoPath, worktreeInfo, repoOwner, repoName, pullRequestNumber, jobBranchName, jobLlm, jobUserId, jobReasoningLevel, correlatedLogger, redisClient } = options;
     if (await releasePRProcessingLock(redisClient, lockKey, lockToken)) {
         correlatedLogger.debug('Released PR processing lock');
     }
@@ -321,6 +322,7 @@ export async function cleanupJob(options: CleanupOptions): Promise<void> {
 
             const followUpJobId = `pr-comments-batch-${repoOwner}-${repoName}-${pullRequestNumber}-${Date.now()}`;
             await issueQueue.add('processPullRequestComment', {
+                ...(jobUserId ? { userId: jobUserId } : {}),
                 pullRequestNumber, comments: [], repoOwner, repoName,
                 branchName: jobBranchName, llm: jobLlm, correlationId: generateCorrelationId(),
                 reasoningLevel: jobReasoningLevel,

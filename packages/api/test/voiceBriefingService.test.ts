@@ -382,9 +382,11 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
       queueStates.push(states);
       if (states[0] === 'active') {
         return [
-          job('owned-active', 'Owned active task', NOW, {
-            userId: 'owner-user',
-          }),
+          {
+            ...job('owned-active', 'Owned active task', NOW),
+            name: 'processGitHubIssue',
+            data: { userId: 'owner-user', repoOwner: 'integry', repoName: 'propr', number: 2139 },
+          },
           job('foreign-active', 'FOREIGN ACTIVE TITLE', NOW, {
             userId: 'foreign-user',
             repository: 'foreign/private',
@@ -394,9 +396,9 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
       if (states[0] === 'waiting') {
         return [
           {
-            ...job('owned-import', 'Owned import', NOW),
-            name: 'processTaskImport',
-            data: { repository: 'integry/propr', userId: 'owner-user', user: 'owner-login' },
+            ...job('owned-comment', 'Owned comment', NOW),
+            name: 'processPullRequestComment',
+            data: { repoOwner: 'integry', repoName: 'propr', pullRequestNumber: 2155, userId: 'owner-user' },
           },
           job('unowned-waiting', 'UNOWNED WAITING TITLE', NOW),
         ];
@@ -436,7 +438,7 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
   ]);
 
   assert.deepEqual(snapshot.active.map(queueJob => queueJob.id), ['owned-active']);
-  assert.deepEqual(snapshot.waiting.map(queueJob => queueJob.id), ['owned-import']);
+  assert.deepEqual(snapshot.waiting.map(queueJob => queueJob.id), ['owned-comment']);
   assert.deepEqual(snapshot.delayed, []);
   const briefing = await new VoiceBriefingService({
     loaders: loaders({ queue: snapshot, plans: [...loadedPlans] }),

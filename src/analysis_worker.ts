@@ -45,6 +45,18 @@ interface TaskRecord {
     repository: string;
     issue_number: number;
     pr_number?: number;
+    initial_job_data?: unknown;
+}
+
+function userIdFromInitialJobData(value: unknown): string | undefined {
+    try {
+        const data = typeof value === 'string' ? JSON.parse(value) as unknown : value;
+        if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined;
+        const userId = (data as Record<string, unknown>).userId;
+        return typeof userId === 'string' && userId.trim() ? userId.trim() : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 /**
@@ -207,6 +219,7 @@ async function checkAndTriggerAutoFollowup(
         // Queue as PR comment job - same as user follow-up comments
         // The webhook filters bot comments, so we queue directly
         const followupCorrelationId = generateCorrelationId();
+        const userId = userIdFromInitialJobData(task.initial_job_data);
         const unprocessedComment: UnprocessedComment = {
             id: commentId,
             body: commentBody,
@@ -214,6 +227,7 @@ async function checkAndTriggerAutoFollowup(
             type: 'issue'
         };
         const jobData: CommentJobData = {
+            ...(userId ? { userId } : {}),
             pullRequestNumber: targetNumber,
             comments: [unprocessedComment],
             repoOwner,

@@ -281,6 +281,11 @@ export function createTaskRoutes(deps: TaskRoutesDeps) {
     try {
       const { taskId } = req.params;
       const { body } = req.body;
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({ error: 'Unable to determine requesting user ID' });
+        return;
+      }
 
       // Validate taskId parameter
       const taskIdValidation = validateTaskId(taskId);
@@ -356,6 +361,7 @@ export function createTaskRoutes(deps: TaskRoutesDeps) {
       };
 
       const jobData: CommentJobData = {
+        userId,
         pullRequestNumber: issueNumber,
         comments: [unprocessedComment],
         repoOwner,

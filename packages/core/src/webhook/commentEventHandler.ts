@@ -272,7 +272,14 @@ async function handleSlashCommand(opts: SlashCommandHandlerOptions): Promise<voi
     if (commandMeta.mode === 'merge') {
         correlatedLogger.info({ pullRequestNumber: prNumber, commentId: comment.id, commentAuthor }, '/merge command detected, enqueuing merge job');
         try {
-            await handleMergeCommand({ owner, repoName: repo, prNumber, redisClient, correlationId });
+            await handleMergeCommand({
+                owner,
+                repoName: repo,
+                prNumber,
+                ...(payload.sender?.id === undefined ? {} : { userId: String(payload.sender.id) }),
+                redisClient,
+                correlationId,
+            });
         } catch (mergeError) {
             correlatedLogger.error({ pullRequestNumber: prNumber, error: (mergeError as Error).message }, 'Failed to handle /merge command');
         }
@@ -870,6 +877,7 @@ async function enqueueNewCommentJob(comment: { id: number; created_at: string; u
     const llm = resolveLlm(llmFromKeywords, prLabels, { modelLabelPattern: MODEL_LABEL_PATTERN, prNumber, correlatedLogger, commandMeta });
 
     const jobData: CommentJobData = {
+        ...(payload.sender?.id === undefined ? {} : { userId: String(payload.sender.id) }),
         pullRequestNumber: prNumber, comments: [unprocessedComment], repoOwner: owner, repoName: repo, branchName, llm, correlationId: generateCorrelationId(),
         ...(commandMeta ? {
             ...buildCommandJobFields(commandMeta),

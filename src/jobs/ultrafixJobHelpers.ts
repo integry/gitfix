@@ -81,6 +81,7 @@ export async function restorePendingCommentsIfUltrafixJobSuperseded(
     await restorePendingComments(pickedUpComments, params);
     if (pickedUpComments.length > 0) {
         await issueQueue.add('processPullRequestComment', {
+            ...(job.data.userId ? { userId: job.data.userId } : {}),
             pullRequestNumber: params.pullRequestNumber,
             comments: [],
             repoOwner: params.repoOwner,
@@ -124,6 +125,7 @@ export async function handleUltrafixContinuation(
     try {
         const continuationResult = await continueUltrafixLoop({
             owner: repoOwner, repo: repoName, pullRequestNumber, completedAction: action,
+            userId: job.data.userId,
             ultrafixMeta: job.data.ultrafixMeta!, redisClient, correlatedLogger, correlationId,
             currentJobId: job.id,
         });

@@ -58,6 +58,9 @@ export interface DetectedIssue {
     // the issue is skipped (fail closed) — see resolveLabelApplier in
     // issueDetection.ts.
     triggeredBy?: string;
+    // Stable GitHub ID for the verified trigger actor. Jobs omit ownership when
+    // this cannot be established, so user-scoped queue views fail closed.
+    triggeredById?: string;
     // How this issue was detected: 'webhook' (label event) or 'polling'.
     source?: 'webhook' | 'polling';
 }
@@ -175,6 +178,7 @@ async function handleIssuesEvent(
             // Do NOT fall back to the issue author — see resolveLabelApplier
             // doc comment in issueDetection.ts for the threat model.
             triggeredBy: payload.sender?.login,
+            ...(payload.sender?.id === undefined ? {} : { triggeredById: String(payload.sender.id) }),
             source: 'webhook'
         };
 

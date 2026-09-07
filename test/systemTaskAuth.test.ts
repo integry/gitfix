@@ -85,7 +85,7 @@ describe('System Task Authorization', () => {
             const payload = buildAuthPayload(data);
             assert.strictEqual(
                 payload,
-                'revert:testorg:testrepo:42:alice:abc1234def5678:99999:feature-branch:1700000000000'
+                'revert:testorg:testrepo:42:github-user-1:alice:abc1234def5678:99999:feature-branch:1700000000000'
             );
         });
 
@@ -185,6 +185,15 @@ describe('System Task Authorization', () => {
             const result = verifyAuthToken(data, TEST_SECRET);
             assert.strictEqual(result.valid, false);
         });
+
+        test('tampered userId invalidates token', () => {
+            const data = makeJobData();
+            data.authToken = generateAuthToken(data, TEST_SECRET);
+            data.userId = 'github-user-2';
+            const result = verifyAuthToken(data, TEST_SECRET);
+            assert.strictEqual(result.valid, false);
+            assert.strictEqual(result.reason, 'HMAC mismatch');
+        });
     });
 
     describe('Replay resistance (authTimestamp)', () => {
@@ -237,12 +246,12 @@ describe('System Task Authorization', () => {
     });
 
     describe('Fork PR payload (headRepoOwner/headRepoName)', () => {
-        test('payload without headRepoOwner/headRepoName is backward-compatible', () => {
+        test('payload without headRepoOwner/headRepoName keeps the non-fork canonical shape', () => {
             const data = makeJobData({ authTimestamp: 1700000000000 });
             const payload = buildAuthPayload(data);
             assert.strictEqual(
                 payload,
-                'revert:testorg:testrepo:42:alice:abc1234def5678:99999:feature-branch:1700000000000'
+                'revert:testorg:testrepo:42:github-user-1:alice:abc1234def5678:99999:feature-branch:1700000000000'
             );
         });
 
@@ -255,7 +264,7 @@ describe('System Task Authorization', () => {
             const payload = buildAuthPayload(data);
             assert.strictEqual(
                 payload,
-                'revert:testorg:testrepo:42:alice:abc1234def5678:99999:feature-branch:1700000000000:fork-user:forked-repo'
+                'revert:testorg:testrepo:42:github-user-1:alice:abc1234def5678:99999:feature-branch:1700000000000:fork-user:forked-repo'
             );
         });
 
