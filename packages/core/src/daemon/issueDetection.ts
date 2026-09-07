@@ -7,6 +7,7 @@ import { handleError } from '../utils/errorHandler.js';
 import { withRetry, retryConfigs } from '../utils/retryHandler.js';
 import { getIssueQueue } from '../queue/taskQueue.js';
 import { getPrimaryProcessingLabels, loadPrimaryProcessingLabelsFromConfig } from './configLoader.js';
+import { getGithubUserWhitelist } from '../utils/userWhitelist.js';
 import { isAuthorizedIssueTriggerActor } from './issueTriggerAuthorization.js';
 import type { DetectedIssue } from '../webhook/webhookHandler.js';
 import type { DeliveryDisposition } from '../intake/routingWebSocketProtocol.js';
@@ -91,10 +92,9 @@ function lastPageFromLinkHeader(linkHeader: string | undefined): number | null {
  * or `null` when the labeler cannot be determined (API error, event pruned,
  * legacy response without an ID, etc.).
  *
- * Callers MUST treat `null` as "actor unknown" and fail closed (skip the
- * issue) rather than falling back to the issue author — otherwise an
- * attacker who applies the trigger label to a whitelisted user's issue
- * could bypass the whitelist whenever the timeline lookup fails.
+ * Callers MUST treat `null` as "actor unknown" and fail closed when the
+ * actor is required for whitelist authorization. Without a whitelist, the
+ * issue may still be processed, but must not receive stable user ownership.
  *
  * Trade-off: because we use the *most recent* labeled event, a
  * non-whitelisted user who toggles the label after a whitelisted user
@@ -167,11 +167,12 @@ async function resolveLabelApplierCached(opts: {
         }
         return result;
     } catch (err) {
-        // Transient API error (rate limit, network blip). Return null (fail closed)
-        // but do NOT cache so the issue is retried on the next poll cycle.
+        // Transient API error (rate limit, network blip). Return null but do NOT
+        // cache so the issue is retried on the next poll cycle. The caller fails
+        // closed when actor identity is required for whitelist authorization.
         opts.log?.warn(
             { owner: opts.owner, repo: opts.repo, issueNumber: opts.issueNumber, error: (err as Error).message },
-            'Timeline API lookup failed — actor unknown, will skip issue (fail closed). Will retry on next poll.'
+            'Timeline API lookup failed — actor unknown. Will retry on next poll.'
         );
         return null;
     }
@@ -423,6 +424,7 @@ export async function fetchIssuesForRepo(octokit: PaginatedOctokitInstance, repo
         }, `Found ${response.data.items.length} matching issues.`);
 
         const detected: DetectedIssue[] = [];
+        const hasWhitelist = getGithubUserWhitelist().length > 0;
 
         // Resolve label appliers with bounded concurrency to avoid N+1
         // sequential timeline API calls when many issues match at once.
@@ -437,12 +439,19 @@ export async function fetchIssuesForRepo(octokit: PaginatedOctokitInstance, repo
                     updatedAt: issue.updated_at, targetLabels: primaryProcessingLabels, log: correlatedLogger
                 });
                 if (labelApplier === null) {
+                    if (hasWhitelist) {
+                        correlatedLogger.warn(
+                            { issueNumber: issue.number, repository: repoFullName },
+                            'Could not determine label applier — skipping issue (fail closed). Will retry on timeline lookup failures; if the label event is too old to appear in the recent timeline window, remove and re-apply the processing label, or raise LABEL_APPLIER_TIMELINE_MAX_PAGES.'
+                        );
+                        return null;
+                    }
                     correlatedLogger.warn(
                         { issueNumber: issue.number, repository: repoFullName },
-                        'Could not determine label applier — skipping issue (fail closed). Will retry on timeline lookup failures; if the label event is too old to appear in the recent timeline window, remove and re-apply the processing label, or raise LABEL_APPLIER_TIMELINE_MAX_PAGES.'
+                        'Could not determine label applier — processing without stable user ownership because no whitelist is configured.'
                     );
-                    return null;
                 }
+                const triggeredBy = labelApplier?.login ?? issue.user?.login;
                 return {
                     id: issue.id,
                     number: issue.number,
@@ -453,8 +462,8 @@ export async function fetchIssuesForRepo(octokit: PaginatedOctokitInstance, repo
                     labels,
                     createdAt: issue.created_at,
                     updatedAt: issue.updated_at,
-                    triggeredBy: labelApplier.login,
-                    triggeredById: labelApplier.userId,
+                    ...(triggeredBy ? { triggeredBy } : {}),
+                    ...(labelApplier ? { triggeredById: labelApplier.userId } : {}),
                     source: 'polling' as const
                 };
             }));

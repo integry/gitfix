@@ -124,6 +124,55 @@ test('fetchIssuesForRepo assigns polling ownership to the label applier, not the
     });
 });
 
+test('fetchIssuesForRepo keeps unowned polling issues when no whitelist is configured', async () => {
+    const mockIssue: MockIssue = {
+        id: 124,
+        number: 2,
+        title: 'Issue with unresolved label applier',
+        html_url: 'https://github.com/owner/repo/issues/2',
+        labels: [{ name: 'AI' }],
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-03T00:00:00Z',
+        user: { id: 583231, login: 'issue-author' },
+    };
+    const octokit = makeOctokit(async () => [mockIssue]);
+
+    const issues = await fetchIssuesForRepo(octokit, 'owner/repo', CORRELATION_ID);
+
+    assert.strictEqual(issues.length, 1);
+    assert.strictEqual(issues[0].number, 2);
+    assert.strictEqual(issues[0].triggeredBy, 'issue-author');
+    assert.ok(!('triggeredById' in issues[0]));
+});
+
+test('fetchIssuesForRepo drops issues with unresolved label appliers when a whitelist is configured', async () => {
+    const previousWhitelist = process.env.GITHUB_USER_WHITELIST;
+    process.env.GITHUB_USER_WHITELIST = 'allowed-user';
+    try {
+        const mockIssue: MockIssue = {
+            id: 125,
+            number: 3,
+            title: 'Issue requiring an authorized label applier',
+            html_url: 'https://github.com/owner/repo/issues/3',
+            labels: [{ name: 'AI' }],
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: '2024-01-04T00:00:00Z',
+            user: { id: 583231, login: 'allowed-user' },
+        };
+        const octokit = makeOctokit(async () => [mockIssue]);
+
+        const issues = await fetchIssuesForRepo(octokit, 'owner/repo', CORRELATION_ID);
+
+        assert.deepStrictEqual(issues, []);
+    } finally {
+        if (previousWhitelist === undefined) {
+            delete process.env.GITHUB_USER_WHITELIST;
+        } else {
+            process.env.GITHUB_USER_WHITELIST = previousWhitelist;
+        }
+    }
+});
+
 test('fetchIssuesForRepo excludes pull requests and -processing/-done labels', async () => {
     const base = {
         created_at: '2024-01-01T00:00:00Z',
