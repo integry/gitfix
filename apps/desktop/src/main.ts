@@ -79,6 +79,7 @@ import { createPackagedSmokeEvidenceSink } from './smoke-test-evidence';
 import { configureNativeSmokeLogsPath } from './smoke-log-path';
 import {
   configureDesktopSessionSecurity,
+  createPackagedConnectOwnershipReporter,
   type DesktopNetworkPermissionEvidence,
   type DesktopRendererOwnershipEvidence,
 } from './session-security';
@@ -1620,9 +1621,9 @@ if (!hasSingleInstanceLock) {
         reportNetworkPermissionDecision: (evidence: DesktopNetworkPermissionEvidence) => {
           log('info', 'desktop.renderer.connect_network_permission', { ...evidence });
         },
-        reportRendererOwnershipDecision: (evidence: DesktopRendererOwnershipEvidence) => {
+        reportRendererOwnershipDecision: createPackagedConnectOwnershipReporter(evidence => {
           log('info', PACKAGED_CONNECT_RENDERER_OWNERSHIP_EVENT, { ...evidence });
-        },
+        }),
       } : {}),
     });
     const credentialInitialization = await credentials.initialize();

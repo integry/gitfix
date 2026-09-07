@@ -15,7 +15,7 @@ export const CHILD_CAPTURE_MAX_BYTES = 64 * 1024;
 export const CHILD_DIAGNOSTIC_MAX_RECORDS = 20;
 
 const RECORD_MAX_BYTES = 8 * 1024;
-const RECORD_MAX_COUNT = 128;
+export const PACKAGED_CONNECT_RECORD_MAX_COUNT = 128;
 const WINDOWS_PID_MAX = 0xffff_ffff;
 const FIXTURE_LEAF_PATTERN = /^propr-desktop-connect-smoke-[A-Za-z0-9]{6}$/u;
 const ISOLATED_CLEANUP_ARGUMENT = '--internal-isolated-connect-fixture-cleanup';
@@ -309,8 +309,8 @@ const createRecordCapture = ({ sensitiveNeedles, onRecord, onSensitiveOutput }) 
 
   const inspectLine = line => {
     const framed = line.endsWith('\r') ? line.slice(0, -1) : line;
-    if (!framed || recordCount >= RECORD_MAX_COUNT) {
-      if (recordCount >= RECORD_MAX_COUNT) captureTruncated = true;
+    if (!framed || recordCount >= PACKAGED_CONNECT_RECORD_MAX_COUNT) {
+      if (recordCount >= PACKAGED_CONNECT_RECORD_MAX_COUNT) captureTruncated = true;
       return;
     }
     let record;
@@ -547,7 +547,7 @@ export const runPackagedConnectLifecycle = async ({
     sensitiveNeedles,
     onSensitiveOutput: () => settleFirst({ category: 'output-rejected' }),
     onRecord: record => {
-      if (records.length < RECORD_MAX_COUNT) records.push(record);
+      if (records.length < PACKAGED_CONNECT_RECORD_MAX_COUNT) records.push(record);
       if (record.event === CONNECT_JOURNEY_STAGE_EVENT
         && record.code === 'JOURNEY_STORAGE_BACKEND') {
         reportedStorageBackend = record.storageBackend;
