@@ -1173,11 +1173,11 @@ const rendererLifecycleInvalidSummary = () => {
 const rendererUiStateSummary = async page => {
   const absent = {
     schemaVersion: 1,
-    connectionPillPresent: false,
+    instanceSelectorPresent: false,
     connectionStatus: 'absent',
     accessibleLabelCategory: 'other',
     navigatorOnline: false,
-    desktopTitleBarPresent: false,
+    redundantDesktopChromeAbsent: false,
     routeLayoutPresent: false,
     loadingSpinnerPresent: false,
     validatedCurrentUserMarkerPresent: false,
@@ -1185,13 +1185,13 @@ const rendererUiStateSummary = async page => {
   };
   try {
     return await page.evaluate(() => {
-      const pill = document.querySelector('.desktop-connection-pill');
+      const selector = document.querySelector('.desktop-instance-selector-button');
       const classStatuses = ['ready', 'offline', 'incompatible'].filter(status =>
-        pill?.classList.contains(`desktop-connection-${status}`));
-      const connectionStatus = pill === null
+        selector?.classList.contains(`desktop-connection-${status}`));
+      const connectionStatus = selector === null
         ? 'absent'
         : classStatuses.length === 1 ? classStatuses[0] : 'unknown';
-      const label = pill?.getAttribute('aria-label');
+      const label = selector?.getAttribute('aria-label');
       const accessibleLabelCategory = label === 'Connected: Operations'
         ? 'Connected: Operations'
         : label === 'Offline: Operations'
@@ -1208,11 +1208,11 @@ const rendererUiStateSummary = async page => {
         .some(element => element.textContent?.trim() === 'Recent Activity');
       return {
         schemaVersion: 1,
-        connectionPillPresent: pill !== null,
+        instanceSelectorPresent: selector !== null,
         connectionStatus,
         accessibleLabelCategory,
         navigatorOnline: navigator.onLine,
-        desktopTitleBarPresent: document.querySelector('.desktop-titlebar') !== null,
+        redundantDesktopChromeAbsent: document.querySelector('.desktop-titlebar') === null,
         routeLayoutPresent: routeLayout !== null,
         loadingSpinnerPresent: loadingSpinner !== null,
         validatedCurrentUserMarkerPresent: validatedCurrentUserMarker !== null,

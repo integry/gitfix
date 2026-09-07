@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
-import { DesktopTitleBar } from './DesktopTitleBar';
+import { DesktopInstanceSelector } from './DesktopInstanceSelector';
 import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
 
 const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
@@ -24,7 +24,7 @@ const remoteProfile: DesktopProfile = {
   kind: 'remote',
 };
 
-const connectedApp = <><DesktopTitleBar /><div>Connected app</div></>;
+const connectedApp = <><DesktopInstanceSelector /><div>Connected app</div></>;
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(settle => { resolve = settle; });
@@ -61,6 +61,20 @@ describe('DesktopExperience profile management', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('switches instances and opens management from the compact connected selector', async () => {
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connected: This computer' }));
+    expect(screen.getByRole('dialog', { name: 'Manage instances' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Team serverRemote instance/i }));
+
+    expect(await screen.findByRole('button', { name: 'Connected: Team server' })).toBeInTheDocument();
+    expect(adapters.connection.probe).toHaveBeenLastCalledWith(remoteProfile);
+    expect(adapters.profiles.setActiveId).toHaveBeenCalledWith(remoteProfile.id);
+    expect(apiMock.setApiBaseUrl).toHaveBeenLastCalledWith(remoteProfile.baseUrl);
   });
 
   it('reconnects an edited active instance but saves an inactive edit without connecting', async () => {

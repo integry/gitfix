@@ -995,12 +995,12 @@ const runPackagedConnectJourneySmoke = async (
   await stages.waitFor('REACT_CONNECTED');
   const proof = await window.webContents.executeJavaScript(`(() => {
     const dashboard = document.querySelector('.desktop-app');
-    const connection = document.querySelector('.desktop-connection-pill.desktop-connection-ready');
+    const connection = document.querySelector('.desktop-instance-selector-button.desktop-connection-ready');
     const titlebar = document.querySelector('.desktop-titlebar');
     return {
       connected: dashboard instanceof HTMLElement
         && connection instanceof HTMLButtonElement
-        && titlebar instanceof HTMLElement,
+        && titlebar === null,
       rendererContractsContainSecret: JSON.stringify([
         window.proprDesktop,
         dashboard instanceof HTMLElement ? dashboard.dataset : null,

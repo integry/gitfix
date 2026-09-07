@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
-import { DesktopTitleBar } from './DesktopTitleBar';
+import { DesktopInstanceSelector } from './DesktopInstanceSelector';
 import { adaptersFor, remoteProfile } from './DesktopExperience.testSupport';
 import { DesktopAuthenticationError, type DesktopAuthenticationProgressStage } from './types';
 
@@ -25,14 +25,14 @@ describe('DesktopExperience authentication', () => {
     adapters.acceptance = {
       reportJourneyStage: vi.fn(async stage => {
         if (stage === 'REACT_CONNECTED') {
-          expect(document.querySelector('.desktop-connection-pill.desktop-connection-ready')).toBeInstanceOf(HTMLButtonElement);
+          expect(document.querySelector('.desktop-instance-selector-button.desktop-connection-ready')).toBeInstanceOf(HTMLButtonElement);
         }
         stages.push(stage);
       }),
     };
     const connectedApp = (transportReady: boolean) => (
       <DesktopExperience adapters={adapters}>
-        <DesktopTitleBar transportReady={transportReady} />
+        <DesktopInstanceSelector transportReady={transportReady} />
         <div>Connected app</div>
       </DesktopExperience>
     );
