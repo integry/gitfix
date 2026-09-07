@@ -98,6 +98,15 @@ function missingMutationTargetMessage(action: PendingVoiceBriefingAction): strin
   return `Cannot ${actionName} ${action.item.reference} because it does not identify a ${targetName}.`;
 }
 
+function unsupportedPlanStopMessage(action: PendingVoiceBriefingAction): string | null {
+  if (action.action !== 'stop' || action.item.kind !== 'plan') return null;
+  if (action.item.status === 'generating' || action.item.status === 'refining') return null;
+  if (action.item.status === 'executing') {
+    return `Cannot stop ${action.item.reference} because the briefing does not identify its task execution.`;
+  }
+  return `Cannot stop ${action.item.reference} while its plan status is ${action.item.status}.`;
+}
+
 async function executePlanAction(
   action: PendingVoiceBriefingAction,
   draftId: string,
@@ -115,14 +124,8 @@ async function executePlanAction(
     case 'refining':
       await abortRefinement(draftId);
       return;
-    case 'executing':
-      throw new Error(
-        `Cannot stop ${action.item.reference} because the briefing does not identify its task execution.`,
-      );
     default:
-      throw new Error(
-        `Cannot stop ${action.item.reference} while its plan status is ${action.item.status}.`,
-      );
+      throw new Error(unsupportedPlanStopMessage(action) ?? 'The plan cannot be stopped.');
   }
 }
 
@@ -282,6 +285,11 @@ export function useVoiceBriefing(
     const action = pendingActionRef.current;
     if (!action || mutationInFlightRef.current) return;
     suppressSpeechRef.current = false;
+    const unsupportedMessage = unsupportedPlanStopMessage(action);
+    if (unsupportedMessage) {
+      showError(unsupportedMessage);
+      return;
+    }
     const targetId = mutationTarget(action.item);
     if (!targetId) {
       showError(missingMutationTargetMessage(action));
@@ -366,13 +374,20 @@ export function useVoiceBriefing(
         setPhase('idle');
         return;
       case 'pending_action':
+        {
+          const unsupportedMessage = unsupportedPlanStopMessage(command);
+          if (unsupportedMessage) {
+            showError(unsupportedMessage);
+            return;
+          }
+        }
         if (!mutationTarget(command.item)) {
           showError(missingMutationTargetMessage(command));
           return;
         }
         pendingActionRef.current = command;
         setPendingAction(command);
-        await speak(confirmationPrompt(command), 'confirming', false);
+        await speak(confirmationPrompt(command), 'confirming');
         return;
       case 'confirm':
         if (!pendingActionRef.current) {

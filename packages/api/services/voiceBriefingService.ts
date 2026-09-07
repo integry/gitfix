@@ -308,9 +308,10 @@ function planCandidate(
   const title = safeTitle(repository ? `Plan for ${repository}` : 'Plan');
   const requiresAttention = status === 'review';
   const running = status === 'generating' || status === 'refining' || status === 'executing';
+  const canStopDraftOperation = status === 'generating' || status === 'refining';
   const actions: VoiceBriefingAction[] = requiresAttention
     ? ['open', 'follow_up']
-    : running ? ['open', 'stop'] : ['open'];
+    : canStopDraftOperation ? ['open', 'stop'] : ['open'];
 
   return [{
     kind: 'plan',
@@ -347,7 +348,7 @@ function notificationCandidate(notification: Notification): CandidateItem[] {
     : safeRepository(target.repository);
   const actions: VoiceBriefingAction[] = [
     ...(kind === 'system' ? [] : ['open' as const]),
-    ...(notification.actions.includes('stop') ? ['stop' as const] : []),
+    ...(kind !== 'plan' && notification.actions.includes('stop') ? ['stop' as const] : []),
     ...(notification.actions.includes('follow_up') ? ['follow_up' as const] : []),
   ];
 

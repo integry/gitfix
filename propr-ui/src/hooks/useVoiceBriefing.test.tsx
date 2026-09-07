@@ -183,6 +183,36 @@ describe('useVoiceBriefing', () => {
     expect(result.current.pendingAction).toBeNull();
   });
 
+  it('exposes confirmation speech and keeps the action pending when playback is stopped', async () => {
+    const promptSpeech = deferred<void>();
+    const cancelPrompt = vi.fn(() => promptSpeech.resolve());
+    vi.mocked(speakOnce)
+      .mockReturnValueOnce({ promise: Promise.resolve(), cancel: vi.fn() })
+      .mockReturnValueOnce({ promise: promptSpeech.promise, cancel: cancelPrompt });
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+
+    let prompt!: Promise<void>;
+    act(() => {
+      prompt = result.current.handleTranscript('stop task one');
+    });
+
+    expect(result.current.phase).toBe('speaking');
+    expect(result.current.pendingAction).toMatchObject({ action: 'stop' });
+    expect(speakOnce).toHaveBeenLastCalledWith(
+      'Stop task 1, Voice controller? Say confirm to stop it, or cancel.',
+      { lang: undefined },
+    );
+
+    act(() => result.current.stopAudio());
+    await act(async () => prompt);
+
+    expect(cancelPrompt).toHaveBeenCalledOnce();
+    expect(result.current.phase).toBe('confirming');
+    expect(result.current.pendingAction).toMatchObject({ action: 'stop' });
+    expect(stopTaskExecution).not.toHaveBeenCalled();
+  });
+
   it('uses a second spoken confirmation for one follow-up API call', async () => {
     const { result } = renderHook(() => useVoiceBriefing());
     await act(async () => result.current.requestBriefing());
@@ -231,12 +261,12 @@ describe('useVoiceBriefing', () => {
     await act(async () => result.current.requestBriefing());
     await act(async () => result.current.handleTranscript('stop plan one'));
 
-    await act(async () => result.current.confirmPendingAction());
-
     expect(result.current.phase).toBe('error');
+    expect(result.current.pendingAction).toBeNull();
     expect(result.current.error).toBe(
       'Cannot stop plan 1 because the briefing does not identify its task execution.',
     );
+    expect(speakOnce).toHaveBeenCalledOnce();
     expect(abortGeneration).not.toHaveBeenCalled();
     expect(abortRefinement).not.toHaveBeenCalled();
     expect(stopTaskExecution).not.toHaveBeenCalled();

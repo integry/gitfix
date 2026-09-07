@@ -231,6 +231,63 @@ test('running and attention scopes filter details while retaining complete snaps
   assert.deepEqual(requestedNotificationUsers, ['authenticated-user', 'authenticated-user']);
 });
 
+test('advertises plan stop only for draft-scoped generating and refining operations', async () => {
+  const queue: VoiceBriefingQueueSnapshot = { active: [], waiting: [], delayed: [] };
+  const plans: VoiceBriefingPlanRow[] = [
+    {
+      draft_id: 'generating-plan', repository: 'integry/propr',
+      status: 'generating', updated_at: '2026-09-07T01:20:00.000Z',
+    },
+    {
+      draft_id: 'refining-plan', repository: 'integry/propr',
+      status: 'refining', updated_at: '2026-09-07T01:19:00.000Z',
+    },
+    {
+      draft_id: 'executing-plan', repository: 'integry/propr',
+      status: 'executing', updated_at: '2026-09-07T01:18:00.000Z',
+    },
+    {
+      draft_id: 'notified-executing-plan', repository: 'integry/propr',
+      status: 'executing', updated_at: '2026-09-07T01:17:00.000Z',
+    },
+  ];
+  const notifications = [notification({
+    id: 'executing-plan-warning',
+    severity: 'warning',
+    title: 'Executing plan needs attention',
+    target: {
+      type: 'plan',
+      repository: 'integry/propr',
+      draftId: 'notified-executing-plan',
+    },
+    occurredAt: '2026-09-07T01:21:00.000Z',
+    actions: ['stop', 'follow_up'],
+  })];
+  const service = new VoiceBriefingService({
+    loaders: loaders({ queue, plans, notifications }),
+    now: () => NOW,
+  });
+
+  const briefing = await service.getBriefing('authenticated-user');
+
+  assert.deepEqual(
+    briefing.items.find(item => item.id === 'generating-plan')?.actions,
+    ['open', 'stop'],
+  );
+  assert.deepEqual(
+    briefing.items.find(item => item.id === 'refining-plan')?.actions,
+    ['open', 'stop'],
+  );
+  assert.deepEqual(
+    briefing.items.find(item => item.id === 'executing-plan')?.actions,
+    ['open'],
+  );
+  assert.deepEqual(
+    briefing.items.find(item => item.id === 'notified-executing-plan')?.actions,
+    ['open', 'follow_up'],
+  );
+});
+
 test('running scope retains an active task that also has an attention notification', async () => {
   const queue: VoiceBriefingQueueSnapshot = {
     active: [job('active-task', 'Active task', '2026-09-07T01:20:00.000Z')],

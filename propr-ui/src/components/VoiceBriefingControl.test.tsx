@@ -199,6 +199,25 @@ describe('VoiceBriefingControl', () => {
     expect(value.confirmPendingAction).toHaveBeenCalledOnce();
   });
 
+  it('offers Stop speaking during confirmation audio without removing the pending action', () => {
+    const pendingAction: PendingVoiceBriefingAction = {
+      type: 'pending_action',
+      action: 'stop',
+      item: briefing.items[0],
+      requiresConfirmation: true,
+    };
+    const value = controller({ briefing, pendingAction, phase: 'speaking' });
+    renderControl(value);
+    fireEvent.click(screen.getByRole('button', { name: 'Voice briefing' }));
+
+    const confirmation = screen.getByRole('region', { name: 'Confirm stop request' });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop speaking' }));
+
+    expect(value.stopAudio).toHaveBeenCalledOnce();
+    expect(confirmation).toBeInTheDocument();
+    expect(value.cancelPendingAction).not.toHaveBeenCalled();
+  });
+
   it('stops audio and restores launcher focus when Escape closes the panel', () => {
     const value = controller({ phase: 'speaking', briefing });
     renderControl(value);
