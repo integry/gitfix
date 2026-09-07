@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { openApprovedDesktopPairingUrl } from './pairing-browser';
+import {
+  DesktopPairingBrowserOpenError,
+  openApprovedDesktopPairingUrl,
+  supportsAmbiguousPairingLaunchRecovery,
+} from './pairing-browser';
 
 const pairingId = `dpr_${'A'.repeat(22)}`;
 const fallback = `https://api.example.test/api/desktop/pairings/${pairingId}/browser`;
 
 describe('desktop pairing browser final sink', () => {
+  it('limits ambiguous OS launch recovery to Linux', () => {
+    assert.equal(supportsAmbiguousPairingLaunchRecovery('linux'), true);
+    assert.equal(supportsAmbiguousPairingLaunchRecovery('darwin'), false);
+    assert.equal(supportsAmbiguousPairingLaunchRecovery('win32'), false);
+  });
+
   it('opens only the exact canonical API browser route', async () => {
     const opened: string[] = [];
     await openApprovedDesktopPairingUrl({
@@ -50,5 +60,28 @@ describe('desktop pairing browser final sink', () => {
       );
     }
     assert.deepEqual(opened, []);
+  });
+
+  it('classifies shell rejection without copying the approval URL into its message', async () => {
+    await assert.rejects(
+      openApprovedDesktopPairingUrl({
+        apiBaseUrl: 'https://api.example.test', pairingId, approvalUrl: fallback,
+      }, { openExternal: async () => { throw new Error(`xdg-open rejected ${fallback}`); } }, {
+        ambiguousOsLaunchFailure: true,
+      }),
+      (error: unknown) => error instanceof DesktopPairingBrowserOpenError
+        && error.message === 'Desktop pairing browser could not be opened'
+        && !error.message.includes(pairingId),
+    );
+  });
+
+  it('keeps non-system approval-host failures terminal', async () => {
+    const navigationFailure = new Error('Packaged approval navigation failed');
+    await assert.rejects(
+      openApprovedDesktopPairingUrl({
+        apiBaseUrl: 'https://api.example.test', pairingId, approvalUrl: fallback,
+      }, { openExternal: async () => { throw navigationFailure; } }),
+      error => error === navigationFailure,
+    );
   });
 });

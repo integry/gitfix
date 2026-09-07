@@ -42,7 +42,7 @@ import {
 import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
-import { openApprovedDesktopPairingUrl } from './pairing-browser';
+import { openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
 import {
   clearPackagedApprovalStorage,
   createPackagedApprovalNavigation,
@@ -1535,10 +1535,20 @@ if (!hasSingleInstanceLock) {
         ? packagedJourneyApprovals.open
         : packagedAcceptanceTest
           ? async () => undefined
-          : request => openApprovedDesktopPairingUrl(request, shell),
+          : request => openApprovedDesktopPairingUrl(request, shell, {
+              ambiguousOsLaunchFailure: supportsAmbiguousPairingLaunchRecovery(process.platform),
+            }),
       clientName: `ProPR Desktop (${process.platform})`,
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
+      },
+      reportPairingProgress: progress => {
+        log(progress.stage === 'browser-open-failed' ? 'warn' : 'info', 'desktop.authentication_pair.progress', {
+          stage: progress.stage,
+        });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.authenticationProgress, progress);
+        }
       },
       ...(packagedAcceptanceTest ? {
         reportWebSocketHandshake: (evidence: DesktopWebSocketHandshakeEvidence) => {

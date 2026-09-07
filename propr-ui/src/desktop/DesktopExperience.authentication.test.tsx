@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
 import { DesktopTitleBar } from './DesktopTitleBar';
 import { adaptersFor, remoteProfile } from './DesktopExperience.testSupport';
+import { DesktopAuthenticationError, type DesktopAuthenticationProgressStage } from './types';
 
 const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
 const runtimeMock = vi.hoisted(() => ({ setDesktopApiBaseUrl: vi.fn() }));
@@ -40,7 +41,7 @@ describe('DesktopExperience authentication', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Sign in in browser/i }));
 
     expect(await screen.findByText('Connected app')).toBeInTheDocument();
-    expect(adapters.authentication.authenticate).toHaveBeenCalledWith(remoteProfile);
+    expect(adapters.authentication.authenticate).toHaveBeenCalledWith(remoteProfile, expect.any(Function));
     expect(probe).toHaveBeenCalledTimes(2);
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
     expect(stages).toEqual([
@@ -64,6 +65,53 @@ describe('DesktopExperience authentication', () => {
     ]));
   });
 
+  it('shows browser approval progress and keeps the user in control while pairing is pending', async () => {
+    const adapters = adaptersFor(
+      [remoteProfile],
+      remoteProfile.id,
+      async () => ({ status: 'authentication-required', message: 'Please sign in.' }),
+    );
+    let reportProgress: ((stage: DesktopAuthenticationProgressStage) => void) | undefined;
+    let settlePairing: (() => void) | undefined;
+    adapters.authentication.cancel = vi.fn(async () => undefined);
+    vi.mocked(adapters.authentication.authenticate).mockImplementation((_profile, onProgress) => {
+      reportProgress = onProgress;
+      return new Promise<void>(resolve => { settlePairing = resolve; });
+    });
+    render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Sign in in browser/i }));
+    expect(await screen.findByText(/preparing a secure browser approval request/i)).toBeInTheDocument();
+
+    act(() => reportProgress?.('approval-pending'));
+    expect(await screen.findByText(/finish signing in and approve ProPR Desktop/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Cancel sign in/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Cancel sign in/i }));
+    expect(await screen.findByRole('button', { name: /Sign in in browser/i })).toBeInTheDocument();
+    expect(adapters.authentication.cancel).toHaveBeenCalledWith(remoteProfile.id);
+    act(() => settlePairing?.());
+  });
+
+  it('explains an ambiguous Linux browser-launch rejection while approval remains pending', async () => {
+    const adapters = adaptersFor(
+      [remoteProfile],
+      remoteProfile.id,
+      async () => ({ status: 'authentication-required', message: 'Please sign in.' }),
+    );
+    vi.mocked(adapters.authentication.authenticate).mockImplementation(async (_profile, onProgress) => {
+      onProgress?.('browser-open-failed');
+      await new Promise<void>(() => undefined);
+    });
+    render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Sign in in browser/i }));
+
+    expect(await screen.findByText(/could not confirm that your browser opened/i)).toBeInTheDocument();
+    expect(screen.getByText(/if the approval page appeared, finish there/i)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/pairing_id|device_secret|xdg-open/i);
+  });
+
   it('reports rejected authentication and connection-help operations in the blocked panel', async () => {
     const adapters = adaptersFor(
       [remoteProfile],
@@ -75,7 +123,7 @@ describe('DesktopExperience authentication', () => {
     render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
 
     fireEvent.click(await screen.findByRole('button', { name: /Sign in in browser/i }));
-    expect(await screen.findByText(/could not open sign in.*try again/i)).toBeInTheDocument();
+    expect(await screen.findByText(/pairing could not be completed.*try again/i)).toBeInTheDocument();
     expect(screen.queryByText(/browser launch failed/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Sign in in browser/i })).toBeInTheDocument();
 
@@ -83,5 +131,26 @@ describe('DesktopExperience authentication', () => {
     expect(await screen.findByText(/could not open connection help.*try again/i)).toBeInTheDocument();
     expect(screen.queryByText(/no browser is configured/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Open connection help/i })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['APPROVAL_EXPIRED', /browser approval expired.*start sign in again/i],
+    ['SECURE_STORAGE_FAILED', /could not save.*secure storage.*system keychain/i],
+    ['PAIRING_UNREACHABLE', /instance became unreachable.*browser approval/i],
+    ['PAIRING_REJECTED', /instance rejected desktop pairing/i],
+  ] as const)('shows safe recovery for %s', async (code, message) => {
+    const adapters = adaptersFor(
+      [remoteProfile],
+      remoteProfile.id,
+      async () => ({ status: 'authentication-required', message: 'Please sign in.' }),
+    );
+    vi.mocked(adapters.authentication.authenticate).mockRejectedValueOnce(new DesktopAuthenticationError(code));
+    render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Sign in in browser/i }));
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sign in in browser/i })).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(code);
   });
 });

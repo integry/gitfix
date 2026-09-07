@@ -325,9 +325,12 @@ describe('desktop pairing service IPC native shutdown lifecycle', () => {
         const invoke = (channel: string, ...args: unknown[]): Promise<unknown> =>
           Promise.resolve(handlers.get(channel)!(event, ...args));
 
+        const pairingAdmission = await invoke(
+          IPC_CHANNELS.authenticationPairAdmit, profile.id,
+        ) as { operationId: string };
         const admitted = invoke(IPC_CHANNELS.authenticationPair, {
           id: profile.id, label: profile.label, apiBaseUrl: profile.apiBaseUrl,
-        }).then(value => {
+        }, pairingAdmission.operationId).then(value => {
           counts.rendererPublication += 1;
           return { status: 'fulfilled' as const, value };
         }, error => ({ status: 'rejected' as const, error }));
@@ -440,8 +443,8 @@ describe('desktop pairing service IPC native shutdown lifecycle', () => {
         }
         assert.equal(targetSignal?.aborted, true);
         assert.equal(counts.rendererPublication, 0);
-        assert.equal(counts.ipcEntry, 1);
-        assert.equal(counts.ipcExit, 1);
+        assert.equal(counts.ipcEntry, 2);
+        assert.equal(counts.ipcExit, 2);
         assert.equal(handlers.size, 0);
         assert.equal(windowDestroyed, true);
         assert.equal(shutdownFinished, true);

@@ -4,6 +4,7 @@ import { createElectronDesktopAdapters } from './electronAdapters';
 import type {
   DesktopAdapters,
   DesktopAuthenticationCompleteEventDetail,
+  DesktopAuthenticationProgressStage,
   DesktopConnectionResult,
   DesktopPlatform,
   DesktopProfile,
@@ -109,7 +110,10 @@ const probeProfile = async (profile: DesktopProfile): Promise<DesktopConnectionR
   }
 };
 
-const authenticateBrowserFixture = (profile: DesktopProfile): Promise<void> => new Promise((resolve, reject) => {
+const authenticateBrowserFixture = (
+  profile: DesktopProfile,
+  onProgress?: (stage: DesktopAuthenticationProgressStage) => void,
+): Promise<void> => new Promise((resolve, reject) => {
   const complete = (event: Event) => {
     const detail = (event as CustomEvent<DesktopAuthenticationCompleteEventDetail>).detail;
     if (detail?.profileId !== profile.id) return;
@@ -129,11 +133,13 @@ const authenticateBrowserFixture = (profile: DesktopProfile): Promise<void> => n
   const redirect = new URL('propr://authentication-complete');
   redirect.searchParams.set('profile_id', profile.id);
   try {
+    onProgress?.('browser-opening');
     window.open(
       `${normalizeBaseUrl(profile.baseUrl)}/api/auth/github?redirect_to=${encodeURIComponent(redirect.toString())}`,
       '_blank',
       'noopener,noreferrer'
     );
+    onProgress?.('approval-pending');
   } catch (error) {
     cleanup();
     reject(error);

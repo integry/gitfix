@@ -8,7 +8,7 @@ import type { DesktopDeepLinkConsumption, DesktopProfile } from './types';
 const REJECTED_DEEP_LINK_MESSAGE = 'ProPR Desktop could not use that link. Choose an instance and try again.';
 const CONNECT_CANDIDATE_NOTICE = 'Review this untrusted instance address, then choose Connect to continue.';
 
-type DesktopDeepLinkPhase = 'loading' | 'choose' | 'connecting' | 'blocked' | 'recovery-review' | 'connected';
+type DesktopDeepLinkPhase = 'loading' | 'choose' | 'connecting' | 'authenticating' | 'blocked' | 'recovery-review' | 'connected';
 
 interface UseDesktopDeepLinksOptions {
   deepLinks?: DesktopDeepLinkInbox;

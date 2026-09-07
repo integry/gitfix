@@ -18,7 +18,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { normalizeBaseUrl } from './browserAdapters';
-import type { DesktopConnectionResult, DesktopProfile } from './types';
+import type { DesktopAuthenticationProgressStage, DesktopConnectionResult, DesktopProfile } from './types';
 
 interface DesktopSetupLayerProps {
   children: React.ReactNode;
@@ -236,6 +236,38 @@ export const ConnectionPanel = ({ profile, result, onBack, onRetry, onAuthentica
     </main>
   );
 };
+
+const authenticationProgressMessage = (progress: DesktopAuthenticationProgressStage): string => {
+  if (progress === 'browser-opening') return 'Opening the secure approval page in your default browser…';
+  if (progress === 'approval-pending') {
+    return 'Finish signing in and approve ProPR Desktop in your browser. This window will continue automatically.';
+  }
+  if (progress === 'browser-open-failed') {
+    return 'ProPR Desktop could not confirm that your browser opened. If the approval page appeared, finish there and this window will keep waiting. If it did not, check your default browser or desktop portal, then cancel and try again.';
+  }
+  return 'Preparing a secure browser approval request…';
+};
+
+export const AuthenticationPanel = ({ profile, progress, onCancel, onChoose }: {
+  profile: DesktopProfile;
+  progress: DesktopAuthenticationProgressStage;
+  onCancel(): void;
+  onChoose(): void;
+}) => (
+  <main className="desktop-connection-card" aria-live="polite">
+    <DesktopBrand />
+    <div className={`desktop-connection-visual ${progress === 'browser-open-failed' ? '' : 'desktop-connecting'}`}>
+      {progress === 'browser-open-failed' ? <AlertTriangle aria-hidden="true" /> : <LoaderCircle aria-hidden="true" />}
+    </div>
+    <span className="desktop-eyebrow">Waiting for browser approval</span>
+    <h1>{profile.name}</h1>
+    <p>{authenticationProgressMessage(progress)}</p>
+    <div className="desktop-connection-actions">
+      <button type="button" className="desktop-secondary-button" onClick={onCancel}>Cancel sign in</button>
+      <button type="button" className="desktop-link-button" onClick={onChoose}>Choose another instance</button>
+    </div>
+  </main>
+);
 
 export const ManagedRecoveryReview = ({ profile, onCancel, onConfirm }: {
   profile: DesktopProfile;

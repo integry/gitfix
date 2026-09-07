@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ProprClientError } from '@propr/client';
 import type { App, IpcMain, IpcMainInvokeEvent, Session } from 'electron';
 import type { DesktopCredentialService } from './credential-service';
 import { DeepLinkDelivery, type DeepLinkWindow } from './deep-link-delivery';
@@ -258,9 +259,12 @@ describe('desktop IPC shutdown gate', () => {
       senderFrame: { url: 'propr-renderer://app/index.html' },
     } as unknown as IpcMainInvokeEvent;
 
+    const admission = await Promise.resolve(handlers.get(IPC_CHANNELS.authenticationPairAdmit)!(
+      event, pairedProfile.id,
+    )) as { operationId: string };
     const result = await Promise.resolve(handlers.get(IPC_CHANNELS.authenticationPair)!(event, {
       id: pairedProfile.id, label: pairedProfile.label, apiBaseUrl: pairedProfile.apiBaseUrl,
-    }));
+    }, admission.operationId));
 
     assert.deepEqual(result, { paired: true });
     assert.deepEqual(pairedInput, {
@@ -268,6 +272,41 @@ describe('desktop IPC shutdown gate', () => {
     });
     assert.equal(listCalls, 1);
     assert.equal(reconciledOrigin, null);
+  });
+
+  it('reports a structured pairing failure as a rejected acceptance operation', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const operations: Array<[string, string]> = [];
+    registerIpcHandlers({
+      app: { getName: () => 'ProPR', getVersion: () => '0.8.15', isPackaged: true } as unknown as App,
+      ipcMain: {
+        handle: (channel: string, handler: (...args: any[]) => unknown) => { handlers.set(channel, handler); },
+        removeHandler: (channel: string) => { handlers.delete(channel); },
+      } as unknown as IpcMain,
+      profiles: {} as ProfileStore,
+      credentials: {
+        pair: async () => { throw new ProprClientError('private rejection', { kind: 'http', status: 403 }); },
+      } as unknown as DesktopCredentialService,
+      connectDiscovery,
+      lifecycle: {} as LocalLifecycleController,
+      logger: { log: () => undefined } as unknown as DesktopLogger,
+      desktopSession: {} as Session,
+      devServerUrl: undefined,
+      packagedRendererUrl: 'propr-renderer://app/index.html',
+      openExternal: async () => undefined,
+      reportAcceptanceOperation: (operation, status) => { operations.push([operation, status]); },
+    });
+    const event = { senderFrame: { url: 'propr-renderer://app/index.html' } } as IpcMainInvokeEvent;
+    const admission = await Promise.resolve(handlers.get(IPC_CHANNELS.authenticationPairAdmit)!(
+      event, 'profile-a',
+    )) as { operationId: string };
+
+    const result = await Promise.resolve(handlers.get(IPC_CHANNELS.authenticationPair)!(event, {
+      id: 'profile-a', label: 'A', apiBaseUrl: 'https://a.example.test',
+    }, admission.operationId));
+
+    assert.deepEqual(result, { paired: false, code: 'PAIRING_REJECTED' });
+    assert.deepEqual(operations, [['PAIR', 'REJECTED']]);
   });
 
   it('reconciles the renderer policy after setting a different active profile', async () => {
@@ -1069,8 +1108,11 @@ describe('desktop IPC shutdown gate', () => {
         : category === 'pairing'
           ? IPC_CHANNELS.authenticationPair
           : IPC_CHANNELS.authLogout;
+      const pairingAdmission = category === 'pairing'
+        ? await invoke(IPC_CHANNELS.authenticationPairAdmit, 'profile-a') as { operationId: string }
+        : null;
       const args = category === 'pairing'
-        ? [{ id: 'profile-a', label: 'A', apiBaseUrl: 'https://a.example.test' }]
+        ? [{ id: 'profile-a', label: 'A', apiBaseUrl: 'https://a.example.test' }, pairingAdmission!.operationId]
         : category === 'session' ? ['https://a.example.test'] : [];
       const admitted = invoke(channel, ...args);
       await started.promise;
