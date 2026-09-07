@@ -7,7 +7,6 @@ import { handleError } from '../utils/errorHandler.js';
 import { withRetry, retryConfigs } from '../utils/retryHandler.js';
 import { getIssueQueue } from '../queue/taskQueue.js';
 import { getPrimaryProcessingLabels, loadPrimaryProcessingLabelsFromConfig } from './configLoader.js';
-import { getGithubUserWhitelist } from '../utils/userWhitelist.js';
 import { isAuthorizedIssueTriggerActor } from './issueTriggerAuthorization.js';
 import type { DetectedIssue } from '../webhook/webhookHandler.js';
 import type { DeliveryDisposition } from '../intake/routingWebSocketProtocol.js';
@@ -424,7 +423,6 @@ export async function fetchIssuesForRepo(octokit: PaginatedOctokitInstance, repo
         }, `Found ${response.data.items.length} matching issues.`);
 
         const detected: DetectedIssue[] = [];
-        const hasWhitelist = getGithubUserWhitelist().length > 0;
 
         // Resolve label appliers with bounded concurrency to avoid N+1
         // sequential timeline API calls when many issues match at once.
@@ -434,24 +432,16 @@ export async function fetchIssuesForRepo(octokit: PaginatedOctokitInstance, repo
             const batch = items.slice(i, i + MAX_CONCURRENT_TIMELINE);
             const results = await Promise.all(batch.map(async (issue) => {
                 const labels = issue.labels.map(l => typeof l === 'string' ? l : l.name);
-                let triggeredBy: string | undefined = issue.user?.login;
-                let triggeredById: string | undefined = issue.user && Number.isSafeInteger(issue.user.id)
-                    ? String(issue.user.id)
-                    : undefined;
-                if (hasWhitelist) {
-                    const labelApplier = await resolveLabelApplierCached({
-                        octokit, owner, repo, issueNumber: issue.number,
-                        updatedAt: issue.updated_at, targetLabels: primaryProcessingLabels, log: correlatedLogger
-                    });
-                    if (labelApplier === null) {
-                        correlatedLogger.warn(
-                            { issueNumber: issue.number, repository: repoFullName },
-                            'Could not determine label applier — skipping issue (fail closed). Will retry on timeline lookup failures; if the label event is too old to appear in the recent timeline window, remove and re-apply the processing label, or raise LABEL_APPLIER_TIMELINE_MAX_PAGES.'
-                        );
-                        return null;
-                    }
-                    triggeredBy = labelApplier.login;
-                    triggeredById = labelApplier.userId;
+                const labelApplier = await resolveLabelApplierCached({
+                    octokit, owner, repo, issueNumber: issue.number,
+                    updatedAt: issue.updated_at, targetLabels: primaryProcessingLabels, log: correlatedLogger
+                });
+                if (labelApplier === null) {
+                    correlatedLogger.warn(
+                        { issueNumber: issue.number, repository: repoFullName },
+                        'Could not determine label applier — skipping issue (fail closed). Will retry on timeline lookup failures; if the label event is too old to appear in the recent timeline window, remove and re-apply the processing label, or raise LABEL_APPLIER_TIMELINE_MAX_PAGES.'
+                    );
+                    return null;
                 }
                 return {
                     id: issue.id,
@@ -463,8 +453,8 @@ export async function fetchIssuesForRepo(octokit: PaginatedOctokitInstance, repo
                     labels,
                     createdAt: issue.created_at,
                     updatedAt: issue.updated_at,
-                    triggeredBy,
-                    ...(triggeredById ? { triggeredById } : {}),
+                    triggeredBy: labelApplier.login,
+                    triggeredById: labelApplier.userId,
                     source: 'polling' as const
                 };
             }));

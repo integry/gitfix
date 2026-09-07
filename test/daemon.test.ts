@@ -30,10 +30,14 @@ interface MockIssue {
 }
 
 type PaginateFn = (endpoint: string, options: Record<string, unknown>) => Promise<unknown>;
+type RequestFn = (endpoint: string, options: Record<string, unknown>) => Promise<unknown>;
 
-/** Build a minimal octokit whose only used method is `paginate`. */
-function makeOctokit(paginate: PaginateFn) {
-    return { paginate: mock.fn(paginate) } as never;
+/** Build a minimal octokit for issue listing and trigger-actor resolution. */
+function makeOctokit(
+    paginate: PaginateFn,
+    request: RequestFn = async () => ({ data: [], headers: {} }),
+) {
+    return { paginate: mock.fn(paginate), request: mock.fn(request) } as never;
 }
 
 before(async () => {
@@ -78,7 +82,7 @@ test('fetchIssuesForRepo queries the issues API by primary label with exclusions
     });
 });
 
-test('fetchIssuesForRepo maps issues to DetectedIssue records', async () => {
+test('fetchIssuesForRepo assigns polling ownership to the label applier, not the issue author', async () => {
     const mockIssue: MockIssue = {
         id: 123,
         number: 1,
@@ -87,9 +91,19 @@ test('fetchIssuesForRepo maps issues to DetectedIssue records', async () => {
         labels: [{ name: 'AI' }, { name: 'bug' }],
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-02T00:00:00Z',
-        user: { id: 583231, login: 'octocat' },
+        user: { id: 583231, login: 'issue-author' },
     };
-    const octokit = makeOctokit(async () => [mockIssue]);
+    const octokit = makeOctokit(
+        async () => [mockIssue],
+        async () => ({
+            data: [{
+                event: 'labeled',
+                label: { name: 'AI' },
+                actor: { id: 991188, login: 'label-applier' },
+            }],
+            headers: {},
+        }),
+    );
 
     const issues = await fetchIssuesForRepo(octokit, 'owner/repo', CORRELATION_ID);
 
@@ -104,9 +118,8 @@ test('fetchIssuesForRepo maps issues to DetectedIssue records', async () => {
         labels: ['AI', 'bug'],
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-02T00:00:00Z',
-        // No whitelist configured → the issue author owns the polling job.
-        triggeredBy: 'octocat',
-        triggeredById: '583231',
+        triggeredBy: 'label-applier',
+        triggeredById: '991188',
         source: 'polling',
     });
 });
@@ -127,7 +140,17 @@ test('fetchIssuesForRepo excludes pull requests and -processing/-done labels', a
         // The only one that should be returned.
         { ...base, id: 4, number: 4, title: 'Fresh', html_url: 'u/4', labels: [{ name: 'AI' }] },
     ];
-    const octokit = makeOctokit(async () => items);
+    const octokit = makeOctokit(
+        async () => items,
+        async () => ({
+            data: [{
+                event: 'labeled',
+                label: { name: 'AI' },
+                actor: { id: 991188, login: 'label-applier' },
+            }],
+            headers: {},
+        }),
+    );
 
     const issues = await fetchIssuesForRepo(octokit, 'owner/repo', CORRELATION_ID);
 
