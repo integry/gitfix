@@ -195,10 +195,19 @@ const NETWORK_HOST_PATTERN = new RegExp(
 );
 function isIpLiteral(value: string): boolean {
   const ipv4Parts = value.split('.');
-  if (ipv4Parts.length === 4) {
-    return ipv4Parts.every(part => (
-      /^\d{1,3}$/.test(part) && Number(part) <= 255
-    ));
+  const isLegacyIpv4Candidate = ipv4Parts.length > 1
+    || /^0x/i.test(value)
+    || (/^\d+$/.test(value) && Number(value) > 0xFF_FF_FF);
+  if (
+    isLegacyIpv4Candidate
+    && /^(?:0x[\da-f]+|\d+)(?:\.(?:0x[\da-f]+|\d+)){0,3}$/i.test(value)
+  ) {
+    try {
+      // URL normalizes valid decimal, octal, hexadecimal, and 1-4 component IPv4.
+      return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(new URL(`http://${value}/`).hostname);
+    } catch {
+      return false;
+    }
   }
 
   if (!value.includes(':')) return false;
