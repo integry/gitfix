@@ -44,7 +44,7 @@ const waitForProcessExit = async (processId, {
         const processState = (await readProcessStat(processId)).split(' ')[2];
         if (processState === 'Z') return;
       } catch (error) {
-        if (error?.code === 'ENOENT') return;
+        if (error?.code === 'ENOENT' || error?.code === 'ESRCH') return;
         throw error;
       }
     }
@@ -73,6 +73,38 @@ test('observes Linux process exit when proc stat disappears after the liveness c
     wait: async () => assert.fail('missing proc stat should observe process exit without retrying'),
   });
   assert.equal(procStatReads, 1);
+});
+
+test('observes Linux process exit when proc stat read reports ESRCH after the liveness check', async () => {
+  const processId = 2178;
+  let livenessChecked = false;
+  let procStatReads = 0;
+  await waitForProcessExit(processId, {
+    platform: 'linux',
+    killProcess: (observedProcessId, signal) => {
+      assert.equal(observedProcessId, processId);
+      assert.equal(signal, 0);
+      livenessChecked = true;
+    },
+    readProcessStat: async observedProcessId => {
+      assert.equal(observedProcessId, processId);
+      assert.equal(livenessChecked, true);
+      procStatReads += 1;
+      throw Object.assign(new Error('proc stat process disappeared'), { code: 'ESRCH' });
+    },
+    wait: async () => assert.fail('ESRCH proc stat read should observe process exit without retrying'),
+  });
+  assert.equal(procStatReads, 1);
+});
+
+test('propagates unexpected Linux proc stat read errors', async () => {
+  const unexpectedError = Object.assign(new Error('proc stat read failed'), { code: 'EIO' });
+  await assert.rejects(waitForProcessExit(2178, {
+    platform: 'linux',
+    killProcess: () => {},
+    readProcessStat: async () => { throw unexpectedError; },
+    wait: async () => assert.fail('unexpected proc stat errors should propagate without retrying'),
+  }), error => error === unexpectedError);
 });
 
 test('bounds output while continuously draining both child streams', async () => {
