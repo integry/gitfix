@@ -98,6 +98,11 @@ export function createTaskRoutes(deps: TaskRoutesDeps) {
         return;
       }
       const { requestingUser, systemTaskSecret } = authResult;
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({ error: 'Unable to determine requesting user ID' });
+        return;
+      }
 
       // --- GitHub lookups (only after basic authorization passes) ---
 
@@ -128,7 +133,7 @@ export function createTaskRoutes(deps: TaskRoutesDeps) {
 
       const jobData = buildRevertJobData({
         owner, repo, prNumber, commit: resolvedCommit, targetCommentId: targetCommentIdNum,
-        requestingUser, systemTaskSecret, branch, prHeadSha,
+        userId, requestingUser, systemTaskSecret, branch, prHeadSha,
         isFork: repoAccess.isFork, headRepoOwner: repoAccess.headRepoOwner, headRepoName: repoAccess.headRepoName
       });
 

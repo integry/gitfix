@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- service privacy and identity regressions share focused fixtures */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Knex } from 'knex';
@@ -255,6 +256,79 @@ test('running scope retains an active task that also has an attention notificati
   ]);
 });
 
+test('deduplicates task and pull request notifications joined by a later queue alias', async () => {
+  const queue: VoiceBriefingQueueSnapshot = {
+    active: [],
+    waiting: [job('bridge-job', 'Queue bridge', '2026-09-07T01:18:00.000Z', {
+      taskId: 'task-alias',
+      pullRequestNumber: 42,
+    })],
+    delayed: [],
+  };
+  const notifications = [
+    notification({
+      id: 'task-error',
+      severity: 'error',
+      title: 'Task failed',
+      target: { type: 'task', repository: 'integry/propr', taskId: 'task-alias' },
+      occurredAt: '2026-09-07T01:20:00.000Z',
+    }),
+    notification({
+      id: 'pr-warning',
+      severity: 'warning',
+      title: 'Pull request needs review',
+      target: { type: 'pull_request', repository: 'integry/propr', prNumber: 42 },
+      occurredAt: '2026-09-07T01:19:00.000Z',
+    }),
+  ];
+  const service = new VoiceBriefingService({
+    loaders: loaders({ queue, notifications }),
+    now: () => NOW,
+  });
+
+  const briefing = await service.getBriefing('authenticated-user');
+
+  assert.equal(briefing.counts.total, 1);
+  assert.equal(briefing.counts.attention, 1);
+  assert.deepEqual(briefing.items.map(item => [item.id, item.title]), [
+    ['task-alias', 'Task failed'],
+  ]);
+});
+
+test('queue authorization ignores identical and reassigned username snapshots', async () => {
+  const taskQueue = {
+    async getJobs(states: string[]) {
+      if (states[0] !== 'waiting') return [];
+      return [
+        {
+          ...job('owned-by-id', 'Owned after rename', NOW),
+          name: 'processTaskImport',
+          data: { userId: 'owner-user', user: 'previous-login' },
+        },
+        {
+          ...job('legacy-same-login', 'LEGACY PRIVATE TITLE', NOW),
+          name: 'processTaskImport',
+          data: { user: 'shared-login' },
+        },
+        {
+          ...job('reassigned-login', 'REASSIGNED PRIVATE TITLE', NOW),
+          name: 'processSystemTask',
+          data: { userId: 'different-user', requestingUser: 'shared-login' },
+        },
+      ];
+    },
+  };
+  const dataLoaders = createVoiceBriefingDataLoaders({
+    database: (() => { throw new Error('queue authorization must not load mutable usernames'); }) as unknown as Knex,
+    taskQueue: taskQueue as never,
+    notificationService: { listNotifications: async () => { throw new Error('unused'); } },
+  });
+
+  const snapshot = await dataLoaders.loadQueueJobs('owner-user');
+
+  assert.deepEqual(snapshot.waiting.map(queueJob => queueJob.id), ['owned-by-id']);
+});
+
 test('production loaders authorize queue jobs, constrain plans, and page notifications', async () => {
   const queryTrace: Array<[string, unknown]> = [];
   const planRows = [{
@@ -275,23 +349,9 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
       return Promise.resolve(planRows);
     },
   };
-  const memberQuery = {
-    select(...columns: string[]) {
-      queryTrace.push(['select', columns]);
-      return this;
-    },
-    where(value: unknown) {
-      queryTrace.push(['where', value]);
-      return this;
-    },
-    first() {
-      queryTrace.push(['first', undefined]);
-      return Promise.resolve({ github_username: 'Owner-Login' });
-    },
-  };
   const database = ((table: string) => {
     queryTrace.push(['table', table]);
-    return table === 'instance_members' ? memberQuery : planQuery;
+    return planQuery;
   }) as unknown as Knex;
   const queueStates: string[][] = [];
   const taskQueue = {
@@ -313,7 +373,7 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
           {
             ...job('owned-import', 'Owned import', NOW),
             name: 'processTaskImport',
-            data: { repository: 'integry/propr', user: 'owner-login' },
+            data: { repository: 'integry/propr', userId: 'owner-user', user: 'owner-login' },
           },
           job('unowned-waiting', 'UNOWNED WAITING TITLE', NOW),
         ];
@@ -382,10 +442,6 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
   assert.deepEqual(loadedPlans, planRows);
   assert.deepEqual(loadedNotifications, []);
   assert.deepEqual(queryTrace, [
-    ['table', 'instance_members'],
-    ['select', ['github_username']],
-    ['where', { github_user_id: 'owner-user' }],
-    ['first', undefined],
     ['table', 'task_drafts'],
     ['select', ['draft_id', 'repository', 'status', 'updated_at']],
     ['where', { user_id: 'owner-user' }],

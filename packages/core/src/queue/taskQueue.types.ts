@@ -98,6 +98,8 @@ export interface TaskImportJobData {
     taskDescription: string;
     repository: string;
     correlationId: string;
+    /** Stable GitHub user ID used for user-scoped views. */
+    userId: string;
     user?: string;
 }
 
@@ -117,6 +119,8 @@ export interface SystemTaskJobData {
     prBranch: string;
     owner: string;
     correlationId: string;
+    /** Stable GitHub user ID used for user-scoped views. */
+    userId: string;
     requestingUser: string;
     authToken: string;
     authTimestamp: number;

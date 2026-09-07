@@ -78,11 +78,6 @@ interface NormalizedQueueEntry {
   stableId: string;
 }
 
-interface QueueRecipientIdentity {
-  userId: string;
-  githubUsername?: string;
-}
-
 /**
  * Construct production data loaders. Only explicitly allowlisted columns and fields
  * cross the data-loading boundary; draft prompts and notification metadata are never
@@ -93,16 +88,15 @@ export function createVoiceBriefingDataLoaders(
 ): VoiceBriefingDataLoaders {
   return {
     async loadQueueJobs(userId) {
-      const recipient = await loadQueueRecipientIdentity(dependencies.database, userId);
       const [active, waiting, delayed] = await Promise.all([
         dependencies.taskQueue.getJobs(['active']),
         dependencies.taskQueue.getJobs(['waiting']),
         dependencies.taskQueue.getJobs(['delayed']),
       ]);
       return {
-        active: active.filter(job => queueJobBelongsToRecipient(job, recipient)),
-        waiting: waiting.filter(job => queueJobBelongsToRecipient(job, recipient)),
-        delayed: delayed.filter(job => queueJobBelongsToRecipient(job, recipient)),
+        active: active.filter(job => queueJobBelongsToRecipient(job, userId)),
+        waiting: waiting.filter(job => queueJobBelongsToRecipient(job, userId)),
+        delayed: delayed.filter(job => queueJobBelongsToRecipient(job, userId)),
       } as VoiceBriefingQueueSnapshot;
     },
 
@@ -225,39 +219,12 @@ async function loadAllAuthorizedNotifications(
   return notifications;
 }
 
-async function loadQueueRecipientIdentity(
-  database: Knex,
-  userId: string,
-): Promise<QueueRecipientIdentity> {
-  const member = await database('instance_members')
-    .select('github_username')
-    .where({ github_user_id: userId })
-    .first() as { github_username?: unknown } | undefined;
-  const username = nonEmptyString(member?.github_username);
-  return {
-    userId,
-    ...(username ? { githubUsername: username } : {}),
-  };
-}
-
 function queueJobBelongsToRecipient(
   job: VoiceBriefingQueueJob,
-  recipient: QueueRecipientIdentity,
+  userId: string,
 ): boolean {
   const data = recordValue(job.data);
-  const explicitOwnerIds = [data.userId, data.user_id, data.githubUserId];
-  if (explicitOwnerIds.some(value => nonEmptyString(value) === recipient.userId)) return true;
-
-  const username = recipient.githubUsername;
-  if (!username) return false;
-  const producerAuthenticatedOwners = job.name === 'processTaskImport'
-    ? [data.user]
-    : job.name === 'processSystemTask' ? [data.requestingUser] : [];
-
-  return producerAuthenticatedOwners.some(value => {
-    const owner = nonEmptyString(value);
-    return owner ? owner.toLowerCase() === username.toLowerCase() : false;
-  });
+  return nonEmptyString(data.userId) === userId;
 }
 
 function normalizeQueueEntries(snapshot: VoiceBriefingQueueSnapshot): NormalizedQueueEntry[] {
@@ -503,12 +470,39 @@ function repositoryFromJobData(data: Record<string, unknown>): string | null {
 
 function deduplicateCandidates(candidates: CandidateItem[]): CandidateItem[] {
   const sorted = [...candidates].sort(compareCandidates);
-  const seen = new Set<string>();
-  return sorted.filter(candidate => {
-    const duplicate = candidate.identities.some(identity => seen.has(identity));
-    candidate.identities.forEach(identity => seen.add(identity));
-    return !duplicate;
+  const parents = sorted.map((_, index) => index);
+  const identityOwners = new Map<string, number>();
+
+  const find = (index: number): number => {
+    let root = index;
+    while (parents[root] !== root) root = parents[root];
+    while (parents[index] !== index) {
+      const parent = parents[index];
+      parents[index] = root;
+      index = parent;
+    }
+    return root;
+  };
+  const union = (left: number, right: number): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+  };
+
+  sorted.forEach((candidate, index) => {
+    candidate.identities.forEach(identity => {
+      const owner = identityOwners.get(identity);
+      if (owner === undefined) identityOwners.set(identity, index);
+      else union(index, owner);
+    });
   });
+
+  const representatives = new Map<number, number>();
+  sorted.forEach((_, index) => {
+    const root = find(index);
+    if (!representatives.has(root)) representatives.set(root, index);
+  });
+  return sorted.filter((_, index) => representatives.get(find(index)) === index);
 }
 
 function compareCandidates(left: CandidateItem, right: CandidateItem): number {

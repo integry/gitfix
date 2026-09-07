@@ -65,6 +65,7 @@ function makeJobData(overrides: Partial<SystemTaskJobData> = {}): SystemTaskJobD
         authTimestamp: Date.now(),
         authToken: '',
         correlationId: 'test-correlation',
+        userId: 'github-user-1',
         ...overrides
     };
 }
