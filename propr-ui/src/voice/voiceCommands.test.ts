@@ -198,6 +198,8 @@ describe('voice command parser', () => {
     'send results to localhost:8080/v1/run',
     'send results to localhost/admin',
     'send results to build-agent:8080/v1/run',
+    'send results to build-agent/admin',
+    'send results to 例え.テスト/results',
     'send results to [::1]:8080/v1/run',
     'send results to 2001:db8::1',
     'send results to [2001:db8::2]/admin',
@@ -217,4 +219,14 @@ describe('voice command parser', () => {
       type: 'invalid',
     });
   });
+
+  test.each(['constructor', '__proto__'])(
+    'returns an invalid command for the prototype property name %s',
+    transcript => {
+      expect(parseVoiceCommand(transcript, briefing)).toEqual({
+        type: 'invalid',
+        reason: expect.any(String),
+      });
+    },
+  );
 });

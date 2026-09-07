@@ -210,7 +210,7 @@ function isIpLiteral(value: string): boolean {
   }
 }
 
-function containsIpEndpoint(value: string): boolean {
+function containsAuthorityEndpoint(value: string): boolean {
   return value.split(/\s+/).some(rawToken => {
     const token = rawToken
       .replace(/^["'({<=>]+/, '')
@@ -229,11 +229,9 @@ function containsIpEndpoint(value: string): boolean {
 
     if (!/[:/?#]/.test(token)) return false;
     try {
-      // Endpoint context disambiguates legacy abbreviated, integer,
-      // hexadecimal, and octal IPv4 forms from ordinary numeric prose.
-      const hostname = new URL(`http://${token}`).hostname;
-      const unbracketedHostname = hostname.replace(/^\[|\]$/g, '');
-      return isIpLiteral(unbracketedHostname);
+      // Requiring endpoint punctuation keeps ordinary words out while allowing
+      // URL to validate IP literals, internal hosts, and internationalized hosts.
+      return new URL(`http://${token}`).hostname.length > 0;
     } catch {
       // Bare IPv6 literals require brackets in URLs and were checked above.
       return false;
@@ -247,7 +245,7 @@ function containsEndpoint(value: string): boolean {
     || ROOT_RELATIVE_PATH_PATTERN.test(value)
     || BARE_HOST_PATTERN.test(value)
     || NETWORK_HOST_PATTERN.test(value)
-    || containsIpEndpoint(value);
+    || containsAuthorityEndpoint(value);
 }
 
 function parseFollowUp(
@@ -311,8 +309,9 @@ export function parseVoiceCommand(
   if (!text) return invalid('No voice command was recognized.');
 
   const simpleText = text.replace(/[.!?]+$/, '').trim().toLowerCase();
-  const simpleCommand = SIMPLE_COMMANDS[simpleText];
-  if (simpleCommand) return simpleCommand;
+  if (Object.prototype.hasOwnProperty.call(SIMPLE_COMMANDS, simpleText)) {
+    return SIMPLE_COMMANDS[simpleText];
+  }
 
   const directAction = parseDirectAction(text, latestBriefing);
   if (directAction) return directAction;
