@@ -52,6 +52,7 @@ import {
 } from './packaged-approval-session';
 import { createDesktopShutdownCoordinator } from './shutdown';
 import { createDesktopTrayController } from './system-tray';
+import { createMainWindowRestorer } from './main-window-restoration';
 import { DesktopSetupController } from './setup-controller';
 import { promptForWebhookSecret } from './secure-secret-prompt';
 import {
@@ -1423,20 +1424,15 @@ const createMainWindow = async (
   return window;
 };
 
-const restoreMainWindow = (): void => {
-  if (shutdownStarted) return;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-    return;
-  }
-  void createMainWindow(null).then(window => {
-    mainWindow = window;
-    window.show();
-    window.focus();
-  }).catch(error => log('error', 'desktop.window.restore_failed', { error }));
-};
+const mainWindowRestorer = createMainWindowRestorer({
+  getWindow: () => mainWindow,
+  setWindow: window => { mainWindow = window; },
+  createWindow: () => createMainWindow(null),
+  shutdownStarted: () => shutdownStarted,
+  creationFailed: error => log('error', 'desktop.window.restore_failed', { error }),
+});
+
+const restoreMainWindow = (): void => mainWindowRestorer.restore();
 
 app.on('open-url', (event, url) => {
   event.preventDefault();
