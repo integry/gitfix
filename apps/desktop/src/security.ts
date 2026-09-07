@@ -193,6 +193,9 @@ export const deepLinkFromArguments = (argv: readonly string[]): string | null =>
   return null;
 };
 
+export const hasExactArgument = (argv: readonly string[], expected: string): boolean =>
+  argv.some(argument => argument === expected);
+
 const rendererConnectSources = (
   development: boolean,
   apiBaseUrls: readonly string[],

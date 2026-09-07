@@ -55,6 +55,7 @@ import { promptForWebhookSecret } from './secure-secret-prompt';
 import {
   createLatestRendererReloader,
   deepLinkFromArguments,
+  hasExactArgument,
   isSafeExternalUrl,
   isTrustedRendererUrl,
   normalizeApiBaseUrl,
@@ -467,8 +468,10 @@ function maybeCompleteNativeFirstLaunch(): void {
 
 const recordNativeRejectedArguments = (argv: readonly string[]): void => {
   if (nativeSmokePhase !== 'first') return;
-  if (argv.includes('native-evidence-malformed')) recordNativeEvent('desktop.deeplink.rejected_malformed');
-  if (argv.includes('https://native-evidence.invalid/unsafe')) {
+  if (hasExactArgument(argv, 'native-evidence-malformed')) {
+    recordNativeEvent('desktop.deeplink.rejected_malformed');
+  }
+  if (hasExactArgument(argv, 'https://native-evidence.invalid/unsafe')) {
     recordNativeEvent('desktop.deeplink.rejected_unsafe_scheme');
   }
   if (argv.some(value => value.length > 2_048 && value.startsWith('propr://connect?api='))) {
