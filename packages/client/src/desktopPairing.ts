@@ -265,7 +265,15 @@ export const completeDesktopPairing = async (
 
     while (true) {
       const remainingBeforeSleep = requireRemainingLifetime();
-      const delay = safeDelay(Math.min(intervalSeconds * 1000, remainingBeforeSleep));
+      const intervalMilliseconds = intervalSeconds * 1000;
+      if (intervalMilliseconds >= remainingBeforeSleep) {
+        // There is no valid poll instant before expiry. Waiting on a second
+        // timer clamped to the deadline makes its callback race the lifetime
+        // timer and can start a poll at the terminal boundary when schedulers
+        // disagree about which callback is due first.
+        await raceLifetime(new Promise<never>(() => undefined));
+      }
+      const delay = safeDelay(intervalMilliseconds);
       await raceLifetime(sleep(delay, lifetimeController.signal));
       const remaining = requireRemainingLifetime();
 

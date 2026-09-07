@@ -661,6 +661,9 @@ try {
         discoveryAuthorizationPresent: discoveries.some(request => request.authorization !== null),
         pairingStartCount: pairingStarts.length,
         pairingBrowserCount: pairingBrowsers.length,
+        pairingExpiryPollPresent: pairingPolls.some(request => request.fixtureMode === 'expiry'),
+        pairingCancelPollPresent: pairingPolls.some(request => request.fixtureMode === 'cancel'),
+        pairingSuccessPollCount: pairingPolls.filter(request => request.fixtureMode === 'success').length,
         pairingPollCount: pairingPolls.length,
         pairingActivationCount: pairingActivations.length,
         pairingMethodBoundaryValid: bootstrap.length === pairingStarts.length

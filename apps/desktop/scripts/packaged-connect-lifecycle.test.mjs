@@ -97,7 +97,7 @@ const run = ({ app = new FakeChild(), onApp, onKiller, ...options } = {}) => {
 };
 
 describe('packaged Connect bounded child lifecycle', () => {
-  test('requires exact three starts, three browser approvals, one poll, and one activation', async () => {
+  test('requires exact starts and approvals, no negative poll, one success poll, and one activation', async () => {
     const harness = await readFile(new URL('./smoke-packaged-connect.mjs', import.meta.url), 'utf8');
     const accounting = harness.slice(
       harness.indexOf('const evidenceFailure = evaluatePackagedConnectEvidence'),
@@ -105,6 +105,9 @@ describe('packaged Connect bounded child lifecycle', () => {
     );
     assert.match(accounting, /pairingStartCount: pairingStarts\.length/u);
     assert.match(accounting, /pairingBrowserCount: pairingBrowsers\.length/u);
+    assert.match(accounting, /pairingExpiryPollPresent: pairingPolls\.some/u);
+    assert.match(accounting, /pairingCancelPollPresent: pairingPolls\.some/u);
+    assert.match(accounting, /pairingSuccessPollCount: pairingPolls\.filter/u);
     assert.match(accounting, /pairingPollCount: pairingPolls\.length/u);
     assert.match(accounting, /pairingActivationCount: pairingActivations\.length/u);
 
@@ -112,6 +115,9 @@ describe('packaged Connect bounded child lifecycle', () => {
     assert.match(evaluator, /evidence\.pairingStartCount < 3/u);
     assert.match(evaluator, /evidence\.pairingStartCount > 3/u);
     assert.match(evaluator, /evidence\.pairingBrowserCount !== 3/u);
+    assert.match(evaluator, /evidence\.pairingExpiryPollPresent/u);
+    assert.match(evaluator, /evidence\.pairingCancelPollPresent/u);
+    assert.match(evaluator, /evidence\.pairingSuccessPollCount !== 1/u);
     assert.match(evaluator, /evidence\.pairingPollCount !== 1/u);
     assert.match(evaluator, /evidence\.pairingActivationCount !== 1/u);
     assert.match(harness, /request\.method === 'POST'[\s\S]*?request\.url === '\/api\/desktop\/pairings'/u);

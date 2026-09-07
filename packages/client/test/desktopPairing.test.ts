@@ -546,8 +546,11 @@ describe('desktop instance protocol', () => {
   });
 
   it('aborts a hung poll at the advertised deadline and reports expiry', async () => {
-    const expiresAt = new Date(protocolNow + 40).toISOString();
+    const pairingClock = new PairingClock();
+    const expiresAt = new Date(protocolNow + 1_040).toISOString();
     const sleeps: number[] = [];
+    let pollStarted!: () => void;
+    const polling = new Promise<void>(resolve => { pollStarted = resolve; });
     const client = new ProprClient({
       baseUrl: 'https://propr.example.test',
       fetch: async (input, init) => {
@@ -558,18 +561,23 @@ describe('desktop instance protocol', () => {
           expiresAt,
           interval: 1,
         }, 201);
+        pollStarted();
         return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener('abort', () => reject(new DOMException('expired', 'AbortError')), { once: true });
         });
       },
     });
 
-    await assert.rejects(client.pairDesktop('Desktop', {
-      now: () => protocolNow,
+    const pairing = client.pairDesktop('Desktop', {
+      clock: pairingClock.source,
+      now: () => protocolNow + pairingClock.source.now(),
       sleep: async milliseconds => { sleeps.push(milliseconds); },
-    }), (error: unknown) =>
+    });
+    await polling;
+    await pairingClock.advanceAfterSchedulerDelay(1_040);
+    await assert.rejects(pairing, (error: unknown) =>
       error instanceof ProprClientError && error.code === 'PAIRING_EXPIRED');
-    assert.deepEqual(sleeps, [40]);
+    assert.deepEqual(sleeps, [1_000]);
   });
 
   for (const lateSettlement of ['microtask', 'next-task'] as const) {
@@ -577,7 +585,7 @@ describe('desktop instance protocol', () => {
       const { completeDesktopPairing } = await import('../src/index.js');
       const pairingClock = new PairingClock();
       const transportClock = new PairingClock();
-      const expiresAt = new Date(protocolNow + 40).toISOString();
+      const expiresAt = new Date(protocolNow + 1_040).toISOString();
       let lateResponseResolved = false;
       let pollStarted!: () => void;
       const polling = new Promise<void>(resolve => { pollStarted = resolve; });
@@ -620,8 +628,8 @@ describe('desktop instance protocol', () => {
       await polling;
       // The transport scheduler reaches the shared boundary while the pairing
       // scheduler remains stalled. This deterministically reproduces hosted
-      // load without relying on a real 40 ms timer race.
-      await transportClock.advanceAfterSchedulerDelay(75);
+      // load without relying on a real timer race.
+      await transportClock.advanceAfterSchedulerDelay(1_075);
       await assert.rejects(bounded(pairing), (error: unknown) =>
         error instanceof ProprClientError && error.code === 'PAIRING_EXPIRED');
       await new Promise<void>(resolve => setImmediate(resolve));
@@ -716,24 +724,37 @@ describe('desktop instance protocol', () => {
     }
   });
 
-  it('clamps a valid polling interval to the remaining advertised deadline', async () => {
+  it('does not schedule a poll timer at or beyond the advertised deadline', async () => {
     const { completeDesktopPairing } = await import('../src/index.js');
-    let now = protocolNow;
+    const pairingClock = new PairingClock();
     const sleeps: number[] = [];
-    const client = new ProprClient({ fetch: async () => { throw new Error('must not poll after deadline'); } });
-    await assert.rejects(completeDesktopPairing(client, {
+    let polls = 0;
+    const client = new ProprClient({ fetch: async () => {
+      polls += 1;
+      throw new Error('must not poll at or after deadline');
+    } });
+    const pairing = completeDesktopPairing(client, {
       pairingId: `dpr_${'A'.repeat(22)}`,
       deviceSecret: 'B'.repeat(43),
       approvalUrl: 'https://propr.example.test/approve',
-      expiresAt: new Date(protocolNow + 500).toISOString(),
-      interval: 60,
+      expiresAt: new Date(protocolNow + 200).toISOString(),
+      interval: 1,
     }, {
-      now: () => now,
+      clock: pairingClock.source,
+      now: () => protocolNow + pairingClock.source.now(),
       sleep: async milliseconds => {
         sleeps.push(milliseconds);
-        now += milliseconds;
       },
-    }), (error: unknown) => error instanceof ProprClientError && error.code === 'PAIRING_EXPIRED');
-    assert.deepEqual(sleeps, [500]);
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(sleeps, []);
+    assert.equal(polls, 0);
+    await pairingClock.advanceAfterSchedulerDelay(200);
+    await assert.rejects(pairing, (error: unknown) =>
+      error instanceof ProprClientError && error.code === 'PAIRING_EXPIRED');
+    await pairingClock.advanceAfterSchedulerDelay(1_000);
+    assert.equal(polls, 0);
   });
 });
