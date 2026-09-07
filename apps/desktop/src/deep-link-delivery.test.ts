@@ -307,6 +307,7 @@ describe('desktop deep-link delivery', () => {
 
     assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), false);
     mainFrame.frameToken = 'incoming-document';
+    delivery.didCommitMainFrameNavigation(window);
     delivery.didFinishLoad(window);
     assert.equal(sent.length, 0);
 
@@ -323,9 +324,56 @@ describe('desktop deep-link delivery', () => {
     await delivery.whenIdle();
   });
 
-  it('accepts initial readiness after Electron commits into the reused main-frame wrapper', async () => {
+  it('requires fresh readiness after a committed navigation reuses the render-frame identity', async () => {
     const sent: DesktopDeepLinkDelivery[] = [];
-    const mainFrame = { frameToken: 'initial-empty-document', processId: 1 };
+    const mainFrame = { frameToken: 'reused-render-frame', processId: 1 };
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        isLoading: () => false,
+        mainFrame,
+        send: (_channel, value) => sent.push(value),
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      ['propr://connect?api=http%3A%2F%2Flocalhost%3A44111'],
+      undefined,
+      undefined,
+      Date.now,
+      1_000,
+      20,
+      true,
+    );
+
+    delivery.setWindow(window);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
+    assert.equal(sent.length, 1);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[0],
+      consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
+    }), true);
+    await delivery.whenIdle();
+
+    delivery.didStartMainFrameNavigation(window);
+    delivery.deliver('propr://open?path=%2Ftasks');
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), false);
+    delivery.didCommitMainFrameNavigation(window);
+    delivery.didFinishLoad(window);
+    assert.equal(sent.length, 1, 'outgoing readiness must not survive the commit');
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
+    assert.equal(sent.length, 2);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[1],
+      consumption: { kind: 'open-queued', target: '/tasks' },
+    }), true);
+    await delivery.whenIdle();
+  });
+
+  it('accepts initial readiness after commit when Electron reuses the initial frame identity', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const mainFrame = { frameToken: 'initial-and-renderer-document', processId: 1 };
     const window: DeepLinkWindow = {
       isDestroyed: () => false,
       webContents: {
@@ -346,11 +394,11 @@ describe('desktop deep-link delivery', () => {
     );
 
     delivery.didStartMainFrameNavigation(window);
-    mainFrame.frameToken = 'loaded-renderer-document';
+    delivery.didCommitMainFrameNavigation(window);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
     delivery.didFinishLoad(window);
     delivery.setWindow(window);
 
-    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
     assert.equal(sent.length, 1);
     assert.equal(delivery.acknowledge(window, {
       ...sent[0],

@@ -38,6 +38,8 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   private window: TWindow | null = null;
   private readonly readyRendererDocuments = new WeakMap<object, string>();
   private readonly staleRendererDocuments = new WeakMap<object, Set<string>>();
+  private readonly pendingMainFrameNavigations = new WeakSet<object>();
+  private readonly outgoingRendererDocuments = new WeakMap<object, string>();
   private readonly recentlyAccepted = new Map<string, number>();
   private deliveryId = 0;
   private draining = false;
@@ -95,13 +97,28 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
 
   didStartMainFrameNavigation(window: TWindow): void {
     const { webContents } = window;
-    // Electron retains the WebFrameMain wrapper across document swaps while
-    // replacing its render-frame identity, so stale the identity, not the wrapper.
+    this.readyRendererDocuments.delete(webContents);
+    this.pendingMainFrameNavigations.add(webContents);
     const documentId = rendererDocumentId(webContents.mainFrame);
     if (documentId === null) return;
+    this.outgoingRendererDocuments.set(webContents, documentId);
     const stale = this.staleRendererDocuments.get(webContents) ?? new Set<string>();
     stale.add(documentId);
     this.staleRendererDocuments.set(webContents, stale);
+  }
+
+  didCommitMainFrameNavigation(window: TWindow): void {
+    const { webContents } = window;
+    this.pendingMainFrameNavigations.delete(webContents);
+    const outgoingDocumentId = this.outgoingRendererDocuments.get(webContents);
+    this.outgoingRendererDocuments.delete(webContents);
+    const currentDocumentId = rendererDocumentId(webContents.mainFrame);
+    if (currentDocumentId !== null && currentDocumentId === outgoingDocumentId) {
+      // Electron 44 can retain both its WebFrameMain wrapper and render-frame
+      // identity for a same-process document navigation. The commit is the
+      // boundary that makes that reused identity safe for the incoming document.
+      this.staleRendererDocuments.get(webContents)?.delete(currentDocumentId);
+    }
   }
 
   /** Starts delivery only after the renderer has installed its consumer. */
@@ -111,6 +128,7 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
       || (typeof senderFrame !== 'object' && typeof senderFrame !== 'function') || senderFrame === null
       || !('mainFrame' in sender) || sender.mainFrame !== senderFrame
       || documentId === null
+      || this.pendingMainFrameNavigations.has(sender)
       || this.staleRendererDocuments.get(sender)?.has(documentId)) return false;
     this.readyRendererDocuments.set(sender, documentId);
     if (this.window?.webContents === sender) void this.drain();
@@ -127,6 +145,8 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
       this.window = null;
       this.readyRendererDocuments.delete(window.webContents);
       this.staleRendererDocuments.delete(window.webContents);
+      this.pendingMainFrameNavigations.delete(window.webContents);
+      this.outgoingRendererDocuments.delete(window.webContents);
     }
   }
 

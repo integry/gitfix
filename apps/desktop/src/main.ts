@@ -1254,6 +1254,9 @@ const createMainWindow = async (
       deepLinkDelivery.didStartMainFrameNavigation(window);
     }
   });
+  window.webContents.on('did-navigate', () => {
+    deepLinkDelivery.didCommitMainFrameNavigation(window);
+  });
   window.on('closed', () => {
     deepLinkDelivery.clearWindow(window);
     if (mainWindow === window) {
