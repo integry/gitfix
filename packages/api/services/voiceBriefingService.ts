@@ -17,7 +17,13 @@ import {
 
 export const VOICE_BRIEFING_DETAIL_LIMIT = 8;
 const NOTIFICATION_PAGE_SIZE = 100;
-const INCLUDED_PLAN_STATUSES = ['generating', 'executing', 'review', 'approved'] as const;
+const INCLUDED_PLAN_STATUSES = [
+  'generating',
+  'refining',
+  'executing',
+  'review',
+  'approved',
+] as const;
 
 export type VoiceBriefingQueueState = 'active' | 'waiting' | 'delayed';
 
@@ -71,6 +77,8 @@ interface CandidateItem extends Omit<VoiceBriefingItem, 'reference' | 'position'
   priority: number;
   workClass: WorkClass;
 }
+
+type CandidateComponent = readonly CandidateItem[];
 
 interface NormalizedQueueEntry {
   job: VoiceBriefingQueueJob;
@@ -145,15 +153,18 @@ export class VoiceBriefingService {
       ...planCandidates,
       ...queueCandidates,
     ];
-    const allCandidates = deduplicateCandidates(rawCandidates);
-    const attentionCandidates = deduplicateCandidates(
-      allCandidates.filter(candidate => candidate.requiresAttention),
+    const components = buildCandidateComponents(rawCandidates);
+    const allCandidates = selectComponentRepresentatives(components);
+    const attentionCandidates = selectComponentRepresentatives(
+      components,
+      candidate => candidate.requiresAttention,
     );
-
     const scopedCandidates = (scope === 'all'
       ? allCandidates
-      : deduplicateCandidates(rawCandidates.filter(candidate => candidate.workClass === scope)))
-      .slice(0, VOICE_BRIEFING_DETAIL_LIMIT);
+      : selectComponentRepresentatives(
+        components,
+        candidate => candidate.workClass === scope,
+      )).slice(0, VOICE_BRIEFING_DETAIL_LIMIT);
     const items = assignReferences(scopedCandidates);
     const running = queueEntries.filter(entry => entry.state === 'active').length;
     const queued = queueEntries.length - running;
@@ -295,7 +306,7 @@ function planCandidate(
   const repository = safeRepository(row.repository);
   const title = safeTitle(repository ? `Plan for ${repository}` : 'Plan');
   const requiresAttention = status === 'review';
-  const running = status === 'generating' || status === 'executing';
+  const running = status === 'generating' || status === 'refining' || status === 'executing';
   const actions: VoiceBriefingAction[] = requiresAttention
     ? ['open', 'follow_up']
     : running ? ['open', 'stop'] : ['open'];
@@ -468,7 +479,7 @@ function repositoryFromJobData(data: Record<string, unknown>): string | null {
   return owner && name ? safeRepository(`${owner}/${name}`) : null;
 }
 
-function deduplicateCandidates(candidates: CandidateItem[]): CandidateItem[] {
+function buildCandidateComponents(candidates: CandidateItem[]): CandidateComponent[] {
   const sorted = [...candidates].sort(compareCandidates);
   const parents = sorted.map((_, index) => index);
   const identityOwners = new Map<string, number>();
@@ -497,12 +508,23 @@ function deduplicateCandidates(candidates: CandidateItem[]): CandidateItem[] {
     });
   });
 
-  const representatives = new Map<number, number>();
-  sorted.forEach((_, index) => {
+  const components = new Map<number, CandidateItem[]>();
+  sorted.forEach((candidate, index) => {
     const root = find(index);
-    if (!representatives.has(root)) representatives.set(root, index);
+    const component = components.get(root);
+    if (component) component.push(candidate);
+    else components.set(root, [candidate]);
   });
-  return sorted.filter((_, index) => representatives.get(find(index)) === index);
+  return [...components.values()];
+}
+
+function selectComponentRepresentatives(
+  components: readonly CandidateComponent[],
+  matches: (candidate: CandidateItem) => boolean = () => true,
+): CandidateItem[] {
+  return components
+    .flatMap(component => component.find(matches) ?? [])
+    .sort(compareCandidates);
 }
 
 function compareCandidates(left: CandidateItem, right: CandidateItem): number {
@@ -568,6 +590,7 @@ function planStatusSummary(status: string): string {
   switch (status) {
     case 'review': return 'is ready for review';
     case 'generating': return 'is generating';
+    case 'refining': return 'is refining';
     case 'executing': return 'is executing';
     case 'approved': return 'is approved';
     default: return `is ${status}`;

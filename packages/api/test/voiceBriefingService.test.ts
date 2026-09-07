@@ -185,6 +185,10 @@ test('running and attention scopes filter details while retaining complete snaps
           status: 'generating', updated_at: '2026-09-07T01:18:00.000Z',
         },
         {
+          draft_id: 'refining-plan', repository: 'integry/propr',
+          status: 'refining', updated_at: '2026-09-07T01:17:30.000Z',
+        },
+        {
           draft_id: 'review-plan', repository: 'integry/propr',
           status: 'review', updated_at: '2026-09-07T01:17:00.000Z',
         },
@@ -210,7 +214,15 @@ test('running and attention scopes filter details while retaining complete snaps
   const running = await service.getBriefing('authenticated-user', 'running');
   const attention = await service.getBriefing('authenticated-user', 'attention');
 
-  assert.deepEqual(running.items.map(item => item.id), ['active-task', 'generating-plan']);
+  assert.deepEqual(running.items.map(item => item.id), [
+    'active-task',
+    'generating-plan',
+    'refining-plan',
+  ]);
+  assert.equal(
+    running.items.find(item => item.id === 'refining-plan')?.summary,
+    'Plan for integry/propr is refining.',
+  );
   assert.deepEqual(attention.items.map(item => item.id), ['stalled-task', 'review-plan']);
   assert.ok(attention.items.every(item => item.requiresAttention));
   assert.deepEqual(running.counts, attention.counts);
@@ -287,10 +299,15 @@ test('deduplicates task and pull request notifications joined by a later queue a
   });
 
   const briefing = await service.getBriefing('authenticated-user');
+  const attention = await service.getBriefing('authenticated-user', 'attention');
 
   assert.equal(briefing.counts.total, 1);
   assert.equal(briefing.counts.attention, 1);
   assert.deepEqual(briefing.items.map(item => [item.id, item.title]), [
+    ['task-alias', 'Task failed'],
+  ]);
+  assert.deepEqual(attention.counts, briefing.counts);
+  assert.deepEqual(attention.items.map(item => [item.id, item.title]), [
     ['task-alias', 'Task failed'],
   ]);
 });
@@ -331,10 +348,16 @@ test('queue authorization ignores identical and reassigned username snapshots', 
 
 test('production loaders authorize queue jobs, constrain plans, and page notifications', async () => {
   const queryTrace: Array<[string, unknown]> = [];
-  const planRows = [{
-    draft_id: 'owned-plan', repository: 'integry/propr',
-    status: 'review', updated_at: NOW,
-  }];
+  const planRows = [
+    {
+      draft_id: 'owned-plan', repository: 'integry/propr',
+      status: 'review', updated_at: NOW,
+    },
+    {
+      draft_id: 'refining-plan', repository: 'integry/propr',
+      status: 'refining', updated_at: NOW,
+    },
+  ];
   const planQuery = {
     select(...columns: string[]) {
       queryTrace.push(['select', columns]);
@@ -423,8 +446,8 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
     running: 1,
     queued: 1,
     attention: 1,
-    plans: 1,
-    total: 3,
+    plans: 2,
+    total: 4,
   });
   const serialized = JSON.stringify(briefing);
   for (const foreignValue of [
@@ -445,7 +468,7 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
     ['table', 'task_drafts'],
     ['select', ['draft_id', 'repository', 'status', 'updated_at']],
     ['where', { user_id: 'owner-user' }],
-    ['whereIn', ['status', ['generating', 'executing', 'review', 'approved']]],
+    ['whereIn', ['status', ['generating', 'refining', 'executing', 'review', 'approved']]],
   ]);
   assert.deepEqual(notificationCalls, [
     { userId: 'owner-user', cursor: null, limit: 100 },
