@@ -122,13 +122,16 @@ describe('DesktopExperience', () => {
     );
     try {
       expect(await screen.findByLabelText('Instance URL')).toHaveValue('https://connect.propr.dev');
-      await waitFor(() => expect(invocations).toEqual([{
-        channel: IPC_CHANNELS.deepLinkAcknowledgement,
-        args: [{
-          ...delivery,
-          consumption: { kind: 'connect-confirmation', target: 'https://connect.propr.dev' },
-        }],
-      }]));
+      await waitFor(() => expect(invocations).toEqual([
+        { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [] },
+        {
+          channel: IPC_CHANNELS.deepLinkAcknowledgement,
+          args: [{
+            ...delivery,
+            consumption: { kind: 'connect-confirmation', target: 'https://connect.propr.dev' },
+          }],
+        },
+      ]));
     } finally {
       unsubscribe();
       rendered.unmount();

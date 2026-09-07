@@ -91,7 +91,11 @@ export const createDesktopBridge = (
     app: {
       getMetadata: () => invoke(ipc, IPC_CHANNELS.appMetadata),
       onDeepLink: (listener) => {
+        const consumerWasAbsent = deepLinkListeners.size === 0;
         deepLinkListeners.add(listener);
+        if (consumerWasAbsent) {
+          void invoke(ipc, IPC_CHANNELS.deepLinkConsumerReady).catch(() => undefined);
+        }
         pendingDeepLinks.splice(0).forEach(delivery => { void consume(delivery).catch(() => undefined); });
         return () => deepLinkListeners.delete(listener);
       },

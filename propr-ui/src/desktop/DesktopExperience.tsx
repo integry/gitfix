@@ -6,11 +6,12 @@ import * as runtimeConfig from '../config/runtimeConfig';
 import type { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopConnectedExperience } from './DesktopConnectedExperience';
 import { LocalSetupWizard } from './LocalSetupWizard';
-import { useAttemptFence, useDesktopModal, useSerializedMutationQueue } from './desktopExperienceHooks';
+import { createDesktopAuthenticationActions } from './desktopAuthenticationActions';
+import { useAttemptFence, useDesktopAccessInvalidation, useDesktopModal, useSerializedMutationQueue } from './desktopExperienceHooks';
 import { AuthenticationPanel, ConnectionPanel, DesktopBrand, DesktopSetupLayer, InstanceChooser, ManagedRecoveryReview, ProfileEditor } from './DesktopExperiencePanels';
 import { managedRecoveryMessage, managedRediscoveryUnavailableMessage, safeConnectionMessage } from './desktopExperienceMessages';
 import { isGuidedLocalSetup, mergeProfiles, recoverableError, settleAuthenticationCancellation, settleConnectCandidateSetup, type ExperienceState } from './desktopExperienceState';
-import { DESKTOP_ACCESS_INVALID_EVENT, DesktopAuthenticationError, type DesktopAccessInvalidEventDetail, type DesktopAdapters, type DesktopAuthenticationProgressStage, type DesktopConnectionResult, type DesktopProfile } from './types';
+import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
 import { useDesktopDeepLinks } from './useDesktopDeepLinks';
 import { useConnectCandidatePresentation } from './useConnectCandidatePresentation';
 import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
@@ -151,6 +152,16 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
   }, [adapters, cancelDiscovery, enqueueProfileMutation, reportAcceptanceStage]);
 
+  const { authenticate, cancelAuthentication } = createDesktopAuthenticationActions({
+    adapters,
+    cancelDiscovery,
+    connect,
+    connectionAttempt,
+    reportCredentialCommitted: () => reportAcceptanceStage('CREDENTIAL_COMMITTED'),
+    setOperationError,
+    setState,
+  });
+
   useEffect(() => {
     let cancelled = false;
     activeProfileId.current = null;
@@ -178,25 +189,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     };
   }, [adapters, connect, hasPendingConnectCandidate, invalidateDiscovery]);
 
-  useEffect(() => {
-    const accessInvalid = (event: Event) => {
-      const detail = (event as CustomEvent<DesktopAccessInvalidEventDetail>).detail;
-      setState(current => {
-        if (current.phase !== 'connected') return current;
-        if (!detail || detail.profileId !== current.profile.id || detail.transportScope !== current.result.transportScope) return current;
-        adapters.connection.deactivate?.();
-        return {
-          phase: 'blocked',
-          profile: current.profile,
-          result: { status: 'authentication-required',
-            message: 'Access to this instance was revoked or expired. Pair again to continue.',
-            version: current.result.version, authentication: current.result.authentication },
-        };
-      });
-    };
-    window.addEventListener(DESKTOP_ACCESS_INVALID_EVENT, accessInvalid);
-    return () => window.removeEventListener(DESKTOP_ACCESS_INVALID_EVENT, accessInvalid);
-  }, [adapters]);
+  useDesktopAccessInvalidation(adapters, setState);
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
@@ -343,65 +336,6 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
         }
         : current);
     }
-  };
-
-  const authenticationFailureMessage = (
-    error: unknown,
-    progress: DesktopAuthenticationProgressStage,
-  ): string => {
-    if (error instanceof DesktopAuthenticationError) {
-      if (error.code === 'APPROVAL_EXPIRED') {
-        return progress === 'browser-open-failed'
-          ? 'Browser approval expired. If no approval page appeared, check your default browser or desktop portal, then start sign in again.'
-          : 'Browser approval expired before it was completed. Start sign in again.';
-      }
-      if (error.code === 'SECURE_STORAGE_FAILED') {
-        return 'ProPR Desktop could not save the approved credential in secure storage. Unlock or enable your system keychain, then try again.';
-      }
-      if (error.code === 'PAIRING_UNREACHABLE') {
-        return 'The instance became unreachable while waiting for browser approval. Check the connection and try again.';
-      }
-      if (error.code === 'PAIRING_REJECTED') {
-        return 'The instance rejected desktop pairing. Confirm it supports this Desktop version, then try again.';
-      }
-    }
-    return 'ProPR Connect pairing could not be completed. Try again.';
-  };
-
-  const authenticate = async (
-    profile: DesktopProfile,
-    result: Extract<DesktopConnectionResult, { status: 'authentication-required' }>,
-  ) => {
-    cancelDiscovery();
-    const attempt = ++connectionAttempt.current;
-    let progress: DesktopAuthenticationProgressStage = 'starting';
-    setOperationError(null);
-    setState({ phase: 'authenticating', profile, result, progress });
-    try {
-      await adapters.authentication.authenticate(profile, nextProgress => {
-        if (connectionAttempt.current !== attempt) return;
-        progress = nextProgress;
-        setState(current => current.phase === 'authenticating' && current.profile.id === profile.id
-          ? { ...current, progress: nextProgress }
-          : current);
-      });
-      if (connectionAttempt.current !== attempt) return;
-      await reportAcceptanceStage('CREDENTIAL_COMMITTED');
-      if (connectionAttempt.current === attempt) await connect(profile);
-    } catch (error) {
-      if (connectionAttempt.current !== attempt) return;
-      setState({
-        phase: 'blocked',
-        profile,
-        result: { ...result, message: authenticationFailureMessage(error, progress) },
-      });
-    }
-  };
-
-  const cancelAuthentication = (current: Extract<ExperienceState, { phase: 'authenticating' }>) => {
-    connectionAttempt.current += 1;
-    settleAuthenticationCancellation(adapters, current.profile.id);
-    setState({ phase: 'blocked', profile: current.profile, result: current.result });
   };
 
   const openEditor = (profile: DesktopProfile | 'new') => {

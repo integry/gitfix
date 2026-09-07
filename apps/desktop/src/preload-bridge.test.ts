@@ -156,6 +156,26 @@ describe('desktop preload bridge', () => {
     assert.equal(ipc.listeners.has(IPC_CHANNELS.deepLink), true);
   });
 
+  it('reports readiness once for each interval with an installed deep-link consumer', async () => {
+    const ipc = new FakeIpc();
+    const bridge = createDesktopBridge(ipc);
+    const first = bridge.app.onDeepLink(() => null);
+    const second = bridge.app.onDeepLink(() => null);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(ipc.invocations, [
+      { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [] },
+    ]);
+
+    first();
+    second();
+    bridge.app.onDeepLink(() => null);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(ipc.invocations, [
+      { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [] },
+      { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [] },
+    ]);
+  });
+
   it('buffers startup and second-instance deep links until the renderer subscribes', async () => {
     const ipc = new FakeIpc();
     const bridge = createDesktopBridge(ipc);
@@ -178,6 +198,7 @@ describe('desktop preload bridge', () => {
     ]);
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(ipc.invocations, [
+      { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [] },
       {
         channel: IPC_CHANNELS.deepLinkAcknowledgement,
         args: [{

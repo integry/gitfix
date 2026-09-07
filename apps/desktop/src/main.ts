@@ -379,6 +379,7 @@ const deepLinkDelivery = new DeepLinkDelivery<BrowserWindow>(
   Date.now,
   1_000,
   deepLinkAcknowledgementTimeoutMs(nativeSmokePhase !== undefined),
+  nativeSmokePhase !== undefined,
 );
 
 const runNativeSecureStorageProbe = async (): Promise<void> => {
@@ -1248,6 +1249,14 @@ const createMainWindow = async (
   window.webContents.on('did-finish-load', () => {
     deepLinkDelivery.didFinishLoad(window);
   });
+  window.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      deepLinkDelivery.didStartMainFrameNavigation(window);
+    }
+  });
+  window.webContents.on('did-navigate', () => {
+    deepLinkDelivery.didCommitMainFrameNavigation(window);
+  });
   window.on('closed', () => {
     deepLinkDelivery.clearWindow(window);
     if (mainWindow === window) {
@@ -1276,29 +1285,10 @@ const createMainWindow = async (
   deepLinkDelivery.setWindow(window);
   if (nativeSmokePhase) {
     await deepLinkDelivery.whenIdle();
-    const expectedInitialApi = nativeSmokePhase === 'first'
-      ? 'http://localhost:44111'
-      : 'https://t-native-relaunch.propr.dev';
-    let initialEndpointVisible: unknown;
-    try {
-      initialEndpointVisible = await window.webContents.executeJavaScript(`(async () => {
-        const deadline = performance.now() + 2000;
-        do {
-          const input = Array.from(document.querySelectorAll('label')).find(label =>
-            label.textContent?.includes('Instance URL'))?.querySelector('input');
-          if (input?.value === ${JSON.stringify(expectedInitialApi)}) return true;
-          await new Promise(resolve => setTimeout(resolve, 25));
-        } while (performance.now() < deadline);
-        return false;
-      })()`);
-    } catch (error) {
-      recordNativeEvent('desktop.native.cold_confirmation_inspection_failed');
-      throw error;
-    }
-    if (!initialEndpointVisible) {
-      recordNativeEvent('desktop.native.cold_confirmation_not_visible');
-      throw new Error('Native cold deep link did not reach the confirmation UI');
-    }
+    // The renderer acknowledges a Connect link only from ProfileEditor's layout
+    // effect, after the exact untrusted endpoint is committed to the confirmation
+    // input. The acknowledgement above is therefore the presentation proof; a
+    // second main-process DOM inspection races application teardown after failures.
     if (nativeSmokePhase === 'first') {
       await runNativeSecureStorageProbe();
       recordNativeEvent('desktop.native.profile_fresh');
@@ -1678,6 +1668,11 @@ if (!hasSingleInstanceLock) {
       devServerUrl,
       packagedRendererUrl,
       openExternal: openAllowedExternalUrl,
+      rendererConsumerReady: event => {
+        const ready = deepLinkDelivery.rendererConsumerReady(event.sender, event.senderFrame);
+        if (ready) recordNativeEvent('desktop.deeplink.consumer_ready');
+        return ready;
+      },
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinkDelivery.acknowledgeSender(event.sender, acknowledgement),
       ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {

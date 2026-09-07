@@ -12,10 +12,15 @@ describe('desktop deep-link delivery', () => {
     isDestroyed: () => false,
     webContents: {
       isLoading: () => false,
+      mainFrame: { frameToken: 'current-document', processId: 1 },
       send: (_channel, value) => sent.push(value),
     },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
+  const activateWindow = (delivery: DeepLinkDelivery<DeepLinkWindow>, window: DeepLinkWindow) => {
+    delivery.setWindow(window);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, window.webContents.mainFrame), true);
+  };
 
   it('keeps the production acknowledgement deadline while bounding a native-smoke allowance', () => {
     assert.equal(deepLinkAcknowledgementTimeoutMs(false), 5_000);
@@ -32,7 +37,7 @@ describe('desktop deep-link delivery', () => {
     );
     const window = createWindow(sent);
     delivery.deliver('propr://open?path=%2Ftasks');
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(sent.length, 1);
     assert.deepEqual(consumed, []);
@@ -69,7 +74,7 @@ describe('desktop deep-link delivery', () => {
       1_000,
     );
     const window = createWindow(sent);
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(delivery.deliver(link), true);
     assert.equal(delivery.deliver(link), false);
@@ -111,8 +116,10 @@ describe('desktop deep-link delivery', () => {
       Date.now,
       1_000,
       20,
+      true,
     );
-    delivery.setWindow(createWindow(sent));
+    const window = createWindow(sent);
+    activateWindow(delivery, window);
     delivery.deliver('propr://open?path=%2Ftasks');
     await delivery.whenIdle();
     assert.equal(sent.length, 1);
@@ -127,6 +134,7 @@ describe('desktop deep-link delivery', () => {
       isDestroyed: () => false,
       webContents: {
         isLoading: () => false,
+        mainFrame: { frameToken: 'current-document', processId: 1 },
         send: (_channel, value) => {
           if (failNextSend) {
             failNextSend = false;
@@ -142,7 +150,7 @@ describe('desktop deep-link delivery', () => {
       undefined,
       error => { failures.push(error); },
     );
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
     await delivery.whenIdle();
@@ -171,7 +179,7 @@ describe('desktop deep-link delivery', () => {
       1_000,
       20,
     );
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
     assert.equal(delivery.deliver('propr://open?path=%2Fplans'), true);
@@ -198,7 +206,7 @@ describe('desktop deep-link delivery', () => {
       error => { failures.push(error); },
     );
     const window = createWindow(sent);
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
     assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
     assert.equal(delivery.deliver('propr://open?path=%2Fplans'), true);
     assert.equal(sent.length, 1);
@@ -224,6 +232,39 @@ describe('desktop deep-link delivery', () => {
     assert.deepEqual(failures, []);
   });
 
+  it('clears renderer state without reading webContents from a destroyed window', () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const webContents = {
+      isLoading: () => false,
+      mainFrame: { frameToken: 'destroyed-window-document', processId: 1 },
+      send: (_channel: string, value: DesktopDeepLinkDelivery) => sent.push(value),
+    };
+    let destroyed = false;
+    const window: DeepLinkWindow = {
+      isDestroyed: () => destroyed,
+      get webContents() {
+        if (destroyed) throw new Error('Object has been destroyed');
+        return webContents;
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link', [], undefined, undefined, Date.now, 1_000, 20, true,
+    );
+
+    activateWindow(delivery, window);
+    delivery.didStartMainFrameNavigation(window);
+    destroyed = true;
+
+    assert.doesNotThrow(() => delivery.clearWindow(window));
+
+    const replacement: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents,
+    };
+    delivery.setWindow(replacement);
+    assert.equal(delivery.rendererConsumerReady(webContents, webContents.mainFrame), true);
+  });
+
   it('deduplicates a cold link reported through argv and open-url before delivery', async () => {
     const sent: DesktopDeepLinkDelivery[] = [];
     const link = 'propr://connect?api=https%3A%2F%2Ft-native-evidence.propr.dev';
@@ -236,7 +277,7 @@ describe('desktop deep-link delivery', () => {
     );
     const window = createWindow(sent);
     assert.equal(delivery.deliver(link), false);
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
     assert.equal(sent.length, 1);
     delivery.acknowledge(window, {
       ...sent[0],
@@ -244,5 +285,158 @@ describe('desktop deep-link delivery', () => {
     });
     await delivery.whenIdle();
     assert.equal(sent.length, 1);
+  });
+
+  it('does not spend the acknowledgement budget before the renderer consumer is ready', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const failures: Error[] = [];
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      ['propr://connect?api=http%3A%2F%2Flocalhost%3A44111'],
+      undefined,
+      error => { failures.push(error); },
+      Date.now,
+      1_000,
+      20,
+      true,
+    );
+    const window = createWindow(sent);
+    delivery.setWindow(window);
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(sent.length, 0);
+    assert.deepEqual(failures, []);
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents, window.webContents.mainFrame), true);
+    assert.equal(sent.length, 1);
+    const dispatched = sent[0];
+    assert.ok(dispatched);
+    assert.equal(delivery.acknowledge(window, {
+      ...dispatched,
+      consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
+    }), true);
+    await delivery.whenIdle();
+    assert.deepEqual(failures, []);
+  });
+
+  it('fences navigation by document token when Electron reuses its main-frame wrapper', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const mainFrame = { frameToken: 'outgoing-document', processId: 1 };
+    const outgoingFrameAfterCommit = { frameToken: 'outgoing-document', processId: 1 };
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        isLoading: () => false,
+        mainFrame,
+        send: (_channel, value) => sent.push(value),
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link', [], undefined, undefined, Date.now, 1_000, 20, true,
+    );
+    activateWindow(delivery, window);
+    delivery.didStartMainFrameNavigation(window);
+    delivery.deliver('propr://open?path=%2Ftasks');
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), false);
+    mainFrame.frameToken = 'incoming-document';
+    delivery.didCommitMainFrameNavigation(window);
+    delivery.didFinishLoad(window);
+    assert.equal(sent.length, 0);
+
+    assert.equal(window.webContents.mainFrame, mainFrame);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, outgoingFrameAfterCommit), false);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
+    assert.equal(sent.length, 1);
+    const dispatched = sent[0];
+    assert.ok(dispatched);
+    assert.equal(delivery.acknowledge(window, {
+      ...dispatched,
+      consumption: { kind: 'open-queued', target: '/tasks' },
+    }), true);
+    await delivery.whenIdle();
+  });
+
+  it('requires fresh readiness after a committed navigation reuses the render-frame identity', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const mainFrame = { frameToken: 'reused-render-frame', processId: 1 };
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        isLoading: () => false,
+        mainFrame,
+        send: (_channel, value) => sent.push(value),
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      ['propr://connect?api=http%3A%2F%2Flocalhost%3A44111'],
+      undefined,
+      undefined,
+      Date.now,
+      1_000,
+      20,
+      true,
+    );
+
+    delivery.setWindow(window);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
+    assert.equal(sent.length, 1);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[0],
+      consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
+    }), true);
+    await delivery.whenIdle();
+
+    delivery.didStartMainFrameNavigation(window);
+    delivery.deliver('propr://open?path=%2Ftasks');
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), false);
+    delivery.didCommitMainFrameNavigation(window);
+    delivery.didFinishLoad(window);
+    assert.equal(sent.length, 1, 'outgoing readiness must not survive the commit');
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
+    assert.equal(sent.length, 2);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[1],
+      consumption: { kind: 'open-queued', target: '/tasks' },
+    }), true);
+    await delivery.whenIdle();
+  });
+
+  it('accepts initial readiness after commit when Electron reuses the initial frame identity', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const mainFrame = { frameToken: 'initial-and-renderer-document', processId: 1 };
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        isLoading: () => false,
+        mainFrame,
+        send: (_channel, value) => sent.push(value),
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      ['propr://connect?api=http%3A%2F%2Flocalhost%3A44111'],
+      undefined,
+      undefined,
+      Date.now,
+      1_000,
+      20,
+      true,
+    );
+
+    delivery.didStartMainFrameNavigation(window);
+    delivery.didCommitMainFrameNavigation(window);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
+    delivery.didFinishLoad(window);
+    delivery.setWindow(window);
+
+    assert.equal(sent.length, 1);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[0],
+      consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
+    }), true);
+    await delivery.whenIdle();
   });
 });

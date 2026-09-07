@@ -17,13 +17,32 @@ export interface DeepLinkWindow {
   isDestroyed(): boolean;
   webContents: {
     isLoading(): boolean;
+    readonly mainFrame: {
+      readonly frameToken: string;
+      readonly processId: number;
+    };
     send(channel: string, value: DesktopDeepLinkDelivery): void;
   };
 }
 
+type DeepLinkWebContents = DeepLinkWindow['webContents'];
+
+const rendererDocumentId = (frame: unknown): string | null => {
+  if ((typeof frame !== 'object' && typeof frame !== 'function') || frame === null
+    || !('frameToken' in frame) || typeof frame.frameToken !== 'string'
+    || frame.frameToken.length === 0
+    || !('processId' in frame) || !Number.isSafeInteger(frame.processId)) return null;
+  return `${String(frame.processId)}:${frame.frameToken}`;
+};
+
 /** Coordinates protocol delivery across the window creation/load boundary. */
 export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   private window: TWindow | null = null;
+  private windowWebContents: DeepLinkWebContents | null = null;
+  private readonly readyRendererDocuments = new WeakMap<object, string>();
+  private readonly staleRendererDocuments = new WeakMap<object, Set<string>>();
+  private readonly pendingMainFrameNavigations = new WeakSet<object>();
+  private readonly outgoingRendererDocuments = new WeakMap<object, string>();
   private readonly recentlyAccepted = new Map<string, number>();
   private deliveryId = 0;
   private draining = false;
@@ -49,6 +68,7 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     private readonly now: () => number = Date.now,
     private readonly duplicateWindowMs = 1_000,
     private readonly acknowledgementTimeoutMs = DEFAULT_DEEP_LINK_ACKNOWLEDGEMENT_TIMEOUT_MS,
+    private readonly requireRendererConsumerReady = false,
   ) {
     if (!Number.isFinite(duplicateWindowMs) || duplicateWindowMs < 0
       || !Number.isFinite(acknowledgementTimeoutMs) || acknowledgementTimeoutMs <= 0) {
@@ -78,13 +98,64 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     if (this.window === window) this.flush(window);
   }
 
+  didStartMainFrameNavigation(window: TWindow): void {
+    const { webContents } = window;
+    this.readyRendererDocuments.delete(webContents);
+    this.pendingMainFrameNavigations.add(webContents);
+    const documentId = rendererDocumentId(webContents.mainFrame);
+    if (documentId === null) return;
+    this.outgoingRendererDocuments.set(webContents, documentId);
+    const stale = this.staleRendererDocuments.get(webContents) ?? new Set<string>();
+    stale.add(documentId);
+    this.staleRendererDocuments.set(webContents, stale);
+  }
+
+  didCommitMainFrameNavigation(window: TWindow): void {
+    const { webContents } = window;
+    this.pendingMainFrameNavigations.delete(webContents);
+    const outgoingDocumentId = this.outgoingRendererDocuments.get(webContents);
+    this.outgoingRendererDocuments.delete(webContents);
+    const currentDocumentId = rendererDocumentId(webContents.mainFrame);
+    if (currentDocumentId !== null && currentDocumentId === outgoingDocumentId) {
+      // Electron 44 can retain both its WebFrameMain wrapper and render-frame
+      // identity for a same-process document navigation. The commit is the
+      // boundary that makes that reused identity safe for the incoming document.
+      this.staleRendererDocuments.get(webContents)?.delete(currentDocumentId);
+    }
+  }
+
+  /** Starts delivery only after the renderer has installed its consumer. */
+  rendererConsumerReady(sender: unknown, senderFrame: unknown): boolean {
+    const documentId = rendererDocumentId(senderFrame);
+    if ((typeof sender !== 'object' && typeof sender !== 'function') || sender === null
+      || (typeof senderFrame !== 'object' && typeof senderFrame !== 'function') || senderFrame === null
+      || !('mainFrame' in sender) || sender.mainFrame !== senderFrame
+      || documentId === null
+      || this.pendingMainFrameNavigations.has(sender)
+      || this.staleRendererDocuments.get(sender)?.has(documentId)) return false;
+    this.readyRendererDocuments.set(sender, documentId);
+    if (this.windowWebContents === sender) void this.drain();
+    return true;
+  }
+
   setWindow(window: TWindow): void {
+    const { webContents } = window;
     this.window = window;
+    this.windowWebContents = webContents;
     void this.drain();
   }
 
   clearWindow(window: TWindow): void {
-    if (this.window === window) this.window = null;
+    if (this.window === window) {
+      const webContents = this.windowWebContents;
+      this.window = null;
+      this.windowWebContents = null;
+      if (!webContents) return;
+      this.readyRendererDocuments.delete(webContents);
+      this.staleRendererDocuments.delete(webContents);
+      this.pendingMainFrameNavigations.delete(webContents);
+      this.outgoingRendererDocuments.delete(webContents);
+    }
   }
 
   acknowledge(window: TWindow, acknowledgement: DesktopDeepLinkAcknowledgement): boolean {
@@ -124,6 +195,10 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
       while (this.pending.length > 0) {
         const window = this.window;
         if (!window || window.isDestroyed() || window.webContents.isLoading()) return;
+        const currentDocumentId = rendererDocumentId(window.webContents.mainFrame);
+        if (this.requireRendererConsumerReady && (currentDocumentId === null
+          || this.readyRendererDocuments.get(window.webContents) !== currentDocumentId
+          || this.staleRendererDocuments.get(window.webContents)?.has(currentDocumentId))) return;
         const value = this.pending.shift();
         if (value === undefined) return;
         const delivery = { deliveryId: ++this.deliveryId, url: value };

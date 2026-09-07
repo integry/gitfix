@@ -49,6 +49,7 @@ const WARM_OPEN = 'propr://open?path=%2Ftasks%3Fstatus%3Dopen';
 const REQUIRED_FIRST_EVENTS = [
   'desktop.smoke.authorized',
   'desktop.native.identity_verified',
+  'desktop.deeplink.consumer_ready',
   'desktop.deeplink.cold_manual_once',
   'desktop.native.secure_storage_probe.started',
   'desktop.native.secure_storage_probe.completed',
@@ -67,6 +68,7 @@ const REQUIRED_FIRST_EVENTS = [
 const REQUIRED_RELAUNCH_EVENTS = [
   'desktop.smoke.authorized',
   'desktop.native.identity_verified',
+  'desktop.deeplink.consumer_ready',
   'desktop.deeplink.cold_tunnel_once',
   'desktop.native.profile_preserved',
   'desktop.deeplink.confirmation_required',
@@ -206,6 +208,7 @@ export const FIRST_EVIDENCE_MILESTONES = Object.freeze([
   'NO_EVIDENCE',
   'AUTHORIZED',
   'IDENTITY',
+  'CONSUMER_READY',
   'SECURE_STORAGE_BACKEND',
   'DEEP_LINK_DELIVERY_FAILURE',
   'COLD_ACK',
@@ -217,6 +220,7 @@ export const FIRST_EVIDENCE_MILESTONES = Object.freeze([
 export const FIRST_EVIDENCE_FAILURE_CATEGORIES = Object.freeze([
   'START_FAILED',
   'UNCAUGHT_EXCEPTION',
+  'DEEP_LINK_DELIVERY_FAILED',
   'COLD_CONFIRMATION_INSPECTION_FAILED',
   'COLD_CONFIRMATION_NOT_VISIBLE',
   'RENDERER_GONE',
@@ -1266,6 +1270,7 @@ export const classifyFirstEvidenceFailure = async (path, resultClass) => {
     const events = new Set(await readFixedEvidenceEvents(path));
     if (events.has('desktop.smoke.authorized')) milestone = 'AUTHORIZED';
     if (events.has('desktop.native.identity_verified')) milestone = 'IDENTITY';
+    if (events.has('desktop.deeplink.consumer_ready')) milestone = 'CONSUMER_READY';
     if (events.has('desktop.native.secure_storage_backend_invalid')) milestone = 'SECURE_STORAGE_BACKEND';
     if (events.has('desktop.deeplink.delivery_failed')) milestone = 'DEEP_LINK_DELIVERY_FAILURE';
     if (events.has('desktop.deeplink.cold_manual_once')) milestone = 'COLD_ACK';
@@ -1274,13 +1279,16 @@ export const classifyFirstEvidenceFailure = async (path, resultClass) => {
     if (events.has('desktop.renderer.ready')) milestone = 'RENDERER';
     if (events.has('desktop.app.start_failed')) failureCategory = 'START_FAILED';
     if (events.has('desktop.main_process.uncaught_exception')) failureCategory = 'UNCAUGHT_EXCEPTION';
-    if (events.has('desktop.native.cold_confirmation_inspection_failed')) {
+    if (events.has('desktop.native.cold_confirmation_inspection_failed')
+      && !events.has('desktop.deeplink.delivery_failed')) {
       failureCategory = 'COLD_CONFIRMATION_INSPECTION_FAILED';
     }
-    if (events.has('desktop.native.cold_confirmation_not_visible')) {
+    if (events.has('desktop.native.cold_confirmation_not_visible')
+      && !events.has('desktop.deeplink.delivery_failed')) {
       failureCategory = 'COLD_CONFIRMATION_NOT_VISIBLE';
     }
     if (events.has('desktop.renderer.gone')) failureCategory = 'RENDERER_GONE';
+    if (events.has('desktop.deeplink.delivery_failed')) failureCategory = 'DEEP_LINK_DELIVERY_FAILED';
   } catch {
     // Only fixed classifications may cross the native-gate diagnostic boundary.
   }
