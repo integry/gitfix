@@ -212,7 +212,7 @@ test('/api/status omits disabled configured agents', async () => {
   assert.equal(body.apiCompatibility, PROPR_API_COMPATIBILITY);
   assert.equal(body.uiCompatibility, PROPR_UI_COMPATIBILITY);
   assert.deepEqual(body.agents, []);
-  assert.equal(body.claudeAuth, 'disconnected');
+  assert.equal(body.claudeAuth, 'not_applicable');
 });
 
 test('/api/compatibility returns public version contract metadata', async () => {
@@ -289,15 +289,102 @@ test('/api/desktop/discovery redacts identity persistence failures', async () =>
   assert.equal(JSON.stringify(body()).includes('SENTINEL'), false);
 });
 
-test('/api/status returns default Claude fallback when no agents are configured', async () => {
+test('/api/status reports Claude auth not applicable when no agents are configured', async () => {
   const body = await readStatus();
 
-  assert.deepEqual(body.agents, [{
-    id: 'default-claude-agent',
-    type: 'claude',
-    alias: 'default',
-    status: 'disconnected',
-  }]);
+  assert.deepEqual(body.agents, []);
+  assert.equal(body.claudeAuth, 'not_applicable');
+});
+
+test('/api/status derives Claude applicability and health from enabled configured agents', async () => {
+  const codex = createAgentConfig();
+  const healthyClaude = createAgentConfig({
+    id: 'claude-healthy', type: 'claude', alias: 'claude-healthy',
+  });
+  const unhealthyClaude = createAgentConfig({
+    id: 'claude-unhealthy', type: 'claude', alias: 'claude-unhealthy',
+  });
+
+  const cases = [
+    {
+      name: 'Codex only',
+      configs: [codex],
+      agents: [createAgent(codex, async () => true)],
+      expected: 'not_applicable',
+    },
+    {
+      name: 'disabled Claude',
+      configs: [codex, { ...unhealthyClaude, enabled: false }],
+      agents: [createAgent(codex, async () => true)],
+      expected: 'not_applicable',
+    },
+    {
+      name: 'healthy Claude',
+      configs: [healthyClaude],
+      agents: [createAgent(healthyClaude, async () => true)],
+      expected: 'connected',
+    },
+    {
+      name: 'unhealthy Claude',
+      configs: [unhealthyClaude],
+      agents: [createAgent(unhealthyClaude, async () => false)],
+      expected: 'disconnected',
+    },
+    {
+      name: 'mixed providers with unhealthy Claude',
+      configs: [codex, unhealthyClaude],
+      agents: [
+        createAgent(codex, async () => true),
+        createAgent(unhealthyClaude, async () => false),
+      ],
+      expected: 'disconnected',
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    const body = await readStatus({
+      loadAgents: async () => [...scenario.configs],
+      agentRegistry: createRegistry([...scenario.agents]),
+    });
+    assert.equal(body.claudeAuth, scenario.expected, scenario.name);
+  }
+});
+
+test('/api/status preserves unknown Claude applicability when agent config cannot be loaded', async () => {
+  const body = await readStatus({
+    loadAgents: async () => { throw new Error('configuration unavailable'); },
+  });
+
+  assert.deepEqual(body.agents, []);
+  assert.equal(body.claudeAuth, 'unknown');
+});
+
+test('/api/status projects enabled, disabled, and re-enabled Claude transitions', async () => {
+  configureStatusEnv();
+  let currentTime = 1_000;
+  let config = createAgentConfig({ id: 'claude-1', type: 'claude', alias: 'claude-prod' });
+  const registered = createAgent(config, async () => false);
+  const snapshots: Array<Record<string, unknown>> = [];
+  const routes = await createRoutes({
+    redisClient: createRedisClient() as never,
+    loadAgents: async () => [config],
+    agentRegistry: createRegistry([registered]),
+    getIndexingQueue: async () => createIndexingQueue(),
+    now: () => currentTime,
+    agentStatusCacheTtlMs: 5_000,
+    projectSystemSnapshot: async snapshot => { snapshots.push(snapshot); },
+  });
+
+  for (const enabled of [true, false, true]) {
+    config = { ...config, enabled };
+    currentTime += 6_000;
+    const response = createJsonResponse();
+    await routes.getStatus({} as Request, response.response);
+  }
+
+  assert.deepEqual(snapshots.map(snapshot => snapshot.claudeAuth), [
+    'disconnected', 'not_applicable', 'disconnected',
+  ]);
 });
 
 test('/api/status isolates system notification projection failures', async () => {

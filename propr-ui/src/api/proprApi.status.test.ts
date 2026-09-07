@@ -100,6 +100,27 @@ describe('getSystemStatus', () => {
     });
   });
 
+  it('presents not-applicable Claude auth without turning it into a failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        daemon: 'running',
+        redis: 'connected',
+        workerCount: 1,
+        githubAuth: 'connected',
+        claudeAuth: 'not_applicable',
+        agents: [{ id: 'codex-1', type: 'codex', alias: 'codex', status: 'connected' }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await expect(getSystemStatus()).resolves.toMatchObject({
+      claudeAuth: 'Not applicable',
+      agents: [{ id: 'codex-1', type: 'codex', alias: 'codex', status: 'Ready' }],
+    });
+  });
+
   it('maps a valid connected Connect account and drops malformed or non-Connect data', async () => {
     const account = {
       installationId: 42,
