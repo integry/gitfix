@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   getCapabilities: vi.fn(),
   registerBackend: vi.fn(),
   revokeBackend: vi.fn(),
-  registerWorker: vi.fn(),
+  getOrRegisterWorker: vi.fn(),
+  supportsWorkerOrigin: vi.fn(),
+  supportsWorkers: vi.fn(),
 }));
 
 vi.mock('../api/notificationApi', () => ({
@@ -24,7 +26,9 @@ vi.mock('../api/notificationApi', () => ({
 }));
 
 vi.mock('../serviceWorkerRegistration', () => ({
-  registerServiceWorker: mocks.registerWorker,
+  browserSupportsServiceWorkerOrigin: mocks.supportsWorkerOrigin,
+  browserSupportsServiceWorkers: mocks.supportsWorkers,
+  getOrRegisterServiceWorker: mocks.getOrRegisterWorker,
 }));
 
 const user = {
@@ -123,7 +127,9 @@ describe('BrowserPushProvider enrollment', () => {
     });
     mocks.registerBackend.mockResolvedValue({ subscription: { id: 'backend-1' } });
     mocks.revokeBackend.mockResolvedValue(undefined);
-    mocks.registerWorker.mockResolvedValue(registration);
+    mocks.getOrRegisterWorker.mockResolvedValue(registration);
+    mocks.supportsWorkerOrigin.mockReturnValue(true);
+    mocks.supportsWorkers.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -136,8 +142,8 @@ describe('BrowserPushProvider enrollment', () => {
       <div>
         <span>{push.isLoading ? 'loading' : push.subscription ? 'subscribed' : 'ready'}</span>
         <span data-testid="push-permission">{push.permission}</span>
-        <button type="button" onClick={() => void push.enable()}>Enable</button>
-        <button type="button" onClick={() => void push.disable()}>Disable</button>
+        <button type="button" onClick={() => void push.enable().catch(() => undefined)}>Enable</button>
+        <button type="button" onClick={() => void push.disable().catch(() => undefined)}>Disable</button>
       </div>
     );
   };
@@ -187,6 +193,49 @@ describe('BrowserPushProvider enrollment', () => {
     await waitFor(() => expect(screen.getByTestId('push-permission')).toHaveTextContent('denied'));
     expect(requestPermission).toHaveBeenCalledTimes(1);
     expect(subscribeBrowser).not.toHaveBeenCalled();
+    expect(mocks.registerBackend).not.toHaveBeenCalled();
+  });
+
+  test('does not inspect service workers or prompt on an unsupported desktop origin', async () => {
+    mocks.supportsWorkerOrigin.mockReturnValue(false);
+    mocks.supportsWorkers.mockReturnValue(false);
+
+    render(
+      <AuthProvider user={user}>
+        <BrowserPushProvider><Probe /></BrowserPushProvider>
+      </AuthProvider>,
+    );
+
+    await screen.findByText('ready');
+    expect(mocks.getOrRegisterWorker).not.toHaveBeenCalled();
+    expect(getSubscription).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    await waitFor(() => expect(requestPermission).not.toHaveBeenCalled());
+    expect(subscribeBrowser).not.toHaveBeenCalled();
+    expect(mocks.registerBackend).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['service workers', { serviceWorker: false, push: true, notifications: true }],
+    ['PushManager', { serviceWorker: true, push: false, notifications: true }],
+    ['Notifications', { serviceWorker: true, push: true, notifications: false }],
+  ])('does not inspect or prompt when %s are unsupported', async (_name, support) => {
+    mocks.supportsWorkers.mockReturnValue(support.serviceWorker);
+    if (!support.push) Reflect.deleteProperty(window, 'PushManager');
+    if (!support.notifications) Reflect.deleteProperty(window, 'Notification');
+
+    render(
+      <AuthProvider user={user}>
+        <BrowserPushProvider><Probe /></BrowserPushProvider>
+      </AuthProvider>,
+    );
+
+    await screen.findByText('ready');
+    expect(mocks.getOrRegisterWorker).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    await waitFor(() => expect(subscribeBrowser).not.toHaveBeenCalled());
+    expect(requestPermission).not.toHaveBeenCalled();
     expect(mocks.registerBackend).not.toHaveBeenCalled();
   });
 });

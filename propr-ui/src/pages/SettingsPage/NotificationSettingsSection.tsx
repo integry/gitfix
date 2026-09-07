@@ -76,11 +76,12 @@ const EnrollmentControl: React.FC = () => {
   if (push.isLoading) {
     return <p className="text-xs text-gray-500">Checking this browser...</p>;
   }
-  if (!push.capabilities?.push.configured) {
+  if (!push.serviceWorkerOriginSupported) {
     return (
-      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-        Web Push is not configured for this ProPR instance. An administrator must configure
-        the VAPID keys before this browser can be enabled.
+      <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs leading-5 text-gray-700">
+        Browser Web Push is not available in the ProPR desktop app. Native desktop
+        notifications are not implemented yet. Your personal notification preferences and
+        inbox notifications still apply.
       </div>
     );
   }
@@ -96,6 +97,14 @@ const EnrollmentControl: React.FC = () => {
     return (
       <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
         This browser does not support the service worker and Push APIs required for notifications.
+      </div>
+    );
+  }
+  if (!push.capabilities?.push.configured) {
+    return (
+      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+        Web Push is not configured for this ProPR instance. An administrator must configure
+        the VAPID keys before this browser can be enabled.
       </div>
     );
   }
