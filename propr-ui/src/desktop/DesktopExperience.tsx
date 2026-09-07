@@ -12,6 +12,7 @@ import { managedRecoveryMessage, managedRediscoveryUnavailableMessage, safeConne
 import { mergeProfiles, recoverableError, settleAuthenticationCancellation, type ExperienceState } from './desktopExperienceState';
 import { DESKTOP_ACCESS_INVALID_EVENT, type DesktopAccessInvalidEventDetail, type DesktopAdapters, type DesktopConnectionResult, type DesktopGuidedLocalSetupAdapter, type DesktopLocalSetupAdapter, type DesktopProfile } from './types';
 import { useDesktopDeepLinks } from './useDesktopDeepLinks';
+import { useConnectCandidatePresentation } from './useConnectCandidatePresentation';
 import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
 import {
   packagedAcceptanceSetupSurface,
@@ -39,6 +40,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   const [acceptanceSetup, setAcceptanceSetup] = useState<PackagedAcceptanceSetupSurface | null>(null);
   const [localSetupOpen, setLocalSetupOpen] = useState(false);
   const connectionAttempt = useRef(0);
+  const { recordPresentation: connectCandidatePresented, waitForPresentation } = useConnectCandidatePresentation();
   const activeProfileId = useRef<string | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -48,6 +50,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     setBusy(false);
   }, [invalidateDiscovery]);
   const stageConnectCandidate = useCallback((candidate: DesktopProfile, phase: ExperienceState['phase']) => {
+    const presented = waitForPresentation(candidate);
     cancelDiscovery();
     setOperationError(null);
     setEditing(candidate);
@@ -56,7 +59,8 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       connectionAttempt.current += 1;
       setState({ phase: 'choose' });
     }
-  }, [cancelDiscovery]);
+    return presented;
+  }, [cancelDiscovery, waitForPresentation]);
   const {
     deepLinkError,
     editorNotice,
@@ -399,7 +403,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       await reportAcceptanceStage('CREDENTIAL_COMMITTED');
     }, 'ProPR Desktop could not open sign in.', 'ProPR Connect pairing could not be completed.', () => connect(state.profile))} onHelp={() => void runBlockedAction(state.profile, () => adapters.externalBrowser.open('https://propr.dev'), 'ProPR Desktop could not open connection help.')} onReenter={() => reenterManagedEndpoint(state.profile)} onRediscover={() => void rediscoverManagedEndpoint(state.profile)} />;
     if (localSetupOpen && isGuidedLocalSetup(adapters.localSetup)) return <LocalSetupWizard adapter={adapters.localSetup} onBack={() => setLocalSetupOpen(false)} onComplete={profile => { setLocalSetupOpen(false); void saveProfile(profile); }} />;
-    if (editing) return <main className="desktop-welcome-card"><DesktopBrand /><ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate()} notice={editorNotice} operationError={operationError} onCancel={closeEditor} onSave={profile => void saveProfile(profile)} /></main>;
+    if (editing) return <main className="desktop-welcome-card"><DesktopBrand /><ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate()} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate() && editing !== 'new' ? () => connectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={profile => void saveProfile(profile)} /></main>;
     return <InstanceChooser profiles={profiles} busy={busy} error={operationError} localSetupSupported={adapters.platform === 'linux' && adapters.localSetup.supported} networkDiscoverySupported={adapters.discovery.supported} onLocalSetup={() => void setupLocal()} onConnectNew={() => openEditor('new')} onDiscover={() => void discover()} onConnect={profile => void connect(profile)} onEdit={openEditor} onRemove={profile => void removeProfile(profile)} />;
   };
 
@@ -411,6 +415,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       managerOpen={managerOpen} managerRef={managerRef} editing={editing}
       operationError={operationError} deepLinkError={deepLinkError} editorNotice={editorNotice}
       hasPendingConnectCandidate={hasPendingConnectCandidate()} openManager={openManager}
+      onConnectCandidatePresented={connectCandidatePresented}
       closeManager={closeManager} closeEditor={closeEditor} openEditor={openEditor}
       connect={connect} removeProfile={removeProfile} saveProfile={saveProfile} retry={retry}
       setManagerOpen={setManagerOpen}

@@ -15,7 +15,10 @@ interface UseDesktopDeepLinksOptions {
   phase: DesktopDeepLinkPhase;
   profileId: string | null;
   activeProfileId: RefObject<string | null>;
-  onStageConnectCandidate(candidate: DesktopProfile, phase: DesktopDeepLinkPhase): void;
+  onStageConnectCandidate(
+    candidate: DesktopProfile,
+    phase: DesktopDeepLinkPhase,
+  ): void | Promise<boolean>;
 }
 
 interface DesktopDeepLinkState {
@@ -55,7 +58,9 @@ export const useDesktopDeepLinks = ({
     },
     () => setDeepLinkError(REJECTED_DEEP_LINK_MESSAGE),
   ));
-  const handler = useRef<(value: string) => DesktopDeepLinkConsumption | null>(() => null);
+  const handler = useRef<(value: string) => (
+    DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>
+  )>(() => null);
 
   handler.current = value => {
     let action: string | null = null;
@@ -81,8 +86,14 @@ export const useDesktopDeepLinks = ({
       pendingConnectCandidate.current = true;
       setDeepLinkError(null);
       setEditorNotice(CONNECT_CANDIDATE_NOTICE);
-      stageCandidateRef.current(candidate, phaseRef.current);
-      return { kind: 'connect-confirmation', target: baseUrl };
+      const presented = stageCandidateRef.current(candidate, phaseRef.current);
+      const consumption: DesktopDeepLinkConsumption = {
+        kind: 'connect-confirmation',
+        target: baseUrl,
+      };
+      return presented
+        ? presented.then(visible => visible ? consumption : null)
+        : consumption;
     }
 
     if (action === 'open') {
