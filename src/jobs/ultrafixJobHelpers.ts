@@ -81,7 +81,6 @@ export async function restorePendingCommentsIfUltrafixJobSuperseded(
     await restorePendingComments(pickedUpComments, params);
     if (pickedUpComments.length > 0) {
         await issueQueue.add('processPullRequestComment', {
-            ...(job.data.userId ? { userId: job.data.userId } : {}),
             pullRequestNumber: params.pullRequestNumber,
             comments: [],
             repoOwner: params.repoOwner,
