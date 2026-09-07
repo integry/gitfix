@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as nodeExecFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -9,6 +10,21 @@ import { fileURLToPath } from 'node:url';
 import { BoundedProcessError, runBoundedProcess } from './run-bounded-darwin-command.mjs';
 
 const helperPath = join(dirname(fileURLToPath(import.meta.url)), 'run-bounded-darwin-command.mjs');
+
+const waitForFixtureProcessId = pidPath => {
+  const waitState = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const processId = Number(readFileSync(pidPath, 'utf8'));
+      if (Number.isInteger(processId) && processId > 0) return processId;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    Atomics.wait(waitState, 0, 0, 20);
+  }
+  assert.fail('timed-out waiting for descendant fixture readiness');
+};
 
 const waitForProcessExit = async processId => {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -44,6 +60,7 @@ test('bounds output while continuously draining both child streams', async () =>
 test('timeout terminates the owned process group including a descendant', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'propr-darwin-bound-'));
   const descendantPidPath = join(fixtureRoot, 'descendant.pid');
+  let descendantPid;
   try {
     await assert.rejects(runBoundedProcess({
       executable: process.execPath,
@@ -57,8 +74,10 @@ test('timeout terminates the owned process group including a descendant', async 
       timeoutMs: 300,
       terminationGraceMs: 100,
       maxOutputBytes: 1_024,
+      // Start the real timeout only after the descendant fixture is ready.
+      // This keeps CI scheduling delay out of the behavior the test is measuring.
+      onSpawn: () => { descendantPid = waitForFixtureProcessId(descendantPidPath); },
     }), error => error instanceof BoundedProcessError && error.reason === 'timeout');
-    const descendantPid = Number(await readFile(descendantPidPath, 'utf8'));
     assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
     await waitForProcessExit(descendantPid);
   } finally {
@@ -69,6 +88,7 @@ test('timeout terminates the owned process group including a descendant', async 
 test('SIGKILL escalation survives leader close and removes a TERM-ignoring descendant', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'propr-darwin-escalation-'));
   const descendantPidPath = join(fixtureRoot, 'descendant.pid');
+  let descendantPid;
   try {
     await assert.rejects(runBoundedProcess({
       executable: process.execPath,
@@ -86,13 +106,61 @@ test('SIGKILL escalation survives leader close and removes a TERM-ignoring desce
       timeoutMs: 500,
       terminationGraceMs: 150,
       maxOutputBytes: 1_024,
+      // Start the real timeout only after the descendant has installed its TERM handler.
+      // This keeps CI scheduling delay out of the behavior the test is measuring.
+      onSpawn: () => { descendantPid = waitForFixtureProcessId(descendantPidPath); },
     }), error => error instanceof BoundedProcessError
       && error.reason === 'timeout'
       && error.result.exitCode === 0);
-    const descendantPid = Number(await readFile(descendantPidPath, 'utf8'));
     assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
     await waitForProcessExit(descendantPid);
   } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test('a throwing readiness hook cleans up the owned process group', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'propr-darwin-readiness-'));
+  const descendantPidPath = join(fixtureRoot, 'descendant.pid');
+  const readinessError = new Error('readiness-hook-failed');
+  let groupLeaderPid;
+  let descendantPid;
+  try {
+    await assert.rejects(runBoundedProcess({
+      executable: process.execPath,
+      arguments: ['-e', [
+        'const { spawn } = require("node:child_process");',
+        'spawn(process.execPath, ["-e", [',
+        '  "const { writeFileSync } = require(\\"node:fs\\");",',
+        '  "process.on(\\"SIGTERM\\", () => {});",',
+        '  "writeFileSync(process.argv[1], String(process.pid));",',
+        '  "setInterval(() => {}, 1000);",',
+        '].join(" "), process.argv[1]], { stdio: "ignore" });',
+        'setInterval(() => {}, 1000);',
+      ].join(' '), descendantPidPath],
+      timeoutMs: 2_000,
+      terminationGraceMs: 150,
+      maxOutputBytes: 1_024,
+      onSpawn: child => {
+        groupLeaderPid = child.pid;
+        descendantPid = waitForFixtureProcessId(descendantPidPath);
+        throw readinessError;
+      },
+    }), error => error instanceof BoundedProcessError
+      && error.reason === 'spawn-or-io'
+      && error.result.cause === readinessError);
+    assert.ok(Number.isInteger(groupLeaderPid) && groupLeaderPid > 0);
+    assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+    await Promise.all([
+      waitForProcessExit(groupLeaderPid),
+      waitForProcessExit(descendantPid),
+    ]);
+  } finally {
+    if (groupLeaderPid) {
+      try { process.kill(-groupLeaderPid, 'SIGKILL'); } catch (error) {
+        if (error?.code !== 'ESRCH') throw error;
+      }
+    }
     await rm(fixtureRoot, { recursive: true, force: true });
   }
 });
