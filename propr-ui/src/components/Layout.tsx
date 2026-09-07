@@ -14,6 +14,7 @@ import { QueueStatsUpdatePayload, IndexingUpdatePayload, DraftUpdatePayload } fr
 import { useCurrentUser, userHasPermission } from '../contexts/AuthContext';
 import { ConnectCapacityBanner } from './ConnectPlusBanner';
 import { useNotificationCenter } from '../contexts/NotificationCenterContext';
+import VoiceBriefingControl from './VoiceBriefingControl';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -270,6 +271,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         <main className="mobile-content-clearance flex-1 overflow-y-auto md:pb-0">
           {children}
         </main>
+
+        <VoiceBriefingControl />
       </div>
     </div>
   );
