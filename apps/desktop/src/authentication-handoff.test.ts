@@ -219,36 +219,37 @@ exit 0
     }
   });
 
-  it('drains a TERM-resistant command after HUP during child identity capture', async () => {
+  it('drains a TERM-resistant command after HUP following admission', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-hup-test-'));
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
     const pidPath = join(directory, 'authentication.pid');
-    const admittedPath = join(directory, 'wrapper.child-admitted');
+    const admittedPath = join(directory, 'wrapper.command-admitted');
     const terminationObservedPath = join(directory, 'wrapper.termination-observed');
-    const releaseIdentityPath = join(directory, 'wrapper.release-identity');
+    const releaseHandlerPath = join(directory, 'wrapper.release-handler');
     try {
       await writeExecutable(terminal, `#!/bin/sh
 controlled_wrapper="$1.controlled"
 awk \\
   -v admitted="${admittedPath}" \\
   -v termination_observed="${terminationObservedPath}" \\
-  -v release_identity="${releaseIdentityPath}" '
-BEGIN { provisional = 0; admission = 0; quote = sprintf("%c", 34); sq = sprintf("%c", 39) }
+  -v release_handler="${releaseHandlerPath}" '
+BEGIN { handler = 0; admission = 0; quote = sprintf("%c", 34) }
 {
-  if (index($0, "trap") == 1 && index($0, "termination_requested=1") > 0) {
-    print "trap " sq "termination_requested=1; printf ready > " quote termination_observed quote sq " HUP INT TERM"
-    provisional++
+  if ($0 == "terminate() {") {
+    print
+    print "  printf ready > " quote termination_observed quote
+    handler++
     next
   }
   print
-  if ($0 == "child=$!") {
+  if (index($0, "admit >") > 0 && index($0, "admission_file") > 0) {
     print "printf ready > " quote admitted quote
-    print "while [ ! -f " quote release_identity quote " ]; do sleep 0.01; done"
+    print "while [ ! -f " quote release_handler quote " ]; do sleep 0.01; done"
     admission++
   }
 }
-END { if (provisional != 1 || admission != 1) exit 1 }
+END { if (handler != 1 || admission != 1) exit 1 }
 ' "$1" > "$controlled_wrapper" || exit 91
 chmod 700 "$controlled_wrapper" || exit 92
 shift
@@ -257,7 +258,7 @@ wrapper=$!
 while [ ! -s "${admittedPath}" ] || [ ! -s "${pidPath}" ]; do sleep 0.01; done
 kill -HUP "$wrapper"
 while [ ! -s "${terminationObservedPath}" ]; do sleep 0.01; done
-printf release > "${releaseIdentityPath}"
+printf release > "${releaseHandlerPath}"
 wait "$wrapper"
 `);
       await writeExecutable(authentication, `#!/bin/sh\ntrap '' TERM INT HUP\nprintf '%s' "$$" > "${pidPath}"\nwhile :; do sleep 1; done\n`);
@@ -272,46 +273,47 @@ wait "$wrapper"
     }
   });
 
-  it('does not execute authentication after HUP before child admission', async () => {
+  it('does not execute authentication after HUP between the guard and admission commit', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-early-hup-test-'));
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
     const executedPath = join(directory, 'authentication.executed');
-    const provisionalReadyPath = join(directory, 'wrapper.provisional-ready');
+    const guardPassedPath = join(directory, 'wrapper.guard-passed');
     const terminationObservedPath = join(directory, 'wrapper.termination-observed');
-    const releaseLaunchPath = join(directory, 'wrapper.release-launch');
     const controller = new AbortController();
     let timeout: NodeJS.Timeout | undefined;
     try {
-      // Add a test-only barrier after the provisional trap so HUP delivery
-      // deterministically precedes the wrapper's child-admission check.
+      // Add a test-only barrier after the last flag guard and before the
+      // signal-handler transition that commits admission.
       await writeExecutable(terminal, `#!/bin/sh
 controlled_wrapper="$1.controlled"
 awk \\
-  -v provisional_ready="${provisionalReadyPath}" \\
-  -v termination_observed="${terminationObservedPath}" \\
-  -v release_launch="${releaseLaunchPath}" '
-BEGIN { provisional = 0; quote = sprintf("%c", 34); sq = sprintf("%c", 39) }
+  -v guard_passed="${guardPassedPath}" \\
+  -v termination_observed="${terminationObservedPath}" '
+BEGIN { guard = 0; rejection = 0; quote = sprintf("%c", 34) }
 {
-  if (index($0, "trap") == 1 && index($0, "termination_requested=1") > 0) {
-    print "trap " sq "termination_requested=1; printf ready > " quote termination_observed quote sq " HUP INT TERM"
-    print "printf ready > " quote provisional_ready quote
-    print "while [ ! -f " quote release_launch quote " ]; do sleep 0.01; done"
-    provisional++
+  if ($0 == "reject_before_admission() {") {
+    print
+    print "  printf ready > " quote termination_observed quote
+    rejection++
     next
   }
   print
+  if (index($0, "termination_requested") > 0 && index($0, "|| reject_before_admission") > 0) {
+    print "printf ready > " quote guard_passed quote
+    print "while :; do sleep 0.01; done"
+    guard++
+  }
 }
-END { if (provisional != 1) exit 1 }
+END { if (guard != 1 || rejection != 1) exit 1 }
 ' "$1" > "$controlled_wrapper" || exit 91
 chmod 700 "$controlled_wrapper" || exit 92
 shift
 "$controlled_wrapper" "$@" >/dev/null 2>&1 &
 wrapper=$!
-while [ ! -s "${provisionalReadyPath}" ]; do sleep 0.01; done
+while [ ! -s "${guardPassedPath}" ]; do sleep 0.01; done
 kill -HUP "$wrapper"
 while [ ! -s "${terminationObservedPath}" ]; do sleep 0.01; done
-printf release > "${releaseLaunchPath}"
 wait "$wrapper"
 `);
       await writeExecutable(authentication, `#!/bin/sh\nprintf executed > "${executedPath}"\n`);
