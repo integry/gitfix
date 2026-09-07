@@ -35,6 +35,18 @@ const taskOne = item('task', 1, ['open']);
 const taskTwo = item('task', 2, ['open', 'stop']);
 const planOne = item('plan', 1, ['open', 'follow_up']);
 const systemOne = item('system', 1, []);
+const spokenNumbers = [
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
+] as const;
 
 const briefing: VoiceBriefingResponse = {
   generatedAt: NOW,
@@ -57,7 +69,7 @@ describe('voice command parser', () => {
     expect(parseVoiceCommand(transcript, briefing)).toEqual(expected);
   });
 
-  test('resolves numeric and spoken references by kind and response position', () => {
+  test('resolves numeric references by kind and response position', () => {
     expect(parseVoiceCommand('open plan 1', briefing)).toEqual({
       type: 'open',
       item: planOne,
@@ -73,6 +85,22 @@ describe('voice command parser', () => {
       requiresConfirmation: true,
     });
   });
+
+  test.each(spokenNumbers)(
+    'resolves the spoken-number reference %s',
+    (spokenNumber) => {
+      const spokenNumberBriefing = {
+        ...briefing,
+        items: spokenNumbers.map((_, index) => item('task', index + 1, ['open'])),
+      };
+      const position = spokenNumbers.indexOf(spokenNumber) + 1;
+
+      expect(parseVoiceCommand(`open task ${spokenNumber}`, spokenNumberBriefing)).toEqual({
+        type: 'open',
+        item: spokenNumberBriefing.items[position - 1],
+      });
+    },
+  );
 
   test('creates a bounded pending follow-up without changing the selected item', () => {
     const followUpTask: VoiceBriefingItem = {
