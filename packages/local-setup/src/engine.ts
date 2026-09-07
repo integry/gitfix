@@ -737,6 +737,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
         // enrollment request. Discovery access itself is not ownership proof.
         failurePhase = "discovery";
         const rechecked = await actions.fetchRelayInstallations({ relayUrl });
+        options.signal?.throwIfAborted();
         if (rechecked.username !== username || !rechecked.installations.some(
           item => String(item.installation_id) === installationId
         )) {
@@ -805,6 +806,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       const automaticConnectApplies =
         managedTunnelEnabled ||
         (usesHostedConnect && isSupportedLoopbackCallback(callbackUrl));
+      options.signal?.throwIfAborted();
       actions.applyEnvSelection(
         rootDir,
         {

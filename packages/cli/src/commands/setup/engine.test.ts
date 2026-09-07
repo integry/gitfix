@@ -853,6 +853,58 @@ test("relay enrollment asks the user to pick among multiple installations", asyn
   assert.equal(enrolledId, "200", "the picked installation is the one enrolled");
 });
 
+test("cancellation during installation revalidation prevents enrollment", async () => {
+  const controller = new AbortController();
+  let discoveryCalls = 0;
+  let enrolled = false;
+  const result = await runSetup({
+    root: "/stack",
+    signal: controller.signal,
+    prompts: relayPrompts({ selectInstallation: async () => "100" }),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      fetchRelayInstallations: async () => {
+        discoveryCalls += 1;
+        if (discoveryCalls === 2) controller.abort();
+        return { username: "octocat", installations: [inst(100, "acme")] };
+      },
+      enrollRelay: async () => {
+        enrolled = true;
+        return { relayUrl: "https://relay/v1", token: "prt_x" };
+      },
+    }),
+  });
+  assert.equal(discoveryCalls, 2);
+  assert.equal(enrolled, false);
+  assert.equal(result.completed, false);
+});
+
+test("cancellation during enrollment prevents applying the returned token", async () => {
+  const controller = new AbortController();
+  let relayConfigurationApplied = false;
+  const result = await runSetup({
+    root: "/stack",
+    signal: controller.signal,
+    prompts: relayPrompts({ selectInstallation: async () => "100" }),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      fetchRelayInstallations: async () => ({
+        username: "octocat", installations: [inst(100, "acme")],
+      }),
+      enrollRelay: async () => {
+        controller.abort();
+        return { relayUrl: "https://relay/v1", token: "prt_x" };
+      },
+      applyEnvSelection: (_root, vars) => {
+        if (vars.GH_AUTH_MODE === "relay") relayConfigurationApplied = true;
+        return { written: Object.keys(vars), skipped: [] };
+      },
+    }),
+  });
+  assert.equal(relayConfigurationApplied, false);
+  assert.equal(result.completed, false);
+});
+
 test("relay enrollment never silently chooses the first of multiple installations", async () => {
   let enrolled = false;
   const result = await runSetup({

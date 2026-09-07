@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, ChevronRight, CircleAlert, ExternalLink, Github, KeyRound, LoaderCircle, RefreshCw, RotateCcw, UserRoundCog, X } from 'lucide-react';
 import type {
   DesktopFilesystemSelection, DesktopGithubInstallationDecision, DesktopGithubSelectedIdentity,
@@ -66,10 +66,32 @@ const GithubInstallationChoice: React.FC<{
 }> = ({ snapshot, busy, choose }) => {
   const identity = snapshot.githubIdentity!;
   const [selected, setSelected] = useState(identity.selectedInstallationId ?? '');
+  const installationIds = identity.installations.map(item => item.installationId).join(':');
+  const previousIdentity = useRef({
+    username: identity.username,
+    installationIds,
+    selectedInstallationId: identity.selectedInstallationId,
+  });
   useEffect(() => {
-    if (identity.selectedInstallationId) setSelected(identity.selectedInstallationId);
-    else if (!identity.installations.some(item => item.installationId === selected)) setSelected('');
-  }, [identity.installations, identity.selectedInstallationId, selected]);
+    const previous = previousIdentity.current;
+    const accountChanged = previous.username !== identity.username;
+    const installationsChanged = previous.installationIds !== installationIds;
+    const serverSelectionChanged = previous.selectedInstallationId !== identity.selectedInstallationId;
+    previousIdentity.current = {
+      username: identity.username,
+      installationIds,
+      selectedInstallationId: identity.selectedInstallationId,
+    };
+    if (!accountChanged && !installationsChanged && !serverSelectionChanged) return;
+    const available = new Set(installationIds.split(':').filter(Boolean));
+    setSelected(current => {
+      if (accountChanged) return '';
+      if (identity.selectedInstallationId && available.has(identity.selectedInstallationId)) {
+        return identity.selectedInstallationId;
+      }
+      return available.has(current) ? current : '';
+    });
+  }, [identity.selectedInstallationId, identity.username, installationIds]);
   const waiting = ['refreshing', 'installing', 'reauthenticating', 'enrolling'].includes(identity.status);
   return <section className="desktop-github-choice" aria-labelledby="desktop-github-choice-title">
     <div className="desktop-github-identity"><Github aria-hidden="true" /><div><small>Authenticated GitHub account</small><strong>@{identity.username}</strong></div></div>
@@ -86,7 +108,10 @@ const GithubInstallationChoice: React.FC<{
     <div className="desktop-github-actions">
       <button type="button" className="desktop-secondary-button" disabled={busy || waiting} onClick={() => choose({ action: 'refresh' })}><RefreshCw /> Refresh installations</button>
       {identity.installAvailable && <button type="button" className="desktop-secondary-button" disabled={busy || waiting} onClick={() => choose({ action: 'install' })}><ExternalLink /> Install GitHub App</button>}
-      <button type="button" className="desktop-secondary-button" disabled={busy || waiting} onClick={() => choose({ action: 'reauthenticate' })}><UserRoundCog /> Change GitHub account</button>
+      <button type="button" className="desktop-secondary-button" disabled={busy || waiting} onClick={() => {
+        setSelected('');
+        choose({ action: 'reauthenticate' });
+      }}><UserRoundCog /> Change GitHub account</button>
     </div>
     <button type="button" className="desktop-primary-button" disabled={busy || waiting || !selected}
       onClick={() => choose({ action: 'select', installationId: selected })}>
