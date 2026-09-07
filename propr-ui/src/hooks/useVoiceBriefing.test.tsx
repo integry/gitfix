@@ -356,6 +356,26 @@ describe('useVoiceBriefing', () => {
     expect(result.current.phase).toBe('idle');
   });
 
+  it('stops current speech and suppresses speech from an abandoned request', async () => {
+    const activeRequest = deferred<VoiceBriefingResponse>();
+    vi.mocked(getVoiceBriefing).mockReturnValue(activeRequest.promise);
+    const { result } = renderHook(() => useVoiceBriefing());
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current.requestBriefing();
+    });
+    act(() => result.current.stopAudio());
+
+    await act(async () => {
+      activeRequest.resolve(snapshot());
+      await request;
+    });
+
+    expect(speakOnce).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe('idle');
+  });
+
   it('waits for an active briefing request before processing a destructive command', async () => {
     const activeRequest = deferred<VoiceBriefingResponse>();
     const current = snapshot('Task two is now current.', 'running', 'task-2');

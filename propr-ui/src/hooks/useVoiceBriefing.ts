@@ -62,6 +62,8 @@ export interface VoiceBriefingController {
   handleTranscript: (transcript: string) => Promise<void>;
   confirmPendingAction: () => Promise<void>;
   cancelPendingAction: () => void;
+  /** Stop browser audio and abandon any still-loading interaction. */
+  stopAudio: () => void;
   clearError: () => void;
 }
 
@@ -145,6 +147,7 @@ export function useVoiceBriefing(
   const scopeRef = useRef<VoiceBriefingScope>('all');
   const speechRef = useRef<CancellableSpeech | null>(null);
   const speechRunRef = useRef(0);
+  const suppressSpeechRef = useRef(false);
   const recognitionRef = useRef<AbortController | null>(null);
   const mutationInFlightRef = useRef(false);
   const requestRunRef = useRef(0);
@@ -182,7 +185,9 @@ export function useVoiceBriefing(
     exposeSpeakingPhase = true,
   ): Promise<void> => {
     cancelSpeech();
-    if (!capabilities.speechSynthesis || document.visibilityState === 'hidden') {
+    if (suppressSpeechRef.current
+      || !capabilities.speechSynthesis
+      || document.visibilityState === 'hidden') {
       setPhase(settledPhase);
       return;
     }
@@ -218,6 +223,7 @@ export function useVoiceBriefing(
     scope: VoiceBriefingScope = 'all',
   ): Promise<void> => {
     if (mutationInFlightRef.current) return;
+    suppressSpeechRef.current = false;
     const run = requestRunRef.current + 1;
     requestRunRef.current = run;
     unresolvedBriefingRequestRunRef.current = run;
@@ -250,6 +256,7 @@ export function useVoiceBriefing(
 
   const repeatBriefing = useCallback(async (): Promise<void> => {
     if (mutationInFlightRef.current) return;
+    suppressSpeechRef.current = false;
     cancelRecognition();
     const latest = briefingRef.current;
     if (!latest) {
@@ -274,6 +281,7 @@ export function useVoiceBriefing(
   const confirmPendingAction = useCallback(async (): Promise<void> => {
     const action = pendingActionRef.current;
     if (!action || mutationInFlightRef.current) return;
+    suppressSpeechRef.current = false;
     const targetId = mutationTarget(action.item);
     if (!targetId) {
       showError(missingMutationTargetMessage(action));
@@ -393,6 +401,7 @@ export function useVoiceBriefing(
     if (recognitionRef.current
       || mutationInFlightRef.current
       || unresolvedBriefingRequestRunRef.current !== null) return;
+    suppressSpeechRef.current = false;
     if (document.visibilityState === 'hidden') {
       setPhase(pendingActionRef.current ? 'confirming' : 'idle');
       return;
@@ -434,6 +443,19 @@ export function useVoiceBriefing(
     }
   }, [cancelSpeech, handleTranscript, setPhase, showError]);
 
+  const stopAudio = useCallback(() => {
+    // Suppress speech that an already-running confirmed mutation may otherwise
+    // start after its refresh completes. Explicit future actions opt back in.
+    suppressSpeechRef.current = true;
+    requestRunRef.current += 1;
+    unresolvedBriefingRequestRunRef.current = null;
+    cancelRecognition();
+    cancelSpeech();
+    if (!mutationInFlightRef.current) {
+      setPhase(pendingActionRef.current ? 'confirming' : 'idle');
+    }
+  }, [cancelRecognition, cancelSpeech, setPhase]);
+
   const clearError = useCallback(() => {
     if (mountedRef.current) setError(null);
     setPhase(pendingActionRef.current ? 'confirming' : 'idle');
@@ -472,6 +494,7 @@ export function useVoiceBriefing(
     handleTranscript,
     confirmPendingAction,
     cancelPendingAction,
+    stopAudio,
     clearError,
   };
 }
