@@ -25,7 +25,7 @@ interface MockIssue {
     labels: { name: string }[];
     created_at: string;
     updated_at: string;
-    user?: { login: string };
+    user?: { id: number; login: string };
     pull_request?: unknown;
 }
 
@@ -87,7 +87,7 @@ test('fetchIssuesForRepo maps issues to DetectedIssue records', async () => {
         labels: [{ name: 'AI' }, { name: 'bug' }],
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-02T00:00:00Z',
-        user: { login: 'octocat' },
+        user: { id: 583231, login: 'octocat' },
     };
     const octokit = makeOctokit(async () => [mockIssue]);
 
@@ -104,8 +104,9 @@ test('fetchIssuesForRepo maps issues to DetectedIssue records', async () => {
         labels: ['AI', 'bug'],
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-02T00:00:00Z',
-        // No whitelist configured → triggeredBy is the issue author.
+        // No whitelist configured → the issue author owns the polling job.
         triggeredBy: 'octocat',
+        triggeredById: '583231',
         source: 'polling',
     });
 });
@@ -114,7 +115,7 @@ test('fetchIssuesForRepo excludes pull requests and -processing/-done labels', a
     const base = {
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-02T00:00:00Z',
-        user: { login: 'octocat' },
+        user: { id: 583231, login: 'octocat' },
     };
     const items: MockIssue[] = [
         // A pull request surfaced by the issues endpoint — must be dropped.

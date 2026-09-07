@@ -435,7 +435,9 @@ export async function fetchIssuesForRepo(octokit: PaginatedOctokitInstance, repo
             const results = await Promise.all(batch.map(async (issue) => {
                 const labels = issue.labels.map(l => typeof l === 'string' ? l : l.name);
                 let triggeredBy: string | undefined = issue.user?.login;
-                let triggeredById: string | undefined;
+                let triggeredById: string | undefined = issue.user && Number.isSafeInteger(issue.user.id)
+                    ? String(issue.user.id)
+                    : undefined;
                 if (hasWhitelist) {
                     const labelApplier = await resolveLabelApplierCached({
                         octokit, owner, repo, issueNumber: issue.number,
