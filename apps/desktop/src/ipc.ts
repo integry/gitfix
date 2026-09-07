@@ -8,6 +8,11 @@ import type { LocalLifecycleController } from './lifecycle';
 import type { ProfileStore } from './profile-store';
 import type { DesktopSetupController } from './setup-controller';
 import {
+  isDesktopNotificationScope,
+  isDesktopTaskTransition,
+  type NativeNotificationService,
+} from './native-notifications';
+import {
   connectApiBaseUrlFromDeepLink,
   dashboardPathFromDeepLink,
   isSafeExternalUrl,
@@ -33,6 +38,7 @@ interface RegisterIpcOptions {
   connectDiscovery: Pick<DesktopConnectDiscoveryService, 'discover' | 'rediscover'>;
   lifecycle: LocalLifecycleController;
   setup?: DesktopSetupController;
+  notifications?: Pick<NativeNotificationService, 'get' | 'update' | 'test' | 'publish' | 'clear'>;
   logger: DesktopLogger;
   desktopSession: Session;
   devServerUrl: string | undefined;
@@ -197,6 +203,30 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     await options.openExternal(value);
   });
   handle(IPC_CHANNELS.storageSecurity, () => options.credentials.storageSecurity());
+  if (options.notifications) {
+    handle(IPC_CHANNELS.notificationsGet, (_event, scope, ...args) => {
+      if (args.length || !isDesktopNotificationScope(scope)) throw new Error('Invalid notification scope');
+      return options.notifications!.get(scope);
+    });
+    handle(IPC_CHANNELS.notificationsUpdate, (_event, scope, preferences, ...args) => {
+      if (args.length || !isDesktopNotificationScope(scope)) throw new Error('Invalid notification settings request');
+      return options.notifications!.update(scope, preferences);
+    });
+    handle(IPC_CHANNELS.notificationsTest, (_event, scope, ...args) => {
+      if (args.length || !isDesktopNotificationScope(scope)) throw new Error('Invalid notification test request');
+      return options.notifications!.test(scope);
+    });
+    handle(IPC_CHANNELS.notificationsPublish, (_event, scope, transition, ...args) => {
+      if (args.length || !isDesktopNotificationScope(scope) || !isDesktopTaskTransition(transition)) {
+        throw new Error('Invalid task notification event');
+      }
+      return options.notifications!.publish(scope, transition);
+    });
+    handle(IPC_CHANNELS.notificationsClear, (_event, scope, ...args) => {
+      if (args.length || !isDesktopNotificationScope(scope)) throw new Error('Invalid notification clear request');
+      options.notifications!.clear(scope);
+    });
+  }
   handle(IPC_CHANNELS.profilesList, () => options.credentials.listProfiles());
   handle(IPC_CHANNELS.profilesSave, async (_event, input) => {
     const profile = await options.credentials.saveProfile(

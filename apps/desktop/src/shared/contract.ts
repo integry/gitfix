@@ -35,6 +35,12 @@ export const IPC_CHANNELS = Object.freeze({
   deepLinkConsumerReady: 'desktop:deep-link-consumer-ready',
   deepLinkAcknowledgement: 'desktop:deep-link-acknowledgement',
   acceptanceJourneyStage: 'desktop:acceptance-journey-stage',
+  notificationsGet: 'desktop:notifications-get',
+  notificationsUpdate: 'desktop:notifications-update',
+  notificationsTest: 'desktop:notifications-test',
+  notificationsPublish: 'desktop:notifications-publish',
+  notificationsClear: 'desktop:notifications-clear',
+  notificationNavigate: 'desktop:notification-navigate',
 } as const);
 
 export interface DesktopDeepLinkDelivery {
@@ -144,6 +150,43 @@ export interface DesktopActivatedConnection extends DesktopConnectionScope {
 
 export interface DesktopAccessInvalidation extends DesktopConnectionScope {
   code: string;
+}
+
+export interface DesktopNotificationScope extends DesktopConnectionScope {
+  /** Authenticated instance user. Preferences remain local to this device. */
+  userId: string;
+}
+
+export interface DesktopNotificationPreferences {
+  enabled: boolean;
+  taskStarted: boolean;
+  taskCompleted: boolean;
+  taskFailed: boolean;
+  taskNeedsAttention: boolean;
+}
+
+export interface DesktopNotificationCapability {
+  supported: boolean;
+  platform: DesktopPlatform;
+  /** Electron cannot observe Focus/DND or whether the OS actually displayed a banner. */
+  permission: 'unknown' | 'unsupported';
+  reason?: 'platform-deferred' | 'native-api-unavailable';
+}
+
+export interface DesktopNotificationSettings {
+  preferences: DesktopNotificationPreferences;
+  capability: DesktopNotificationCapability;
+  scope: 'account-instance-device';
+}
+
+export interface DesktopTaskTransition {
+  taskId: string;
+  state: string;
+  previousState: string;
+  repository?: string;
+  issueNumber?: number;
+  timestamp: string;
+  version?: number;
 }
 
 export type LocalLifecycleState = 'disconnected' | 'starting' | 'connected' | 'stopping' | 'error';
@@ -302,6 +345,17 @@ export interface DesktopBridge {
     acquireWebhookSecret(): Promise<DesktopSecretSelection | null>;
     resolveGithubInstallation(decision: DesktopGithubInstallationDecision): Promise<DesktopSetupSnapshot>;
     onProgress(listener: (snapshot: DesktopSetupSnapshot) => void): () => void;
+  };
+  notifications?: {
+    get(scope: DesktopNotificationScope): Promise<DesktopNotificationSettings>;
+    update(
+      scope: DesktopNotificationScope,
+      preferences: Partial<DesktopNotificationPreferences>,
+    ): Promise<DesktopNotificationSettings>;
+    test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }>;
+    publish(scope: DesktopNotificationScope, transition: DesktopTaskTransition): Promise<{ accepted: boolean }>;
+    clear(scope: DesktopNotificationScope): Promise<void>;
+    onNavigate(listener: (path: string) => void): () => void;
   };
   /** @internal Present only in an authorized packaged Connect acceptance process. */
   acceptance?: {

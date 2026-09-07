@@ -79,9 +79,9 @@ const EnrollmentControl: React.FC = () => {
   if (!push.serviceWorkerOriginSupported) {
     return (
       <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs leading-5 text-gray-700">
-        Browser Web Push is not available in the ProPR desktop app. Native desktop
-        notifications are not implemented yet. Your personal notification preferences and
-        inbox notifications still apply.
+        Browser Web Push is not available in the ProPR desktop app. Use the Desktop notifications
+        section on this page to configure native task alerts for this device. Your personal
+        notification preferences and inbox notifications still apply.
       </div>
     );
   }
