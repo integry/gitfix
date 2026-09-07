@@ -200,10 +200,15 @@ describe('GoalsPage', () => {
     render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
     expect((await screen.findAllByText('Implement API')).length).toBeGreaterThan(0);
     expect(screen.getByText('15')).toBeInTheDocument();
-    expect(screen.getByText('Agent orchestrates through ProPR')).toBeInTheDocument();
+    expect(screen.getByText('ProPR orchestrated')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: goal.title })).toBeInTheDocument();
     expect(screen.getByText('Goal description')).toBeInTheDocument();
     expect(screen.getByText(/\/goal Ship the dashboard/)).toBeInTheDocument();
+    expect(screen.getByRole('main', { name: 'Goal monitor' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Steering console' })).toBeInTheDocument();
+    expect(screen.getAllByText('GPT-5.6 Sol').length).toBeGreaterThan(0);
+    expect(screen.queryByText('gpt-5.6-sol')).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'GPT-5.6 Luna' })).toHaveValue('gpt-5.6-luna');
     fireEvent.click(screen.getByRole('button', { name: "What's done?" }));
     await waitFor(() => expect(goalsApi.sendGoalInput).toHaveBeenCalledWith('goal-1', { canned: 'done' }));
     expect(goalsApi.pauseGoal).not.toHaveBeenCalled();
@@ -261,6 +266,7 @@ describe('GoalsPage', () => {
   it('confirms deletion and returns to the goals list after the server stops and removes the goal', async () => {
     vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
     render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /><Route path="/goals" element={<div>Goals list</div>} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByLabelText('More goal actions'));
     fireEvent.click(await screen.findByRole('button', { name: 'Delete goal' }));
     await waitFor(() => expect(goalsApi.deleteGoal).toHaveBeenCalledWith('goal-1'));
     expect(await screen.findByText('Goals list')).toBeInTheDocument();

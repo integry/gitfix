@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Activity, CheckCircle2, Circle, CircleDot, CirclePause, CirclePlay, CircleStop, Clock3,
   Coins, ExternalLink, FileText, GitPullRequest, Github, ListTodo, LoaderCircle, Plus, Send,
-  Terminal, Trash2,
+  MoreHorizontal, Terminal, Trash2,
 } from 'lucide-react';
 import { getInstanceCatalog } from '../api/proprApi';
 import type { InstanceCatalogRepository } from '../api/proprTypes';
@@ -14,7 +14,6 @@ import {
 } from '../api/goals';
 import { useTaskLiveData } from '../components/TaskDetails/useTaskLiveData';
 import TodoList from '../components/TaskDetails/TodoList';
-import RealTimeStats from '../components/TaskDetails/RealTimeStats';
 import ExecutionEventLog from '../components/TaskDetails/ExecutionEventLog';
 import ThinkingLog from '../components/TaskDetails/ThinkingLog';
 import { useThinkingLog } from '../components/TaskDetails/useThinkingLog';
@@ -103,7 +102,10 @@ const capabilityAgentLabel = (agent: GoalCapability, agents: GoalCapability[]) =
 function GoalState({ goal }: { goal: Goal }) {
   const state = goal.resultState || (goal.desiredState === 'cancelled' ? 'cancelling' : goal.desiredState);
   const color = state === 'completed' ? 'bg-green-100 text-green-800' : state === 'failed' || state === 'cancelled' ? 'bg-red-100 text-red-800' : state === 'paused' || state === 'cancelling' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800';
-  return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${color}`}>{state}</span>;
+  return <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${color}`}>
+    {state === 'running' && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+    {state}
+  </span>;
 }
 
 function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['checkpoint']> }) {
@@ -118,7 +120,7 @@ function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['c
     <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
     <dd className="mt-1 flex flex-wrap gap-1.5">{values.map(value => <code key={value} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">{value}</code>)}</dd>
   </div>;
-  return <section aria-label="Latest checkpoint declaration" className="mt-3 rounded-md border border-indigo-100 bg-white p-3 text-slate-800">
+  return <section aria-label="Latest checkpoint declaration" className="mt-3 border-t border-blue-200 pt-3 text-slate-800">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h2 className="font-semibold">Latest checkpoint declaration</h2>
       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${badgeClass}`}>{latest.state}</span>
@@ -366,48 +368,134 @@ function GoalDetails({ goalId }: { goalId: string }) {
   const terminal = Boolean(goal.resultState);
   const cancelling = !terminal && goal.desiredState === 'cancelled';
   const mutable = !terminal && !cancelling;
-  return <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
-    <Link to="/goals" className="text-sm text-primary-600 hover:underline">← All goals</Link>
-    <header className="rounded-lg border bg-white p-5"><div className="flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-xl font-bold text-slate-900">{goal.title}</h1><p className="mt-2 text-sm text-slate-500">{goal.repository} · {goal.agent.alias}</p></div><GoalState goal={goal} /></div>
-      <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-7"><div><dt className="text-slate-500">Launch strategy</dt><dd className="font-medium">{goal.launchStrategy === 'direct' ? 'Agent implements directly' : 'Agent orchestrates through ProPR'}</dd></div><div><dt className="text-slate-500">Requested model</dt><dd className="font-medium">{goal.requestedModel}</dd></div><div><dt className="text-slate-500">Effective model</dt><dd className="font-medium">{goal.effectiveModel || 'Pending provider report'}</dd></div><div><dt className="text-slate-500">Current task</dt><dd className="font-medium">{live.currentTask || goal.taskState}</dd></div><div><dt className="text-slate-500">Elapsed</dt><dd className="font-medium">{duration(goal.elapsedMs)}</dd></div><div><dt className="text-slate-500">Active</dt><dd className="font-medium">{duration(goal.activeMs)}</dd></div><div><dt className="text-slate-500">Paused</dt><dd className="font-medium">{duration(goal.pausedMs)}</dd></div></dl>
-      <div className="mt-4 flex flex-wrap gap-2">{goal.desiredState === 'running' && mutable && <button disabled={busy} onClick={() => act(() => pauseGoal(goal.id))} className={`${buttonClass} bg-amber-100 text-amber-800`}><CirclePause className="h-4 w-4" />Pause</button>}{goal.desiredState === 'paused' && mutable && <button disabled={busy} onClick={() => act(() => resumeGoal(goal.id))} className={`${buttonClass} bg-green-100 text-green-800`}><CirclePlay className="h-4 w-4" />{goal.pausePending ? 'Resume after safe boundary' : 'Resume'}</button>}{mutable && <button disabled={busy} onClick={() => act(() => cancelGoal(goal.id))} className={`${buttonClass} bg-red-100 text-red-800`}><CircleStop className="h-4 w-4" />Cancel</button>}<Link to={`/tasks/${goal.taskId}`} className={`${buttonClass} bg-slate-100 text-slate-700`}>Open task history</Link>{goal.finalPr && <a href={goal.finalPr.url} target="_blank" rel="noreferrer" className={`${buttonClass} bg-primary-50 text-primary-700`}>{goal.launchStrategy === 'direct' ? 'Open draft PR' : 'Review final PR'} <ExternalLink className="h-4 w-4" /></a>}<button disabled={busy} onClick={remove} className={`${buttonClass} border border-red-200 bg-white text-red-700 hover:bg-red-50`}><Trash2 className="h-4 w-4" />Delete goal</button></div>
-      {cancelling && <p className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-800">Cancelling at the provider boundary and cleaning up the active session…</p>}
-      <p className="mt-3 text-xs text-slate-500">{goal.artifactStats.openIssues}/{goal.artifactStats.issues} open issues · {goal.artifactStats.openPullRequests}/{goal.artifactStats.pullRequests} open PRs</p>
-      {goal.checkpoint && <div className="mt-3 rounded-md bg-indigo-50 p-3 text-sm text-indigo-900">
-        <div className="flex flex-wrap items-center gap-3">
-          <span>{goal.checkpoint.count} checkpoint commit{goal.checkpoint.count === 1 ? '' : 's'}{goal.checkpoint.lastAt ? ` · last ${new Date(goal.checkpoint.lastAt).toLocaleString()}` : ''}</span>
-          <span>Target cadence: about every {goal.checkpoint.intervalMinutes || 15} minutes.</span>
-          <span className="text-xs text-indigo-700">The agent declares when coherent work is ready.</span>
-          {goal.checkpoint.error && !goal.checkpoint.latest?.error && <span className="text-red-700">Checkpoint error: {goal.checkpoint.error}</span>}
+  const strategyLabel = goal.launchStrategy === 'direct' ? 'Direct' : 'ProPR orchestrated';
+  const currentModel = getModelDisplayName(goal.effectiveModel || goal.requestedModel);
+  return <div className="min-h-full bg-white text-slate-900">
+    <header className="border-b border-slate-200 px-4 py-4 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl">
+        <div className="flex items-center justify-between gap-4">
+          <Link to="/goals" className="text-sm font-medium text-slate-600 transition hover:text-primary-700">← All goals</Link>
+          <GoalState goal={goal} />
         </div>
-        <CheckpointDeclaration checkpoint={goal.checkpoint} />
-      </div>}
-      {goal.artifacts.length > 0 && <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">{goal.artifacts.map((artifact, index) => { const item = artifact as { type?: string; number?: number; url?: string }; return item.url ? <a key={item.url} href={item.url} target="_blank" rel="noreferrer" className="rounded bg-slate-100 px-2 py-1 hover:underline">{item.type === 'pull_request' ? 'PR' : 'Issue'} #{item.number}</a> : <span key={index} />; })}</div>}
-      <details className="mt-4 rounded-md bg-slate-50 p-3 text-sm"><summary className="cursor-pointer font-medium text-slate-700">Goal description</summary><p className="mt-3 whitespace-pre-wrap break-words text-slate-600">{goal.objective}</p></details>
-      <details className="mt-4 rounded-md bg-slate-50 p-3 text-sm"><summary className="cursor-pointer font-medium text-slate-700">Initial provider prompt</summary><pre className="mt-3 whitespace-pre-wrap break-words font-mono text-xs text-slate-600">{goal.initialPrompt}</pre></details>
+        <h1 className="mt-4 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{goal.title}</h1>
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-700">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Strategy</span>
+          <span className="font-medium">{strategyLabel}</span>
+          <span aria-hidden="true" className="text-slate-300">•</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Model</span>
+          <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs font-semibold text-slate-700">{currentModel}</code>
+          <span aria-hidden="true" className="text-slate-300">•</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Elapsed</span>
+          <span className="font-mono text-xs font-semibold text-slate-700">{duration(goal.elapsedMs)}</span>
+          <span aria-hidden="true" className="hidden text-slate-300 sm:inline">•</span>
+          <span className="text-xs text-slate-500">{goal.repository} · {goal.agent.alias}</span>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-4">
+          {goal.desiredState === 'running' && mutable && <button disabled={busy} onClick={() => act(() => pauseGoal(goal.id))} className={`${buttonClass} border border-amber-300 text-amber-800 hover:bg-amber-50`}><CirclePause className="h-4 w-4" />Pause</button>}
+          {goal.desiredState === 'paused' && mutable && <button disabled={busy} onClick={() => act(() => resumeGoal(goal.id))} className={`${buttonClass} border border-green-300 text-green-800 hover:bg-green-50`}><CirclePlay className="h-4 w-4" />{goal.pausePending ? 'Resume after safe boundary' : 'Resume'}</button>}
+          {mutable && <button disabled={busy} onClick={() => act(() => cancelGoal(goal.id))} className={`${buttonClass} border border-red-300 text-red-700 hover:bg-red-50`}><CircleStop className="h-4 w-4" />Cancel</button>}
+          {goal.finalPr && <a href={goal.finalPr.url} target="_blank" rel="noreferrer" className={`${buttonClass} bg-primary-600 text-white shadow-sm hover:bg-primary-700`}><GitPullRequest className="h-4 w-4" />{goal.launchStrategy === 'direct' ? 'Open draft PR' : 'Review final PR'} <ExternalLink className="h-3.5 w-3.5" /></a>}
+          <details className="group relative">
+            <summary aria-label="More goal actions" className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md border border-slate-300 text-slate-600 transition hover:bg-slate-50 [&::-webkit-details-marker]:hidden"><MoreHorizontal className="h-4 w-4" /></summary>
+            <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+              <Link to={`/tasks/${goal.taskId}`} className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Open task history</Link>
+              <button disabled={busy} onClick={remove} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4" />Delete goal</button>
+            </div>
+          </details>
+        </div>
+      </div>
     </header>
-    {error && <p role="alert" className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-    {goal.failureReason && <p role="alert" className="rounded bg-red-50 p-3 text-sm text-red-700">{goal.failureReason}</p>}
-    {mutable && <section className="rounded-lg border bg-white p-4"><div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => continueWith({ canned: 'done' })} className={`${buttonClass} bg-slate-100`}>What's done?</button><button disabled={busy} onClick={() => continueWith({ canned: 'left' })} className={`${buttonClass} bg-slate-100`}>What's left?</button></div><div className="mt-3 flex gap-2"><textarea aria-label="Correction or follow-up" value={message} onChange={event => setMessage(event.target.value)} rows={2} className="min-w-0 flex-1 rounded-md border border-slate-300 p-2" placeholder="Send a correction to the same coding-agent session…" /><button disabled={busy || !message.trim()} onClick={() => continueWith({ message })} className={`${buttonClass} bg-primary-600 text-white`}><Send className="h-4 w-4" />Send</button></div>
-      <label className="mt-3 block text-sm text-slate-600">Model for next continuation <select value={goal.requestedModel} onChange={event => act(() => requestGoalModel(goal.id, event.target.value))} className="ml-2 rounded border p-1">{models.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
-    </section>}
-    <section className="grid gap-5 lg:grid-cols-3"><div className="rounded-lg border bg-white p-4"><h2 className="font-semibold">Native todos</h2>{live.todos.length ? <TodoList liveDetails={live} history={[{ state: goal.taskState }]} /> : <p className="mt-3 text-sm text-slate-500">No provider todos yet.</p>}</div><div className="rounded-lg border bg-white p-4"><h2 className="font-semibold">Usage</h2><p className="mt-3 text-2xl font-bold">{totalTokens.toLocaleString()}</p>{goal.liveSummary.nativeGoal && <p className="mt-1 text-xs text-slate-500">Native goal: {goal.liveSummary.nativeGoal.status} · {duration(goal.liveSummary.nativeGoal.timeUsedSeconds * 1000)}</p>}<RealTimeStats tokenUsage={live.tokenUsage || undefined} /></div><div className="rounded-lg border bg-white p-4"><h2 className="font-semibold">Session</h2><p className="mt-3 break-all text-sm text-slate-600">{goal.sessionId || 'Waiting for provider identity'}</p></div></section>
-    <section className="overflow-hidden rounded-lg border bg-white">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-        <div><h2 className="font-semibold text-slate-900">Goal output</h2><p className="mt-0.5 text-xs text-slate-500">Follow the agent's progress or inspect the raw provider stream.</p></div>
-        <div role="group" aria-label="Goal output view" className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
-          <button type="button" aria-pressed={outputMode === 'readable'} onClick={() => setOutputMode('readable')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'readable' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><FileText className="h-3.5 w-3.5" />Human readable</button>
-          <button type="button" aria-pressed={outputMode === 'terminal'} onClick={() => setOutputMode('terminal')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'terminal' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><Terminal className="h-3.5 w-3.5" />Raw terminal</button>
-        </div>
-      </header>
-      {outputMode === 'readable'
-        ? <div className="min-h-32 p-4">{thinkingLog.thinkingLogWithTimestamps.length > 0
-          ? <ThinkingLog events={thinkingLog.thinkingLogWithTimestamps} todos={live.todos} />
-          : <p className="text-sm text-slate-500">No human-readable output yet.</p>}</div>
-        : <div className="min-h-32 bg-slate-950 p-4 text-slate-100">{live.events.length > 0
-          ? <ExecutionEventLog events={live.events} collapsed={false} onToggleCollapse={() => undefined} lastThought={thinkingLog.lastThought} isTaskActive={mutable && goal.desiredState === 'running'} taskInfo={null} />
-          : <p className="text-sm text-slate-400">No terminal output yet.</p>}</div>}
-    </section>
+
+    {(error || goal.failureReason || cancelling) && <div className="mx-auto max-w-7xl space-y-2 px-4 pt-4 sm:px-6 lg:px-8">
+      {error && <p role="alert" className="bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {goal.failureReason && <p role="alert" className="bg-red-50 p-3 text-sm text-red-700">{goal.failureReason}</p>}
+      {cancelling && <p className="bg-amber-50 p-3 text-sm text-amber-800">Cancelling at the provider boundary and cleaning up the active session…</p>}
+    </div>}
+
+    <div className="mx-auto grid min-h-[calc(100vh-17rem)] max-w-7xl lg:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)]">
+      <main aria-label="Goal monitor" className="min-w-0 bg-white px-4 py-6 sm:px-6 lg:px-8">
+        <section aria-labelledby="goal-context-heading">
+          <h2 id="goal-context-heading" className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Context</h2>
+          <details className="group border-b border-slate-200 py-4 text-sm" open>
+            <summary className="cursor-pointer font-semibold text-slate-800">Goal description</summary>
+            <p className="mt-3 whitespace-pre-wrap break-words leading-6 text-slate-600">{goal.objective}</p>
+          </details>
+          <details className="group border-b border-slate-200 py-4 text-sm">
+            <summary className="cursor-pointer font-semibold text-slate-800">Initial provider prompt</summary>
+            <pre className="mt-3 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-600">{goal.initialPrompt}</pre>
+          </details>
+        </section>
+
+        {goal.checkpoint && <section className="my-6 bg-blue-50 p-4 text-sm text-blue-950">
+          <div className="flex items-start gap-3">
+            <CircleDot className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
+            <div className="min-w-0">
+              <p className="font-medium">{goal.checkpoint.count} checkpoint commit{goal.checkpoint.count === 1 ? '' : 's'}{goal.checkpoint.lastAt ? ` · last ${new Date(goal.checkpoint.lastAt).toLocaleString()}` : ''}</p>
+              <p className="mt-1 text-blue-800">Target cadence: about every {goal.checkpoint.intervalMinutes || 15} minutes. <span className="text-xs">The agent declares when coherent work is ready.</span></p>
+              {goal.checkpoint.error && !goal.checkpoint.latest?.error && <p className="mt-2 text-red-700">Checkpoint error: {goal.checkpoint.error}</p>}
+              <CheckpointDeclaration checkpoint={goal.checkpoint} />
+            </div>
+          </div>
+        </section>}
+
+        {goal.artifacts.length > 0 && <div className="my-5 flex flex-wrap gap-2 text-xs text-slate-600">{goal.artifacts.map((artifact, index) => { const item = artifact as { type?: string; number?: number; url?: string }; return item.url ? <a key={item.url} href={item.url} target="_blank" rel="noreferrer" className="rounded bg-slate-100 px-2 py-1 hover:underline">{item.type === 'pull_request' ? 'PR' : 'Issue'} #{item.number}</a> : <span key={index} />; })}</div>}
+
+        <section aria-labelledby="live-progress-heading" className="mt-8">
+          <div className="flex items-center gap-2">
+            <h2 id="live-progress-heading" className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Live progress</h2>
+            {mutable && goal.desiredState === 'running' && <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" /></span>}
+          </div>
+          <p className="mt-2 text-lg font-semibold text-slate-900">Native todos</p>
+          {live.todos.length ? <div className="[&>div]:border-t-0 [&>div]:pt-3 [&>div>h4]:hidden"><TodoList liveDetails={live} history={[{ state: goal.taskState }]} /></div> : <p className="mt-3 text-sm text-slate-500">No provider todos yet.</p>}
+        </section>
+
+        <section className="mt-8 border-t border-slate-200 pt-5">
+          <header className="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 className="font-semibold text-slate-900">Goal output</h2><p className="mt-0.5 text-xs text-slate-500">Follow the agent's progress or inspect the raw provider stream.</p></div>
+            <div role="group" aria-label="Goal output view" className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
+              <button type="button" aria-pressed={outputMode === 'readable'} onClick={() => setOutputMode('readable')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'readable' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><FileText className="h-3.5 w-3.5" />Human readable</button>
+              <button type="button" aria-pressed={outputMode === 'terminal'} onClick={() => setOutputMode('terminal')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'terminal' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><Terminal className="h-3.5 w-3.5" />Raw terminal</button>
+            </div>
+          </header>
+          {outputMode === 'readable'
+            ? <div className="min-h-32 py-4">{thinkingLog.thinkingLogWithTimestamps.length > 0
+              ? <ThinkingLog events={thinkingLog.thinkingLogWithTimestamps} todos={live.todos} />
+              : <p className="text-sm text-slate-500">No human-readable output yet.</p>}</div>
+            : <div className="mt-4 min-h-32 bg-slate-950 p-4 text-slate-100">{live.events.length > 0
+              ? <ExecutionEventLog events={live.events} collapsed={false} onToggleCollapse={() => undefined} lastThought={thinkingLog.lastThought} isTaskActive={mutable && goal.desiredState === 'running'} taskInfo={null} />
+              : <p className="text-sm text-slate-400">No terminal output yet.</p>}</div>}
+        </section>
+      </main>
+
+      <aside aria-label="Steering console" className="flex min-w-0 flex-col border-t border-slate-200 bg-slate-50 px-4 py-6 sm:px-6 lg:border-l lg:border-t-0">
+        <section aria-labelledby="goal-metrics-heading">
+          <h2 id="goal-metrics-heading" className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Metrics</h2>
+          <dl className="mt-3 grid grid-cols-2 border-y border-slate-200">
+            <div className="border-b border-r border-slate-200 py-4 pr-4"><dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Usage</dt><dd className="mt-1 text-2xl font-bold tracking-tight text-slate-950">{totalTokens.toLocaleString()}</dd><dd className="text-xs text-slate-500">tokens</dd>{goal.liveSummary.nativeGoal && <dd className="mt-1 text-xs text-slate-500">{goal.liveSummary.nativeGoal.status} · {duration(goal.liveSummary.nativeGoal.timeUsedSeconds * 1000)}</dd>}</div>
+            <div className="border-b border-slate-200 py-4 pl-4"><dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Session</dt><dd className="mt-2 break-all"><code className="rounded bg-white px-2 py-1 font-mono text-xs text-slate-700 shadow-sm">{goal.sessionId || 'Waiting for provider identity'}</code></dd></div>
+            <div className="border-r border-slate-200 py-4 pr-4"><dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Active</dt><dd className="mt-1 font-mono text-sm font-semibold text-slate-800">{duration(goal.activeMs)}</dd><dd className="mt-1 text-xs text-slate-500">{duration(goal.pausedMs)} paused</dd></div>
+            <div className="py-4 pl-4"><dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Artifacts</dt><dd className="mt-1 text-sm font-semibold text-slate-800">{goal.artifactStats.openPullRequests}/{goal.artifactStats.pullRequests} PRs</dd><dd className="mt-1 text-xs text-slate-500">{goal.artifactStats.openIssues}/{goal.artifactStats.issues} open issues</dd></div>
+          </dl>
+        </section>
+
+        {mutable && <section aria-labelledby="quick-actions-heading" className="mt-7">
+          <h2 id="quick-actions-heading" className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Quick actions</h2>
+          <div className="mt-3 flex flex-wrap gap-2"><button disabled={busy} onClick={() => continueWith({ canned: 'done' })} className={`${buttonClass} border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50`}>What's done?</button><button disabled={busy} onClick={() => continueWith({ canned: 'left' })} className={`${buttonClass} border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50`}>What's left?</button></div>
+        </section>}
+
+        {mutable ? <section aria-labelledby="correction-heading" className="sticky bottom-0 mt-auto pt-10">
+          <div className="mb-2 flex items-center justify-end gap-2">
+            <label htmlFor="goal-continuation-model" className="text-xs text-slate-500">Model for next continuation</label>
+            <select id="goal-continuation-model" value={goal.requestedModel} onChange={event => act(() => requestGoalModel(goal.id, event.target.value))} className="max-w-48 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 shadow-sm">{models.map(item => <option key={item} value={item}>{getModelDisplayName(item)}</option>)}</select>
+          </div>
+          <div className="bg-white p-2 shadow-md ring-1 ring-slate-200/70">
+            <h2 id="correction-heading" className="sr-only">Send a correction</h2>
+            <textarea aria-label="Correction or follow-up" value={message} onChange={event => setMessage(event.target.value)} rows={3} className="w-full resize-none border-0 p-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0" placeholder="Send a correction to the same coding-agent session…" />
+            <div className="flex justify-end"><button disabled={busy || !message.trim()} onClick={() => continueWith({ message })} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}><Send className="h-4 w-4" />Send</button></div>
+          </div>
+        </section> : <p className="mt-auto pt-10 text-sm text-slate-500">This goal no longer accepts corrections.</p>}
+      </aside>
+    </div>
   </div>;
 }
 
