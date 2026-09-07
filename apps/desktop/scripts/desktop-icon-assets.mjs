@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 export const DESKTOP_ICON_FILE = 'propr-desktop.png';
 export const MACOS_ICON_FILE = 'propr-desktop.icns';
 export const DESKTOP_ICON_SIZE = 512;
 export const CANONICAL_ICON_SHA256 = 'e66a28f489d5367e08b1b49b1b98b10dd0a29a4e424e38c0684be9513baa7726';
+export const CANONICAL_MACOS_ICON_SHA256 = 'c7f54c8e7b47804bd1a353ea65db1729b1bcf7f531f38c9ec77a3edb3472a27a';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const ICNS_SIZES = Object.freeze(new Map([
@@ -89,8 +90,17 @@ export const verifyLinuxLauncherIcon = async ({ desktopFile, iconFile }) => {
 
 export const verifyMacApplicationIcon = async ({ applicationRoot, readPlist }) => {
   const iconFile = await readPlist('CFBundleIconFile');
-  if (iconFile !== MACOS_ICON_FILE) throw new Error('macOS application icon metadata is not branded');
+  // Electron Packager keeps the template's electron.icns name and replaces its bytes.
+  // Treat the plist value as a resource reference; branding is established below by content.
+  if (typeof iconFile !== 'string' || iconFile.length === 0 || basename(iconFile) !== iconFile
+    || !iconFile.toLowerCase().endsWith('.icns')) {
+    throw new Error('macOS application icon metadata does not reference a safe ICNS resource');
+  }
   const path = join(applicationRoot, 'Contents', 'Resources', iconFile);
-  inspectIcnsBytes(await readFile(path));
+  const bytes = await readFile(path);
+  inspectIcnsBytes(bytes);
+  if (sha256(bytes) !== CANONICAL_MACOS_ICON_SHA256) {
+    throw new Error('macOS application icon does not match the canonical ProPR artwork');
+  }
   return path;
 };

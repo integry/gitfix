@@ -3,8 +3,10 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import sharp from 'sharp';
 import {
   CANONICAL_ICON_SHA256,
+  CANONICAL_MACOS_ICON_SHA256,
   DESKTOP_ICON_FILE,
   inspectIcnsBytes,
   MACOS_ICON_FILE,
@@ -17,6 +19,36 @@ import {
 import { buildDesktopIcons } from './generate-desktop-icons.mjs';
 
 const iconDirectory = new URL('../assets/icons/', import.meta.url);
+const icnsSizes = Object.freeze(new Map([
+  ['icp4', 16],
+  ['icp5', 32],
+  ['icp6', 64],
+  ['ic07', 128],
+  ['ic08', 256],
+  ['ic09', 512],
+  ['ic10', 1024],
+]));
+
+const buildAlternateValidIcns = async () => {
+  const entries = await Promise.all([...icnsSizes].map(async ([type, size]) => {
+    const png = await sharp({
+      create: {
+        width: size,
+        height: size,
+        channels: 4,
+        background: '#000000',
+      },
+    }).png().toBuffer();
+    const header = Buffer.alloc(8);
+    header.write(type, 0, 4, 'ascii');
+    header.writeUInt32BE(header.length + png.length, 4);
+    return Buffer.concat([header, png]);
+  }));
+  const header = Buffer.alloc(8);
+  header.write('icns', 0, 4, 'ascii');
+  header.writeUInt32BE(header.length + entries.reduce((total, entry) => total + entry.length, 0), 4);
+  return Buffer.concat([header, ...entries]);
+};
 
 describe('desktop native icon assets', () => {
   it('wires the native assets into Forge, runtime BrowserWindow creation, and CI package checks', async () => {
@@ -40,6 +72,7 @@ describe('desktop native icon assets', () => {
       readFile(new URL(MACOS_ICON_FILE, iconDirectory)),
     ]);
     assert.equal(sha256(png), CANONICAL_ICON_SHA256);
+    assert.equal(sha256(icns), CANONICAL_MACOS_ICON_SHA256);
     assert.deepEqual(verifyDesktopPngBytes(png), { width: 512, height: 512 });
     assert.deepEqual(inspectIcnsBytes(icns), {
       icp4: 16,
@@ -84,20 +117,29 @@ describe('desktop native icon assets', () => {
     }
   });
 
-  it('verifies macOS bundle metadata points at the complete ICNS resource', async () => {
+  it('follows Electron Packager macOS metadata and requires canonical ICNS bytes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'propr-icon-macos-'));
     try {
       const resources = join(root, 'ProPR.app', 'Contents', 'Resources');
+      const emittedIconFile = 'electron.icns';
       await mkdir(resources, { recursive: true });
-      await writeFile(join(resources, MACOS_ICON_FILE), await readFile(new URL(MACOS_ICON_FILE, iconDirectory)));
+      await writeFile(join(resources, emittedIconFile), await readFile(new URL(MACOS_ICON_FILE, iconDirectory)));
       const path = await verifyMacApplicationIcon({
         applicationRoot: join(root, 'ProPR.app'),
         readPlist: async key => {
           assert.equal(key, 'CFBundleIconFile');
-          return MACOS_ICON_FILE;
+          return emittedIconFile;
         },
       });
-      assert.equal(path, join(resources, MACOS_ICON_FILE));
+      assert.equal(path, join(resources, emittedIconFile));
+
+      const alternate = await buildAlternateValidIcns();
+      assert.deepEqual(inspectIcnsBytes(alternate), Object.fromEntries(icnsSizes));
+      await writeFile(join(resources, emittedIconFile), alternate);
+      await assert.rejects(verifyMacApplicationIcon({
+        applicationRoot: join(root, 'ProPR.app'),
+        readPlist: async () => emittedIconFile,
+      }), /does not match the canonical ProPR artwork/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
