@@ -13,6 +13,10 @@ export interface DesktopDeepLinkNavigationResult {
   state: 'queued' | 'navigated';
 }
 
+type DesktopDeepLinkConsumptionResult = DesktopDeepLinkConsumption
+  | null
+  | Promise<DesktopDeepLinkConsumption | null>;
+
 /** Holds accepted routes while binding each one to the profile active when it arrived. */
 export class DesktopDeepLinkNavigation {
   private activeProfileId: string | null = null;
@@ -70,21 +74,28 @@ export class DesktopDeepLinkNavigation {
 
 /** One-consumer handoff between the desktop bridge and presentation experience. */
 export class DesktopDeepLinkInbox {
-  private listener: ((value: string) => DesktopDeepLinkConsumption | null) | null = null;
+  private listener: ((value: string) => DesktopDeepLinkConsumptionResult) | null = null;
   private readonly pending: Array<{
+    reject: (reason?: unknown) => void;
     resolve: (consumption: DesktopDeepLinkConsumption | null) => void;
     value: string;
   }> = [];
 
   receive(value: string): DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null> {
     if (this.listener) return this.listener(value);
-    return new Promise(resolve => this.pending.push({ resolve, value }));
+    return new Promise((resolve, reject) => this.pending.push({ reject, resolve, value }));
   }
 
-  subscribe(listener: (value: string) => DesktopDeepLinkConsumption | null): () => void {
+  subscribe(listener: (value: string) => DesktopDeepLinkConsumptionResult): () => void {
     if (this.listener) throw new Error('Desktop deep-link inbox already has a consumer');
     this.listener = listener;
-    this.pending.splice(0).forEach(({ resolve, value }) => resolve(listener(value)));
+    this.pending.splice(0).forEach(({ reject, resolve, value }) => {
+      try {
+        void Promise.resolve(listener(value)).then(resolve, reject);
+      } catch (error) {
+        reject(error);
+      }
+    });
     return () => {
       if (this.listener === listener) this.listener = null;
     };

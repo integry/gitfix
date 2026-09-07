@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useState } from 'react';
 import {
   DEFAULT_LOCAL_API_BASE_URL,
   isProprLoopbackHostname,
@@ -19,6 +19,19 @@ import {
 } from 'lucide-react';
 import { normalizeBaseUrl } from './browserAdapters';
 import type { DesktopConnectionResult, DesktopProfile } from './types';
+
+interface DesktopSetupLayerProps {
+  children: React.ReactNode;
+  editor: React.ReactNode;
+  suspended: boolean;
+}
+
+export const DesktopSetupLayer: React.FC<DesktopSetupLayerProps> = ({ children, editor, suspended }) => <>
+  <div hidden={suspended} inert={suspended} aria-hidden={suspended || undefined} style={suspended ? undefined : { display: 'contents' }}>
+    {children}
+  </div>
+  {suspended && editor}
+</>;
 
 const createProfileId = (): string => {
   try { return crypto.randomUUID(); } catch { return `profile-${Date.now()}`; }
@@ -55,15 +68,18 @@ interface ProfileEditorProps {
   candidate?: boolean;
   notice?: string | null;
   operationError?: string | null;
+  onPresented?(): void;
   onCancel(): void;
   onSave(profile: DesktopProfile): void;
 }
 
-export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate = false, notice, operationError, onCancel, onSave }) => {
+export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate = false, notice, operationError, onPresented, onCancel, onSave }) => {
   const [name, setName] = useState(initial?.name || 'My ProPR');
   const [baseUrl, setBaseUrl] = useState(initial ? initial.baseUrl : DEFAULT_LOCAL_API_BASE_URL);
   const [validationError, setValidationError] = useState<string | null>(null);
   const connectEndpoint = parseProprConnectEndpoint(baseUrl);
+
+  useLayoutEffect(() => { onPresented?.(); }, [onPresented]);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();

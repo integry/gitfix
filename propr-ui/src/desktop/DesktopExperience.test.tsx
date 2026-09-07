@@ -75,7 +75,7 @@ describe('DesktopExperience', () => {
     });
 
     expect(await screen.findByRole('status')).toHaveTextContent(/untrusted instance address/i);
-    expect(consumption).toEqual({
+    expect(await consumption).toEqual({
       kind: 'connect-confirmation',
       target: 'https://connect.propr.dev',
     });
@@ -141,7 +141,9 @@ describe('DesktopExperience', () => {
     render(<DesktopExperience adapters={adapters} deepLinks={deepLinks}><div>Shared route tree</div></DesktopExperience>);
 
     expect(await screen.findByRole('heading', { name: 'Let’s set up this computer' })).toBeInTheDocument();
-    act(() => deepLinks.receive('propr://connect?api=https%3A%2F%2Fconnect.propr.dev'));
+    act(() => {
+      void deepLinks.receive('propr://connect?api=https%3A%2F%2Fconnect.propr.dev');
+    });
     expect(await screen.findByLabelText('Instance URL')).toHaveValue('https://connect.propr.dev');
 
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));

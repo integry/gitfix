@@ -1,4 +1,4 @@
-import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
+import type { DesktopAdapters, DesktopConnectionResult, DesktopGuidedLocalSetupAdapter, DesktopLocalSetupAdapter, DesktopProfile } from './types';
 
 export type ExperienceState =
   | { phase: 'loading' }
@@ -16,6 +16,35 @@ export const mergeProfiles = (current: DesktopProfile[], incoming: DesktopProfil
 };
 
 export const recoverableError = (message: string): string => `${message} Try again.`;
+
+export const isGuidedLocalSetup = (adapter: DesktopLocalSetupAdapter): adapter is DesktopGuidedLocalSetupAdapter =>
+  ['status', 'start', 'retry', 'cancel', 'selectPrivateKey', 'acquireWebhookSecret', 'onProgress']
+    .every(key => typeof adapter[key as keyof DesktopLocalSetupAdapter] === 'function');
+
+interface SettleConnectCandidateSetupOptions {
+  acceptanceSetupOpen: boolean;
+  candidatePending: boolean;
+  guidedSetup: DesktopGuidedLocalSetupAdapter | null;
+  onAcceptanceSetupSettled: () => void;
+  onFailure: () => void;
+  onGuidedSetupSettled: () => void;
+}
+
+export const settleConnectCandidateSetup = async ({ acceptanceSetupOpen, candidatePending, guidedSetup, onAcceptanceSetupSettled, onFailure, onGuidedSetupSettled }: SettleConnectCandidateSetupOptions): Promise<boolean> => {
+  if (!candidatePending) return true;
+  if (guidedSetup) {
+    try {
+      const settled = await guidedSetup.cancel();
+      if (settled.phase === 'running') throw new Error('Local setup cancellation did not settle');
+    } catch {
+      onFailure();
+      return false;
+    }
+    onGuidedSetupSettled();
+  }
+  if (acceptanceSetupOpen) onAcceptanceSetupSettled();
+  return true;
+};
 
 export const settleAuthenticationCancellation = (adapters: DesktopAdapters, profileId: string): void => {
   // Back/navigation must remain synchronous. Cancellation is best effort and
