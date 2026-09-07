@@ -352,3 +352,24 @@ export {
   type PushSubscriptionsResponse,
   type RuntimeSchema,
 } from './notifications.js';
+
+// Keep voice briefing contracts shared so API and browser validation cannot drift.
+export {
+  VOICE_BRIEFING_SCOPES,
+  VOICE_BRIEFING_ITEM_KINDS,
+  VOICE_BRIEFING_ACTIONS,
+  parseVoiceBriefingScope,
+  parseVoiceBriefingItem,
+  parseVoiceBriefingResponse,
+  parseVoiceCapabilitiesResponse,
+  voiceBriefingResponseSchema,
+  voiceCapabilitiesResponseSchema,
+  type VoiceBriefingScope,
+  type VoiceBriefingItemKind,
+  type VoiceBriefingAction,
+  type VoiceBriefingItem,
+  type VoiceBriefingCounts,
+  type VoiceBriefingResponse,
+  type VoiceCapabilitiesResponse,
+  type RuntimeVoiceSchema,
+} from './voice.js';
