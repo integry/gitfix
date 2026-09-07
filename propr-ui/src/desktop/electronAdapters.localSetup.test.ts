@@ -40,7 +40,7 @@ describe('Electron guided local setup adapter', () => {
     const adapters = createElectronDesktopAdapters(fixture.bridge);
     const request: DesktopSetupRequest = {
       sessionId: snapshot.sessionId, root: { mode: 'default' }, reinitialize: false,
-      agents: ['codex'], github: { mode: 'demo' }, intake: { mode: 'keep' },
+      agents: ['codex'], github: { mode: 'keep' }, intake: { mode: 'keep' },
       whitelist: null, repository: null,
     };
 

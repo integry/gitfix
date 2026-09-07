@@ -109,7 +109,7 @@ it('presents Connect during guided setup and settles setup cancellation before c
 
   fireEvent.click(await screen.findByRole('button', { name: /Set up this computer/i }));
   await screen.findByRole('heading', { name: 'Check the essentials' });
-  for (const heading of ['Private local storage', 'Connect GitHub', 'Choose GitHub event intake', 'Select coding agents', 'Ready to install']) {
+  for (const heading of ['Private local storage', 'Connect GitHub', 'GitHub event intake', 'Select coding agents', 'Ready to install']) {
     fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
     await screen.findByRole('heading', { name: heading });
   }

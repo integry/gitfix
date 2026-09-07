@@ -9,7 +9,7 @@ import type { DesktopSetupRequest } from './shared/contract';
 
 const request: DesktopSetupRequest = {
   sessionId: '11111111-1111-4111-8111-111111111111', root: { mode: 'default' },
-  reinitialize: false, agents: [], github: { mode: 'demo' }, intake: { mode: 'keep' },
+  reinitialize: false, agents: [], github: { mode: 'keep' }, intake: { mode: 'keep' },
   whitelist: null, repository: null,
 };
 
@@ -243,6 +243,107 @@ describe('desktop local setup controller', () => {
     } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
   });
 
+  it('rejects direct Demo and ProPR Connect polling requests before host actions', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    let hostActions = 0;
+    const controller = new DesktopSetupController({
+      actions: { runChecks: async () => { hostActions += 1; throw new Error('must not run'); } } as unknown as SetupActions,
+      platform: 'linux', appDataDir: appData, defaultRootDir: join(appData, 'local-runtime'),
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      assert.throws(() => controller.start({ ...request, github: { mode: 'demo' }, intake: { mode: 'keep' } }), /Invalid GitHub configuration/);
+      assert.throws(() => controller.start({ ...request, github: { mode: 'relay' }, intake: { mode: 'polling' } }), /ProPR Connect requires WebSocket intake/);
+      assert.equal(hostActions, 0);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
+  it('corrects stale ProPR Connect polling state and requires review before retry', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const statePath = join(appData, 'setup', 'state.json');
+    mkdirSync(join(appData, 'setup'), { mode: 0o700 });
+    writeFileSync(statePath, `${JSON.stringify({
+      version: 1, phase: 'completed', resume: {
+        agents: ['codex'], reinitialize: false, github: { mode: 'relay' }, intake: { mode: 'polling' },
+        whitelist: null, repository: null,
+      },
+      profile: { id: '22222222-2222-4222-8222-222222222222', name: 'This computer', baseUrl: 'http://localhost:4000', kind: 'local' },
+    })}\n`, { mode: 0o600 });
+    const controller = new DesktopSetupController({
+      actions: {} as SetupActions, platform: 'linux', appDataDir: appData, defaultRootDir: join(appData, 'local-runtime'),
+      statePath, sessionId: request.sessionId, selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const restored = await controller.status();
+      assert.equal(restored.phase, 'interrupted');
+      assert.equal(restored.profile, undefined);
+      assert.deepEqual(restored.resume?.intake, { mode: 'routing_websocket' });
+      assert.equal(restored.resume?.reconfigurationStage, 'intake');
+      assert.equal(restored.reconfigurationRequired, true);
+      assert.match(restored.error ?? '', /requires WebSocket intake/);
+      await assert.rejects(controller.retry(), /Re-enter the intake configuration/);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
+  it('requires a supported choice for a completed legacy Demo configuration', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const statePath = join(appData, 'setup', 'state.json');
+    mkdirSync(join(appData, 'setup'), { mode: 0o700 });
+    writeFileSync(statePath, `${JSON.stringify({
+      version: 1, phase: 'completed', resume: {
+        agents: [], reinitialize: false, github: { mode: 'demo' }, intake: { mode: 'keep' },
+        whitelist: null, repository: null,
+      },
+      profile: { id: '22222222-2222-4222-8222-222222222222', name: 'This computer', baseUrl: 'http://localhost:4000', kind: 'local' },
+    })}\n`, { mode: 0o600 });
+    const controller = new DesktopSetupController({
+      actions: {} as SetupActions, platform: 'linux', appDataDir: appData, defaultRootDir: join(appData, 'local-runtime'),
+      statePath, sessionId: request.sessionId, selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const restored = await controller.status();
+      assert.equal(restored.phase, 'interrupted');
+      assert.equal(restored.profile, undefined);
+      assert.match(restored.error ?? '', /Demo mode is no longer available/);
+      assert.equal(restored.reconfigurationRequired, true);
+      assert.equal(restored.resume?.reconfigurationStage, 'github');
+      await assert.rejects(controller.retry(), /Re-enter the github configuration/);
+      await assert.rejects(controller.retry(request), /Select ProPR Connect or Custom GitHub App/);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
+  it('allows keep when retrying an ordinary saved non-Demo configuration', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const statePath = join(appData, 'setup', 'state.json');
+    mkdirSync(join(appData, 'setup'), { mode: 0o700 });
+    writeFileSync(statePath, `${JSON.stringify({
+      version: 1, phase: 'failed', resume: {
+        agents: [], reinitialize: false, github: { mode: 'relay' }, intake: { mode: 'routing_websocket' },
+        whitelist: null, repository: null,
+      },
+    })}\n`, { mode: 0o600 });
+    const controller = new DesktopSetupController({
+      actions: { runChecks: async () => ({ rootDir: join(appData, 'local-runtime'), anyFail: true,
+        results: [{ name: 'Docker daemon', group: 'Docker', status: 'fail', detail: 'Transient daemon failure.' }] }) } as unknown as SetupActions,
+      platform: 'linux', appDataDir: appData, defaultRootDir: join(appData, 'local-runtime'),
+      statePath, sessionId: request.sessionId, selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const retried = await controller.retry(request);
+      assert.equal(retried.phase, 'failed');
+      assert.equal(retried.resume?.github.mode, 'keep');
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
   it('admits private-key resolution atomically and cancels it before host actions start', async () => {
     const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
     chmodSync(appData, 0o700);
@@ -340,7 +441,7 @@ describe('desktop local setup controller', () => {
     mkdirSync(join(appData, 'setup'), { mode: 0o700 });
     writeFileSync(statePath, `${JSON.stringify({
       version: 1, phase: 'completed', resume: {
-        agents: [], reinitialize: false, github: { mode: 'demo' }, intake: { mode: 'keep' },
+        agents: [], reinitialize: false, github: { mode: 'keep' }, intake: { mode: 'keep' },
         whitelist: null, repository: null,
       },
     })}\n`, { mode: 0o600 });
@@ -354,6 +455,7 @@ describe('desktop local setup controller', () => {
       assert.equal(restored.phase, 'interrupted');
       assert.match(restored.error ?? '', /could not be restored/i);
       assert.equal(restored.resumeAvailable, true);
+      assert.equal(restored.reconfigurationRequired, false);
     } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
   });
 });
