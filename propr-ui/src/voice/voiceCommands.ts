@@ -180,6 +180,7 @@ function normalizedInstruction(value: string): string {
 const URL_SCHEME_PATTERN = /\b[a-z][a-z\d+.-]*:\S+/i;
 const NETWORK_PATH_PATTERN = /(?:^|[\s"'(\[{<=>])\/\/\S+/i;
 const ROOT_RELATIVE_PATH_PATTERN = /(?:^|[\s"'(\[{<=>:])\/(?![\/\s])\S+/i;
+const URL_DOT_SEPARATOR_PATTERN = /[\u3002\uFF0E\uFF61]/g;
 const BARE_HOST_PATTERN = new RegExp(
   '(?:^|[^@\\w.-])'
     + '(?:[a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?\\.)+'
@@ -253,12 +254,13 @@ function containsAuthorityEndpoint(value: string): boolean {
 }
 
 function containsEndpoint(value: string): boolean {
-  return URL_SCHEME_PATTERN.test(value)
-    || NETWORK_PATH_PATTERN.test(value)
-    || ROOT_RELATIVE_PATH_PATTERN.test(value)
-    || BARE_HOST_PATTERN.test(value)
-    || NETWORK_HOST_PATTERN.test(value)
-    || containsAuthorityEndpoint(value);
+  const normalizedValue = value.replace(URL_DOT_SEPARATOR_PATTERN, '.');
+  return URL_SCHEME_PATTERN.test(normalizedValue)
+    || NETWORK_PATH_PATTERN.test(normalizedValue)
+    || ROOT_RELATIVE_PATH_PATTERN.test(normalizedValue)
+    || BARE_HOST_PATTERN.test(normalizedValue)
+    || NETWORK_HOST_PATTERN.test(normalizedValue)
+    || containsAuthorityEndpoint(normalizedValue);
 }
 
 function parseFollowUp(
