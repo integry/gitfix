@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PROPR_API_ORIGIN_PARITY_CASES } from '@propr/shared';
 import type { DesktopBridge, DesktopProfile as StoredProfile } from '../../../apps/desktop/src/shared/contract';
 import { createElectronDesktopAdapters } from './electronAdapters';
+import { DesktopAuthenticationError } from './types';
 
 const desktopConnectionState = vi.hoisted(() => ({
   scope: null as null | { bridge: DesktopBridge; profileId: string; transportScope: string },
@@ -145,6 +146,29 @@ describe('Electron remote instance adapters', () => {
 
     await expect(adapters.authentication.cancel?.('profile-1')).rejects.toThrow('private IPC detail');
     expect(fixture.bridge.authentication.cancel).toHaveBeenCalledWith('profile-1');
+  });
+
+  it('projects secret-free main progress and failure codes without host error details', async () => {
+    const fixture = bridgeFixture();
+    let progressListener: Parameters<NonNullable<DesktopBridge['authentication']['onProgress']>>[0] | undefined;
+    fixture.bridge.authentication.onProgress = listener => {
+      progressListener = listener;
+      return () => { progressListener = undefined; };
+    };
+    vi.mocked(fixture.bridge.authentication.pair).mockImplementationOnce(async () => {
+      progressListener?.({ profileId: storedProfile.id, stage: 'browser-open-failed' });
+      return { paired: false, code: 'APPROVAL_EXPIRED' };
+    });
+    const adapters = createElectronDesktopAdapters(fixture.bridge);
+    const progress: string[] = [];
+
+    await expect(adapters.authentication.authenticate(
+      (await adapters.profiles.list())[0],
+      stage => progress.push(stage),
+    )).rejects.toEqual(new DesktopAuthenticationError('APPROVAL_EXPIRED'));
+
+    expect(progress).toEqual(['browser-open-failed']);
+    expect(progressListener).toBeUndefined();
   });
   it('matches the shared canonical origin parity table before profile IPC', async () => {
     const fixture = bridgeFixture();

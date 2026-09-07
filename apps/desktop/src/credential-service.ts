@@ -23,10 +23,13 @@ import {
   type DesktopActivatedConnection,
   type DesktopAccessInvalidation,
   type DesktopConnectionScope,
+  type DesktopPairingFailureCode as ContractDesktopPairingFailureCode,
+  type DesktopPairingProgress as ContractDesktopPairingProgress,
 } from './shared/contract';
 import { normalizeApiBaseUrl } from './security';
 import type { PendingCredentialRevocation, ProfileStore, StoredCredential } from './profile-store';
 import type { DesktopConnectIdentityClaimSnapshot } from './connect-discovery';
+import { isDesktopPairingBrowserOpenError } from './pairing-browser';
 
 const DEFINITIVE_INVALID_CODES = new Set([
   'INVALID_INSTANCE_TOKEN',
@@ -57,6 +60,8 @@ export interface CredentialServiceDependencies {
   reportWebSocketHandshake?(evidence: DesktopWebSocketHandshakeEvidence): void;
   /** Fixed, bounded, secret-free evidence for scoped renderer user validation. */
   reportCurrentUserValidation?(evidence: DesktopCurrentUserProxyEvidence): void;
+  /** Secret-free pairing lifecycle evidence and renderer progress. */
+  reportPairingProgress?(progress: DesktopPairingProgress): void;
   /** Main-owned Connect evidence; renderer input can never provide this snapshot. */
   snapshotConnectIdentityClaim?(profileId: string, origin: string): DesktopConnectIdentityClaimSnapshot;
 }
@@ -117,6 +122,31 @@ export interface DesktopPairingBrowserRequest {
   pairingId: string;
   approvalUrl: string;
 }
+
+export type DesktopPairingProgress = ContractDesktopPairingProgress;
+export type DesktopPairingFailureCode = ContractDesktopPairingFailureCode;
+
+class DesktopPairingFailureError extends Error {
+  readonly code: DesktopPairingFailureCode;
+
+  constructor(code: DesktopPairingFailureCode, cause?: unknown) {
+    // Preserve the in-process failure for durability tests and local control
+    // flow. IPC returns only `code`, and the protected logger never receives
+    // this message or the underlying error object.
+    super(cause instanceof Error ? cause.message : 'Desktop pairing failed');
+    this.name = 'DesktopPairingFailureError';
+    this.code = code;
+  }
+}
+
+export const desktopPairingFailureCode = (error: unknown): DesktopPairingFailureCode | null => {
+  if (error instanceof DesktopPairingFailureError) return error.code;
+  if (!(error instanceof ProprClientError)) return null;
+  if (error.kind === 'aborted') return 'PAIRING_CANCELLED';
+  if (error.kind === 'authentication' && error.code === 'PAIRING_EXPIRED') return 'APPROVAL_EXPIRED';
+  if (error.kind === 'network' || error.kind === 'timeout') return 'PAIRING_UNREACHABLE';
+  return 'PAIRING_REJECTED';
+};
 
 export interface CredentialServiceInitialization {
   status: 'ready' | 'degraded';
@@ -409,6 +439,7 @@ export class DesktopCredentialService {
   readonly #reportRevocationFailure: NonNullable<CredentialServiceDependencies['reportRevocationFailure']>;
   readonly #reportWebSocketHandshake: NonNullable<CredentialServiceDependencies['reportWebSocketHandshake']>;
   readonly #reportCurrentUserValidation: NonNullable<CredentialServiceDependencies['reportCurrentUserValidation']>;
+  readonly #reportPairingProgress: NonNullable<CredentialServiceDependencies['reportPairingProgress']>;
   readonly #revocationDeadlines: RevocationDeadlines;
   readonly #snapshotConnectIdentityClaim: NonNullable<CredentialServiceDependencies['snapshotConnectIdentityClaim']>;
   readonly #internalRequestKey = randomBytes(32).toString('base64url');
@@ -440,6 +471,7 @@ export class DesktopCredentialService {
     this.#reportRevocationFailure = dependencies.reportRevocationFailure ?? (() => undefined);
     this.#reportWebSocketHandshake = dependencies.reportWebSocketHandshake ?? (() => undefined);
     this.#reportCurrentUserValidation = dependencies.reportCurrentUserValidation ?? (() => undefined);
+    this.#reportPairingProgress = dependencies.reportPairingProgress ?? (() => undefined);
     this.#revocationDeadlines = boundedRevocationDeadlines(dependencies.revocationDeadlines);
     this.#snapshotConnectIdentityClaim = dependencies.snapshotConnectIdentityClaim ?? (() => ({
       status: 'unclaimed',
@@ -611,7 +643,7 @@ export class DesktopCredentialService {
     this.#schedulePendingRevocationRetry();
     if (!input.id) throw new Error('Desktop profile id is required');
     if (!this.#profiles.security().available) {
-      throw new Error('OS-backed secure storage is required for desktop pairing.');
+      throw new DesktopPairingFailureError('SECURE_STORAGE_FAILED');
     }
     const origin = normalizeApiBaseUrl(input.apiBaseUrl ?? '');
     if (!origin) throw new Error('Invalid desktop API URL');
@@ -662,11 +694,22 @@ export class DesktopCredentialService {
           this.#assertPairingCurrent(
             proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
           );
-          await this.#openPairingBrowser({
-            apiBaseUrl: proposed.apiBaseUrl,
-            pairingId,
-            approvalUrl,
-          });
+          this.#reportFixedPairingProgress({ profileId: proposed.id, stage: 'browser-opening' });
+          try {
+            await this.#openPairingBrowser({
+              apiBaseUrl: proposed.apiBaseUrl,
+              pairingId,
+              approvalUrl,
+            });
+            this.#reportFixedPairingProgress({ profileId: proposed.id, stage: 'approval-pending' });
+          } catch (error) {
+            if (!isDesktopPairingBrowserOpenError(error)) throw error;
+            // Linux desktop portals can reject xdg-open after the selected
+            // browser has already started. Keep the server-owned pairing
+            // deadline and poll alive; an approval that actually arrived must
+            // win over this ambiguous OS launch acknowledgement.
+            this.#reportFixedPairingProgress({ profileId: proposed.id, stage: 'browser-open-failed' });
+          }
         },
       });
       provisional = completed;
@@ -680,9 +723,14 @@ export class DesktopCredentialService {
       this.#assertPairingCurrent(
         proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
       );
-      const journaled = await this.#profiles.journalPendingRevocation(transient, credentialGeneration);
+      let journaled: Awaited<ReturnType<CredentialServiceDependencies['profiles']['journalPendingRevocation']>>;
+      try {
+        journaled = await this.#profiles.journalPendingRevocation(transient, credentialGeneration);
+      } catch (error) {
+        throw new DesktopPairingFailureError('SECURE_STORAGE_FAILED', error);
+      }
       if ('stored' in journaled) {
-        throw new Error('OS-backed secure storage is required for desktop pairing.');
+        throw new DesktopPairingFailureError('SECURE_STORAGE_FAILED');
       }
       transientRevocation = journaled;
       this.#assertPairingCurrent(
@@ -706,25 +754,30 @@ export class DesktopCredentialService {
       this.#assertPairingCurrent(
         proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
       );
-      const committed = await this.#profiles.commitPairedProfile(
-        proposed,
-        transient,
-        baseline,
-        () => !controller.signal.aborted
-          && this.#generation(proposed.id) === profileGeneration
-          && this.#selectionGeneration === selectionGeneration
-          && connectClaim.isCurrent(),
-        () => this.#beginPairPublish(
-          proposed.id, profileGeneration, selectionGeneration, controller.signal, connectClaim,
-        ),
-        () => {
-          publicationStarted = true;
-          if (this.#active?.profileId === proposed.id) this.#active = null;
-        },
-        transientRevocation.id,
-      );
+      let committed: Awaited<ReturnType<CredentialServiceDependencies['profiles']['commitPairedProfile']>>;
+      try {
+        committed = await this.#profiles.commitPairedProfile(
+          proposed,
+          transient,
+          baseline,
+          () => !controller.signal.aborted
+            && this.#generation(proposed.id) === profileGeneration
+            && this.#selectionGeneration === selectionGeneration
+            && connectClaim.isCurrent(),
+          () => this.#beginPairPublish(
+            proposed.id, profileGeneration, selectionGeneration, controller.signal, connectClaim,
+          ),
+          () => {
+            publicationStarted = true;
+            if (this.#active?.profileId === proposed.id) this.#active = null;
+          },
+          transientRevocation.id,
+        );
+      } catch (error) {
+        throw new DesktopPairingFailureError('SECURE_STORAGE_FAILED', error);
+      }
       if (committed && 'stored' in committed) {
-        throw new Error('OS-backed secure storage is required for desktop pairing.');
+        throw new DesktopPairingFailureError('SECURE_STORAGE_FAILED');
       }
       if (!committed) throw new ProprClientError('Desktop pairing was cancelled.', { kind: 'aborted' });
       transient = null;
@@ -766,7 +819,10 @@ export class DesktopCredentialService {
       }
       if (controller.signal.aborted || operation.signal.aborted
         || (error instanceof ProprClientError && error.kind === 'aborted')) {
-        throw new Error('Desktop pairing was cancelled.');
+        throw new DesktopPairingFailureError(
+          'PAIRING_CANCELLED',
+          new Error('Desktop pairing was cancelled.'),
+        );
       }
       throw error;
     } finally {
@@ -1575,6 +1631,14 @@ export class DesktopCredentialService {
       this.#reportRevocationFailure(diagnostic);
     } catch {
       // Diagnostics must never alter durable retry state or task settlement.
+    }
+  }
+
+  #reportFixedPairingProgress(progress: DesktopPairingProgress): void {
+    try {
+      this.#reportPairingProgress(progress);
+    } catch {
+      // Diagnostics and renderer progress must never alter pairing settlement.
     }
   }
 

@@ -64,6 +64,26 @@ describe('desktop preload bridge', () => {
     assert.equal(bridge.discovery.supported, true);
   });
 
+  it('forwards only fixed secret-free pairing progress values', () => {
+    const ipc = new FakeIpc();
+    const bridge = createDesktopBridge(ipc);
+    const received: unknown[] = [];
+    const unsubscribe = bridge.authentication.onProgress?.(value => received.push(value));
+
+    ipc.listeners.get(IPC_CHANNELS.authenticationProgress)?.({}, {
+      profileId: 'profile-1', stage: 'approval-pending', approvalUrl: 'https://must-not-leak.invalid',
+    });
+    ipc.listeners.get(IPC_CHANNELS.authenticationProgress)?.({}, {
+      profileId: 'profile-1', stage: 'unknown',
+    });
+    ipc.listeners.get(IPC_CHANNELS.authenticationProgress)?.({}, {
+      profileId: 'profile-1', stage: 'browser-open-failed',
+    });
+    unsubscribe?.();
+
+    assert.deepEqual(received, [{ profileId: 'profile-1', stage: 'browser-open-failed' }]);
+  });
+
   it('can advertise an unsupported host without exposing a renderer-selected root', () => {
     const bridge = createDesktopBridge(new FakeIpc(), false);
     assert.equal(bridge.discovery.supported, false);

@@ -7,10 +7,10 @@ import type { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopConnectedExperience } from './DesktopConnectedExperience';
 import { LocalSetupWizard } from './LocalSetupWizard';
 import { useAttemptFence, useDesktopModal, useSerializedMutationQueue } from './desktopExperienceHooks';
-import { ConnectionPanel, DesktopBrand, DesktopSetupLayer, InstanceChooser, ManagedRecoveryReview, ProfileEditor } from './DesktopExperiencePanels';
+import { AuthenticationPanel, ConnectionPanel, DesktopBrand, DesktopSetupLayer, InstanceChooser, ManagedRecoveryReview, ProfileEditor } from './DesktopExperiencePanels';
 import { managedRecoveryMessage, managedRediscoveryUnavailableMessage, safeConnectionMessage } from './desktopExperienceMessages';
 import { isGuidedLocalSetup, mergeProfiles, recoverableError, settleAuthenticationCancellation, settleConnectCandidateSetup, type ExperienceState } from './desktopExperienceState';
-import { DESKTOP_ACCESS_INVALID_EVENT, type DesktopAccessInvalidEventDetail, type DesktopAdapters, type DesktopConnectionResult, type DesktopProfile } from './types';
+import { DESKTOP_ACCESS_INVALID_EVENT, DesktopAuthenticationError, type DesktopAccessInvalidEventDetail, type DesktopAdapters, type DesktopAuthenticationProgressStage, type DesktopConnectionResult, type DesktopProfile } from './types';
 import { useDesktopDeepLinks } from './useDesktopDeepLinks';
 import { useConnectCandidatePresentation } from './useConnectCandidatePresentation';
 import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
@@ -48,6 +48,9 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   const stageConnectCandidate = useCallback((candidate: DesktopProfile, phase: ExperienceState['phase']) => {
     const presented = waitForPresentation(candidate);
     cancelDiscovery();
+    if (phase === 'authenticating' && stateRef.current.phase === 'authenticating') {
+      settleAuthenticationCancellation(adapters, stateRef.current.profile.id);
+    }
     setOperationError(null);
     setEditing(candidate);
     if (phase === 'connected') setManagerOpen(true);
@@ -56,7 +59,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       setState({ phase: 'choose' });
     }
     return presented;
-  }, [cancelDiscovery, waitForPresentation]);
+  }, [adapters, cancelDiscovery, waitForPresentation]);
   const {
     deepLinkError,
     editorNotice,
@@ -65,7 +68,9 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   } = useDesktopDeepLinks({
     deepLinks,
     phase: state.phase,
-    profileId: state.phase === 'connecting' || state.phase === 'connected' ? state.profile.id : null,
+    profileId: state.phase === 'connecting' || state.phase === 'authenticating' || state.phase === 'connected'
+      ? state.profile.id
+      : null,
     activeProfileId,
     onStageConnectCandidate: stageConnectCandidate,
   });
@@ -340,6 +345,65 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
   };
 
+  const authenticationFailureMessage = (
+    error: unknown,
+    progress: DesktopAuthenticationProgressStage,
+  ): string => {
+    if (error instanceof DesktopAuthenticationError) {
+      if (error.code === 'APPROVAL_EXPIRED') {
+        return progress === 'browser-open-failed'
+          ? 'Browser approval expired. If no approval page appeared, check your default browser or desktop portal, then start sign in again.'
+          : 'Browser approval expired before it was completed. Start sign in again.';
+      }
+      if (error.code === 'SECURE_STORAGE_FAILED') {
+        return 'ProPR Desktop could not save the approved credential in secure storage. Unlock or enable your system keychain, then try again.';
+      }
+      if (error.code === 'PAIRING_UNREACHABLE') {
+        return 'The instance became unreachable while waiting for browser approval. Check the connection and try again.';
+      }
+      if (error.code === 'PAIRING_REJECTED') {
+        return 'The instance rejected desktop pairing. Confirm it supports this Desktop version, then try again.';
+      }
+    }
+    return 'ProPR Connect pairing could not be completed. Try again.';
+  };
+
+  const authenticate = async (
+    profile: DesktopProfile,
+    result: Extract<DesktopConnectionResult, { status: 'authentication-required' }>,
+  ) => {
+    cancelDiscovery();
+    const attempt = ++connectionAttempt.current;
+    let progress: DesktopAuthenticationProgressStage = 'starting';
+    setOperationError(null);
+    setState({ phase: 'authenticating', profile, result, progress });
+    try {
+      await adapters.authentication.authenticate(profile, nextProgress => {
+        if (connectionAttempt.current !== attempt) return;
+        progress = nextProgress;
+        setState(current => current.phase === 'authenticating' && current.profile.id === profile.id
+          ? { ...current, progress: nextProgress }
+          : current);
+      });
+      if (connectionAttempt.current !== attempt) return;
+      await reportAcceptanceStage('CREDENTIAL_COMMITTED');
+      if (connectionAttempt.current === attempt) await connect(profile);
+    } catch (error) {
+      if (connectionAttempt.current !== attempt) return;
+      setState({
+        phase: 'blocked',
+        profile,
+        result: { ...result, message: authenticationFailureMessage(error, progress) },
+      });
+    }
+  };
+
+  const cancelAuthentication = (current: Extract<ExperienceState, { phase: 'authenticating' }>) => {
+    connectionAttempt.current += 1;
+    settleAuthenticationCancellation(adapters, current.profile.id);
+    setState({ phase: 'blocked', profile: current.profile, result: current.result });
+  };
+
   const openEditor = (profile: DesktopProfile | 'new') => {
     cancelDiscovery();
     clearConnectCandidate();
@@ -401,11 +465,11 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     if (state.phase === 'loading') return <div className="desktop-loading"><LoaderCircle className="desktop-spin" /><span>Opening ProPR…</span></div>;
     if (acceptanceSetup) return setupLayer(<PackagedAcceptanceLocalSetup initial={acceptanceSetup} onBack={() => setAcceptanceSetup(null)} />);
     if (state.phase === 'connecting') return <ConnectionPanel profile={state.profile} onBack={choose} onRetry={retry} onAuthenticate={() => undefined} onHelp={() => undefined} onReenter={() => undefined} onRediscover={() => undefined} />;
+    if (state.phase === 'authenticating') return <AuthenticationPanel profile={state.profile} progress={state.progress} onCancel={() => cancelAuthentication(state)} onChoose={choose} />;
     if (state.phase === 'recovery-review') return <ManagedRecoveryReview profile={state.profile} onCancel={() => { cancelDiscovery(); setState({ phase: 'blocked', profile: state.profile, result: { status: 'offline', message: managedRecoveryMessage } }); }} onConfirm={() => void connect(state.candidate)} />;
-    if (state.phase === 'blocked') return <ConnectionPanel profile={state.profile} result={state.result} onBack={choose} onRetry={retry} onAuthenticate={() => void runBlockedAction(state.profile, async () => {
-      await adapters.authentication.authenticate(state.profile);
-      await reportAcceptanceStage('CREDENTIAL_COMMITTED');
-    }, 'ProPR Desktop could not open sign in.', 'ProPR Connect pairing could not be completed.', () => connect(state.profile))} onHelp={() => void runBlockedAction(state.profile, () => adapters.externalBrowser.open('https://propr.dev'), 'ProPR Desktop could not open connection help.')} onReenter={() => reenterManagedEndpoint(state.profile)} onRediscover={() => void rediscoverManagedEndpoint(state.profile)} />;
+    if (state.phase === 'blocked') return <ConnectionPanel profile={state.profile} result={state.result} onBack={choose} onRetry={retry} onAuthenticate={() => {
+      if (state.result.status === 'authentication-required') void authenticate(state.profile, state.result);
+    }} onHelp={() => void runBlockedAction(state.profile, () => adapters.externalBrowser.open('https://propr.dev'), 'ProPR Desktop could not open connection help.')} onReenter={() => reenterManagedEndpoint(state.profile)} onRediscover={() => void rediscoverManagedEndpoint(state.profile)} />;
     if (localSetupOpen && isGuidedLocalSetup(adapters.localSetup)) return setupLayer(<LocalSetupWizard adapter={adapters.localSetup} onBack={() => setLocalSetupOpen(false)} onComplete={profile => { setLocalSetupOpen(false); void saveProfile(profile); }} />);
     if (profileEditor) return profileEditor;
     return <InstanceChooser profiles={profiles} busy={busy} error={operationError} localSetupSupported={adapters.platform === 'linux' && adapters.localSetup.supported} networkDiscoverySupported={adapters.discovery.supported} onLocalSetup={() => void setupLocal()} onConnectNew={() => openEditor('new')} onDiscover={() => void discover()} onConnect={profile => void connect(profile)} onEdit={openEditor} onRemove={profile => void removeProfile(profile)} />;

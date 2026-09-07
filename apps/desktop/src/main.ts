@@ -1545,10 +1545,20 @@ if (!hasSingleInstanceLock) {
         ? packagedJourneyApprovals.open
         : packagedAcceptanceTest
           ? async () => undefined
-          : request => openApprovedDesktopPairingUrl(request, shell),
+          : request => openApprovedDesktopPairingUrl(request, shell, {
+              ambiguousOsLaunchFailure: true,
+            }),
       clientName: `ProPR Desktop (${process.platform})`,
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
+      },
+      reportPairingProgress: progress => {
+        log(progress.stage === 'browser-open-failed' ? 'warn' : 'info', 'desktop.authentication_pair.progress', {
+          stage: progress.stage,
+        });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.authenticationProgress, progress);
+        }
       },
       ...(packagedAcceptanceTest ? {
         reportWebSocketHandshake: (evidence: DesktopWebSocketHandshakeEvidence) => {

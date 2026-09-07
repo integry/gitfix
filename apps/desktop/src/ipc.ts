@@ -1,6 +1,6 @@
 import type { App, IpcMain, IpcMainInvokeEvent, Session } from 'electron';
 import { clearDesktopInstanceCookies, logoutDesktopSession } from './desktop-session';
-import type { DesktopCredentialService } from './credential-service';
+import { desktopPairingFailureCode, type DesktopCredentialService } from './credential-service';
 import type { DesktopConnectDiscoveryService } from './connect-discovery';
 import type { DesktopLogger } from './logger';
 import type { LocalLifecycleController } from './lifecycle';
@@ -78,6 +78,7 @@ const acceptanceStatus = (result: unknown): DesktopAcceptanceOperationStatus => 
   if (!result || typeof result !== 'object' || Array.isArray(result) || !('status' in result)) {
     return 'COMPLETED';
   }
+  if ('paired' in result && (result as { paired?: unknown }).paired === false) return 'REJECTED';
   const status = (result as { status?: unknown }).status;
   if (status === 'ready') return 'READY';
   if (status === 'authentication-required') return 'AUTHENTICATION_REQUIRED';
@@ -219,9 +220,21 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     await reconcileRendererActiveProfile();
   });
   handle(IPC_CHANNELS.authenticationPair, async (_event, profile) => {
-    const paired = await options.credentials.pair(profile);
-    await reconcileRendererActiveProfile();
-    return paired;
+    try {
+      const paired = await options.credentials.pair(profile);
+      await reconcileRendererActiveProfile();
+      return paired;
+    } catch (error) {
+      // A shutdown-owned cancellation must retain the admitted-work fence: do not
+      // turn it into a renderer result while the renderer and IPC are closing.
+      if (closing) throw error;
+      const code = desktopPairingFailureCode(error);
+      if (code === null) throw error;
+      options.logger.log(code === 'PAIRING_CANCELLED' ? 'info' : 'warn', 'desktop.authentication_pair.failed', {
+        code,
+      });
+      return { paired: false as const, code };
+    }
   });
   handle(IPC_CHANNELS.authenticationCancel, (_event, profileId) => options.credentials.cancelPairing(profileId));
   handle(IPC_CHANNELS.connectionProbe, (_event, profile) => options.credentials.probe(profile));

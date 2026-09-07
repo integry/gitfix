@@ -3,6 +3,7 @@ import type {
   DesktopDeepLinkAcknowledgement,
   DesktopDeepLinkConsumption,
   DesktopDeepLinkDelivery,
+  DesktopPairingProgress,
 } from './shared/contract';
 import { IPC_CHANNELS } from './shared/contract';
 
@@ -53,6 +54,7 @@ export const createDesktopBridge = (
     await invoke(ipc, IPC_CHANNELS.deepLinkAcknowledgement, acknowledgement).catch(() => undefined);
   };
   const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
+  const pairingProgressListeners = new Set<(value: DesktopPairingProgress) => void>();
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
@@ -65,6 +67,22 @@ export const createDesktopBridge = (
     setupProgressListeners.forEach(listener => listener(
       value as Awaited<ReturnType<DesktopBridge['localSetup']['status']>>,
     ));
+  });
+  ipc.on(IPC_CHANNELS.authenticationProgress, (_event, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const progress = value as Record<string, unknown>;
+    if (Object.keys(progress).length !== 2
+      || typeof progress.profileId !== 'string'
+      || progress.profileId.length === 0
+      || progress.profileId.length > 128
+      || !['browser-opening', 'approval-pending', 'browser-open-failed'].includes(
+        progress.stage as string,
+      )) return;
+    const safeProgress: DesktopPairingProgress = {
+      profileId: progress.profileId,
+      stage: progress.stage as DesktopPairingProgress['stage'],
+    };
+    pairingProgressListeners.forEach(listener => listener(safeProgress));
   });
 
   const bridge: DesktopBridge = {
@@ -94,6 +112,10 @@ export const createDesktopBridge = (
     authentication: {
       pair: (profile) => invoke(ipc, IPC_CHANNELS.authenticationPair, profile),
       cancel: (profileId) => invoke(ipc, IPC_CHANNELS.authenticationCancel, profileId),
+      onProgress: listener => {
+        pairingProgressListeners.add(listener);
+        return () => pairingProgressListeners.delete(listener);
+      },
     },
     connection: {
       probe: (profile) => invoke(ipc, IPC_CHANNELS.connectionProbe, profile),
