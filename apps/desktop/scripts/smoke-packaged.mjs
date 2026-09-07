@@ -21,6 +21,7 @@ import {
   createPackagedSmokeLaunch,
   LAYOUT_READY_EVENT,
   MVP_FLOWS_PROOF,
+  NATIVE_ICON_READY_EVENT,
   PACKAGED_SMOKE_LAUNCH_MODES,
   REDUCED_NATIVE_WINDOW_READY_EVENT,
   TRANSPORT_PROOF,
@@ -362,6 +363,12 @@ const launch = async mode => {
   const missingMarkers = requiredMarkers.filter(marker => !output.includes(marker));
   if (missingMarkers.length !== 0) {
     throw new Error(`Packaged desktop ${mode} smoke missed required markers: ${missingMarkers.join(', ')}`);
+  }
+  if (process.platform === 'linux') {
+    const nativeIcon = parseEventRecord(output, NATIVE_ICON_READY_EVENT);
+    if (nativeIcon?.asset !== 'propr-desktop.png' || nativeIcon?.width !== 512 || nativeIcon?.height !== 512) {
+      throw new Error('Packaged Linux BrowserWindow did not load the canonical ProPR native icon');
+    }
   }
   const runRequests = requests.slice(requestStart);
   if (!transport) {
