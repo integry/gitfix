@@ -511,10 +511,48 @@ jobs:
           GITHUB_TOKEN: ${{ steps.preflight-app-token.outputs.token }}
         run: node apps/desktop/scripts/release-preflight.mjs
 
-  release-package:
-    name: Sign and package ${{ matrix.platform }}-${{ matrix.arch }} production target
+  runtime-preflight:
+    name: Verify published desktop runtime tag and platforms
     if: needs.preflight.result == 'success'
     needs: preflight
+    runs-on: ubuntu-24.04
+    environment:
+      name: desktop-release
+    permissions:
+      contents: read
+    outputs:
+      app_image: ${{ steps.runtime.outputs.app_image }}
+      ui_image: ${{ steps.runtime.outputs.ui_image }}
+    env:
+      RUNTIME_APP_IMAGE: ${{ vars.PROPR_DESKTOP_RUNTIME_APP_IMAGE }}
+      RUNTIME_UI_IMAGE: ${{ vars.PROPR_DESKTOP_RUNTIME_UI_IMAGE }}
+      PROPR_DESKTOP_RELEASE_SHA: ${{ needs.preflight.outputs.release_sha }}
+    steps:
+      - name: Checkout exact immutable release SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.preflight.outputs.release_sha }}
+          persist-credentials: false
+
+      - name: Resolve commit tags and verify digests and runtime architectures
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PROPR_DESKTOP_RELEASE_SHA"
+          test -n "$RUNTIME_APP_IMAGE" || { echo 'PROPR_DESKTOP_RUNTIME_APP_IMAGE is missing' >&2; exit 1; }
+          test -n "$RUNTIME_UI_IMAGE" || { echo 'PROPR_DESKTOP_RUNTIME_UI_IMAGE is missing' >&2; exit 1; }
+          node apps/desktop/scripts/desktop-runtime-manifest.mjs verify-release \
+            --source-revision "$PROPR_DESKTOP_RELEASE_SHA" \
+            --app-image "$RUNTIME_APP_IMAGE" \
+            --ui-image "$RUNTIME_UI_IMAGE"
+          echo "app_image=$RUNTIME_APP_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "ui_image=$RUNTIME_UI_IMAGE" >> "$GITHUB_OUTPUT"
+
+  release-package:
+    name: Sign and package ${{ matrix.platform }}-${{ matrix.arch }} production target
+    if: needs.preflight.result == 'success' && needs.runtime-preflight.result == 'success'
+    needs: [preflight, runtime-preflight]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     environment:
@@ -546,8 +584,8 @@ jobs:
       UPDATE_MANIFEST_URL: ${{ vars.PROPR_DESKTOP_UPDATE_MANIFEST_URL }}
       UPDATE_MAC_SIGNING_IDENTITY: ${{ vars.PROPR_DESKTOP_MAC_SIGNING_IDENTITY }}
       UPDATE_MAC_TEAM_ID: ${{ vars.PROPR_DESKTOP_MAC_TEAM_ID }}
-      RUNTIME_APP_IMAGE: ${{ vars.PROPR_DESKTOP_RUNTIME_APP_IMAGE }}
-      RUNTIME_UI_IMAGE: ${{ vars.PROPR_DESKTOP_RUNTIME_UI_IMAGE }}
+      RUNTIME_APP_IMAGE: ${{ needs.runtime-preflight.outputs.app_image }}
+      RUNTIME_UI_IMAGE: ${{ needs.runtime-preflight.outputs.ui_image }}
       PROPR_DESKTOP_RELEASE_SHA: ${{ needs.preflight.outputs.release_sha }}
     steps:
       - name: Revalidate immutable tag before checkout
@@ -604,10 +642,6 @@ jobs:
           set -euo pipefail
           test -n "$RUNTIME_APP_IMAGE" || { echo 'PROPR_DESKTOP_RUNTIME_APP_IMAGE is missing' >&2; exit 1; }
           test -n "$RUNTIME_UI_IMAGE" || { echo 'PROPR_DESKTOP_RUNTIME_UI_IMAGE is missing' >&2; exit 1; }
-          if [ "${{ matrix.platform }}" = linux ]; then
-            docker buildx imagetools inspect "$RUNTIME_APP_IMAGE" >/dev/null
-            docker buildx imagetools inspect "$RUNTIME_UI_IMAGE" >/dev/null
-          fi
           runtime_manifest="$RUNNER_TEMP/propr-desktop-runtime/manifest.json"
           node apps/desktop/scripts/desktop-runtime-manifest.mjs release \
             --source-revision "$PROPR_DESKTOP_RELEASE_SHA" \

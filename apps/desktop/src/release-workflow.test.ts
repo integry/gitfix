@@ -112,7 +112,7 @@ describe('desktop trusted release workflow', () => {
   });
 
   test('allows production only from a new protected-main desktop tag after protected read-only preflight', () => {
-    const preflight = job('preflight', 'release-package');
+    const preflight = job('preflight', 'runtime-preflight');
     const production = job('release-package', 'release-finalize');
     assert.ok(!workflow.includes('workflow_dispatch:'));
     assert.match(preflight, /github\.event_name == 'push'/);
@@ -138,7 +138,7 @@ describe('desktop trusted release workflow', () => {
     assert.ok(!preflight.includes('permission-administration: write'));
     assert.ok(!preflight.includes('permission-contents: write'));
     assert.ok(!preflight.includes('permission-environments: write'));
-    assert.match(production, /needs: preflight/);
+    assert.match(production, /needs: \[preflight, runtime-preflight\]/);
     assert.match(production, /environment:\s+name: desktop-release/);
     assert.match(production, /ref: \$\{\{ needs\.preflight\.outputs\.release_sha \}\}/);
     assert.match(production, /gh api .*commits\/\$RELEASE_TAG/);
@@ -146,12 +146,20 @@ describe('desktop trusted release workflow', () => {
   });
 
   test('binds every production desktop package to explicitly published runtime digests from the same source revision', () => {
+    const runtimePreflight = job('runtime-preflight', 'release-package');
     const production = job('release-package', 'release-finalize');
-    assert.match(production, /RUNTIME_APP_IMAGE: \$\{\{ vars\.PROPR_DESKTOP_RUNTIME_APP_IMAGE \}\}/);
-    assert.match(production, /RUNTIME_UI_IMAGE: \$\{\{ vars\.PROPR_DESKTOP_RUNTIME_UI_IMAGE \}\}/);
+    assert.match(runtimePreflight, /needs: preflight/);
+    assert.match(runtimePreflight, /environment:\s+name: desktop-release/);
+    assert.match(runtimePreflight, /desktop-runtime-manifest\.mjs verify-release/);
+    assert.match(runtimePreflight, /--source-revision "\$PROPR_DESKTOP_RELEASE_SHA"/);
+    assert.match(runtimePreflight, /--app-image "\$RUNTIME_APP_IMAGE"/);
+    assert.match(runtimePreflight, /--ui-image "\$RUNTIME_UI_IMAGE"/);
+    assert.match(runtimePreflight, /app_image: \$\{\{ steps\.runtime\.outputs\.app_image \}\}/);
+    assert.match(runtimePreflight, /ui_image: \$\{\{ steps\.runtime\.outputs\.ui_image \}\}/);
+    assert.match(production, /RUNTIME_APP_IMAGE: \$\{\{ needs\.runtime-preflight\.outputs\.app_image \}\}/);
+    assert.match(production, /RUNTIME_UI_IMAGE: \$\{\{ needs\.runtime-preflight\.outputs\.ui_image \}\}/);
     assert.match(production, /PROPR_DESKTOP_RELEASE_SHA: \$\{\{ needs\.preflight\.outputs\.release_sha \}\}/);
-    assert.match(production, /docker buildx imagetools inspect "\$RUNTIME_APP_IMAGE"/);
-    assert.match(production, /docker buildx imagetools inspect "\$RUNTIME_UI_IMAGE"/);
+    assert.match(production, /needs: \[preflight, runtime-preflight\]/);
     assert.match(production, /desktop-runtime-manifest\.mjs release/);
     assert.match(production, /--source-revision "\$PROPR_DESKTOP_RELEASE_SHA"/);
     assert.match(production, /PROPR_DESKTOP_RUNTIME_MANIFEST=\$runtime_manifest/);
@@ -160,7 +168,7 @@ describe('desktop trusted release workflow', () => {
   });
 
   test('grants the preflight token Environments read for both environment API calls without exposing it', () => {
-    const preflight = job('preflight', 'release-package');
+    const preflight = job('preflight', 'runtime-preflight');
     const permissions = preflightAppTokenPermissions(preflight);
     for (const fixture of environmentApiPermissionFixtures) {
       for (const source of fixture.sources) {

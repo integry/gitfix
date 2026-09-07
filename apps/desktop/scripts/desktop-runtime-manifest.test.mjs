@@ -5,6 +5,7 @@ import { describe, test } from 'node:test';
 import {
   createDesktopRuntimeManifest,
   validateDesktopRuntimeManifest,
+  validatePublishedDesktopRuntimeImageInspection,
 } from './desktop-runtime-manifest.mjs';
 
 const revision = 'a'.repeat(40);
@@ -59,6 +60,30 @@ describe('desktop runtime manifest alignment', () => {
     assert.throws(() => validateDesktopRuntimeManifest(manifest, {
       apiCompatibility: '2025-01-01',
     }), /compatibility contract/);
+  });
+
+  test('requires the separately resolved release tag to match its configured digest', () => {
+    const image = `propr/app:${revision}@${digest}`;
+    const inspection = {
+      digest,
+      manifests: [
+        { platform: { os: 'linux', architecture: 'amd64' } },
+        { platform: { os: 'linux', architecture: 'arm64' } },
+      ],
+    };
+    assert.equal(validatePublishedDesktopRuntimeImageInspection(image, 'app', revision, inspection), inspection);
+    assert.throws(() => validatePublishedDesktopRuntimeImageInspection(image, 'app', revision, {
+      ...inspection,
+      digest: `sha256:${'c'.repeat(64)}`,
+    }), /does not resolve to configured digest/);
+  });
+
+  test('requires both supported Linux architectures in every published runtime image', () => {
+    const image = `propr/ui:${revision}@${digest}`;
+    assert.throws(() => validatePublishedDesktopRuntimeImageInspection(image, 'ui', revision, {
+      digest,
+      manifests: [{ platform: { os: 'linux', architecture: 'amd64' } }],
+    }), /missing required platforms: linux\/arm64/);
   });
 });
 

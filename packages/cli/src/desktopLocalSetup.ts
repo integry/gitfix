@@ -52,6 +52,16 @@ const incompatibleRuntime = (
   ...(replaceRunningStack ? { recoveryAction: 'replace-running-stack' as const } : {}),
 });
 
+const unavailableRuntime = (image: string, reason: string): DesktopRuntimeCompatibilityResult => ({
+  compatible: false,
+  detail: `desktop runtime ${image} could not be verified: ${reason}`,
+  nextAction: 'Retry local setup. If this persists, inspect the Desktop-managed API and identity persistence health; the existing runtime and data have been retained.',
+});
+
+const transientDiscoveryStatus = (status: number): boolean => (
+  status === 408 || status === 425 || status === 429 || status >= 500
+);
+
 /**
  * Probe the complete public desktop contract, not only the protected health
  * route.  This is intentionally strict: a legacy compatibility document is not
@@ -79,16 +89,18 @@ export async function checkDesktopRuntimeCompatibility(options: {
     );
   } catch (error) {
     if (options.signal?.aborted) throw error;
-    return incompatibleRuntime(options.image, signal.aborted
+    return unavailableRuntime(options.image, signal.aborted
       ? 'the desktop discovery check timed out'
       : 'the desktop discovery endpoint could not be reached');
   }
   if (!response.ok || response.redirected) {
     try { await response.body?.cancel(); } catch { /* best-effort disposal */ }
+    const reason = `the public desktop discovery endpoint returned HTTP ${response.status}`;
+    if (transientDiscoveryStatus(response.status)) return unavailableRuntime(options.image, reason);
     return incompatibleRuntime(
       options.image,
-      `the public desktop discovery endpoint returned HTTP ${response.status}`,
-      response.status === 404,
+      reason,
+      true,
     );
   }
   const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
@@ -97,7 +109,7 @@ export async function checkDesktopRuntimeCompatibility(options: {
     || (declared !== null && (!/^(?:0|[1-9]\d*)$/.test(declared)
       || Number(declared) > PROPR_CONNECT_DISCOVERY_MAX_BYTES))) {
     try { await response.body?.cancel(); } catch { /* best-effort disposal */ }
-    return incompatibleRuntime(options.image, 'the public desktop discovery response is invalid');
+    return incompatibleRuntime(options.image, 'the public desktop discovery response is invalid', true);
   }
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
@@ -109,25 +121,25 @@ export async function checkDesktopRuntimeCompatibility(options: {
       received += next.value.byteLength;
       if (received > PROPR_CONNECT_DISCOVERY_MAX_BYTES) {
         await reader.cancel();
-        return incompatibleRuntime(options.image, 'the public desktop discovery response is oversized');
+        return incompatibleRuntime(options.image, 'the public desktop discovery response is oversized', true);
       }
       chunks.push(next.value);
     }
   } catch (error) {
     if (options.signal?.aborted) throw error;
-    return incompatibleRuntime(options.image, 'the public desktop discovery response could not be read');
+    return unavailableRuntime(options.image, 'the public desktop discovery response could not be read');
   } finally {
     try { reader?.releaseLock(); } catch { /* response already cancelled */ }
   }
   if (declared !== null && Number(declared) !== received) {
-    return incompatibleRuntime(options.image, 'the public desktop discovery response length is invalid');
+    return incompatibleRuntime(options.image, 'the public desktop discovery response length is invalid', true);
   }
   const bytes = new Uint8Array(received);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   let contents: string;
   try { contents = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-  catch { return incompatibleRuntime(options.image, 'the public desktop discovery response is not valid UTF-8'); }
+  catch { return incompatibleRuntime(options.image, 'the public desktop discovery response is not valid UTF-8', true); }
   const discovery = parseProprDesktopDiscoveryJson(contents);
   if (!discovery) {
     return incompatibleRuntime(options.image, 'it does not expose the required discovery, identity, and desktop authentication contract', true);

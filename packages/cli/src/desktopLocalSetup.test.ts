@@ -95,6 +95,62 @@ describe('desktop local runtime compatibility gate', () => {
     assert.equal(result.compatible, false);
     assert.match(result.detail, new RegExp(image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(result.nextAction ?? '', new RegExp(PROPR_API_COMPATIBILITY));
+    assert.equal(result.recoveryAction, 'replace-running-stack');
+  });
+
+  test('keeps throttling and identity persistence failures resumable without diagnosing an incompatible image', async () => {
+    for (const [status, body] of [
+      [429, { code: 'RATE_LIMITED' }],
+      [503, { schemaVersion: 1, code: 'IDENTITY_UNAVAILABLE' }],
+    ] as const) {
+      const result = await checkDesktopRuntimeCompatibility({
+        baseUrl: 'http://127.0.0.1:14000', image,
+        fetch: async () => response(body, status),
+      });
+      assert.equal(result.compatible, false);
+      assert.match(result.detail, new RegExp(`could not be verified.*HTTP ${status}`));
+      assert.match(result.nextAction ?? '', /Retry local setup/);
+      assert.match(result.nextAction ?? '', /identity persistence health/);
+      assert.doesNotMatch(result.nextAction ?? '', /Install the app image|desktop:runtime:build/);
+      assert.equal(result.recoveryAction, undefined);
+    }
+  });
+
+  test('keeps connection failures resumable without prescribing another image', async () => {
+    const result = await checkDesktopRuntimeCompatibility({
+      baseUrl: 'http://127.0.0.1:14000', image,
+      fetch: async () => { throw new TypeError('connection refused'); },
+    });
+    assert.equal(result.compatible, false);
+    assert.match(result.detail, /could not be verified.*could not be reached/);
+    assert.match(result.nextAction ?? '', /Retry local setup/);
+    assert.doesNotMatch(result.nextAction ?? '', /Install the app image|desktop:runtime:build/);
+    assert.equal(result.recoveryAction, undefined);
+  });
+
+  test('keeps discovery timeouts resumable without prescribing another image', async () => {
+    const result = await checkDesktopRuntimeCompatibility({
+      baseUrl: 'http://127.0.0.1:14000', image, timeoutMs: 1,
+      fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      }),
+    });
+    assert.equal(result.compatible, false);
+    assert.match(result.detail, /could not be verified.*timed out/);
+    assert.match(result.nextAction ?? '', /Retry local setup/);
+    assert.doesNotMatch(result.nextAction ?? '', /Install the app image|desktop:runtime:build/);
+    assert.equal(result.recoveryAction, undefined);
+  });
+
+  test('treats a missing public discovery endpoint as a definitive contract failure', async () => {
+    const result = await checkDesktopRuntimeCompatibility({
+      baseUrl: 'http://127.0.0.1:14000', image,
+      fetch: async () => response({ code: 'NOT_FOUND' }, 404),
+    });
+    assert.equal(result.compatible, false);
+    assert.match(result.detail, /incompatible.*HTTP 404/);
+    assert.match(result.nextAction ?? '', new RegExp(PROPR_API_COMPATIBILITY));
+    assert.equal(result.recoveryAction, 'replace-running-stack');
   });
 });
 

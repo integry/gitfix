@@ -10,6 +10,7 @@ const repositoryRoot = resolve(here, '..', '..', '..');
 const SHA = /^[0-9a-f]{40}$/;
 const DIGEST = /@sha256:[0-9a-f]{64}$/;
 const COMPATIBILITY = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
+const REQUIRED_RUNTIME_PLATFORMS = ['linux/amd64', 'linux/arm64'];
 
 const argumentsOf = (argv) => {
   const result = {};
@@ -77,6 +78,29 @@ export function readDesktopRuntimeManifest(path, expected = {}) {
   return validateDesktopRuntimeManifest(JSON.parse(readFileSync(path, 'utf8')), expected);
 }
 
+export function validatePublishedDesktopRuntimeImageInspection(image, repository, sourceRevision, inspection) {
+  if (!exactImage(image, repository, sourceRevision, 'published')) {
+    throw new Error(`Published desktop runtime ${repository} image is not bound to the release revision`);
+  }
+  if (!inspection || typeof inspection !== 'object' || Array.isArray(inspection)) {
+    throw new Error(`Registry returned invalid manifest metadata for propr/${repository}:${sourceRevision}`);
+  }
+  const tag = `propr/${repository}:${sourceRevision}`;
+  const configuredDigest = image.slice(image.lastIndexOf('@') + 1);
+  if (inspection.digest !== configuredDigest) {
+    throw new Error(`Published desktop runtime tag ${tag} does not resolve to configured digest ${configuredDigest}`);
+  }
+  const platforms = new Set((Array.isArray(inspection.manifests) ? inspection.manifests : [])
+    .map(manifest => manifest?.platform)
+    .filter(platform => platform && typeof platform === 'object')
+    .map(platform => `${platform.os}/${platform.architecture}`));
+  const missing = REQUIRED_RUNTIME_PLATFORMS.filter(platform => !platforms.has(platform));
+  if (missing.length) {
+    throw new Error(`Published desktop runtime tag ${tag} is missing required platforms: ${missing.join(', ')}`);
+  }
+  return inspection;
+}
+
 const writeManifest = (path, manifest) => {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -124,14 +148,42 @@ const createRelease = (args) => {
   }));
 };
 
+const verifyRelease = (args) => {
+  const sourceRevision = args['source-revision'];
+  if (!sourceRevision || !args['app-image'] || !args['ui-image']) {
+    throw new Error('Release verification requires source-revision, app-image, and ui-image');
+  }
+  if (!SHA.test(sourceRevision)) throw new Error('A full lowercase Git source revision is required');
+  for (const [repository, image] of [['app', args['app-image']], ['ui', args['ui-image']]]) {
+    if (!exactImage(image, repository, sourceRevision, 'published')) {
+      throw new Error(`Published desktop runtime ${repository} image is not bound to the release revision`);
+    }
+    const tag = `propr/${repository}:${sourceRevision}`;
+    let output;
+    try {
+      output = execFileSync('docker', [
+        'buildx', 'imagetools', 'inspect', tag, '--format', '{{json .Manifest}}',
+      ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+    } catch {
+      throw new Error(`Published desktop runtime tag ${tag} is unavailable`);
+    }
+    let inspection;
+    try { inspection = JSON.parse(output); }
+    catch { throw new Error(`Registry returned invalid manifest metadata for ${tag}`); }
+    validatePublishedDesktopRuntimeImageInspection(image, repository, sourceRevision, inspection);
+  }
+};
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const [command, ...argv] = process.argv.slice(2);
     const args = argumentsOf(argv);
-    if (!args['api-compatibility']) throw new Error('--api-compatibility is required');
-    if (command === 'local') buildLocal(args);
-    else if (command === 'release') createRelease(args);
-    else throw new Error('Usage: desktop-runtime-manifest.mjs <local|release> [options]');
+    if (command === 'local' || command === 'release') {
+      if (!args['api-compatibility']) throw new Error('--api-compatibility is required');
+      if (command === 'local') buildLocal(args);
+      else createRelease(args);
+    } else if (command === 'verify-release') verifyRelease(args);
+    else throw new Error('Usage: desktop-runtime-manifest.mjs <local|release|verify-release> [options]');
   } catch (error) {
     console.error((error instanceof Error ? error : new Error(String(error))).message);
     process.exitCode = 1;
