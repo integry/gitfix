@@ -232,11 +232,11 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
       const result = await enrollRelayToken(client, { installationId, label: label ?? hostname() });
       return { relayUrl: client.baseUrl, token: result.token };
     },
-    async loginWithGithub({ onLog, signal } = {}) {
+    async loginWithGithub({ onLog, signal, force } = {}) {
       if (!configManager) return false;
       const { loginWithGithubCli } = await import("../../auth/githubLogin.js");
       const result = await loginWithGithubCli(configManager, {
-        interactive: true, onLog, signal,
+        interactive: true, onLog, signal, force,
         authenticationHandoff: options.authenticationHandoff,
         capturedCommand: options.capturedCommand,
       });

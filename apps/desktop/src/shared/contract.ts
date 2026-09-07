@@ -27,6 +27,7 @@ export const IPC_CHANNELS = Object.freeze({
   setupCancel: 'desktop:setup-cancel',
   setupSelectPrivateKey: 'desktop:setup-select-private-key',
   setupAcquireWebhookSecret: 'desktop:setup-acquire-webhook-secret',
+  setupGithubInstallationDecision: 'desktop:setup-github-installation-decision',
   setupProgress: 'desktop:setup-progress',
   deepLink: 'desktop:deep-link',
   deepLinkAcknowledgement: 'desktop:deep-link-acknowledgement',
@@ -153,10 +154,37 @@ export interface DesktopSetupRequest {
 export interface DesktopFilesystemSelection { capability: string; label: string }
 export interface DesktopSecretSelection { capability: string; label: 'Secret entered' }
 
+export interface DesktopGithubInstallation {
+  installationId: string;
+  accountLogin: string;
+  accountType: string;
+}
+
+export interface DesktopGithubSelectedIdentity {
+  username: string;
+  installation: DesktopGithubInstallation;
+}
+
+export type DesktopGithubInstallationDecision =
+  | { action: 'select'; installationId: string }
+  | { action: 'refresh' }
+  | { action: 'install' }
+  | { action: 'reauthenticate' };
+
+export interface DesktopGithubIdentityState {
+  status: 'selection-required' | 'authorization-failed' | 'refreshing' | 'installing' | 'reauthenticating' | 'enrolling' | 'enrolled';
+  username: string;
+  installations: DesktopGithubInstallation[];
+  selectedInstallationId?: string;
+  permissionExplanation?: string;
+  installAvailable: boolean;
+}
+
 export interface DesktopSetupResumeView {
   agents: string[];
   reinitialize: boolean;
-  github: { mode: 'keep' | 'demo' | 'relay' }
+  github: { mode: 'keep' | 'demo' }
+    | { mode: 'relay'; identity?: DesktopGithubSelectedIdentity }
     | { mode: 'app'; appId: string; installationId: string; reconfigurationRequired: true };
   intake: { mode: 'keep' | 'routing_websocket' | 'polling' }
     | { mode: 'direct_webhook'; reconfigurationRequired: true };
@@ -187,6 +215,8 @@ export interface DesktopSetupSnapshot {
   resume?: DesktopSetupResumeView;
   resumeAvailable?: boolean;
   reconfigurationRequired?: boolean;
+  /** Safe identity metadata only; GitHub and relay tokens never cross IPC. */
+  githubIdentity?: DesktopGithubIdentityState;
 }
 
 export interface DesktopBridge {
@@ -239,6 +269,7 @@ export interface DesktopBridge {
     cancel(): Promise<DesktopSetupSnapshot>;
     selectPrivateKey(): Promise<DesktopFilesystemSelection | null>;
     acquireWebhookSecret(): Promise<DesktopSecretSelection | null>;
+    resolveGithubInstallation(decision: DesktopGithubInstallationDecision): Promise<DesktopSetupSnapshot>;
     onProgress(listener: (snapshot: DesktopSetupSnapshot) => void): () => void;
   };
   /** @internal Present only in an authorized packaged Connect acceptance process. */

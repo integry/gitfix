@@ -20,6 +20,7 @@ const bridgeFixture = () => {
       cancel: async () => snapshot,
       selectPrivateKey: async () => null,
       acquireWebhookSecret: async () => null,
+      resolveGithubInstallation: async () => snapshot,
       onProgress: () => () => undefined,
     },
   } as unknown as DesktopBridge;

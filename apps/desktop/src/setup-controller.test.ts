@@ -46,7 +46,149 @@ const successfulActions = (rootDir: string): SetupActions => ({
   validateAgents: async () => [],
 } as unknown as SetupActions);
 
+const relayRequest: DesktopSetupRequest = {
+  ...request, github: { mode: 'relay' }, intake: { mode: 'routing_websocket' },
+};
+
+const waitForSnapshot = async (
+  controller: DesktopSetupController,
+  predicate: (snapshot: Awaited<ReturnType<DesktopSetupController['status']>>) => boolean,
+) => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const snapshot = await controller.status();
+    if (predicate(snapshot)) return snapshot;
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  throw new Error('Timed out waiting for setup snapshot');
+};
+
+const relayActions = (rootDir: string, overrides: Partial<SetupActions> = {}): SetupActions => {
+  const env: Record<string, string> = { GITHUB_EVENT_INTAKE_MODE: 'routing_websocket' };
+  return {
+    ...successfulActions(rootDir),
+    readEnvVars: () => ({ ...env }),
+    applyEnvSelection: (_root, vars) => {
+      Object.assign(env, vars);
+      return { written: Object.keys(vars), skipped: [] };
+    },
+    detectGithubAuthMode: () => env.GH_AUTH_MODE === 'relay'
+      ? { mode: 'relay', warnings: [] } : { mode: 'none', warnings: [] },
+    hasGithubToken: () => true,
+    fetchRelayInstallations: async () => ({ username: 'fixture-user', installations: [
+      { installation_id: 100, account_login: 'acme', account_type: 'Organization' },
+      { installation_id: 200, account_login: 'fixture-user', account_type: 'User' },
+    ] }),
+    enrollRelay: async () => ({ relayUrl: 'https://relay.example.test', token: 'fixture-secret-token' }),
+    ...overrides,
+  } as SetupActions;
+};
+
 describe('desktop local setup controller', () => {
+  it('publishes safe identity metadata and validates an explicit installation choice', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const rootDir = join(appData, 'local-runtime');
+    let enrolledId: string | undefined;
+    const controller = new DesktopSetupController({
+      actions: relayActions(rootDir, { enrollRelay: async ({ installationId }) => {
+        enrolledId = installationId;
+        return { relayUrl: 'https://relay.example.test', token: 'fixture-secret-token' };
+      } }),
+      platform: 'linux', appDataDir: appData, defaultRootDir: rootDir,
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const running = controller.start(relayRequest);
+      const choice = await waitForSnapshot(controller, value => value.githubIdentity?.status === 'selection-required');
+      assert.equal(choice.githubIdentity?.username, 'fixture-user');
+      assert.deepEqual(choice.githubIdentity?.installations.map(value => [value.accountLogin, value.accountType]), [
+        ['acme', 'Organization'], ['fixture-user', 'User'],
+      ]);
+      assert.doesNotMatch(JSON.stringify(choice), /fixture-secret-token/);
+      await assert.rejects(controller.resolveGithubInstallation({ action: 'select', installationId: '999' }), /current discovered list/);
+      await controller.resolveGithubInstallation({ action: 'select', installationId: '200' });
+      const completed = await running;
+      assert.equal(completed.phase, 'completed');
+      assert.equal(completed.githubIdentity?.status, 'enrolled');
+      assert.equal(completed.resume?.github.mode === 'relay' && completed.resume.github.identity?.installation.accountLogin, 'fixture-user');
+      assert.equal(enrolledId, '200');
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
+  it('keeps install, refresh, and cancel actionable when discovery returns zero installations', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const rootDir = join(appData, 'local-runtime');
+    const opened: string[] = [];
+    let discoveries = 0;
+    const controller = new DesktopSetupController({
+      actions: relayActions(rootDir, {
+        fetchRelayInstallations: async () => {
+          discoveries += 1;
+          return { username: 'fixture-user', installations: [] };
+        },
+        openUrl: async url => { opened.push(url); },
+      }),
+      platform: 'linux', appDataDir: appData, defaultRootDir: rootDir,
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const running = controller.start(relayRequest);
+      const initial = await waitForSnapshot(controller, value => value.githubIdentity?.status === 'selection-required');
+      assert.deepEqual(initial.githubIdentity?.installations, []);
+      assert.equal(initial.githubIdentity?.installAvailable, true);
+
+      const installing = await controller.resolveGithubInstallation({ action: 'install' });
+      assert.equal(installing.githubIdentity?.status, 'installing');
+      await waitForSnapshot(controller, value => discoveries >= 2 && value.githubIdentity?.status === 'selection-required');
+      assert.deepEqual(opened, ['https://github.com/apps/propr-dev/installations/new']);
+
+      const refreshing = await controller.resolveGithubInstallation({ action: 'refresh' });
+      assert.equal(refreshing.githubIdentity?.status, 'refreshing');
+      await waitForSnapshot(controller, value => discoveries >= 3 && value.githubIdentity?.status === 'selection-required');
+
+      const cancelled = await controller.cancel();
+      assert.equal((await running).phase, 'cancelled');
+      assert.equal(cancelled.phase, 'cancelled');
+      assert.equal(discoveries, 3);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
+  it('keeps an enrollment 403 in the chooser and settles cancellation without duplicate enrollment', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const rootDir = join(appData, 'local-runtime');
+    let enrollmentCalls = 0;
+    const controller = new DesktopSetupController({
+      actions: relayActions(rootDir, { enrollRelay: async () => {
+        enrollmentCalls += 1;
+        throw Object.assign(new Error('owner only'), { status: 403 });
+      } }),
+      platform: 'linux', appDataDir: appData, defaultRootDir: rootDir,
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const running = controller.start(relayRequest);
+      await waitForSnapshot(controller, value => value.githubIdentity?.status === 'selection-required');
+      await controller.resolveGithubInstallation({ action: 'select', installationId: '100' });
+      const denied = await waitForSnapshot(controller, value => value.githubIdentity?.status === 'authorization-failed');
+      assert.match(denied.githubIdentity?.permissionExplanation ?? '', /installation owner/i);
+      assert.equal(denied.phase, 'running');
+      assert.equal(enrollmentCalls, 1);
+      const cancelled = await controller.cancel();
+      assert.equal((await running).phase, 'cancelled');
+      assert.equal(cancelled.phase, 'cancelled');
+      assert.equal(enrollmentCalls, 1);
+      await assert.rejects(controller.resolveGithubInstallation({ action: 'refresh' }), /No GitHub installation choice/);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
   it('cancels admitted engine work and allows a fresh retry without touching a real stack', async () => {
     const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
     chmodSync(appData, 0o700);

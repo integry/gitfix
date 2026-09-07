@@ -3,14 +3,15 @@ import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from '
 import { dirname, resolve } from 'node:path';
 import {
   getLocalSetupCapability, retrySetup, runSetup,
-  type GithubAuthDecision, type SetupActions, type SetupRunResult,
+  type GithubAuthDecision, type RelayInstallationChoiceContext, type RelayInstallationDecision,
+  type SetupActions, type SetupRunResult,
 } from '@propr/local-setup';
 import { DEFAULT_PROPR_GH_RELAY_URL } from '@propr/shared';
 import { bindRootOperations, RootDirectoryAuthority, SetupFilesystemCapabilities, SetupSecretCapabilities } from './setup-capabilities';
 import { parseDesktopSetupRequest, SetupRequestError } from './setup-schema';
 import type {
   DesktopFilesystemSelection, DesktopSecretSelection, DesktopSetupRequest,
-  DesktopSetupResumeView, DesktopSetupSnapshot,
+  DesktopGithubInstallation, DesktopGithubInstallationDecision, DesktopSetupResumeView, DesktopSetupSnapshot,
 } from './shared/contract';
 
 interface ResolvedRequest {
@@ -59,6 +60,21 @@ const validCompletedProfile = (value: unknown): value is NonNullable<DesktopSetu
   } catch { return false; }
 };
 
+const validGithubSelectedIdentity = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const identity = value as Record<string, unknown>;
+  if (Object.keys(identity).some(key => !['username', 'installation'].includes(key))
+    || typeof identity.username !== 'string'
+    || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(identity.username)
+    || !identity.installation || typeof identity.installation !== 'object' || Array.isArray(identity.installation)) return false;
+  const installation = identity.installation as Record<string, unknown>;
+  return !Object.keys(installation).some(key => !['installationId', 'accountLogin', 'accountType'].includes(key))
+    && typeof installation.installationId === 'string' && /^[1-9][0-9]{0,19}$/.test(installation.installationId)
+    && typeof installation.accountLogin === 'string'
+    && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(installation.accountLogin)
+    && (installation.accountType === 'User' || installation.accountType === 'Organization');
+};
+
 const enforceDesktopResumePolicy = (value: DesktopSetupResumeView): {
   resume: DesktopSetupResumeView;
   message?: string;
@@ -94,6 +110,7 @@ export class DesktopSetupController {
   #resolved: ResolvedRequest | null = null;
   #resume: DesktopSetupResumeView | null = null;
   #loaded = false;
+  #pendingGithub: { resolve(value: RelayInstallationDecision): void; settled: boolean } | null = null;
 
   constructor(options: DesktopSetupControllerOptions) {
     this.#options = options;
@@ -120,6 +137,37 @@ export class DesktopSetupController {
     return value === null ? null : this.#secrets.issue(this.#sessionId, value);
   }
 
+  async resolveGithubInstallation(input: unknown): Promise<DesktopSetupSnapshot> {
+    const pending = this.#pendingGithub;
+    if (!pending || pending.settled) throw new SetupRequestError('No GitHub installation choice is pending.');
+    const decision = this.#parseGithubDecision(input);
+    const identity = this.#snapshot.githubIdentity;
+    if (!identity || !['selection-required', 'authorization-failed'].includes(identity.status)) {
+      throw new SetupRequestError('The GitHub installation choice is no longer active.');
+    }
+    if (decision.action === 'select') {
+      const installation = identity.installations.find(item => item.installationId === decision.installationId);
+      if (!installation) throw new SetupRequestError('Choose an installation from the current discovered list.');
+      if (this.#resume?.github.mode === 'relay') {
+        this.#resume.github.identity = { username: identity.username, installation: { ...installation } };
+      }
+      this.#snapshot = { ...this.#snapshot, githubIdentity: {
+        ...identity, status: 'enrolling', selectedInstallationId: installation.installationId,
+        permissionExplanation: undefined,
+      }, ...(this.#resume ? { resume: copyResume(this.#resume) } : {}) };
+    } else {
+      if (decision.action === 'install' && !identity.installAvailable) throw new SetupRequestError('GitHub App installation is unavailable for this relay.');
+      if (decision.action === 'reauthenticate' && this.#resume?.github.mode === 'relay') delete this.#resume.github.identity;
+      this.#snapshot = { ...this.#snapshot, githubIdentity: { ...identity,
+        status: decision.action === 'refresh' ? 'refreshing' : decision.action === 'install' ? 'installing' : 'reauthenticating',
+        permissionExplanation: undefined,
+      }, ...(this.#resume ? { resume: copyResume(this.#resume) } : {}) };
+    }
+    this.#publish();
+    pending.resolve(decision);
+    return this.#publicSnapshot();
+  }
+
   start(input: unknown): Promise<DesktopSetupSnapshot> { return this.#begin(parseDesktopSetupRequest(input), false); }
 
   async retry(input?: unknown): Promise<DesktopSetupSnapshot> {
@@ -137,7 +185,9 @@ export class DesktopSetupController {
       if (this.#resume.reconfigurationStage) throw new SetupRequestError(`Re-enter the ${this.#resume.reconfigurationStage} configuration before retrying.`);
       const request = parseDesktopSetupRequest({
         sessionId: this.#sessionId, root: { mode: 'resume' }, reinitialize: this.#resume.reinitialize,
-        agents: this.#resume.agents, github: this.#resume.github, intake: this.#resume.intake,
+        agents: this.#resume.agents,
+        github: this.#resume.github.mode === 'relay' ? { mode: 'relay' } : this.#resume.github,
+        intake: this.#resume.intake,
         whitelist: this.#resume.whitelist, repository: this.#resume.repository,
       });
       return this.#begin(request, true);
@@ -146,12 +196,14 @@ export class DesktopSetupController {
   }
 
   async cancel(): Promise<DesktopSetupSnapshot> {
+    this.#settleGithubChoice();
     this.#abort?.abort();
     await this.#current?.catch(() => undefined);
     return this.#publicSnapshot();
   }
 
   async shutdown(): Promise<void> {
+    this.#settleGithubChoice();
     this.#abort?.abort();
     await this.#current?.catch(() => undefined);
     this.#filesystem.clear(); this.#secrets.clear(); this.#resolved?.authority.close();
@@ -227,7 +279,7 @@ export class DesktopSetupController {
     };
     try {
       const actions = bindRootOperations(this.#options.actions, resolved.authority);
-      const options = { actions, prompts: this.#prompts(resolved), reporter, platform: this.#options.platform ?? process.platform, signal };
+      const options = { actions, prompts: this.#prompts(resolved, signal), reporter, platform: this.#options.platform ?? process.platform, signal };
       const result = retry && this.#result ? await retrySetup(this.#result, options) : await runSetup({ ...options, root: this.#options.defaultRootDir });
       this.#result = result;
       signal.throwIfAborted();
@@ -241,6 +293,9 @@ export class DesktopSetupController {
       this.#snapshot = {
         ...this.#snapshot, phase: result.completed ? 'completed' : result.cancelled ? 'cancelled' : 'failed',
         state: result.state, errors: result.errors, profile,
+        ...(result.completed && this.#snapshot.githubIdentity ? {
+          githubIdentity: { ...this.#snapshot.githubIdentity, status: 'enrolled' as const },
+        } : {}),
         reconfigurationRequired: !result.completed && Boolean(this.#resume?.reconfigurationStage),
       };
     } catch (error) {
@@ -254,7 +309,7 @@ export class DesktopSetupController {
     return this.#publicSnapshot();
   }
 
-  #prompts(resolved: ResolvedRequest) {
+  #prompts(resolved: ResolvedRequest, signal: AbortSignal) {
     const request = resolved.request;
     return {
       resolveStackRoot: async () => ({ rootDir: this.#options.defaultRootDir, reinitialize: request.reinitialize }),
@@ -268,7 +323,7 @@ export class DesktopSetupController {
       },
       confirmGithubLogin: async () => true,
       confirmGithubAppInstall: async () => true,
-      confirmGithubAppInstalled: async () => false,
+      chooseInstallation: (context: RelayInstallationChoiceContext) => this.#chooseGithubInstallation(context, signal),
       configureIntake: async () => request.intake.mode === 'keep' ? { keep: true as const }
         : request.intake.mode === 'direct_webhook' ? { mode: 'direct_webhook' as const, webhookSecret: resolved.webhookSecret }
         : { mode: request.intake.mode },
@@ -280,10 +335,89 @@ export class DesktopSetupController {
     };
   }
 
+  #chooseGithubInstallation(context: RelayInstallationChoiceContext, signal: AbortSignal): Promise<RelayInstallationDecision> {
+    if (this.#pendingGithub) throw new SetupRequestError('A GitHub installation choice is already pending.');
+    const username = context.username.trim();
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(username)) {
+      throw new SetupRequestError('The relay returned an invalid GitHub identity.');
+    }
+    const installations: DesktopGithubInstallation[] = context.installations.map(item => {
+      const installationId = String(item.installation_id);
+      const accountLogin = item.account_login.trim();
+      const accountType = item.account_type.trim();
+      if (!/^[1-9][0-9]{0,19}$/.test(installationId)
+        || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(accountLogin)
+        || (accountType !== 'User' && accountType !== 'Organization')) {
+        throw new SetupRequestError('The relay returned invalid GitHub installation metadata.');
+      }
+      return { installationId, accountLogin, accountType };
+    });
+    if (new Set(installations.map(item => item.installationId)).size !== installations.length) {
+      throw new SetupRequestError('The relay returned duplicate GitHub installations.');
+    }
+    const remembered = this.#resume?.github.mode === 'relay' ? this.#resume.github.identity : undefined;
+    if (remembered && (remembered.username !== username || !installations.some(
+      item => item.installationId === remembered.installation.installationId
+    )) && this.#resume?.github.mode === 'relay') delete this.#resume.github.identity;
+    const saved = this.#resume?.github.mode === 'relay' && this.#resume.github.identity?.username === username
+      ? this.#resume.github.identity.installation.installationId : undefined;
+    const selectedInstallationId = [context.selectedInstallationId, saved]
+      .find(value => value && installations.some(item => item.installationId === value));
+    const permissionExplanation = context.enrollmentPermissionError?.slice(0, 1_000);
+    this.#snapshot = { ...this.#snapshot, ...(this.#resume ? { resume: copyResume(this.#resume) } : {}), githubIdentity: {
+      status: permissionExplanation ? 'authorization-failed' : 'selection-required',
+      username, installations, installAvailable: Boolean(context.installUrl),
+      ...(selectedInstallationId ? { selectedInstallationId } : {}),
+      ...(permissionExplanation ? { permissionExplanation } : {}),
+    } };
+    this.#publish();
+
+    return new Promise(resolve => {
+      const pending = { settled: false, resolve: (_decision: RelayInstallationDecision): void => undefined };
+      const finish = (decision: RelayInstallationDecision): void => {
+        if (pending.settled) return;
+        pending.settled = true;
+        signal.removeEventListener('abort', abort);
+        if (this.#pendingGithub === pending) this.#pendingGithub = null;
+        resolve(decision);
+      };
+      const abort = (): void => finish({ action: 'cancel' });
+      pending.resolve = finish;
+      this.#pendingGithub = pending;
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
+    });
+  }
+
+  #parseGithubDecision(input: unknown): DesktopGithubInstallationDecision {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new SetupRequestError('Invalid GitHub installation action.');
+    }
+    const value = input as Record<string, unknown>;
+    if (value.action === 'select') {
+      if (Object.keys(value).some(key => !['action', 'installationId'].includes(key))
+        || typeof value.installationId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(value.installationId)) {
+        throw new SetupRequestError('Invalid GitHub installation selection.');
+      }
+      return { action: 'select', installationId: value.installationId };
+    }
+    if (!['refresh', 'install', 'reauthenticate'].includes(String(value.action)) || Object.keys(value).length !== 1) {
+      throw new SetupRequestError('Invalid GitHub installation action.');
+    }
+    return { action: value.action as 'refresh' | 'install' | 'reauthenticate' };
+  }
+
+  #settleGithubChoice(): void {
+    this.#pendingGithub?.resolve({ action: 'cancel' });
+  }
+
   #resumeFrom(request: DesktopSetupRequest): DesktopSetupResumeView {
     const github: DesktopSetupResumeView['github'] = request.github.mode === 'app'
       ? { mode: 'app', appId: request.github.appId, installationId: request.github.installationId, reconfigurationRequired: true }
-      : structuredClone(request.github);
+      : request.github.mode === 'relay'
+        ? { mode: 'relay', ...(this.#resume?.github.mode === 'relay' && this.#resume.github.identity
+          ? { identity: structuredClone(this.#resume.github.identity) } : {}) }
+        : structuredClone(request.github);
     const intake: DesktopSetupResumeView['intake'] = request.intake.mode === 'direct_webhook'
       ? { mode: 'direct_webhook', reconfigurationRequired: true } : structuredClone(request.intake);
     return { agents: [...request.agents], reinitialize: request.reinitialize, github, intake,
@@ -299,6 +433,8 @@ export class DesktopSetupController {
       const persisted = JSON.parse(readFileSync(this.#options.statePath, 'utf8')) as PersistedSetup;
       if (persisted.version !== 1 || !persisted.resume || !SETUP_PHASES.has(persisted.phase)) throw new Error('invalid');
       const policy = enforceDesktopResumePolicy(persisted.resume);
+      if (policy.resume.github.mode === 'relay' && policy.resume.github.identity
+        && !validGithubSelectedIdentity(policy.resume.github.identity)) delete policy.resume.github.identity;
       this.#resume = policy.resume;
       const completedProfile = persisted.phase === 'completed' && !policy.message && validCompletedProfile(persisted.profile)
         ? structuredClone(persisted.profile) : undefined;

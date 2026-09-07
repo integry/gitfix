@@ -45,6 +45,8 @@ export interface GithubLoginOptions {
   capturedCommand?: CapturedCommandRunner;
   /** Cooperative desktop cancellation. */
   signal?: AbortSignal;
+  /** Start an account-changing login even when gh already has a session. */
+  force?: boolean;
 }
 
 export interface GithubLoginResult {
@@ -66,7 +68,7 @@ export async function loginWithGithubCli(
   configManager: ConfigManager,
   options: GithubLoginOptions = {}
 ): Promise<GithubLoginResult> {
-  const { interactive = false, onLog, authenticationHandoff, signal } = options;
+  const { interactive = false, onLog, authenticationHandoff, signal, force = false } = options;
   const { execSync, spawnSync } = await import("child_process");
 
   if (authenticationHandoff) {
@@ -85,7 +87,7 @@ export async function loginWithGithubCli(
         message: "GitHub CLI (gh) is not installed. Install it from https://cli.github.com and retry setup.",
       };
     }
-    const existing = await readGhTokenAsync(capture, signal);
+    const existing = force ? null : await readGhTokenAsync(capture, signal);
     if (existing) {
       signal?.throwIfAborted();
       await configManager.setGithubToken(existing);
@@ -120,7 +122,7 @@ export async function loginWithGithubCli(
   }
 
   // Reuse an existing gh session when one is already authenticated.
-  const existing = readGhToken(execSync);
+  const existing = force ? null : readGhToken(execSync);
   if (existing) {
     await configManager.setGithubToken(existing);
     return { ok: true, token: existing, message: "Authenticated using your existing gh CLI session." };
