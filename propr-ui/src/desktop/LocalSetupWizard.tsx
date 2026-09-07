@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Check, ChevronRight, CircleAlert, KeyRound, LoaderCircle, RotateCcw, X } from 'lucide-react';
+import { ArrowLeft, Check, ChevronRight, CircleAlert, ExternalLink, Github, KeyRound, LoaderCircle, RefreshCw, RotateCcw, UserRoundCog, X } from 'lucide-react';
 import type {
-  DesktopFilesystemSelection, DesktopSecretSelection, DesktopSetupRequest, DesktopSetupSnapshot,
+  DesktopFilesystemSelection, DesktopGithubInstallationDecision, DesktopGithubSelectedIdentity,
+  DesktopSecretSelection, DesktopSetupRequest, DesktopSetupSnapshot,
 } from '../../../apps/desktop/src/shared/contract';
 import type { DesktopGuidedLocalSetupAdapter, DesktopProfile } from './types';
 
@@ -13,6 +14,7 @@ const agents = ['codex', 'claude', 'antigravity', 'opencode', 'vibe'];
 
 interface Draft {
   githubMode: GithubMode; appId: string; installationId: string; privateKey: DesktopFilesystemSelection | null;
+  githubIdentity: DesktopGithubSelectedIdentity | null;
   intakeMode: IntakeMode; webhookSecret: DesktopSecretSelection | null; selectedAgents: string[];
   whitelist: string; reinitialize: boolean;
 }
@@ -35,7 +37,43 @@ const InlineError: React.FC<{ message: string | null }> = ({ message }) => messa
 
 const hasSavedChoices = (snapshot: DesktopSetupSnapshot): boolean => Boolean(snapshot.resumeAvailable && snapshot.resume);
 
-const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; cancel(): void }> = ({ snapshot, busy, error, back, cancel }) => {
+const GithubInstallationChoice: React.FC<{
+  snapshot: DesktopSetupSnapshot; busy: boolean;
+  choose(decision: DesktopGithubInstallationDecision): void;
+}> = ({ snapshot, busy, choose }) => {
+  const identity = snapshot.githubIdentity!;
+  const [selected, setSelected] = useState(identity.selectedInstallationId ?? '');
+  useEffect(() => {
+    if (identity.selectedInstallationId) setSelected(identity.selectedInstallationId);
+    else if (!identity.installations.some(item => item.installationId === selected)) setSelected('');
+  }, [identity.installations, identity.selectedInstallationId, selected]);
+  const waiting = ['refreshing', 'installing', 'reauthenticating', 'enrolling'].includes(identity.status);
+  return <section className="desktop-github-choice" aria-labelledby="desktop-github-choice-title">
+    <div className="desktop-github-identity"><Github aria-hidden="true" /><div><small>Authenticated GitHub account</small><strong>@{identity.username}</strong></div></div>
+    <h2 id="desktop-github-choice-title">Choose a GitHub App installation</h2>
+    <p>Discovery shows installations this account can access. The relay separately verifies enrollment permission after you choose.</p>
+    {identity.permissionExplanation && <div className="desktop-inline-error" role="alert">{identity.permissionExplanation}</div>}
+    {identity.installations.length > 0 ? <div className="desktop-setup-options desktop-github-installations">
+      {identity.installations.map(installation => <label key={installation.installationId}>
+        <input type="radio" name="github-installation" checked={selected === installation.installationId}
+          disabled={busy || waiting} onChange={() => setSelected(installation.installationId)} />
+        <span><strong>{installation.accountLogin}</strong><small>{installation.accountType} · Installation {installation.installationId}</small></span>
+      </label>)}
+    </div> : <div className="desktop-setup-note">No GitHub App installation is visible to @{identity.username} yet. Install the app, then refresh this list.</div>}
+    <div className="desktop-github-actions">
+      <button type="button" className="desktop-secondary-button" disabled={busy || waiting} onClick={() => choose({ action: 'refresh' })}><RefreshCw /> Refresh installations</button>
+      {identity.installAvailable && <button type="button" className="desktop-secondary-button" disabled={busy || waiting} onClick={() => choose({ action: 'install' })}><ExternalLink /> Install GitHub App</button>}
+      <button type="button" className="desktop-secondary-button" disabled={busy || waiting} onClick={() => choose({ action: 'reauthenticate' })}><UserRoundCog /> Change GitHub account</button>
+    </div>
+    <button type="button" className="desktop-primary-button" disabled={busy || waiting || !selected}
+      onClick={() => choose({ action: 'select', installationId: selected })}>
+      {waiting ? <><LoaderCircle className="desktop-spin" /> {identity.status === 'enrolling' ? 'Checking permission…' : 'Updating…'}</> : <>Continue with selection <ChevronRight /></>}
+    </button>
+  </section>;
+};
+
+const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; choiceBusy: boolean; error: string | null; back(): void; cancel(): void;
+  choose(decision: DesktopGithubInstallationDecision): void }> = ({ snapshot, busy, choiceBusy, error, back, cancel, choose }) => {
   const complete = snapshot.state?.steps.filter(step => ['done', 'skipped', 'warning'].includes(step.status)).length ?? 0;
   const total = snapshot.state?.steps.length ?? 1;
   return <main className="desktop-setup-wizard" aria-live="polite">
@@ -45,6 +83,8 @@ const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: 
       <span>{step.status === 'active' ? <LoaderCircle className="desktop-spin" /> : step.status === 'done' ? <Check /> : step.status === 'failed' ? <X /> : null}</span>
       <div><strong>{step.title}</strong><small>{step.detail || step.description}</small></div>
     </div>)}</div>
+    {snapshot.githubIdentity && snapshot.githubIdentity.status !== 'enrolled'
+      && <GithubInstallationChoice snapshot={snapshot} busy={choiceBusy} choose={choose} />}
     {snapshot.logs.length > 0 && <pre className="desktop-setup-log">{snapshot.logs.slice(-8).join('\n')}</pre>}
     <InlineError message={error} />
     <div className="desktop-setup-footer">{error && <button type="button" className="desktop-secondary-button" onClick={back}>Back</button>}
@@ -54,10 +94,12 @@ const Running: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: 
 
 const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error: string | null; back(): void; retry(): void; review(): void }> = ({ snapshot, busy, error, back, retry, review }) => {
   const failed = snapshot.state?.steps.find(step => step.status === 'failed');
+  const identity = snapshot.resume?.github.mode === 'relay' ? snapshot.resume.github.identity : undefined;
   return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon desktop-setup-error-icon" />
     <span className="desktop-eyebrow">Recovery</span><h1>{snapshot.phase === 'interrupted' ? 'Continue your setup' : 'Setup needs attention'}</h1>
     <p>{failed?.detail || snapshot.error || snapshot.errors?.[0]?.message || 'Setup stopped safely.'}</p>
     {(failed?.nextAction || snapshot.errors?.[0]?.nextAction) && <div className="desktop-setup-recovery">{failed?.nextAction || snapshot.errors?.[0]?.nextAction}</div>}
+    {identity && <div className="desktop-github-identity"><Github aria-hidden="true" /><div><small>Saved GitHub choice</small><strong>@{identity.username} · {identity.installation.accountLogin} ({identity.installation.accountType})</strong></div></div>}
     <InlineError message={error} />
     <div className="desktop-setup-footer"><button className="desktop-secondary-button" type="button" onClick={back}>Back</button>
       {hasSavedChoices(snapshot) && <button className="desktop-secondary-button" type="button" disabled={busy} onClick={review}>Review saved choices</button>}
@@ -76,7 +118,7 @@ const Form: React.FC<{ stage: Stage; draft: Draft; busy: boolean; error: string 
     {stage === 'directory' && <><h1>Private local storage</h1><p>Environment, data, logs, and repositories stay in a fixed owner-only directory managed by ProPR Desktop.</p><div className="desktop-setup-note">Desktop-managed local runtime</div></>}
     {stage === 'github' && <><h1>Connect GitHub</h1><p>Secrets stay in the trusted desktop process and are never returned to this page.</p>
       <div className="desktop-setup-options">{(['relay', 'app', 'demo', 'keep'] as GithubMode[]).map(mode => <label key={mode}><input type="radio" checked={draft.githubMode === mode} onChange={() => {
-        set('githubMode', mode); if (mode === 'relay' && draft.intakeMode === 'direct_webhook') set('intakeMode', 'routing_websocket');
+        set('githubMode', mode); if (mode !== 'relay') set('githubIdentity', null); if (mode === 'relay' && draft.intakeMode === 'direct_webhook') set('intakeMode', 'routing_websocket');
         if (mode === 'app' && draft.intakeMode === 'routing_websocket') set('intakeMode', 'polling'); if (mode === 'demo') set('intakeMode', 'keep');
       }} /><span><strong>{mode === 'relay' ? 'ProPR Connect' : mode === 'app' ? 'Custom GitHub App' : mode === 'demo' ? 'Demo mode' : 'Keep existing configuration'}</strong></span></label>)}</div>
       {draft.githubMode === 'app' && <div className="desktop-setup-grid"><label>App ID<input value={draft.appId} onChange={event => set('appId', event.target.value)} /></label>
@@ -88,7 +130,7 @@ const Form: React.FC<{ stage: Stage; draft: Draft; busy: boolean; error: string 
       {draft.intakeMode === 'direct_webhook' && <div className="desktop-setup-wide"><button type="button" className="desktop-secondary-button" onClick={props.acquireSecret}><KeyRound /> Enter webhook secret securely</button><small>{draft.webhookSecret?.label ?? ' No secret entered'}</small></div>}</>}
     {stage === 'agents' && <><h1>Select coding agents</h1><div className="desktop-agent-options">{agents.map(agent => <label key={agent}><input type="checkbox" checked={draft.selectedAgents.includes(agent)} onChange={() => set('selectedAgents', draft.selectedAgents.includes(agent) ? draft.selectedAgents.filter(value => value !== agent) : [...draft.selectedAgents, agent])} /><span>{agent}</span></label>)}</div>
       {draft.githubMode !== 'demo' && <label className="desktop-setup-field"><span>Allowed GitHub users (comma-separated, optional)</span><div><input value={draft.whitelist} onChange={event => set('whitelist', event.target.value)} /></div></label>}</>}
-    {stage === 'summary' && <><h1>Ready to install</h1><dl className="desktop-setup-summary"><div><dt>Directory</dt><dd>Desktop-managed local runtime</dd></div><div><dt>GitHub</dt><dd>{draft.githubMode}</dd></div><div><dt>Intake</dt><dd>{draft.intakeMode}</dd></div><div><dt>Agents</dt><dd>{draft.selectedAgents.join(', ') || 'None'}</dd></div></dl></>}
+    {stage === 'summary' && <><h1>Ready to install</h1><dl className="desktop-setup-summary"><div><dt>Directory</dt><dd>Desktop-managed local runtime</dd></div><div><dt>GitHub</dt><dd>{draft.githubMode}{draft.githubIdentity ? ` · @${draft.githubIdentity.username}` : draft.githubMode === 'relay' ? ' · identity verified next' : ''}</dd></div>{draft.githubIdentity && <div><dt>Installation</dt><dd>{draft.githubIdentity.installation.accountLogin} ({draft.githubIdentity.installation.accountType})</dd></div>}<div><dt>Intake</dt><dd>{draft.intakeMode}</dd></div><div><dt>Agents</dt><dd>{draft.selectedAgents.join(', ') || 'None'}</dd></div></dl></>}
     {props.error && <div className="desktop-inline-error" role="alert">{props.error}</div>}
     <div className="desktop-setup-footer"><button type="button" className="desktop-primary-button" disabled={props.busy} onClick={props.next}>{stage === 'summary' ? 'Install ProPR' : 'Continue'} <ChevronRight /></button></div>
   </main>;
@@ -99,10 +141,11 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
   const [snapshot, setSnapshot] = useState<DesktopSetupSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [choiceBusy, setChoiceBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusAttempt, setStatusAttempt] = useState(0);
   const [reconfiguring, setReconfiguring] = useState(false);
-  const [draft, setDraft] = useState<Draft>({ githubMode: 'relay', appId: '', installationId: '', privateKey: null,
+  const [draft, setDraft] = useState<Draft>({ githubMode: 'relay', appId: '', installationId: '', privateKey: null, githubIdentity: null,
     intakeMode: 'routing_websocket', webhookSecret: null, selectedAgents: ['codex'], whitelist: '', reinitialize: false });
 
   useEffect(() => {
@@ -110,6 +153,7 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
     void adapter.status().then(value => { if (!mounted) return; setSnapshot(value); if (value.resume) setDraft(current => ({ ...current,
       githubMode: value.resume!.github.mode, appId: value.resume!.github.mode === 'app' ? value.resume!.github.appId : '',
       installationId: value.resume!.github.mode === 'app' ? value.resume!.github.installationId : '', intakeMode: value.resume!.intake.mode,
+      githubIdentity: value.resume!.github.mode === 'relay' ? value.resume!.github.identity ?? null : null,
       selectedAgents: value.resume!.agents, whitelist: value.resume!.whitelist?.join(', ') ?? '', reinitialize: value.resume!.reinitialize })); })
       .catch(() => { if (mounted) setError('Setup status is unavailable.'); });
     return () => { mounted = false; unsubscribe(); };
@@ -137,13 +181,20 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
     catch { setError('Setup cancellation could not be confirmed. Try again or go back and reopen setup.'); }
     finally { setCancelling(false); }
   };
+  const chooseGithubInstallation = async (decision: DesktopGithubInstallationDecision) => {
+    setChoiceBusy(true); setError(null);
+    try { setSnapshot(await adapter.resolveGithubInstallation(decision)); }
+    catch { setError('The GitHub installation list changed. Refresh it and choose again.'); }
+    finally { setChoiceBusy(false); }
+  };
   if (!snapshot && error) return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon desktop-setup-error-icon" />
     <span className="desktop-eyebrow">Setup unavailable</span><h1>Could not load setup</h1><div className="desktop-inline-error" role="alert">{error}</div>
     <div className="desktop-setup-footer"><button type="button" className="desktop-secondary-button" onClick={onBack}>Back</button>
       <button type="button" className="desktop-primary-button" onClick={() => { setError(null); setStatusAttempt(value => value + 1); }}><RotateCcw /> Retry</button></div></main>;
   if (!snapshot) return <div className="desktop-loading"><LoaderCircle className="desktop-spin" /> Loading setup…</div>;
   if (snapshot.phase === 'unsupported') return <main className="desktop-setup-wizard"><CircleAlert className="desktop-setup-hero-icon" /><h1>Local setup is unavailable</h1><p>{snapshot.error}</p><button className="desktop-primary-button" onClick={onBack}>Back to instances</button></main>;
-  if (snapshot.phase === 'running') return <Running snapshot={snapshot} busy={cancelling} error={error} back={onBack} cancel={() => void cancel()} />;
+  if (snapshot.phase === 'running') return <Running snapshot={snapshot} busy={cancelling} choiceBusy={choiceBusy} error={error} back={onBack}
+    cancel={() => void cancel()} choose={decision => void chooseGithubInstallation(decision)} />;
   if (['failed', 'cancelled', 'interrupted'].includes(snapshot.phase) && !reconfiguring) return <Recovery snapshot={snapshot} busy={busy} error={error} back={onBack} retry={() => void run(true)} review={() => void run(true, true)} />;
   if (snapshot.phase === 'completed' && snapshot.profile) return <main className="desktop-setup-wizard"><div className="desktop-setup-success"><Check /></div><span className="desktop-eyebrow">Setup complete</span><h1>ProPR is ready</h1><p>The local stack is healthy. Continue through the normal identity and pairing checks to open it.</p><div className="desktop-setup-footer"><button className="desktop-primary-button" onClick={() => onComplete(snapshot.profile!)}>Connect securely</button></div></main>;
   const index = stages.indexOf(stage);

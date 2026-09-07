@@ -80,11 +80,13 @@ describe('desktop preload bridge', () => {
     await bridge.localSetup.status();
     await bridge.localSetup.start(request);
     await bridge.localSetup.retry();
+    await bridge.localSetup.resolveGithubInstallation({ action: 'refresh' });
     await bridge.localSetup.cancel();
     ipc.listeners.get(IPC_CHANNELS.setupProgress)?.({ mustNotLeak: true }, { phase: 'running' } as never);
     unsubscribe();
     assert.deepEqual(ipc.invocations.map(value => value.channel), [
-      IPC_CHANNELS.setupStatus, IPC_CHANNELS.setupStart, IPC_CHANNELS.setupRetry, IPC_CHANNELS.setupCancel,
+      IPC_CHANNELS.setupStatus, IPC_CHANNELS.setupStart, IPC_CHANNELS.setupRetry,
+      IPC_CHANNELS.setupGithubInstallationDecision, IPC_CHANNELS.setupCancel,
     ]);
     assert.deepEqual(snapshots, [{ phase: 'running' }]);
   });

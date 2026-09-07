@@ -121,6 +121,7 @@ export const createDesktopBridge = (
       cancel: () => invoke(ipc, IPC_CHANNELS.setupCancel),
       selectPrivateKey: () => invoke(ipc, IPC_CHANNELS.setupSelectPrivateKey),
       acquireWebhookSecret: () => invoke(ipc, IPC_CHANNELS.setupAcquireWebhookSecret),
+      resolveGithubInstallation: decision => invoke(ipc, IPC_CHANNELS.setupGithubInstallationDecision, decision),
       onProgress: listener => {
         setupProgressListeners.add(listener);
         return () => setupProgressListeners.delete(listener);

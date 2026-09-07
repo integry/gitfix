@@ -26,6 +26,7 @@ const guidedAdapter = (overrides: Partial<DesktopGuidedLocalSetupAdapter> = {}):
   cancel: vi.fn(async () => defaultCancelled),
   selectPrivateKey: vi.fn(async () => null),
   acquireWebhookSecret: vi.fn(async () => null),
+  resolveGithubInstallation: vi.fn(async () => idle),
   onProgress: vi.fn(() => () => undefined),
   ...overrides,
 });
@@ -42,6 +43,37 @@ const openAndSubmitWizard = async () => {
 
 describe('production local setup journey', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('shows the authenticated identity, installation types, and explicit recovery controls', async () => {
+    const choosing: DesktopSetupSnapshot = {
+      ...idle, phase: 'running', githubIdentity: {
+        status: 'authorization-failed', username: 'member-user', installAvailable: true,
+        permissionExplanation: 'This account has access, but an installation owner must authorize enrollment.',
+        installations: [
+          { installationId: '100', accountLogin: 'acme', accountType: 'Organization' },
+          { installationId: '200', accountLogin: 'member-user', accountType: 'User' },
+        ],
+      },
+    };
+    const resolveGithubInstallation = vi.fn(async () => ({
+      ...choosing, githubIdentity: { ...choosing.githubIdentity!, status: 'enrolling' as const, selectedInstallationId: '200' },
+    }));
+    render(<LocalSetupWizard adapter={guidedAdapter({
+      status: vi.fn(async () => choosing), resolveGithubInstallation,
+    })} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(await screen.findByText('@member-user')).toBeInTheDocument();
+    expect(screen.getByText('Organization · Installation 100')).toBeInTheDocument();
+    expect(screen.getByText('User · Installation 200')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/installation owner/i);
+    expect(screen.getByRole('button', { name: 'Continue with selection' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('radio', { name: /member-user/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with selection' }));
+    expect(resolveGithubInstallation).toHaveBeenCalledWith({ action: 'select', installationId: '200' });
+    expect(screen.getByRole('button', { name: 'Refresh installations' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install GitHub App' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change GitHub account' })).toBeInTheDocument();
+  });
 
   it('opens the real wizard and settles cancellation before retrying', async () => {
     let progress: ((snapshot: DesktopSetupSnapshot) => void) | undefined;

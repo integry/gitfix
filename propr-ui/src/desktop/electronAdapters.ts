@@ -148,6 +148,7 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
     cancel: () => bridge.localSetup.cancel(),
     selectPrivateKey: () => bridge.localSetup.selectPrivateKey(),
     acquireWebhookSecret: () => bridge.localSetup.acquireWebhookSecret(),
+    resolveGithubInstallation: decision => bridge.localSetup.resolveGithubInstallation(decision),
     onProgress: listener => bridge.localSetup.onProgress(listener),
   },
   connection: {

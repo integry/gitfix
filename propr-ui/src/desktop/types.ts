@@ -70,6 +70,7 @@ export interface DesktopLocalSetupAdapter {
   cancel?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
   selectPrivateKey?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopFilesystemSelection | null>;
   acquireWebhookSecret?(): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSecretSelection | null>;
+  resolveGithubInstallation?(decision: import('../../../apps/desktop/src/shared/contract').DesktopGithubInstallationDecision): Promise<import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot>;
   onProgress?(listener: (snapshot: import('../../../apps/desktop/src/shared/contract').DesktopSetupSnapshot) => void): () => void;
 }
 
