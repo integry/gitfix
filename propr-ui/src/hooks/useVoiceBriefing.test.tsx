@@ -1,7 +1,14 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { voiceBriefingResponseSchema, type VoiceBriefingResponse } from '@propr/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { postTaskFollowup, stopTaskExecution } from '../api/proprApi';
+import {
+  abortGeneration,
+  abortRefinement,
+  getDraftWithPlan,
+  postTaskFollowup,
+  refinePlan,
+  stopTaskExecution,
+} from '../api/proprApi';
 import { getVoiceBriefing } from '../api/voiceApi';
 import {
   getBrowserSpeechCapabilities,
@@ -13,7 +20,11 @@ import { useVoiceBriefing } from './useVoiceBriefing';
 let currentVisibility: DocumentVisibilityState = 'visible';
 
 vi.mock('../api/proprApi', () => ({
+  abortGeneration: vi.fn(),
+  abortRefinement: vi.fn(),
+  getDraftWithPlan: vi.fn(),
   postTaskFollowup: vi.fn(),
+  refinePlan: vi.fn(),
   stopTaskExecution: vi.fn(),
 }));
 
@@ -59,8 +70,8 @@ function snapshot(
   });
 }
 
-function planSnapshot(status: 'generating' | 'review'): VoiceBriefingResponse {
-  const action = status === 'generating' ? 'stop' : 'follow_up';
+function planSnapshot(status: 'generating' | 'refining' | 'review'): VoiceBriefingResponse {
+  const action = status === 'review' ? 'follow_up' : 'stop';
   return voiceBriefingResponseSchema.parse({
     generatedAt: '2026-09-07T09:35:00.000Z',
     scope: 'all',
@@ -113,6 +124,9 @@ describe('useVoiceBriefing', () => {
       containerStopped: true,
     });
     vi.mocked(postTaskFollowup).mockResolvedValue({ success: true, message: 'Posted' });
+    vi.mocked(abortGeneration).mockResolvedValue();
+    vi.mocked(abortRefinement).mockResolvedValue();
+    vi.mocked(refinePlan).mockResolvedValue({ plan: [], message: 'Refinement started' });
   });
 
   it('fetches a fresh one-shot briefing and retains it when speech output is unavailable', async () => {
@@ -187,18 +201,60 @@ describe('useVoiceBriefing', () => {
   });
 
   it.each([
-    ['generating', 'stop plan one'],
-    ['review', 'follow up plan one to rerun the tests'],
-  ] as const)('rejects a %s plan action without a task execution target', async (status, command) => {
+    ['generating', abortGeneration],
+    ['refining', abortRefinement],
+  ] as const)('confirms and stops a %s plan through its planner operation', async (status, stopPlan) => {
     vi.mocked(getVoiceBriefing).mockResolvedValue(planSnapshot(status));
     const { result } = renderHook(() => useVoiceBriefing());
     await act(async () => result.current.requestBriefing());
 
-    await act(async () => result.current.handleTranscript(command));
+    await act(async () => result.current.handleTranscript('stop plan one'));
 
-    expect(result.current.phase).toBe('error');
-    expect(result.current.error).toMatch(/does not identify a task execution/);
-    expect(result.current.pendingAction).toBeNull();
+    expect(result.current.phase).toBe('confirming');
+    expect(result.current.pendingAction).toMatchObject({ action: 'stop' });
+    expect(stopPlan).not.toHaveBeenCalled();
+
+    await act(async () => result.current.confirmPendingAction());
+
+    expect(stopPlan).toHaveBeenCalledOnce();
+    expect(stopPlan).toHaveBeenCalledWith('draft-1');
+    expect(stopTaskExecution).not.toHaveBeenCalled();
+    expect(postTaskFollowup).not.toHaveBeenCalled();
+  });
+
+  it('confirms a plan follow-up and starts refinement with the current plan', async () => {
+    const currentPlan = [{
+      id: 'step-1',
+      title: 'Test the controller',
+      body: 'Add regression coverage.',
+      implementation: 'Update the hook tests.',
+    }];
+    vi.mocked(getVoiceBriefing).mockResolvedValue(planSnapshot('review'));
+    vi.mocked(getDraftWithPlan).mockResolvedValue({
+      plan_json: currentPlan,
+    } as Awaited<ReturnType<typeof getDraftWithPlan>>);
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+
+    await act(async () => result.current.handleTranscript(
+      'follow up plan one to rerun the tests',
+    ));
+
+    expect(result.current.phase).toBe('confirming');
+    expect(result.current.pendingAction).toMatchObject({
+      action: 'follow_up',
+      instruction: 'rerun the tests',
+    });
+    expect(refinePlan).not.toHaveBeenCalled();
+
+    await act(async () => result.current.confirmPendingAction());
+
+    expect(getDraftWithPlan).toHaveBeenCalledWith('draft-1');
+    expect(refinePlan).toHaveBeenCalledWith(
+      'draft-1',
+      currentPlan,
+      'rerun the tests',
+    );
     expect(stopTaskExecution).not.toHaveBeenCalled();
     expect(postTaskFollowup).not.toHaveBeenCalled();
   });

@@ -4,7 +4,14 @@ import type {
   VoiceBriefingResponse,
   VoiceBriefingScope,
 } from '@propr/shared';
-import { postTaskFollowup, stopTaskExecution } from '../api/proprApi';
+import {
+  abortGeneration,
+  abortRefinement,
+  getDraftWithPlan,
+  postTaskFollowup,
+  refinePlan,
+  stopTaskExecution,
+} from '../api/proprApi';
 import { getVoiceBriefing } from '../api/voiceApi';
 import {
   BrowserSpeechError,
@@ -73,9 +80,36 @@ function taskMutationTarget(item: VoiceBriefingItem): string | null {
   return item.href === `/tasks/${encodeURIComponent(item.id)}` ? item.id : null;
 }
 
+function planMutationTarget(item: VoiceBriefingItem): string | null {
+  if (item.kind !== 'plan') return null;
+  return item.href === `/studio/${encodeURIComponent(item.id)}` ? item.id : null;
+}
+
+function mutationTarget(item: VoiceBriefingItem): string | null {
+  return taskMutationTarget(item) ?? planMutationTarget(item);
+}
+
 function missingMutationTargetMessage(action: PendingVoiceBriefingAction): string {
   const actionName = action.action === 'follow_up' ? 'follow up on' : 'stop';
-  return `Cannot ${actionName} ${action.item.reference} because it does not identify a task execution.`;
+  const targetName = action.item.kind === 'plan' ? 'plan draft' : 'task execution';
+  return `Cannot ${actionName} ${action.item.reference} because it does not identify a ${targetName}.`;
+}
+
+async function executePlanAction(
+  action: PendingVoiceBriefingAction,
+  draftId: string,
+): Promise<void> {
+  if (action.action === 'follow_up') {
+    const draft = await getDraftWithPlan(draftId);
+    await refinePlan(draftId, draft.plan_json, action.instruction);
+    return;
+  }
+
+  if (action.item.status === 'refining') {
+    await abortRefinement(draftId);
+    return;
+  }
+  await abortGeneration(draftId);
 }
 
 /**
@@ -228,8 +262,8 @@ export function useVoiceBriefing(
   const confirmPendingAction = useCallback(async (): Promise<void> => {
     const action = pendingActionRef.current;
     if (!action || mutationInFlightRef.current) return;
-    const taskId = taskMutationTarget(action.item);
-    if (!taskId) {
+    const targetId = mutationTarget(action.item);
+    if (!targetId) {
       showError(missingMutationTargetMessage(action));
       return;
     }
@@ -245,14 +279,16 @@ export function useVoiceBriefing(
     setPhase('executing');
 
     try {
-      if (action.action === 'stop') {
-        await stopTaskExecution(taskId);
+      if (action.item.kind === 'plan') {
+        await executePlanAction(action, targetId);
+      } else if (action.action === 'stop') {
+        await stopTaskExecution(targetId);
       } else {
-        await postTaskFollowup(taskId, action.instruction);
+        await postTaskFollowup(targetId, action.instruction);
       }
     } catch (mutationError) {
       if (mountedRef.current) {
-        showError(messageFrom(mutationError, 'The task action could not be completed.'));
+        showError(messageFrom(mutationError, 'The action could not be completed.'));
       }
       mutationInFlightRef.current = false;
       return;
@@ -310,7 +346,7 @@ export function useVoiceBriefing(
         setPhase('idle');
         return;
       case 'pending_action':
-        if (!taskMutationTarget(command.item)) {
+        if (!mutationTarget(command.item)) {
           showError(missingMutationTargetMessage(command));
           return;
         }
