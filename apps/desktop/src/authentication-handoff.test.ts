@@ -45,7 +45,27 @@ const waitForProcessExit = async (pid: number): Promise<void> => {
   throw new Error('Controlled authentication process was not reaped');
 };
 
-const stopFixtureProcess = async (pid: number): Promise<void> => {
+const readFixturePid = async (path: string): Promise<number> => {
+  const recorded = await readFile(path, 'utf8');
+  assert.match(recorded, /^[1-9][0-9]{0,9}$/);
+  const pid = Number(recorded);
+  assert.ok(Number.isSafeInteger(pid));
+  return pid;
+};
+
+const fixtureOwnsProcess = async (pid: number, command: string): Promise<boolean> => {
+  if (process.platform !== 'linux') return false;
+  try {
+    const commandLine = await readFile(`/proc/${pid}/cmdline`, 'utf8');
+    return commandLine.split('\0').includes(command);
+  }
+  catch {
+    return false;
+  }
+};
+
+const stopFixtureProcess = async (pid: number, command: string): Promise<void> => {
+  if (!await fixtureOwnsProcess(pid, command)) return;
   try { process.kill(pid, 'SIGTERM'); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
@@ -57,6 +77,7 @@ const stopFixtureProcess = async (pid: number): Promise<void> => {
     return;
   }
   catch {
+    if (!await fixtureOwnsProcess(pid, command)) return;
     try { process.kill(pid, 'SIGKILL'); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
@@ -305,6 +326,7 @@ wait "$wrapper"
     const terminalPidPath = join(directory, 'terminal.pid');
     const controller = new AbortController();
     let terminalPid: number | undefined;
+    let terminalReaped = false;
     let timeout: NodeJS.Timeout | undefined;
     try {
       // Add a test-only barrier after the last flag guard and before the
@@ -368,15 +390,16 @@ exit "$wrapper_status"
       timeout = setTimeout(() => controller.abort(), 3_000);
       const handoff = launch(authentication, [], { title: 'Controlled early terminal close', signal: controller.signal });
       await waitForFile(terminalPidPath);
-      terminalPid = Number(await readFile(terminalPidPath, 'utf8'));
+      terminalPid = await readFixturePid(terminalPidPath);
       assert.deepEqual(await handoff, { status: 1 });
       await waitForFile(terminalCompletedPath);
       await waitForProcessExit(terminalPid);
+      terminalReaped = true;
       await assert.rejects(readFile(executedPath), { code: 'ENOENT' });
     } finally {
       if (timeout) clearTimeout(timeout);
       controller.abort();
-      if (terminalPid !== undefined) await stopFixtureProcess(terminalPid);
+      if (terminalPid !== undefined && !terminalReaped) await stopFixtureProcess(terminalPid, terminal);
       await rm(directory, { recursive: true, force: true });
     }
   });
