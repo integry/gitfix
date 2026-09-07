@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:docker-context": "node --test scripts/docker-context-inputs.test.mjs",
     "test:browser": "playwright test --config playwright.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

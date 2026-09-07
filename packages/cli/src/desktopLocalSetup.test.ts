@@ -152,6 +152,54 @@ describe('desktop local runtime compatibility gate', () => {
     assert.match(result.nextAction ?? '', new RegExp(PROPR_API_COMPATIBILITY));
     assert.equal(result.recoveryAction, 'replace-running-stack');
   });
+
+  test('offers owned-stack replacement for the exact discovery-401 legacy compatibility runtime', async () => {
+    const requests: Array<{ url: string; authorization: string | null; credentials?: RequestCredentials }> = [];
+    const result = await checkDesktopRuntimeCompatibility({
+      baseUrl: 'http://127.0.0.1:14000', image: 'propr/app:0.8.15',
+      fetch: async (input, init) => {
+        requests.push({
+          url: input.toString(),
+          authorization: new Headers(init?.headers).get('authorization'),
+          credentials: init?.credentials,
+        });
+        return input.toString().endsWith('/api/desktop/discovery')
+          ? response({ error: 'Authentication required' }, 401)
+          : response({
+              version: '0.8.15',
+              apiCompatibility: '2026-06-27',
+              uiCompatibility: '2026-06-27',
+            });
+      },
+    });
+    assert.equal(result.compatible, false);
+    assert.match(result.detail, /legacy ProPR 0\.8\.15/);
+    assert.equal(result.recoveryAction, 'replace-running-stack');
+    assert.deepEqual(requests, [
+      { url: 'http://127.0.0.1:14000/api/desktop/discovery', authorization: null, credentials: 'omit' },
+      { url: 'http://127.0.0.1:14000/api/compatibility', authorization: null, credentials: 'omit' },
+    ]);
+  });
+
+  test('does not classify an arbitrary discovery 401 as an incompatible image', async () => {
+    for (const compatibility of [
+      { service: 'not-propr' },
+      { ...discovery(), schemaVersion: undefined },
+      { version: '0.8.15', apiCompatibility: '2026-06-27', uiCompatibility: '2026-06-27', unexpected: true },
+      { version: '0.8.15', apiCompatibility: '2025-01-01', uiCompatibility: '2025-01-01' },
+    ]) {
+      const result = await checkDesktopRuntimeCompatibility({
+        baseUrl: 'http://127.0.0.1:14000', image,
+        fetch: async input => input.toString().endsWith('/api/desktop/discovery')
+          ? response({ error: 'Authentication required' }, 401)
+          : response(compatibility),
+      });
+      assert.equal(result.compatible, false);
+      assert.match(result.detail, /could not be verified.*HTTP 401/);
+      assert.equal(result.recoveryAction, undefined);
+      assert.match(result.nextAction ?? '', /existing runtime and data have been retained/);
+    }
+  });
 });
 
 describe('desktop setup host authentication boundary', () => {

@@ -93,6 +93,7 @@ it('presents Connect during guided setup and settles setup cancellation before c
     }),
     selectPrivateKey: vi.fn(async () => null),
     acquireWebhookSecret: vi.fn(async () => null),
+    resolveGithubInstallation: vi.fn(async () => idle),
     onProgress: vi.fn(listener => {
       progress = listener;
       return () => {

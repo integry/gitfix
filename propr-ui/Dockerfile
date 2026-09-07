@@ -29,6 +29,13 @@ RUN cd packages/shared && npm run build
 COPY packages/client ./packages/client
 RUN cd packages/client && npm run build
 
+# Desktop presentation code imports the browser-safe deep-link validators from
+# the desktop source boundary. Include that module's complete runtime-relative
+# closure; type-only desktop setup imports are erased by Vite and stay outside
+# the production UI image.
+COPY apps/desktop/src/security.ts ./apps/desktop/src/security.ts
+COPY apps/desktop/src/shared/contract.ts ./apps/desktop/src/shared/contract.ts
+
 # Copy UI source and build it
 COPY propr-ui ./propr-ui
 RUN cd propr-ui && npm run build

@@ -215,12 +215,20 @@ export interface SetupPrompts {
   /** Configure GitHub auth. Default: keep whatever `.env` already has. */
   configureGithubAuth?(ctx: { current: GithubAuthModeResult }): Promise<GithubAuthDecision>;
   /**
-   * Choose which installation to enroll when the relay reports more than one the
-   * user can access. Only consulted for the ambiguous (>1) case; a single
-   * installation is auto-selected and zero is an error. Default (no hook): the
-   * first installation.
+   * Choose which access-scoped installation to submit for relay enrollment.
+   * This is the legacy CLI/TUI hook and is called only when discovery has at
+   * least one option. A selection is always checked against a fresh server
+   * discovery before enrollment. Without this hook one installation is
+   * auto-selected and multiple installations fail closed instead of silently
+   * choosing the first.
    */
-  selectInstallation?(ctx: { installations: AuthorizedInstallation[] }): Promise<string>;
+  selectInstallation?(ctx: RelayInstallationChoiceContext): Promise<string>;
+  /**
+   * Action-capable installation chooser used by desktop. Unlike the legacy
+   * selector, this hook receives empty discovery results so the host can offer
+   * install, refresh, re-authenticate, and cancellation actions.
+   */
+  chooseInstallation?(ctx: RelayInstallationChoiceContext): Promise<RelayInstallationDecision>;
   /**
    * Ask whether to run the interactive `propr login` (gh CLI) now when Connect
    * enrollment or protected local API steps need a user token and none is
@@ -302,6 +310,23 @@ export interface AuthorizedInstallation {
   account_login: string;
   account_type: string;
 }
+
+export interface RelayInstallationChoiceContext {
+  username: string;
+  installations: AuthorizedInstallation[];
+  selectedInstallationId?: string;
+  /** Present only after the enrollment endpoint—not discovery—returned 403. */
+  enrollmentPermissionError?: string;
+  /** Hosted installation page; absent for custom relays. */
+  installUrl?: string;
+}
+
+export type RelayInstallationDecision =
+  | { action: "select"; installationId: string }
+  | { action: "refresh" }
+  | { action: "install" }
+  | { action: "reauthenticate" }
+  | { action: "cancel" };
 
 /** Minimal environment-check contract consumed by the setup state machine. */
 export interface SetupCheckResult {
@@ -465,7 +490,7 @@ export interface SetupActions extends AgentSetupActions {
     label?: string;
   }): Promise<{ relayUrl: string; token: string }>;
   /** Authenticate with GitHub through the host's interactive handoff and store the token. */
-  loginWithGithub(params?: { onLog?: (line: string) => void; signal?: AbortSignal }): Promise<boolean>;
+  loginWithGithub(params?: { onLog?: (line: string) => void; signal?: AbortSignal; force?: boolean }): Promise<boolean>;
   /** Host preference used to select managed browser authentication. */
   getTunnelEnabled?(rootDir: string): boolean | undefined;
 }
@@ -651,13 +676,17 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       }
     }
 
-    try {
+    let selectedInstallationId: string | undefined;
+    let enrollmentPermissionError: string | undefined;
+    let failurePhase: "discovery" | "enrollment" = "discovery";
+    while (true) try {
       // 2. Discover installations: auto-select the only one, pick among many,
       //    error when there are none.
+      failurePhase = "discovery";
       let { username, installations } = await actions.fetchRelayInstallations({ relayUrl });
       const usingHostedRelay =
         relayUrl.replace(/\/+$/, "") === DEFAULT_PROPR_GH_RELAY_URL.replace(/\/+$/, "");
-      if (installations.length === 0 && usingHostedRelay && prompts.confirmGithubAppInstall) {
+      if (installations.length === 0 && !prompts.chooseInstallation && usingHostedRelay && prompts.confirmGithubAppInstall) {
         const installUrl = DEFAULT_PROPR_GITHUB_APP_INSTALL_URL;
         if (await prompts.confirmGithubAppInstall({ url: installUrl })) {
           await actions.openUrl(installUrl);
@@ -669,7 +698,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
           }
         }
       }
-      if (installations.length === 0) {
+      if (installations.length === 0 && !prompts.chooseInstallation) {
         return {
           note: {
             detail: "relay not enrolled — no GitHub App installation available",
@@ -680,18 +709,79 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
         };
       }
       let installationId: string;
-      if (installations.length === 1) {
+      if (prompts.chooseInstallation || prompts.selectInstallation) {
+        const context: RelayInstallationChoiceContext = {
+          username,
+          installations: installations.map(value => ({ ...value })),
+          ...(selectedInstallationId ? { selectedInstallationId } : {}),
+          ...(enrollmentPermissionError ? { enrollmentPermissionError } : {}),
+          ...(usingHostedRelay ? { installUrl: DEFAULT_PROPR_GITHUB_APP_INSTALL_URL } : {}),
+        };
+        const decision: RelayInstallationDecision = prompts.chooseInstallation
+          ? await prompts.chooseInstallation(context)
+          : { action: "select", installationId: await prompts.selectInstallation!(context) };
+        options.signal?.throwIfAborted();
+        if (decision.action === "cancel") throw new SetupCancellation(state);
+        if (decision.action === "refresh") {
+          enrollmentPermissionError = undefined;
+          continue;
+        }
+        if (decision.action === "install") {
+          if (!usingHostedRelay) {
+            enrollmentPermissionError = "This relay does not publish an installation URL. Ask its administrator for the correct GitHub App.";
+            continue;
+          }
+          await actions.openUrl(DEFAULT_PROPR_GITHUB_APP_INSTALL_URL);
+          enrollmentPermissionError = undefined;
+          continue;
+        }
+        if (decision.action === "reauthenticate") {
+          const authenticated = await actions.loginWithGithub({ onLog: log, signal: options.signal, force: true });
+          if (!authenticated) {
+            enrollmentPermissionError = "GitHub authentication did not complete. Try again or keep the current account.";
+          } else {
+            selectedInstallationId = undefined;
+            enrollmentPermissionError = undefined;
+          }
+          continue;
+        }
+        installationId = decision.installationId;
+        if (!installations.some(item => String(item.installation_id) === installationId)) {
+          selectedInstallationId = undefined;
+          enrollmentPermissionError = "That installation is no longer in the current server-discovered set. Refresh and choose again.";
+          continue;
+        }
+        selectedInstallationId = installationId;
+        // Recheck access and identity immediately before the owner-authorized
+        // enrollment request. Discovery access itself is not ownership proof.
+        failurePhase = "discovery";
+        const rechecked = await actions.fetchRelayInstallations({ relayUrl });
+        options.signal?.throwIfAborted();
+        if (rechecked.username !== username || !rechecked.installations.some(
+          item => String(item.installation_id) === installationId
+        )) {
+          selectedInstallationId = undefined;
+          enrollmentPermissionError = rechecked.username === username
+            ? "The selected installation changed or is no longer accessible. Choose from the refreshed list."
+            : "The authenticated GitHub account changed. Choose an installation for the current account.";
+          continue;
+        }
+      } else if (installations.length === 1) {
         installationId = String(installations[0].installation_id);
         log(`relay: using installation ${installationId} (${installations[0].account_login})`);
-      } else if (prompts.selectInstallation) {
-        installationId = await prompts.selectInstallation({ installations });
       } else {
-        installationId = String(installations[0].installation_id);
+        return {
+          note: {
+            detail: "relay not enrolled — choose a GitHub App installation explicitly",
+            nextAction: "Re-run setup interactively and select the account whose installation should be enrolled.",
+          },
+        };
       }
 
       // 3. Mint the relay token and write the relay env vars (overwriting only
       //    these keys). PROPR_DEMO_MODE=false ensures the new relay config isn't
       //    shadowed by a leftover demo flag (see detectGithubAuthMode).
+      failurePhase = "enrollment";
       const { relayUrl: resolvedRelayUrl, token } = await actions.enrollRelay({ relayUrl, installationId });
       const existingEnv = actions.readEnvVars(rootDir);
       const existingAdminUsers = [...new Set(
@@ -735,6 +825,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       const automaticConnectApplies =
         managedTunnelEnabled ||
         (usesHostedConnect && isSupportedLoopbackCallback(callbackUrl));
+      options.signal?.throwIfAborted();
       actions.applyEnvSelection(
         rootDir,
         {
@@ -749,11 +840,10 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
           ...(automaticConnectApplies && !hasExplicitBrowserAuthMode && !customBrowserOAuthApplies
             ? { PROPR_WEB_AUTH_MODE: "connect" }
             : {}),
-          // The relay identity was just authenticated by GitHub and owns this
-          // installation, so it is the safe bootstrap administrator only when
-          // the configured datastore is absent or conclusively contains no
-          // durable administrator. Existing environment administrators and
-          // durable database administrators are always preserved.
+          // The enrollment endpoint—not access-scoped discovery—just accepted
+          // this identity and installation. Use that server-authoritative result
+          // for first-run bootstrap only; do not infer ownership from discovery.
+          // Existing environment and durable administrators are preserved.
           ...(seedBootstrapAdmin ? { PROPR_ADMIN_USERS: username } : {}),
           // Preserve every user-managed whitelist entry, adding the enrolled
           // identity only when bootstrap enrollment needs it.
@@ -770,13 +860,22 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
             ? "left administrators unchanged because the datastore could not be inspected"
             : "left administrators unchanged on existing stack";
       return {
-        detail: `auth mode: relay (installation ${installationId}); ${adminDetail}`,
+        detail: `auth mode: relay as ${username} (installation ${installationId}); ${adminDetail}`,
       };
     } catch (error) {
+      options.signal?.throwIfAborted();
+      if (failurePhase === "enrollment" && (error as { status?: unknown }).status === 403 && prompts.chooseInstallation) {
+        enrollmentPermissionError = "This account can access the installation, but the relay requires an installation owner to authorize enrollment. Ask an owner, choose another installation, refresh, or change account.";
+        continue;
+      }
       return {
         note: {
-          detail: `relay enrollment failed — ${(error as Error).message}`,
-          nextAction: "Confirm the shared GitHub App is installed and you own the installation, then re-run setup.",
+          detail: `${failurePhase === "discovery" ? "relay identity discovery" : "relay enrollment"} failed — ${(error as Error).message}`,
+          nextAction: failurePhase === "discovery"
+            ? "Refresh or re-authenticate the GitHub account, then retry setup."
+            : (error as { status?: unknown }).status === 403
+              ? "The selected identity has discovery access but is not authorized by the relay to enroll. Ask an installation owner or choose another installation."
+              : "Review the selected GitHub identity and installation, then retry enrollment.",
         },
       };
     }
@@ -1027,65 +1126,16 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
   }
 
   // Every non-demo start needs either an environment administrator or a
-  // durable one. Relay enrollment above already seeds its authenticated
-  // identity when the datastore is conclusively empty. On a keep rerun, the
-  // same identity can be recovered safely only when the stored GitHub session
-  // can access the installation already configured for this stack.
+  // durable one. Relay enrollment above may seed the authenticated identity
+  // only after the server accepted enrollment. Access-scoped discovery on a
+  // keep rerun is deliberately insufficient evidence for administrator seed.
   const demoModeEnabled = isTruthyEnvFlag(actions.readEnvVars(rootDir).PROPR_DEMO_MODE);
-  let keptRelayBootstrapIdentity: string | undefined;
   const configuredAdministrators = (): string[] =>
     (actions.readEnvVars(rootDir).PROPR_ADMIN_USERS ?? "")
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
   const durableAdministratorExists = datastoreAdminInspection?.status === "has-admin";
-  if (
-    !demoModeEnabled &&
-    !durableAdministratorExists &&
-    !bootstrapAdministratorSeeded &&
-    configuredAdministrators().length === 0 &&
-    bootstrapIdentityEligible &&
-    resolvedAuth.mode === "relay" &&
-    actions.hasGithubToken()
-  ) {
-    const env = actions.readEnvVars(rootDir);
-    const installationId = env.GH_INSTALLATION_ID?.trim();
-    if (installationId) {
-      try {
-        const identity = await actions.fetchRelayInstallations({
-          relayUrl: env.PROPR_GH_RELAY_URL?.trim() || undefined,
-        });
-        const username = identity.username.trim();
-        const ownsConfiguredInstallation = identity.installations.some(
-          (installation) => String(installation.installation_id) === installationId
-        );
-        if (username && ownsConfiguredInstallation) {
-          const existingWhitelist = (env.GITHUB_USER_WHITELIST ?? "")
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean);
-          const whitelistHasIdentity = existingWhitelist.some(
-            (value) => value.toLowerCase() === username.toLowerCase()
-          );
-          actions.applyEnvSelection(
-            rootDir,
-            {
-              PROPR_ADMIN_USERS: username,
-              ...(!whitelistHasIdentity
-                ? { GITHUB_USER_WHITELIST: [...existingWhitelist, username].join(",") }
-                : {}),
-            },
-            { overwrite: true }
-          );
-          bootstrapAdministratorSeeded = true;
-          keptRelayBootstrapIdentity = username;
-        }
-      } catch (error) {
-        log(`administrator bootstrap: could not verify the configured relay identity: ${(error as Error).message}`);
-      }
-    }
-  }
-
   if (
     !demoModeEnabled &&
     !durableAdministratorExists &&
@@ -1137,9 +1187,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
   } else {
     settle("github-auth", {
       status: "done",
-      detail: keptRelayBootstrapIdentity
-        ? `auth mode: ${resolvedAuth.mode}; bootstrap administrator: ${keptRelayBootstrapIdentity}`
-        : `auth mode: ${resolvedAuth.mode}`,
+      detail: `auth mode: ${resolvedAuth.mode}`,
     });
   }
 

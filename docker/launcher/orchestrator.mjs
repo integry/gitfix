@@ -1546,30 +1546,134 @@ export async function isStackRunningAsync(cfg, signal) {
 }
 
 /**
- * Stop and remove only containers carrying this resolved stack's ownership
- * label. Bind-mounted data, credentials, logs, repositories, and the network
- * are deliberately retained so an aligned runtime can be started in place.
+ * Resolve the root paths that prove a host-managed container belongs to this
+ * exact stack root. A stack label is not sufficient: different roots can use
+ * the same configured stack name.
+ */
+function replacementRootPaths(cfg) {
+    if (!cfg?.validateHostPaths || !cfg.hostData || !cfg.hostLogs || !cfg.hostRepos || !cfg.envFileHost) {
+        throw new Error('Refusing container replacement because the managed stack root is not fully resolved');
+    }
+    const data = resolve(cfg.hostData);
+    const logs = resolve(cfg.hostLogs);
+    const repos = resolve(cfg.hostRepos);
+    const envFile = resolve(cfg.envFileHost);
+    const roots = [dirname(data), dirname(logs), dirname(repos), dirname(envFile)];
+    if (new Set(roots).size !== 1
+        || data !== join(roots[0], 'data')
+        || logs !== join(roots[0], 'logs')
+        || repos !== join(roots[0], 'repos')
+        || envFile !== join(roots[0], '.env')) {
+        throw new Error('Refusing container replacement because the managed stack root paths do not agree');
+    }
+    return { data, logs, repos, envFile };
+}
+
+const REPLACEMENT_INSPECT_FORMAT = '{{json .Id}}\t{{json .Name}}\t{{json .Config.Labels}}\t{{json .Mounts}}';
+
+function parseReplacementInspection(stdout) {
+    const fields = stdout.trim().split('\t');
+    if (fields.length !== 4) return null;
+    try {
+        const [id, name, labels, mounts] = fields.map((field) => JSON.parse(field));
+        if (typeof id !== 'string' || typeof name !== 'string'
+            || !labels || typeof labels !== 'object' || Array.isArray(labels)
+            || !Array.isArray(mounts)) return null;
+        return { id, name, labels, mounts };
+    } catch {
+        return null;
+    }
+}
+
+function hasReplacementMount(mounts, expected) {
+    return mounts.some((mount) => mount && typeof mount === 'object'
+        && mount.Type === expected.type
+        && mount.Destination === expected.destination
+        && (expected.source === undefined || resolve(String(mount.Source || '')) === expected.source)
+        && (expected.name === undefined || mount.Name === expected.name));
+}
+
+function replacementMountsMatch(cfg, service, mounts, rootPaths) {
+    if (service === 'redis') {
+        return hasReplacementMount(mounts, {
+            type: 'volume', destination: '/data', name: `${cfg.stack}-redis-data`,
+        });
+    }
+    if (DATABASE_SERVICES.has(service)) {
+        if (!hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.data, destination: '/usr/src/app/data',
+        }) || !hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.logs, destination: '/usr/src/app/logs',
+        })) return false;
+        if (service === 'worker' && !hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.repos, destination: '/usr/src/app/repos',
+        })) return false;
+        if ((service === 'daemon' || service === 'api') && !hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.envFile, destination: '/usr/src/app/.env',
+        })) return false;
+        return true;
+    }
+    // The UI, docs, and tunnel service specifications own no mounts. Refuse a
+    // same-labelled substitute that adds one instead of inferring ownership.
+    return mounts.length === 0;
+}
+
+/**
+ * Stop and remove only containers whose immutable IDs, canonical service
+ * identity, and root mounts were all validated before the first mutation.
+ * Bind-mounted data, credentials, logs, repositories, and the network are
+ * deliberately retained so an aligned runtime can be started in place.
  */
 export async function replaceStackContainersAsync(cfg, { onLog, signal } = {}) {
     signal?.throwIfAborted();
+    const rootPaths = replacementRootPaths(cfg);
     const listed = await dockerAsync([
-        'ps', '-a', '--filter', `label=propr.stack=${cfg.stack}`, '--format', '{{.Names}}',
+        'ps', '-a', '--no-trunc', '--filter', `label=propr.stack=${cfg.stack}`, '--format', '{{.ID}}',
     ], { signal });
     if (listed.status !== 0) {
         throw new Error(`Failed to list ${cfg.stack} containers: ${(listed.stderr || '').trim()}`);
     }
-    const names = [...new Set(listed.stdout.split('\n').map((name) => name.trim()).filter(Boolean))];
-    for (const name of names) {
+    const ids = listed.stdout.split('\n').map((id) => id.trim()).filter(Boolean);
+    if (ids.length > SERVICES.length || new Set(ids).size !== ids.length
+        || ids.some((id) => !/^[a-f0-9]{64}$/.test(id))) {
+        throw new Error(`Refusing to replace ${cfg.stack} containers because the ownership target set is invalid`);
+    }
+    const validated = [];
+    const services = new Set();
+    let rootBoundServices = 0;
+    for (const listedId of ids) {
         signal?.throwIfAborted();
-        const stopped = await dockerAsync(['stop', '-t', '10', name], { signal });
+        const inspected = await dockerAsync(['inspect', '--format', REPLACEMENT_INSPECT_FORMAT, listedId], { signal });
+        const container = inspected.status === 0 ? parseReplacementInspection(inspected.stdout) : null;
+        const service = container?.labels?.['propr.service'];
+        if (!container
+            || container.id !== listedId
+            || container.name !== `/${cfg.stack}-${service}`
+            || container.labels['propr.stack'] !== cfg.stack
+            || typeof service !== 'string'
+            || !SERVICES.includes(service)
+            || services.has(service)
+            || !replacementMountsMatch(cfg, service, container.mounts, rootPaths)) {
+            throw new Error(`Refusing to replace ${cfg.stack} containers because ownership metadata does not match the managed root and service set`);
+        }
+        services.add(service);
+        if (DATABASE_SERVICES.has(service)) rootBoundServices += 1;
+        validated.push({ id: container.id, name: container.name.slice(1) });
+    }
+    if (validated.length > 0 && rootBoundServices === 0) {
+        throw new Error(`Refusing to replace ${cfg.stack} containers because no container proves ownership of the managed root`);
+    }
+    signal?.throwIfAborted();
+    for (const container of validated) {
+        const stopped = await dockerAsync(['stop', '-t', '10', container.id], { signal });
         if (stopped.status !== 0) {
-            throw new Error(`Failed to stop ${name}: ${(stopped.stderr || '').trim()}`);
+            throw new Error(`Failed to stop ${container.name}: ${(stopped.stderr || '').trim()}`);
         }
-        const removed = await dockerAsync(['rm', name], { signal });
+        const removed = await dockerAsync(['rm', container.id], { signal });
         if (removed.status !== 0) {
-            throw new Error(`Stopped ${name} but failed to remove it: ${(removed.stderr || '').trim()}`);
+            throw new Error(`Stopped ${container.name} but failed to remove it: ${(removed.stderr || '').trim()}`);
         }
-        onLog?.(`  [ok] replaced ${name}`);
+        onLog?.(`  [ok] replaced ${container.name}`);
     }
 }
 

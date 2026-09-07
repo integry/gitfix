@@ -18,7 +18,7 @@ import {
 } from "./sequential.js";
 import type { SetupActions } from "./engine.js";
 import type { ChecksOutcome } from "../checkCommands.js";
-import type { GithubAuthModeResult } from "@propr/shared";
+import { DEFAULT_PROPR_GH_RELAY_URL, type GithubAuthModeResult } from "@propr/shared";
 import { getStep } from "./state.js";
 import type { SetupState } from "./types.js";
 
@@ -367,6 +367,47 @@ test("runSequentialSetup drives the engine end to end through scripted answers",
   const text = io.lines.join("\n");
   assert.match(text, /ProPR setup/);
   assert.match(text, /Setup complete/);
+});
+
+test("no-TUI setup recovers from zero installations before opening its legacy picker", async () => {
+  const io = scriptedIo(["", "n", "", "1", "", "", "", "", "2", "", "", "n", "n"]);
+  const opened: string[] = [];
+  const env: Record<string, string> = { GITHUB_EVENT_INTAKE_MODE: "polling" };
+  let discoveries = 0;
+  let enrolledId: string | undefined;
+
+  const result = await runSequentialSetup({
+    io,
+    root: "/stack",
+    actions: mockActions({
+      readEnvVars: () => ({ ...env }),
+      applyEnvSelection: (_root, vars) => {
+        Object.assign(env, vars);
+        return { written: Object.keys(vars), skipped: [] };
+      },
+      detectGithubAuthMode: () => env.GH_AUTH_MODE === "relay"
+        ? { mode: "relay", warnings: [] }
+        : { mode: "none", warnings: [] },
+      hasGithubToken: () => true,
+      fetchRelayInstallations: async () => ({
+        username: "octocat",
+        installations: ++discoveries === 1
+          ? []
+          : [{ installation_id: 42, account_login: "octo-org", account_type: "Organization" }],
+      }),
+      openUrl: async url => { opened.push(url); },
+      enrollRelay: async ({ relayUrl, installationId }) => {
+        enrolledId = installationId;
+        return { relayUrl: relayUrl ?? DEFAULT_PROPR_GH_RELAY_URL, token: "prt_test" };
+      },
+    }),
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(discoveries, 3);
+  assert.equal(enrolledId, "42");
+  assert.deepEqual(opened, ["https://github.com/apps/propr-dev/installations/new"]);
+  assert.match(io.lines.join("\n"), /GitHub App installation complete\?[\s\S]*Choose a GitHub App installation[\s\S]*octo-org/);
 });
 
 test("no-TUI custom-App setup logs in before polling protected status", async () => {

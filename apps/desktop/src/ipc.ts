@@ -300,6 +300,10 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     if (args.length) throw new Error('Invalid setup secret request');
     return setup.acquireWebhookSecret();
   });
+  if (setup) handle(IPC_CHANNELS.setupGithubInstallationDecision, (_event, decision, ...args) => {
+    if (args.length) throw new Error('Invalid GitHub installation decision');
+    return setup.resolveGithubInstallation(decision);
+  });
   return {
     close() {
       if (closing) return;

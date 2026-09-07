@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DesktopSetupSnapshot } from '../../../apps/desktop/src/shared/contract';
+import type { DesktopGithubInstallationDecision, DesktopSetupSnapshot } from '../../../apps/desktop/src/shared/contract';
 import { DesktopExperience } from './DesktopExperience';
 import { adaptersFor, localProfile } from './DesktopExperience.testSupport';
 import { LocalSetupWizard } from './LocalSetupWizard';
@@ -26,6 +26,7 @@ const guidedAdapter = (overrides: Partial<DesktopGuidedLocalSetupAdapter> = {}):
   cancel: vi.fn(async () => defaultCancelled),
   selectPrivateKey: vi.fn(async () => null),
   acquireWebhookSecret: vi.fn(async () => null),
+  resolveGithubInstallation: vi.fn(async () => idle),
   onProgress: vi.fn(() => () => undefined),
   ...overrides,
 });
@@ -42,6 +43,99 @@ const openAndSubmitWizard = async () => {
 
 describe('production local setup journey', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('shows the authenticated identity, installation types, and explicit recovery controls', async () => {
+    const choosing: DesktopSetupSnapshot = {
+      ...idle, phase: 'running', githubIdentity: {
+        status: 'authorization-failed', username: 'member-user', installAvailable: true,
+        selectedInstallationId: '100',
+        permissionExplanation: 'This account has access, but an installation owner must authorize enrollment.',
+        installations: [
+          { installationId: '100', accountLogin: 'acme', accountType: 'Organization' },
+          { installationId: '200', accountLogin: 'member-user', accountType: 'User' },
+        ],
+      },
+    };
+    const resolveGithubInstallation = vi.fn(async () => ({
+      ...choosing, githubIdentity: { ...choosing.githubIdentity!, status: 'enrolling' as const, selectedInstallationId: '200' },
+    }));
+    render(<LocalSetupWizard adapter={guidedAdapter({
+      status: vi.fn(async () => choosing), resolveGithubInstallation,
+    })} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(await screen.findByText('@member-user')).toBeInTheDocument();
+    expect(screen.getByText('Organization · Installation 100')).toBeInTheDocument();
+    expect(screen.getByText('User · Installation 200')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/installation owner/i);
+    expect(screen.getByRole('radio', { name: /acme/i })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Continue with selection' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('radio', { name: /member-user/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with selection' }));
+    expect(resolveGithubInstallation).toHaveBeenCalledWith({ action: 'select', installationId: '200' });
+    expect(screen.getByRole('button', { name: 'Refresh installations' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install GitHub App' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change GitHub account' })).toBeInTheDocument();
+  });
+
+  it('requires a fresh choice after reauthentication even when identity metadata is unchanged', async () => {
+    const choosing: DesktopSetupSnapshot = {
+      ...idle, phase: 'running', githubIdentity: {
+        status: 'authorization-failed', username: 'shared-user', installAvailable: true,
+        selectedInstallationId: '100', installations: [
+          { installationId: '100', accountLogin: 'shared-org', accountType: 'Organization' },
+          { installationId: '200', accountLogin: 'shared-user', accountType: 'User' },
+        ],
+      },
+    };
+    const afterReauthentication: DesktopSetupSnapshot = {
+      ...choosing, githubIdentity: {
+        ...choosing.githubIdentity!, status: 'selection-required', selectedInstallationId: undefined,
+      },
+    };
+    const resolveGithubInstallation = vi.fn(async (decision: DesktopGithubInstallationDecision) => decision.action === 'reauthenticate'
+      ? afterReauthentication : choosing);
+    render(<LocalSetupWizard adapter={guidedAdapter({
+      status: vi.fn(async () => choosing), resolveGithubInstallation,
+    })} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(await screen.findByRole('radio', { name: /shared-org/i })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: /shared-user/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change GitHub account' }));
+
+    await waitFor(() => expect(resolveGithubInstallation).toHaveBeenCalledWith({ action: 'reauthenticate' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue with selection' })).toBeDisabled());
+    expect(screen.getAllByRole('radio').every(radio => !(radio as HTMLInputElement).checked)).toBe(true);
+  });
+
+  it('clears a local choice that disappears from a refreshed installation list', async () => {
+    const choosing: DesktopSetupSnapshot = {
+      ...idle, phase: 'running', githubIdentity: {
+        status: 'selection-required', username: 'member-user', installAvailable: true,
+        installations: [
+          { installationId: '100', accountLogin: 'acme', accountType: 'Organization' },
+          { installationId: '200', accountLogin: 'member-user', accountType: 'User' },
+        ],
+      },
+    };
+    const refreshed: DesktopSetupSnapshot = {
+      ...choosing, githubIdentity: {
+        ...choosing.githubIdentity!, installations: [choosing.githubIdentity!.installations[0]],
+      },
+    };
+    const resolveGithubInstallation = vi.fn(async () => refreshed);
+    render(<LocalSetupWizard adapter={guidedAdapter({
+      status: vi.fn(async () => choosing), resolveGithubInstallation,
+    })} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('radio', { name: /member-user/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh installations' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('radio', { name: /member-user/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Continue with selection' })).toBeDisabled();
+    });
+    expect(screen.getByRole('radio', { name: /acme/i })).not.toBeChecked();
+  });
 
   it('removes Demo and fixes ProPR Connect to readable WebSocket intake', async () => {
     render(<LocalSetupWizard adapter={guidedAdapter()} onBack={vi.fn()} onComplete={vi.fn()} />);

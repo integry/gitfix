@@ -48,32 +48,105 @@ test("explicit new root does not inherit legacy tunnel intent during start prefl
   }
 });
 
-test("owned-stack replacement touches only labelled containers and retains host state", async () => {
+test("owned-stack replacement validates mounts first and mutates immutable container IDs", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "propr-owned-replacement-test-"));
+  const rootDir = createStackRoot(tempDir, "managed-root");
   const docker = join(tempDir, "docker");
   const log = join(tempDir, "docker.jsonl");
   const originalPath = process.env.PATH;
   process.env.PROPR_TEST_DOCKER_LOG = log;
+  process.env.PROPR_TEST_MANAGED_ROOT = rootDir;
   writeFileSync(docker, `#!/usr/bin/env node
 const fs = require('node:fs');
-fs.appendFileSync(process.env.PROPR_TEST_DOCKER_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
-if (process.argv[2] === 'ps') process.stdout.write('desktop-api\\ndesktop-ui\\n');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const apiId = 'a'.repeat(64);
+const uiId = 'b'.repeat(64);
+fs.appendFileSync(process.env.PROPR_TEST_DOCKER_LOG, JSON.stringify(args) + '\\n');
+if (args[0] === 'ps') process.stdout.write(apiId + '\\n' + uiId + '\\n');
+if (args[0] === 'inspect') {
+  const id = args.at(-1);
+  const service = id === apiId ? 'api' : 'ui';
+  const root = process.env.PROPR_TEST_MANAGED_ROOT;
+  const mounts = service === 'api' ? [
+    { Type: 'bind', Source: path.join(root, 'data'), Destination: '/usr/src/app/data' },
+    { Type: 'bind', Source: path.join(root, 'logs'), Destination: '/usr/src/app/logs' },
+    { Type: 'bind', Source: path.join(root, '.env'), Destination: '/usr/src/app/.env' },
+  ] : [];
+  process.stdout.write([id, '/desktop-owned-' + service, {
+    'propr.stack': 'desktop-owned', 'propr.service': service,
+  }, mounts].map(JSON.stringify).join('\\t') + '\\n');
+}
 `, { mode: 0o700 });
   chmodSync(docker, 0o700);
   process.env.PATH = `${tempDir}:${originalPath ?? ""}`;
   try {
     const orch = await loadOrchestrator();
-    await orch.replaceStackContainersAsync({ stack: "desktop-owned" } as never);
+    await orch.replaceStackContainersAsync({
+      stack: "desktop-owned", validateHostPaths: true,
+      hostData: join(rootDir, "data"), hostLogs: join(rootDir, "logs"),
+      hostRepos: join(rootDir, "repos"), envFileHost: join(rootDir, ".env"),
+    } as never);
     const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    assert.deepEqual(calls, [
-      ["ps", "-a", "--filter", "label=propr.stack=desktop-owned", "--format", "{{.Names}}"],
-      ["stop", "-t", "10", "desktop-api"], ["rm", "desktop-api"],
-      ["stop", "-t", "10", "desktop-ui"], ["rm", "desktop-ui"],
+    assert.deepEqual(calls.map((call: string[]) => [call[0], call.at(-1)]), [
+      ["ps", "{{.ID}}"],
+      ["inspect", "a".repeat(64)], ["inspect", "b".repeat(64)],
+      ["stop", "a".repeat(64)], ["rm", "a".repeat(64)],
+      ["stop", "b".repeat(64)], ["rm", "b".repeat(64)],
     ]);
-    assert.equal(calls.flat().some((argument: string) => /volume|network|data|credential/i.test(argument)), false);
+    const mutations = calls.filter((call: string[]) => call[0] === "stop" || call[0] === "rm");
+    assert.equal(mutations.flat().some((argument: string) => /volume|network|data|credential/i.test(argument)), false);
   } finally {
     process.env.PATH = originalPath;
     delete process.env.PROPR_TEST_DOCKER_LOG;
+    delete process.env.PROPR_TEST_MANAGED_ROOT;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("owned-stack replacement refuses a same-label container mounted from another root without mutation", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "propr-foreign-replacement-test-"));
+  const rootDir = createStackRoot(tempDir, "managed-root");
+  const foreignRoot = createStackRoot(tempDir, "foreign-root");
+  const docker = join(tempDir, "docker");
+  const log = join(tempDir, "docker.jsonl");
+  const originalPath = process.env.PATH;
+  process.env.PROPR_TEST_DOCKER_LOG = log;
+  process.env.PROPR_TEST_FOREIGN_ROOT = foreignRoot;
+  writeFileSync(docker, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const id = 'c'.repeat(64);
+fs.appendFileSync(process.env.PROPR_TEST_DOCKER_LOG, JSON.stringify(args) + '\\n');
+if (args[0] === 'ps') process.stdout.write(id + '\\n');
+if (args[0] === 'inspect') {
+  const root = process.env.PROPR_TEST_FOREIGN_ROOT;
+  const mounts = [
+    { Type: 'bind', Source: path.join(root, 'data'), Destination: '/usr/src/app/data' },
+    { Type: 'bind', Source: path.join(root, 'logs'), Destination: '/usr/src/app/logs' },
+    { Type: 'bind', Source: path.join(root, '.env'), Destination: '/usr/src/app/.env' },
+  ];
+  process.stdout.write([id, '/desktop-owned-api', {
+    'propr.stack': 'desktop-owned', 'propr.service': 'api',
+  }, mounts].map(JSON.stringify).join('\\t') + '\\n');
+}
+`, { mode: 0o700 });
+  chmodSync(docker, 0o700);
+  process.env.PATH = `${tempDir}:${originalPath ?? ""}`;
+  try {
+    const orch = await loadOrchestrator();
+    await assert.rejects(orch.replaceStackContainersAsync({
+      stack: "desktop-owned", validateHostPaths: true,
+      hostData: join(rootDir, "data"), hostLogs: join(rootDir, "logs"),
+      hostRepos: join(rootDir, "repos"), envFileHost: join(rootDir, ".env"),
+    } as never), /ownership metadata does not match/);
+    const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(calls.map((call: string[]) => call[0]), ["ps", "inspect"]);
+  } finally {
+    process.env.PATH = originalPath;
+    delete process.env.PROPR_TEST_DOCKER_LOG;
+    delete process.env.PROPR_TEST_FOREIGN_ROOT;
     rmSync(tempDir, { recursive: true, force: true });
   }
 });

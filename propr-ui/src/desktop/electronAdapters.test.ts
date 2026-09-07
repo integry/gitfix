@@ -92,6 +92,7 @@ const bridgeFixture = () => {
       cancel: async () => setupSnapshot,
       selectPrivateKey: async () => null,
       acquireWebhookSecret: async () => null,
+      resolveGithubInstallation: async () => setupSnapshot,
       onProgress: () => () => undefined,
     },
   };
