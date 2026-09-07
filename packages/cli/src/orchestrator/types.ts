@@ -186,6 +186,7 @@ export interface OrchestratorModule {
 
   isStackRunning(cfg: OrchestratorConfig): boolean;
   isStackRunningAsync(cfg: OrchestratorConfig, signal?: AbortSignal): Promise<boolean>;
+  isStackReplacementPending(cfg: OrchestratorConfig): boolean;
   replaceStackContainersAsync(
     cfg: OrchestratorConfig,
     opts?: { onLog?: (line: string) => void; signal?: AbortSignal }

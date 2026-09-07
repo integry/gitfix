@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,6 +12,79 @@ function createStackRoot(parent: string, name: string): string {
   for (const dir of ["data", "logs", "repos"]) mkdirSync(join(root, dir));
   writeFileSync(join(root, ".env"), "");
   return root;
+}
+
+function replacementConfig(rootDir: string) {
+  return {
+    stack: "desktop-owned", validateHostPaths: true,
+    hostData: join(rootDir, "data"), hostLogs: join(rootDir, "logs"),
+    hostRepos: join(rootDir, "repos"), envFileHost: join(rootDir, ".env"),
+  } as never;
+}
+
+function createResumableReplacementDocker(tempDir: string, rootDir: string): {
+  docker: string;
+  state: string;
+} {
+  const docker = join(tempDir, "docker");
+  const state = join(tempDir, "docker-state.json");
+  writeFileSync(state, JSON.stringify({
+    failedWorkerStop: false,
+    containers: [
+      { id: "a".repeat(64), service: "api", running: true },
+      { id: "b".repeat(64), service: "worker", running: true },
+    ],
+  }));
+  writeFileSync(docker, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const statePath = process.env.PROPR_TEST_DOCKER_STATE;
+const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
+if (args[0] === 'ps' && args.includes('{{.ID}}')) {
+  process.stdout.write(state.containers.map(container => container.id).join('\\n') + (state.containers.length ? '\\n' : ''));
+} else if (args[0] === 'ps') {
+  for (const container of state.containers) {
+    if (args.includes('-a') || container.running) {
+      process.stdout.write('desktop-owned-' + container.service + '\\t'
+        + (container.running ? 'running\\tUp' : 'exited\\tExited') + '\\t\\n');
+    }
+  }
+} else if (args[0] === 'inspect') {
+  const container = state.containers.find(candidate => candidate.id === args.at(-1));
+  if (!container) process.exitCode = 1;
+  else {
+    const root = process.env.PROPR_TEST_MANAGED_ROOT;
+    const mounts = [
+      { Type: 'bind', Source: path.join(root, 'data'), Destination: '/usr/src/app/data' },
+      { Type: 'bind', Source: path.join(root, 'logs'), Destination: '/usr/src/app/logs' },
+      ...(container.service === 'worker'
+        ? [{ Type: 'bind', Source: path.join(root, 'repos'), Destination: '/usr/src/app/repos' }]
+        : [{ Type: 'bind', Source: path.join(root, '.env'), Destination: '/usr/src/app/.env' }]),
+    ];
+    process.stdout.write([container.id, '/desktop-owned-' + container.service, {
+      'propr.stack': 'desktop-owned', 'propr.service': container.service,
+    }, mounts].map(JSON.stringify).join('\\t') + '\\n');
+  }
+} else if (args[0] === 'stop') {
+  const container = state.containers.find(candidate => candidate.id === args.at(-1));
+  if (process.env.PROPR_TEST_FAIL_WORKER_STOP === '1' && container?.service === 'worker' && !state.failedWorkerStop) {
+    state.failedWorkerStop = true;
+    save();
+    process.stderr.write('injected Docker stop failure\\n');
+    process.exitCode = 1;
+  } else if (container) {
+    container.running = false;
+    save();
+  }
+} else if (args[0] === 'rm') {
+  state.containers = state.containers.filter(container => container.id !== args.at(-1));
+  save();
+}
+`, { mode: 0o700 });
+  chmodSync(docker, 0o700);
+  return { docker, state };
 }
 
 test("explicit new root does not inherit legacy tunnel intent during start preflight", async () => {
@@ -91,8 +164,8 @@ if (args[0] === 'inspect') {
     assert.deepEqual(calls.map((call: string[]) => [call[0], call.at(-1)]), [
       ["ps", "{{.ID}}"],
       ["inspect", "a".repeat(64)], ["inspect", "b".repeat(64)],
-      ["stop", "a".repeat(64)], ["rm", "a".repeat(64)],
       ["stop", "b".repeat(64)], ["rm", "b".repeat(64)],
+      ["stop", "a".repeat(64)], ["rm", "a".repeat(64)],
     ]);
     const mutations = calls.filter((call: string[]) => call[0] === "stop" || call[0] === "rm");
     assert.equal(mutations.flat().some((argument: string) => /volume|network|data|credential/i.test(argument)), false);
@@ -100,6 +173,82 @@ if (args[0] === 'inspect') {
     process.env.PATH = originalPath;
     delete process.env.PROPR_TEST_DOCKER_LOG;
     delete process.env.PROPR_TEST_MANAGED_ROOT;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("owned-stack replacement is resumable after cancellation removes one container", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "propr-cancelled-replacement-test-"));
+  const rootDir = createStackRoot(tempDir, "managed-root");
+  const marker = join(rootDir, ".propr-stack-replacement.json");
+  const originalPath = process.env.PATH;
+  const { state } = createResumableReplacementDocker(tempDir, rootDir);
+  process.env.PROPR_TEST_DOCKER_STATE = state;
+  process.env.PROPR_TEST_MANAGED_ROOT = rootDir;
+  process.env.PATH = `${tempDir}:${originalPath ?? ""}`;
+  try {
+    const orch = await loadOrchestrator();
+    const cfg = replacementConfig(rootDir);
+    const controller = new AbortController();
+    await assert.rejects(orch.replaceStackContainersAsync(cfg, {
+      signal: controller.signal,
+      onLog: (line: string) => {
+        if (line.includes("desktop-owned-api")) controller.abort(new Error("replacement cancelled"));
+      },
+    }), /replacement cancelled/);
+
+    assert.equal(existsSync(marker), true);
+    assert.equal(statSync(marker).mode & 0o777, 0o600);
+    assert.equal(orch.isStackReplacementPending(cfg), true);
+    assert.equal(await orch.isStackRunningAsync(cfg), false,
+      "a remaining running core container must not make interrupted replacement look coherent");
+
+    await orch.replaceStackContainersAsync(cfg);
+    assert.equal(orch.isStackReplacementPending(cfg), false);
+    assert.equal(existsSync(marker), false);
+    assert.deepEqual(JSON.parse(readFileSync(state, "utf8")).containers, []);
+  } finally {
+    process.env.PATH = originalPath;
+    delete process.env.PROPR_TEST_DOCKER_STATE;
+    delete process.env.PROPR_TEST_MANAGED_ROOT;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("owned-stack replacement is resumable after a Docker failure following partial removal", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "propr-failed-replacement-test-"));
+  const rootDir = createStackRoot(tempDir, "managed-root");
+  const marker = join(rootDir, ".propr-stack-replacement.json");
+  const originalPath = process.env.PATH;
+  const { state } = createResumableReplacementDocker(tempDir, rootDir);
+  process.env.PROPR_TEST_DOCKER_STATE = state;
+  process.env.PROPR_TEST_MANAGED_ROOT = rootDir;
+  process.env.PROPR_TEST_FAIL_WORKER_STOP = "1";
+  process.env.PATH = `${tempDir}:${originalPath ?? ""}`;
+  try {
+    const orch = await loadOrchestrator();
+    const cfg = replacementConfig(rootDir);
+    await assert.rejects(orch.replaceStackContainersAsync(cfg), /injected Docker stop failure/);
+
+    assert.equal(existsSync(marker), true);
+    assert.equal(statSync(marker).mode & 0o777, 0o600);
+    assert.equal(await orch.isStackRunningAsync(cfg), false,
+      "the recovery marker must force reconstruction while the failed core container is still running");
+    assert.equal(orch.isStackRunning(cfg), false);
+    assert.throws(() => orch.startStack(cfg), /re-run `propr setup` to resume/,
+      "the synchronous start path must not bypass an incomplete validated replacement");
+    const interrupted = JSON.parse(readFileSync(state, "utf8"));
+    assert.deepEqual(interrupted.containers.map((container: { service: string }) => container.service), ["worker"]);
+    assert.equal(interrupted.containers[0].running, true);
+
+    await orch.replaceStackContainersAsync(cfg);
+    assert.equal(existsSync(marker), false);
+    assert.deepEqual(JSON.parse(readFileSync(state, "utf8")).containers, []);
+  } finally {
+    process.env.PATH = originalPath;
+    delete process.env.PROPR_TEST_DOCKER_STATE;
+    delete process.env.PROPR_TEST_MANAGED_ROOT;
+    delete process.env.PROPR_TEST_FAIL_WORKER_STOP;
     rmSync(tempDir, { recursive: true, force: true });
   }
 });

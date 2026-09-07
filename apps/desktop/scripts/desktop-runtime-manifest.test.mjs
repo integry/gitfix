@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   createDesktopRuntimeManifest,
+  normalizeDesktopRuntimeManifestMode,
   validateDesktopRuntimeManifest,
   validatePublishedDesktopRuntimeImageInspection,
+  writeDesktopRuntimeManifest,
 } from './desktop-runtime-manifest.mjs';
 
 const revision = 'a'.repeat(40);
@@ -19,6 +22,26 @@ const base = {
 };
 
 describe('desktop runtime manifest alignment', () => {
+  test('normalizes generated and packaged manifests for ordinary-user reads', {
+    skip: process.platform === 'win32',
+  }, () => {
+    const directory = mkdtempSync(join(tmpdir(), 'propr-desktop-runtime-manifest-'));
+    const generated = join(directory, 'generated.json');
+    const packaged = join(directory, 'packaged.json');
+    try {
+      writeFileSync(generated, '{}\n', { mode: 0o600 });
+      writeDesktopRuntimeManifest(generated, base);
+      assert.equal(statSync(generated).mode & 0o777, 0o644);
+
+      writeFileSync(packaged, '{}\n', { mode: 0o600 });
+      chmodSync(packaged, 0o600);
+      normalizeDesktopRuntimeManifestMode(packaged);
+      assert.equal(statSync(packaged).mode & 0o777, 0o644);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test('creates a source-local manifest without claiming unpublished images', () => {
     const manifest = createDesktopRuntimeManifest(base, {
       distribution: 'local', sourceRevision: revision,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -101,10 +101,20 @@ export function validatePublishedDesktopRuntimeImageInspection(image, repository
   return inspection;
 }
 
-const writeManifest = (path, manifest) => {
+export const DESKTOP_RUNTIME_MANIFEST_MODE = 0o644;
+
+export function normalizeDesktopRuntimeManifestMode(path) {
+  chmodSync(path, DESKTOP_RUNTIME_MANIFEST_MODE);
+}
+
+export function writeDesktopRuntimeManifest(path, manifest) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-};
+  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: DESKTOP_RUNTIME_MANIFEST_MODE });
+  // writeFileSync's mode applies only when creating a file. Normalize an
+  // existing release output too so a prior private mode cannot leak into a
+  // root-owned DEB/RPM installation and block the ordinary desktop user.
+  normalizeDesktopRuntimeManifestMode(path);
+}
 
 const buildLocal = (args) => {
   const checkoutRevision = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -127,7 +137,7 @@ const buildLocal = (args) => {
   });
   const base = JSON.parse(readFileSync(resolve(repositoryRoot, 'docker/launcher/manifest.json'), 'utf8'));
   const output = resolve(args.output ?? resolve(repositoryRoot, '.propr', 'desktop-runtime', sourceRevision, 'manifest.json'));
-  writeManifest(output, createDesktopRuntimeManifest(base, {
+  writeDesktopRuntimeManifest(output, createDesktopRuntimeManifest(base, {
     distribution: 'local', sourceRevision, appImage, uiImage,
     apiCompatibility: args['api-compatibility'],
   }));
@@ -141,7 +151,7 @@ const createRelease = (args) => {
     throw new Error('Release generation requires source-revision, app-image, ui-image, and output');
   }
   const base = JSON.parse(readFileSync(resolve(args.base ?? resolve(repositoryRoot, 'docker/launcher/manifest.json')), 'utf8'));
-  writeManifest(resolve(output), createDesktopRuntimeManifest(base, {
+  writeDesktopRuntimeManifest(resolve(output), createDesktopRuntimeManifest(base, {
     distribution: 'published', sourceRevision,
     appImage: args['app-image'], uiImage: args['ui-image'],
     apiCompatibility: args['api-compatibility'],

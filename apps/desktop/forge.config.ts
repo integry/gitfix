@@ -16,7 +16,10 @@ import {
   resolveDesktopVersion,
   resolveTrustedUpdateBuildConfig,
 } from './src/release-config';
-import { readDesktopRuntimeManifest } from './scripts/desktop-runtime-manifest.mjs';
+import {
+  normalizeDesktopRuntimeManifestMode,
+  readDesktopRuntimeManifest,
+} from './scripts/desktop-runtime-manifest.mjs';
 
 const DESKTOP_EXECUTABLE_NAME = 'propr-desktop';
 
@@ -45,11 +48,18 @@ if (configuredRuntimeManifest) {
   });
 }
 const linuxSetupResources = process.platform === 'linux'
-  ? { extraResource: [
-      resolve(connectOrchestrator, 'orchestrator.mjs'),
-      desktopRuntimeManifest,
-      setupAssets,
-    ] }
+  ? {
+      extraResource: [
+        resolve(connectOrchestrator, 'orchestrator.mjs'),
+        desktopRuntimeManifest,
+        setupAssets,
+      ],
+      afterCopyExtraResources: [({ buildPath, platform }: { buildPath: string; platform: string }) => {
+        if (platform === 'linux') {
+          normalizeDesktopRuntimeManifestMode(resolve(buildPath, 'resources', 'manifest.json'));
+        }
+      }],
+    }
   : {};
 
 const packagedConnectNativeArtifacts = (platform: string, arch: string): string[] => {

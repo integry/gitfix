@@ -18,6 +18,10 @@ export interface DesktopRuntimeManifest {
   [key: string]: unknown;
 }
 
+export const DESKTOP_RUNTIME_MANIFEST_MODE: number;
+export function normalizeDesktopRuntimeManifestMode(path: string): void;
+export function writeDesktopRuntimeManifest(path: string, manifest: unknown): void;
+
 export function validateDesktopRuntimeManifest(
   value: unknown,
   expected?: DesktopRuntimeManifestExpected,

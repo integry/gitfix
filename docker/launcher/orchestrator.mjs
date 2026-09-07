@@ -19,7 +19,10 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createECDH, timingSafeEqual } from 'node:crypto';
-import { readFileSync, existsSync, statSync, accessSync, constants as fsConstants } from 'node:fs';
+import {
+    readFileSync, writeFileSync, renameSync, unlinkSync, lstatSync, chmodSync,
+    existsSync, statSync, accessSync, constants as fsConstants,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1176,6 +1179,7 @@ export function stopService(cfg, service, { remove = true, onLog } = {}) {
  * prompt before restarting (e.g. `propr start`).
  */
 export function isStackRunning(cfg) {
+    if (isStackReplacementPending(cfg)) return false;
     const status = getStackStatus(cfg);
     return status.services.some((s) => CORE_SERVICES.includes(s.service) && s.running);
 }
@@ -1186,6 +1190,9 @@ export function isStackRunning(cfg) {
  * rethrown, so a failed startup doesn't leave a half-running stack behind.
  */
 export function startStack(cfg, { ui = true, docs = cfg.docsEnabled, tunnel = cfg.uiTunnelEnabled, onLog } = {}) {
+    if (isStackReplacementPending(cfg)) {
+        throw new Error('Desktop-managed stack replacement was interrupted; re-run `propr setup` to resume it before starting the stack');
+    }
     const toStart = [...CORE_SERVICES, ...(ui ? ['ui'] : []), ...(docs ? ['docs'] : []), ...(tunnel ? ['tunnel'] : [])];
     const started = [];
     const freshnessCache = new Map();
@@ -1487,6 +1494,10 @@ async function stopServiceAsync(cfg, service, { remove = true, onLog, signal } =
  * mid-startup failure (best effort) before rethrowing.
  */
 export async function startStackAsync(cfg, { ui = true, docs = cfg.docsEnabled, tunnel = cfg.uiTunnelEnabled, onLog, signal } = {}) {
+    if (isStackReplacementPending(cfg)) {
+        onLog?.('  · resuming interrupted desktop-managed stack replacement');
+        await replaceStackContainersAsync(cfg, { onLog, signal });
+    }
     const toStart = [...CORE_SERVICES, ...(ui ? ['ui'] : []), ...(docs ? ['docs'] : []), ...(tunnel ? ['tunnel'] : [])];
     const started = [];
     const freshnessCache = new Map();
@@ -1541,6 +1552,7 @@ async function getServiceStateAsync(cfg, service, signal) {
 
 /** Async mirror of isStackRunning. */
 export async function isStackRunningAsync(cfg, signal) {
+    if (isStackReplacementPending(cfg)) return false;
     const status = await getStackStatusAsync(cfg, signal);
     return status.services.some((s) => CORE_SERVICES.includes(s.service) && s.running);
 }
@@ -1566,7 +1578,90 @@ function replacementRootPaths(cfg) {
         || envFile !== join(roots[0], '.env')) {
         throw new Error('Refusing container replacement because the managed stack root paths do not agree');
     }
-    return { data, logs, repos, envFile };
+    return { root: roots[0], data, logs, repos, envFile };
+}
+
+const REPLACEMENT_MARKER_FILENAME = '.propr-stack-replacement.json';
+const REPLACEMENT_MARKER_MODE = 0o600;
+
+function replacementMarkerPath(cfg) {
+    if (!cfg?.validateHostPaths) return undefined;
+    return join(replacementRootPaths(cfg).root, REPLACEMENT_MARKER_FILENAME);
+}
+
+function validateReplacementMarker(cfg, marker) {
+    if (!marker || typeof marker !== 'object' || Array.isArray(marker)
+        || marker.schemaVersion !== 1 || marker.stack !== cfg.stack
+        || !Array.isArray(marker.containers) || marker.containers.length === 0
+        || marker.containers.length > SERVICES.length) {
+        throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is invalid`);
+    }
+    const ids = new Set();
+    const services = new Set();
+    for (const container of marker.containers) {
+        if (!container || typeof container !== 'object' || Array.isArray(container)
+            || typeof container.id !== 'string' || !/^[a-f0-9]{64}$/.test(container.id)
+            || typeof container.service !== 'string' || !SERVICES.includes(container.service)
+            || container.name !== `${cfg.stack}-${container.service}`
+            || ids.has(container.id) || services.has(container.service)) {
+            throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is invalid`);
+        }
+        ids.add(container.id);
+        services.add(container.service);
+    }
+    if (!marker.containers.some((container) => DATABASE_SERVICES.has(container.service))) {
+        throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is not root-bound`);
+    }
+    return marker;
+}
+
+function readReplacementMarker(cfg) {
+    const path = replacementMarkerPath(cfg);
+    if (!path || !existsSync(path)) return undefined;
+    const metadata = lstatSync(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()
+        || (metadata.mode & 0o777) !== REPLACEMENT_MARKER_MODE
+        || metadata.size > 64 * 1024) {
+        throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is unsafe`);
+    }
+    try {
+        return validateReplacementMarker(cfg, JSON.parse(readFileSync(path, 'utf8')));
+    } catch (error) {
+        if (error instanceof SyntaxError) {
+            throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is invalid`);
+        }
+        throw error;
+    }
+}
+
+function persistReplacementMarker(cfg, rootPaths, containers) {
+    const path = join(rootPaths.root, REPLACEMENT_MARKER_FILENAME);
+    const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+    try {
+        writeFileSync(temporary, `${JSON.stringify({
+            schemaVersion: 1,
+            stack: cfg.stack,
+            containers: containers.map(({ id, name, service }) => ({ id, name, service })),
+        })}\n`, { encoding: 'utf8', mode: REPLACEMENT_MARKER_MODE, flag: 'wx' });
+        chmodSync(temporary, REPLACEMENT_MARKER_MODE);
+        renameSync(temporary, path);
+    } finally {
+        try { unlinkSync(temporary); } catch { /* rename or cleanup already removed it */ }
+    }
+}
+
+function clearReplacementMarker(cfg) {
+    const path = replacementMarkerPath(cfg);
+    if (!path) return;
+    try { unlinkSync(path); }
+    catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+    }
+}
+
+/** Whether an earlier validated replacement must finish before startup. */
+export function isStackReplacementPending(cfg) {
+    return Boolean(readReplacementMarker(cfg));
 }
 
 const REPLACEMENT_INSPECT_FORMAT = '{{json .Id}}\t{{json .Name}}\t{{json .Config.Labels}}\t{{json .Mounts}}';
@@ -1627,6 +1722,7 @@ function replacementMountsMatch(cfg, service, mounts, rootPaths) {
 export async function replaceStackContainersAsync(cfg, { onLog, signal } = {}) {
     signal?.throwIfAborted();
     const rootPaths = replacementRootPaths(cfg);
+    const recovery = readReplacementMarker(cfg);
     const listed = await dockerAsync([
         'ps', '-a', '--no-trunc', '--filter', `label=propr.stack=${cfg.stack}`, '--format', '{{.ID}}',
     ], { signal });
@@ -1641,6 +1737,7 @@ export async function replaceStackContainersAsync(cfg, { onLog, signal } = {}) {
     const validated = [];
     const services = new Set();
     let rootBoundServices = 0;
+    const recoveryById = new Map((recovery?.containers ?? []).map((container) => [container.id, container]));
     for (const listedId of ids) {
         signal?.throwIfAborted();
         const inspected = await dockerAsync(['inspect', '--format', REPLACEMENT_INSPECT_FORMAT, listedId], { signal });
@@ -1653,18 +1750,26 @@ export async function replaceStackContainersAsync(cfg, { onLog, signal } = {}) {
             || typeof service !== 'string'
             || !SERVICES.includes(service)
             || services.has(service)
+            || (recovery && (recoveryById.get(container.id)?.name !== container.name.slice(1)
+                || recoveryById.get(container.id)?.service !== service))
             || !replacementMountsMatch(cfg, service, container.mounts, rootPaths)) {
             throw new Error(`Refusing to replace ${cfg.stack} containers because ownership metadata does not match the managed root and service set`);
         }
         services.add(service);
         if (DATABASE_SERVICES.has(service)) rootBoundServices += 1;
-        validated.push({ id: container.id, name: container.name.slice(1) });
+        validated.push({ id: container.id, name: container.name.slice(1), service });
     }
     if (validated.length > 0 && rootBoundServices === 0) {
         throw new Error(`Refusing to replace ${cfg.stack} containers because no container proves ownership of the managed root`);
     }
     signal?.throwIfAborted();
-    for (const container of validated) {
+    if (!recovery && validated.length > 0) persistReplacementMarker(cfg, rootPaths, validated);
+    // Keep at least one root-bound service until optional containers are gone.
+    // A retry can therefore re-prove this exact root even if interruption lands
+    // between any two removals; the final root-bound removal leaves no target.
+    const replacementOrder = validated.toSorted((left, right) =>
+        Number(DATABASE_SERVICES.has(left.service)) - Number(DATABASE_SERVICES.has(right.service)));
+    for (const container of replacementOrder) {
         const stopped = await dockerAsync(['stop', '-t', '10', container.id], { signal });
         if (stopped.status !== 0) {
             throw new Error(`Failed to stop ${container.name}: ${(stopped.stderr || '').trim()}`);
@@ -1675,6 +1780,7 @@ export async function replaceStackContainersAsync(cfg, { onLog, signal } = {}) {
         }
         onLog?.(`  [ok] replaced ${container.name}`);
     }
+    clearReplacementMarker(cfg);
 }
 
 /**
