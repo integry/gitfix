@@ -4,7 +4,7 @@ import { MakerRpm } from '@electron-forge/maker-rpm';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { flipFuses, FuseV1Options, FuseVersion } from '@electron/fuses';
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ import {
   normalizeDesktopRuntimeManifestMode,
   readDesktopRuntimeManifest,
 } from './scripts/desktop-runtime-manifest.mjs';
+import { copyPackagedNativeAuthority } from './src/package-native-authority';
 
 const DESKTOP_EXECUTABLE_NAME = 'propr-desktop';
 const desktopIconDirectory = fileURLToPath(new URL('./assets/icons', import.meta.url));
@@ -65,17 +66,6 @@ const linuxSetupResources = process.platform === 'linux'
       }],
     }
   : {};
-
-const packagedConnectNativeArtifacts = (platform: string, arch: string): string[] => {
-  if (platform === 'darwin' || platform === 'mas') {
-    return [
-      `${platform === 'mas' ? 'darwin' : platform}-${arch}/directory-operations.node`,
-      `${platform === 'mas' ? 'darwin' : platform}-${arch}/connect-authority-broker`,
-    ];
-  }
-  if (platform === 'linux') return [`linux-${arch}/directory-operations.node`];
-  return [];
-};
 
 const desktopPackage = JSON.parse(
   readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'),
@@ -165,13 +155,12 @@ const config: ForgeConfig = {
       version: releaseVersion,
     }),
     packageAfterCopy: async (_forgeConfig, resourcesPath, _electronVersion, platform, arch) => {
-      for (const relativeArtifact of packagedConnectNativeArtifacts(platform, arch)) {
-        const target = resolve(resourcesPath, '.vite/native/prebuilds', relativeArtifact);
-        mkdirSync(dirname(target), { recursive: true });
-        const source = resolve(connectNativePrebuilds, relativeArtifact);
-        copyFileSync(source, target);
-        if (platform !== 'win32') chmodSync(target, statSync(source).mode & 0o777);
-      }
+      copyPackagedNativeAuthority({
+        arch,
+        platform,
+        resourcesPath,
+        sourceRoot: connectNativePrebuilds,
+      });
       const packagedOrchestrator = resolve(resourcesPath, '.vite/build');
       mkdirSync(packagedOrchestrator, { recursive: true });
       for (const asset of ['orchestrator.mjs', 'manifest.json']) {
