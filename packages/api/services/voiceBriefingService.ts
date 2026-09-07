@@ -4,6 +4,7 @@ import type { Knex } from 'knex';
 import type { NotificationService } from '@propr/core';
 import {
   normalizeISO8601Timestamp,
+  VOICE_BRIEFING_MAX_ITEMS,
   voiceBriefingResponseSchema,
   type Notification,
   type NotificationListResponse,
@@ -15,7 +16,7 @@ import {
   type VoiceBriefingScope,
 } from '@propr/shared';
 
-export const VOICE_BRIEFING_DETAIL_LIMIT = 8;
+export const VOICE_BRIEFING_DETAIL_LIMIT = VOICE_BRIEFING_MAX_ITEMS;
 const NOTIFICATION_PAGE_SIZE = 100;
 const INCLUDED_PLAN_STATUSES = [
   'generating',

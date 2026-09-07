@@ -16,7 +16,7 @@ export const VOICE_BRIEFING_ACTIONS = ['open', 'stop', 'follow_up'] as const;
 export type VoiceBriefingAction = (typeof VOICE_BRIEFING_ACTIONS)[number];
 
 /** Maximum number of prioritized entries included in a short briefing. */
-export const VOICE_BRIEFING_MAX_ITEMS = 10;
+export const VOICE_BRIEFING_MAX_ITEMS = 8;
 
 export interface VoiceBriefingItem {
   /** Human-speakable stable reference within this response, such as task 2. */
