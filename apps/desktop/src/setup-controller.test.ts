@@ -117,6 +117,47 @@ describe('desktop local setup controller', () => {
     } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
   });
 
+  it('keeps install, refresh, and cancel actionable when discovery returns zero installations', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const rootDir = join(appData, 'local-runtime');
+    const opened: string[] = [];
+    let discoveries = 0;
+    const controller = new DesktopSetupController({
+      actions: relayActions(rootDir, {
+        fetchRelayInstallations: async () => {
+          discoveries += 1;
+          return { username: 'fixture-user', installations: [] };
+        },
+        openUrl: async url => { opened.push(url); },
+      }),
+      platform: 'linux', appDataDir: appData, defaultRootDir: rootDir,
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const running = controller.start(relayRequest);
+      const initial = await waitForSnapshot(controller, value => value.githubIdentity?.status === 'selection-required');
+      assert.deepEqual(initial.githubIdentity?.installations, []);
+      assert.equal(initial.githubIdentity?.installAvailable, true);
+
+      const installing = await controller.resolveGithubInstallation({ action: 'install' });
+      assert.equal(installing.githubIdentity?.status, 'installing');
+      await waitForSnapshot(controller, value => discoveries >= 2 && value.githubIdentity?.status === 'selection-required');
+      assert.deepEqual(opened, ['https://github.com/apps/propr-dev/installations/new']);
+
+      const refreshing = await controller.resolveGithubInstallation({ action: 'refresh' });
+      assert.equal(refreshing.githubIdentity?.status, 'refreshing');
+      await waitForSnapshot(controller, value => discoveries >= 3 && value.githubIdentity?.status === 'selection-required');
+
+      const cancelled = await controller.cancel();
+      assert.equal((await running).phase, 'cancelled');
+      assert.equal(cancelled.phase, 'cancelled');
+      assert.equal(discoveries, 3);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
   it('keeps an enrollment 403 in the chooser and settles cancellation without duplicate enrollment', async () => {
     const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
     chmodSync(appData, 0o700);

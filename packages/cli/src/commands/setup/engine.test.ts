@@ -933,7 +933,7 @@ test("interactive relay enrollment refreshes after app installation and validate
     root: "/stack",
     prompts: relayPrompts({
       configureGithubAuth: async () => ({ mode: "relay", enrollRelay: { relayUrl: DEFAULT_PROPR_GH_RELAY_URL } }),
-      selectInstallation: async ({ username, installations, enrollmentPermissionError }) => {
+      chooseInstallation: async ({ username, installations, enrollmentPermissionError }) => {
         promptsSeen += 1;
         assert.equal(username, "octocat");
         if (promptsSeen === 1) {
@@ -971,7 +971,7 @@ test("an enrollment 403 returns to explicit selection without treating access as
   const result = await runSetup({
     root: "/stack",
     prompts: relayPrompts({
-      selectInstallation: async ({ enrollmentPermissionError }) => {
+      chooseInstallation: async ({ enrollmentPermissionError }) => {
         promptsSeen += 1;
         if (promptsSeen === 1) return { action: "select", installationId: "100" };
         assert.match(enrollmentPermissionError ?? "", /requires an installation owner/i);
@@ -1003,7 +1003,7 @@ test("interactive relay enrollment can force re-authentication and rediscover an
   const result = await runSetup({
     root: "/stack",
     prompts: relayPrompts({
-      selectInstallation: async context => {
+      chooseInstallation: async context => {
         promptsSeen += 1;
         if (promptsSeen === 1) {
           assert.equal(context.username, "first-user");

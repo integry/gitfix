@@ -295,7 +295,7 @@ export class DesktopSetupController {
       },
       confirmGithubLogin: async () => true,
       confirmGithubAppInstall: async () => true,
-      selectInstallation: (context: RelayInstallationChoiceContext) => this.#chooseGithubInstallation(context, signal),
+      chooseInstallation: (context: RelayInstallationChoiceContext) => this.#chooseGithubInstallation(context, signal),
       configureIntake: async () => request.intake.mode === 'keep' ? { keep: true as const }
         : request.intake.mode === 'direct_webhook' ? { mode: 'direct_webhook' as const, webhookSecret: resolved.webhookSecret }
         : { mode: request.intake.mode },

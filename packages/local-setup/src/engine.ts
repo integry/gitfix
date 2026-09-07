@@ -216,13 +216,19 @@ export interface SetupPrompts {
   configureGithubAuth?(ctx: { current: GithubAuthModeResult }): Promise<GithubAuthDecision>;
   /**
    * Choose which access-scoped installation to submit for relay enrollment.
-   * Interactive hosts may also refresh discovery, open the hosted App install
-   * page, or re-authenticate. A selection is always checked against a fresh
-   * server discovery before enrollment. Hosts using the legacy string result
-   * continue to work; without this hook one installation is auto-selected and
-   * multiple installations fail closed instead of silently choosing the first.
+   * This is the legacy CLI/TUI hook and is called only when discovery has at
+   * least one option. A selection is always checked against a fresh server
+   * discovery before enrollment. Without this hook one installation is
+   * auto-selected and multiple installations fail closed instead of silently
+   * choosing the first.
    */
-  selectInstallation?(ctx: RelayInstallationChoiceContext): Promise<string | RelayInstallationDecision>;
+  selectInstallation?(ctx: RelayInstallationChoiceContext): Promise<string>;
+  /**
+   * Action-capable installation chooser used by desktop. Unlike the legacy
+   * selector, this hook receives empty discovery results so the host can offer
+   * install, refresh, re-authenticate, and cancellation actions.
+   */
+  chooseInstallation?(ctx: RelayInstallationChoiceContext): Promise<RelayInstallationDecision>;
   /**
    * Ask whether to run the interactive `propr login` (gh CLI) now when Connect
    * enrollment or protected local API steps need a user token and none is
@@ -667,7 +673,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       let { username, installations } = await actions.fetchRelayInstallations({ relayUrl });
       const usingHostedRelay =
         relayUrl.replace(/\/+$/, "") === DEFAULT_PROPR_GH_RELAY_URL.replace(/\/+$/, "");
-      if (installations.length === 0 && !prompts.selectInstallation && usingHostedRelay && prompts.confirmGithubAppInstall) {
+      if (installations.length === 0 && !prompts.chooseInstallation && usingHostedRelay && prompts.confirmGithubAppInstall) {
         const installUrl = DEFAULT_PROPR_GITHUB_APP_INSTALL_URL;
         if (await prompts.confirmGithubAppInstall({ url: installUrl })) {
           await actions.openUrl(installUrl);
@@ -679,7 +685,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
           }
         }
       }
-      if (installations.length === 0 && !prompts.selectInstallation) {
+      if (installations.length === 0 && !prompts.chooseInstallation) {
         return {
           note: {
             detail: "relay not enrolled — no GitHub App installation available",
@@ -690,17 +696,17 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
         };
       }
       let installationId: string;
-      if (prompts.selectInstallation) {
-        const rawDecision = await prompts.selectInstallation({
+      if (prompts.chooseInstallation || prompts.selectInstallation) {
+        const context: RelayInstallationChoiceContext = {
           username,
           installations: installations.map(value => ({ ...value })),
           ...(selectedInstallationId ? { selectedInstallationId } : {}),
           ...(enrollmentPermissionError ? { enrollmentPermissionError } : {}),
           ...(usingHostedRelay ? { installUrl: DEFAULT_PROPR_GITHUB_APP_INSTALL_URL } : {}),
-        });
-        const decision: RelayInstallationDecision = typeof rawDecision === "string"
-          ? { action: "select", installationId: rawDecision }
-          : rawDecision;
+        };
+        const decision: RelayInstallationDecision = prompts.chooseInstallation
+          ? await prompts.chooseInstallation(context)
+          : { action: "select", installationId: await prompts.selectInstallation!(context) };
         options.signal?.throwIfAborted();
         if (decision.action === "cancel") throw new SetupCancellation(state);
         if (decision.action === "refresh") {
@@ -845,7 +851,7 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       };
     } catch (error) {
       options.signal?.throwIfAborted();
-      if (failurePhase === "enrollment" && (error as { status?: unknown }).status === 403 && prompts.selectInstallation) {
+      if (failurePhase === "enrollment" && (error as { status?: unknown }).status === 403 && prompts.chooseInstallation) {
         enrollmentPermissionError = "This account can access the installation, but the relay requires an installation owner to authorize enrollment. Ask an owner, choose another installation, refresh, or change account.";
         continue;
       }
