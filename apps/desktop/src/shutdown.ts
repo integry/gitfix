@@ -16,6 +16,7 @@ interface ShutdownOptions {
   ipc: RegisteredIpcHandlers;
   deepLinks?: { close(): void; whenIdle(): Promise<void> };
   tray?: { close(): void };
+  notifications?: { close(): void; idle(): Promise<void> };
   profiles: { close(): Promise<void> };
   sessionSecurity: { close(): void; dispose(): void };
   disposeRendererProtocol(): void;
@@ -81,6 +82,8 @@ export const createDesktopShutdownCoordinator = (
       if (options.deepLinks) step('deep-links-closed');
       options.tray?.close();
       if (options.tray) step('tray-closed');
+      options.notifications?.close();
+      if (options.notifications) step('notifications-closed');
       options.ipc.close();
       step('ipc-closed');
       options.sessionSecurity.close();
@@ -98,12 +101,14 @@ export const createDesktopShutdownCoordinator = (
       step('ipc-drain-started');
       const deepLinkDrain = options.deepLinks?.whenIdle() ?? Promise.resolve();
       if (options.deepLinks) step('deep-link-drain-started');
+      const notificationDrain = options.notifications?.idle() ?? Promise.resolve();
       completion = bounded(Promise.allSettled([
         credentialDrain,
         lifecycleDrain,
         setupDrain,
         ipcDrain,
         deepLinkDrain,
+        notificationDrain,
       ]).then(results => {
         for (const result of results) if (result.status === 'rejected') throw result.reason;
       }), 'service-drain').then(async () => {

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -42,6 +42,7 @@ import {
 } from './ipc';
 import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
+import { NativeNotificationService } from './native-notifications';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
 import { openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
 import {
@@ -1665,6 +1666,29 @@ if (!hasSingleInstanceLock) {
       }
     }
     const lifecycle = new LocalLifecycleController();
+    const notifications = new NativeNotificationService({
+      statePath: join(app.getPath('userData'), 'desktop-notification-preferences.json'),
+      platform: process.platform,
+      isSupported: () => Notification.isSupported(),
+      isActiveScope: scope => credentials.isActiveConnectionScope(scope),
+      show: (payload, onClick) => {
+        const notification = new Notification({ title: payload.title, body: payload.body });
+        notification.once('click', onClick);
+        notification.show();
+        return {
+          close: () => notification.close(),
+          onClose: listener => { notification.once('close', listener); },
+        };
+      },
+      navigate: path => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        mainWindow.webContents.send(IPC_CHANNELS.notificationNavigate, path);
+      },
+      log: (level, event) => log(level, event),
+    });
     nativeProfiles = profiles;
     const trayArtworkPath = app.isPackaged
       ? join(process.resourcesPath, 'logo-only-small.png')
@@ -1723,6 +1747,7 @@ if (!hasSingleInstanceLock) {
       connectDiscovery,
       lifecycle,
       setup,
+      notifications,
       logger,
       desktopSession: session.defaultSession,
       devServerUrl,
@@ -1740,6 +1765,7 @@ if (!hasSingleInstanceLock) {
       onActiveWorkRefresh: () => desktopTray.refresh(),
       ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {
         onRendererActiveProfileChanged: (origin: string | null) => {
+          notifications.clear();
           if (packagedAcceptanceTest) return;
           const nextOrigins = origin?.startsWith('http://') ? [origin] : [];
           if (rendererPolicyOrigins.length === nextOrigins.length
@@ -1774,6 +1800,7 @@ if (!hasSingleInstanceLock) {
       setup,
       ipc: registeredIpc,
       profiles,
+      notifications,
       sessionSecurity,
       disposeRendererProtocol,
       getWindow: () => mainWindow,

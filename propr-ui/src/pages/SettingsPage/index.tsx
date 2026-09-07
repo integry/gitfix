@@ -12,6 +12,8 @@ import { useDemoMode } from '../../contexts/DemoModeContext';
 import { useCurrentUser, userHasPermission } from '../../contexts/AuthContext';
 import NotificationSettingsSection from './NotificationSettingsSection';
 import VisualPreviewAuthSection from './VisualPreviewAuthSection';
+import DesktopNotificationSettingsSection from './DesktopNotificationSettingsSection';
+import { useDesktop } from '../../desktop/DesktopContext';
 
 const AdminSettingsPage: React.FC = () => {
   const { isDemoMode } = useDemoMode();
@@ -144,6 +146,8 @@ const AdminSettingsPage: React.FC = () => {
           <h3 className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-4">Automation Rules</h3>
 
           <div className="space-y-6">
+            <DesktopNotificationSettingsSection />
+
             <NotificationSettingsSection />
 
             <VisualPreviewAuthSection />
@@ -297,6 +301,7 @@ const SettingsPage: React.FC = () => {
   useDocumentTitle('Settings');
   const user = useCurrentUser();
   const { isDemoMode } = useDemoMode();
+  const desktop = useDesktop();
 
   if (userHasPermission(user, 'instance.manage_settings')) {
     return <AdminSettingsPage />;
@@ -313,6 +318,10 @@ const SettingsPage: React.FC = () => {
         className={`flex-1 overflow-y-auto p-6 ${isDemoMode ? 'opacity-70' : ''}`}
       >
         <div className="mx-auto max-w-2xl">
+          {desktop && <>
+            <DesktopNotificationSettingsSection />
+            <div className="my-6 border-t border-gray-200" />
+          </>}
           <NotificationSettingsSection />
         </div>
       </fieldset>

@@ -110,7 +110,7 @@ describe('Notification Settings browser enrollment guidance', () => {
 
     expect(await screen.findByText(/Browser Web Push is not available in the ProPR desktop app/))
       .toBeInTheDocument();
-    expect(screen.getByText(/Native desktop notifications are not implemented yet/))
+    expect(screen.getByText(/Use the Desktop notifications section on this page/))
       .toBeInTheDocument();
     expect(screen.queryByText(/administrator must configure the VAPID keys/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Enable on this browser/ })).not.toBeInTheDocument();
