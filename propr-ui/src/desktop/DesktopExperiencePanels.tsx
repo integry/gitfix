@@ -20,6 +20,19 @@ import {
 import { normalizeBaseUrl } from './browserAdapters';
 import type { DesktopConnectionResult, DesktopProfile } from './types';
 
+interface DesktopSetupLayerProps {
+  children: React.ReactNode;
+  editor: React.ReactNode;
+  suspended: boolean;
+}
+
+export const DesktopSetupLayer: React.FC<DesktopSetupLayerProps> = ({ children, editor, suspended }) => <>
+  <div hidden={suspended} inert={suspended} aria-hidden={suspended || undefined} style={suspended ? undefined : { display: 'contents' }}>
+    {children}
+  </div>
+  {suspended && editor}
+</>;
+
 const createProfileId = (): string => {
   try { return crypto.randomUUID(); } catch { return `profile-${Date.now()}`; }
 };

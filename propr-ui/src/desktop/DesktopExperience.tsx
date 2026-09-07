@@ -7,10 +7,10 @@ import type { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopConnectedExperience } from './DesktopConnectedExperience';
 import { LocalSetupWizard } from './LocalSetupWizard';
 import { useAttemptFence, useDesktopModal, useSerializedMutationQueue } from './desktopExperienceHooks';
-import { ConnectionPanel, DesktopBrand, InstanceChooser, ManagedRecoveryReview, ProfileEditor } from './DesktopExperiencePanels';
+import { ConnectionPanel, DesktopBrand, DesktopSetupLayer, InstanceChooser, ManagedRecoveryReview, ProfileEditor } from './DesktopExperiencePanels';
 import { managedRecoveryMessage, managedRediscoveryUnavailableMessage, safeConnectionMessage } from './desktopExperienceMessages';
-import { mergeProfiles, recoverableError, settleAuthenticationCancellation, type ExperienceState } from './desktopExperienceState';
-import { DESKTOP_ACCESS_INVALID_EVENT, type DesktopAccessInvalidEventDetail, type DesktopAdapters, type DesktopConnectionResult, type DesktopGuidedLocalSetupAdapter, type DesktopLocalSetupAdapter, type DesktopProfile } from './types';
+import { isGuidedLocalSetup, mergeProfiles, recoverableError, settleAuthenticationCancellation, settleConnectCandidateSetup, type ExperienceState } from './desktopExperienceState';
+import { DESKTOP_ACCESS_INVALID_EVENT, type DesktopAccessInvalidEventDetail, type DesktopAdapters, type DesktopConnectionResult, type DesktopProfile } from './types';
 import { useDesktopDeepLinks } from './useDesktopDeepLinks';
 import { useConnectCandidatePresentation } from './useConnectCandidatePresentation';
 import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
@@ -25,10 +25,6 @@ interface DesktopExperienceProps {
   deepLinks?: DesktopDeepLinkInbox;
   children: React.ReactNode;
 }
-
-const isGuidedLocalSetup = (adapter: DesktopLocalSetupAdapter): adapter is DesktopGuidedLocalSetupAdapter =>
-  ['status', 'start', 'retry', 'cancel', 'selectPrivateKey', 'acquireWebhookSecret', 'onProgress']
-    .every(key => typeof adapter[key as keyof DesktopLocalSetupAdapter] === 'function');
 
 export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, deepLinks, children }) => {
   const [profiles, setProfiles] = useState<DesktopProfile[]>([]);
@@ -230,21 +226,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
   };
 
-  const settleSetupBeforeConnectCandidate = async (): Promise<boolean> => {
-    if (!hasPendingConnectCandidate()) return true;
-    if (localSetupOpen && isGuidedLocalSetup(adapters.localSetup)) {
-      try {
-        const settled = await adapters.localSetup.cancel();
-        if (settled.phase === 'running') throw new Error('Local setup cancellation did not settle');
-      } catch {
-        setOperationError('Local setup could not be cancelled safely. Try Connect again or return to setup.');
-        return false;
-      }
-      setLocalSetupOpen(false);
-    }
-    setAcceptanceSetup(null);
-    return true;
-  };
+  const settleSetupBeforeConnectCandidate = () => settleConnectCandidateSetup({ acceptanceSetupOpen: Boolean(acceptanceSetup), candidatePending: hasPendingConnectCandidate(), guidedSetup: localSetupOpen && isGuidedLocalSetup(adapters.localSetup) ? adapters.localSetup : null, onAcceptanceSetupSettled: () => setAcceptanceSetup(null), onFailure: () => setOperationError('Local setup could not be cancelled safely. Try Connect again or return to setup.'), onGuidedSetupSettled: () => setLocalSetupOpen(false) });
 
   const saveProfile = async (profile: DesktopProfile, shouldConnect = true) => {
     cancelDiscovery();
@@ -413,16 +395,8 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   };
 
   const content = () => {
-    const profileEditor = editing
-      ? <main className="desktop-welcome-card"><DesktopBrand /><ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate()} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate() && editing !== 'new' ? () => connectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={profile => void saveProfile(profile)} /></main>
-      : null;
-    const setupSuspended = Boolean(profileEditor && hasPendingConnectCandidate());
-    const setupLayer = (surface: React.ReactNode) => <>
-      <div hidden={setupSuspended} inert={setupSuspended} aria-hidden={setupSuspended || undefined} style={setupSuspended ? undefined : { display: 'contents' }}>
-        {surface}
-      </div>
-      {setupSuspended && profileEditor}
-    </>;
+    const profileEditor = editing ? <main className="desktop-welcome-card"><DesktopBrand /><ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate()} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate() && editing !== 'new' ? () => connectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={profile => void saveProfile(profile)} /></main> : null;
+    const setupLayer = (surface: React.ReactNode) => <DesktopSetupLayer editor={profileEditor} suspended={Boolean(profileEditor && hasPendingConnectCandidate())}>{surface}</DesktopSetupLayer>;
 
     if (state.phase === 'loading') return <div className="desktop-loading"><LoaderCircle className="desktop-spin" /><span>Opening ProPR…</span></div>;
     if (acceptanceSetup) return setupLayer(<PackagedAcceptanceLocalSetup initial={acceptanceSetup} onBack={() => setAcceptanceSetup(null)} />);
