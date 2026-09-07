@@ -145,6 +145,20 @@ describe('desktop trusted release workflow', () => {
     assert.match(production, /! gh release view/);
   });
 
+  test('binds every production desktop package to explicitly published runtime digests from the same source revision', () => {
+    const production = job('release-package', 'release-finalize');
+    assert.match(production, /RUNTIME_APP_IMAGE: \$\{\{ vars\.PROPR_DESKTOP_RUNTIME_APP_IMAGE \}\}/);
+    assert.match(production, /RUNTIME_UI_IMAGE: \$\{\{ vars\.PROPR_DESKTOP_RUNTIME_UI_IMAGE \}\}/);
+    assert.match(production, /PROPR_DESKTOP_RELEASE_SHA: \$\{\{ needs\.preflight\.outputs\.release_sha \}\}/);
+    assert.match(production, /docker buildx imagetools inspect "\$RUNTIME_APP_IMAGE"/);
+    assert.match(production, /docker buildx imagetools inspect "\$RUNTIME_UI_IMAGE"/);
+    assert.match(production, /desktop-runtime-manifest\.mjs release/);
+    assert.match(production, /--source-revision "\$PROPR_DESKTOP_RELEASE_SHA"/);
+    assert.match(production, /PROPR_DESKTOP_RUNTIME_MANIFEST=\$runtime_manifest/);
+    assert.match(forgeConfig, /Production desktop releases require an aligned published runtime manifest/);
+    assert.match(forgeConfig, /distribution: 'published'/);
+  });
+
   test('grants the preflight token Environments read for both environment API calls without exposing it', () => {
     const preflight = job('preflight', 'release-package');
     const permissions = preflightAppTokenPermissions(preflight);
@@ -389,7 +403,8 @@ describe('desktop trusted release workflow', () => {
     assert.equal(workflow.match(/\*Machine-Setup\.msi/g)?.length, 1);
     assert.equal(workflow.match(/run-installed-windows-app-harness\.ps1/g)?.length, 1);
     assert.equal(workflow.match(/PROPR_DESKTOP_WINDOWS_INSTALLED_APP=1/g)?.length, 1);
-    assert.doesNotMatch(forgeConfig, /extraResource|windows-authority|postPackage/);
+    assert.match(forgeConfig, /const linuxSetupResources = process\.platform === 'linux'[\s\S]*extraResource:/);
+    assert.doesNotMatch(forgeConfig, /windows-authority|postPackage/);
     assert.match(forgeConfig, /buildWindowsMachineInstaller/);
     assert.match(forgeConfig, /wixDirectory: process\.env\.PROPR_DESKTOP_WIX_DIRECTORY/);
     assert.doesNotMatch(forgeConfig, /MakerSquirrel|noMsi|Setup\.exe|full\.nupkg/);

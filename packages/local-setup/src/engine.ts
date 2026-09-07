@@ -373,6 +373,8 @@ export interface BackendHealthParams {
 export interface BackendHealth {
   healthy: boolean;
   detail: string;
+  /** Host-specific recovery guidance for a definitive runtime contract failure. */
+  nextAction?: string;
   /**
    * Set when the backend answered the probe (it is reachable and running) but
    * rejected the request for authentication or authorization reasons rather
@@ -1248,11 +1250,11 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
           // The backend answered, so access failures need account-oriented
           // remediation rather than service-health troubleshooting. A 401 calls
           // for login; a 403 calls for permission/configuration checks.
-          nextAction: health.accessFailure === "unauthorized"
+          nextAction: health.nextAction ?? (health.accessFailure === "unauthorized"
             ? "Run `propr login` to obtain a GitHub user token, then re-run `propr setup`; the running stack will be reused."
             : health.accessFailure === "forbidden"
               ? "Check the authenticated account, the stack's bootstrap-admin configuration, and its access permissions, then re-run `propr setup`; the running stack will be reused."
-            : "Run `propr status` / `propr remote-status` and inspect the API logs, then re-run setup.",
+            : "Run `propr status` / `propr remote-status` and inspect the API logs, then re-run setup."),
         });
       }
     }

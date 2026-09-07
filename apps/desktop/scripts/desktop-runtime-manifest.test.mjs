@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
+import {
+  createDesktopRuntimeManifest,
+  validateDesktopRuntimeManifest,
+} from './desktop-runtime-manifest.mjs';
+
+const revision = 'a'.repeat(40);
+const digest = `sha256:${'b'.repeat(64)}`;
+const base = {
+  version: '0.8.15', git_sha: 'legacy', registry: 'propr',
+  images: {
+    app: 'propr/app:0.8.15', ui: 'propr/ui:0.8.15', docs: 'propr/docs:0.8.15',
+    agent: 'propr/agent:0.8.15', redis: 'redis:7-alpine',
+  },
+};
+
+describe('desktop runtime manifest alignment', () => {
+  test('creates a source-local manifest without claiming unpublished images', () => {
+    const manifest = createDesktopRuntimeManifest(base, {
+      distribution: 'local', sourceRevision: revision,
+      appImage: `propr-desktop-local/app:${revision}`,
+      uiImage: `propr-desktop-local/ui:${revision}`,
+      apiCompatibility: '2026-06-27',
+    });
+    assert.equal(manifest.images.app, `propr-desktop-local/app:${revision}`);
+    assert.equal(manifest.desktopRuntime.distribution, 'local');
+    assert.equal(manifest.git_sha, revision);
+    assert.equal(manifest.images.agent, base.images.agent);
+  });
+
+  test('requires published release images to bind the exact commit tag and digest', () => {
+    const manifest = createDesktopRuntimeManifest(base, {
+      distribution: 'published', sourceRevision: revision,
+      appImage: `propr/app:${revision}@${digest}`,
+      uiImage: `propr/ui:${revision}@${digest}`,
+      apiCompatibility: '2026-06-27',
+    });
+    assert.equal(manifest.desktopRuntime.distribution, 'published');
+    assert.throws(() => createDesktopRuntimeManifest(base, {
+      distribution: 'published', sourceRevision: revision,
+      appImage: 'propr/app:0.8.15', uiImage: `propr/ui:${revision}@${digest}`,
+      apiCompatibility: '2026-06-27',
+    }), /not bound/);
+  });
+
+  test('rejects a manifest from another source or compatibility contract', () => {
+    const manifest = createDesktopRuntimeManifest(base, {
+      distribution: 'local', sourceRevision: revision,
+      appImage: `propr-desktop-local/app:${revision}`,
+      uiImage: `propr-desktop-local/ui:${revision}`,
+      apiCompatibility: '2026-06-27',
+    });
+    assert.throws(() => validateDesktopRuntimeManifest(manifest, {
+      sourceRevision: 'c'.repeat(40),
+    }), /release revision/);
+    assert.throws(() => validateDesktopRuntimeManifest(manifest, {
+      apiCompatibility: '2025-01-01',
+    }), /compatibility contract/);
+  });
+});

@@ -1,10 +1,20 @@
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { SetupActions } from '@propr/local-setup';
+import {
+  evaluateProprApiCompatibility,
+  parseProprDesktopDiscoveryJson,
+  PROPR_API_COMPATIBILITY,
+  PROPR_CONNECT_DISCOVERY_MAX_BYTES,
+} from '@propr/shared';
 import { ConfigManager } from './config/index.js';
 import { configureStackTemplatePath } from './commands/initStack.js';
 import { createDefaultActions } from './commands/setup/hostActions.js';
-import { configureOrchestratorAssetPath, getHostConfig } from './orchestrator/index.js';
+import {
+  configureOrchestratorAssetPath,
+  configureOrchestratorManifestPath,
+  getHostConfig,
+} from './orchestrator/index.js';
 import { localhostServiceUrl } from './utils/dockerPort.js';
 import type { AuthenticationCommandHandoff, CapturedCommandRunner } from './auth/githubLogin.js';
 
@@ -22,24 +32,146 @@ const verifiedResource = (path: string): string => {
   return realpathSync(path);
 };
 
+export interface DesktopRuntimeCompatibilityResult {
+  compatible: boolean;
+  detail: string;
+  nextAction?: string;
+}
+
+const incompatibleRuntime = (image: string, reason: string): DesktopRuntimeCompatibilityResult => ({
+  compatible: false,
+  detail: `desktop runtime ${image} is incompatible: ${reason}`,
+  nextAction: `Install the app image released for API compatibility ${PROPR_API_COMPATIBILITY}, then retry local setup. Source builds can use \`npm run desktop:runtime:build\` and package with its generated manifest.`,
+});
+
+/**
+ * Probe the complete public desktop contract, not only the protected health
+ * route.  This is intentionally strict: a legacy compatibility document is not
+ * evidence of discovery, identity, pairing, REST bearer, or Socket.IO support.
+ */
+export async function checkDesktopRuntimeCompatibility(options: {
+  baseUrl: string;
+  image: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  fetch?: typeof globalThis.fetch;
+}): Promise<DesktopRuntimeCompatibilityResult> {
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? 8_000);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  let response: Response;
+  try {
+    response = await (options.fetch ?? globalThis.fetch)(
+      new URL('/api/desktop/discovery', options.baseUrl),
+      {
+        credentials: 'omit',
+        headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
+        redirect: 'manual',
+        signal,
+      },
+    );
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    return incompatibleRuntime(options.image, signal.aborted
+      ? 'the desktop discovery check timed out'
+      : 'the desktop discovery endpoint could not be reached');
+  }
+  if (!response.ok || response.redirected) {
+    try { await response.body?.cancel(); } catch { /* best-effort disposal */ }
+    return incompatibleRuntime(options.image, `the public desktop discovery endpoint returned HTTP ${response.status}`);
+  }
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  const declared = response.headers.get('content-length');
+  if (contentType !== 'application/json'
+    || (declared !== null && (!/^(?:0|[1-9]\d*)$/.test(declared)
+      || Number(declared) > PROPR_CONNECT_DISCOVERY_MAX_BYTES))) {
+    try { await response.body?.cancel(); } catch { /* best-effort disposal */ }
+    return incompatibleRuntime(options.image, 'the public desktop discovery response is invalid');
+  }
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    while (reader) {
+      const next = await reader.read();
+      if (next.done) break;
+      received += next.value.byteLength;
+      if (received > PROPR_CONNECT_DISCOVERY_MAX_BYTES) {
+        await reader.cancel();
+        return incompatibleRuntime(options.image, 'the public desktop discovery response is oversized');
+      }
+      chunks.push(next.value);
+    }
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    return incompatibleRuntime(options.image, 'the public desktop discovery response could not be read');
+  } finally {
+    try { reader?.releaseLock(); } catch { /* response already cancelled */ }
+  }
+  if (declared !== null && Number(declared) !== received) {
+    return incompatibleRuntime(options.image, 'the public desktop discovery response length is invalid');
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  let contents: string;
+  try { contents = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch { return incompatibleRuntime(options.image, 'the public desktop discovery response is not valid UTF-8'); }
+  const discovery = parseProprDesktopDiscoveryJson(contents);
+  if (!discovery) {
+    return incompatibleRuntime(options.image, 'it does not expose the required discovery, identity, and desktop authentication contract');
+  }
+  const compatibility = evaluateProprApiCompatibility(discovery);
+  if (!compatibility.compatible) return incompatibleRuntime(options.image, compatibility.message);
+  if (!discovery.desktopAuthentication.browserPairing
+    || !discovery.desktopAuthentication.instanceBearerTokens
+    || !discovery.desktopAuthentication.socketIoBearerAuthentication) {
+    return incompatibleRuntime(options.image, 'it does not enable browser pairing, REST bearer tokens, and Socket.IO bearer authentication');
+  }
+  return {
+    compatible: true,
+    detail: `desktop contract ready (API ${discovery.apiCompatibility}, pairing protocol ${discovery.desktopAuthentication.protocolVersion})`,
+  };
+}
+
 /** Build the real CLI setup host without exposing command execution to the renderer. */
 export async function createDesktopSetupHost(options: {
   configDir: string;
   resourcesPath?: string;
+  runtimeManifestPath?: string;
   authenticationHandoff: AuthenticationCommandHandoff;
   capturedCommand?: CapturedCommandRunner;
 }): Promise<DesktopSetupHost> {
   if (options.resourcesPath) {
     const root = realpathSync(options.resourcesPath);
-    configureOrchestratorAssetPath(verifiedResource(join(root, 'orchestrator', 'orchestrator.mjs')));
+    configureOrchestratorAssetPath(verifiedResource(join(root, 'orchestrator.mjs')));
+    configureOrchestratorManifestPath(verifiedResource(join(root, 'manifest.json')));
     configureStackTemplatePath(verifiedResource(join(root, 'assets', 'env.example.txt')));
+  } else if (options.runtimeManifestPath) {
+    configureOrchestratorManifestPath(verifiedResource(options.runtimeManifestPath));
   }
   const config = new ConfigManager(resolve(options.configDir));
   await config.init();
-  const actions = createDefaultActions(config, {
+  const baseActions = createDefaultActions(config, {
     authenticationHandoff: options.authenticationHandoff,
     capturedCommand: options.capturedCommand,
   });
+  const actions: SetupActions = {
+    ...baseActions,
+    async checkBackendHealth(params) {
+      const health = await baseActions.checkBackendHealth(params);
+      if (!health.healthy) return health;
+      const { cfg } = await getHostConfig({ configManager: config, root: params.rootDir });
+      const baseUrl = localhostServiceUrl(cfg.apiPort);
+      const desktop = await checkDesktopRuntimeCompatibility({
+        baseUrl,
+        image: cfg.images.app ?? 'unknown app image',
+        signal: params.signal,
+      });
+      return desktop.compatible
+        ? { ...health, detail: `${health.detail}; ${desktop.detail}` }
+        : { healthy: false, detail: desktop.detail, nextAction: desktop.nextAction };
+    },
+  };
   return {
     actions,
     async resolveApiBaseUrl(rootDir, signal) {

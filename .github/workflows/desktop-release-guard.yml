@@ -546,6 +546,9 @@ jobs:
       UPDATE_MANIFEST_URL: ${{ vars.PROPR_DESKTOP_UPDATE_MANIFEST_URL }}
       UPDATE_MAC_SIGNING_IDENTITY: ${{ vars.PROPR_DESKTOP_MAC_SIGNING_IDENTITY }}
       UPDATE_MAC_TEAM_ID: ${{ vars.PROPR_DESKTOP_MAC_TEAM_ID }}
+      RUNTIME_APP_IMAGE: ${{ vars.PROPR_DESKTOP_RUNTIME_APP_IMAGE }}
+      RUNTIME_UI_IMAGE: ${{ vars.PROPR_DESKTOP_RUNTIME_UI_IMAGE }}
+      PROPR_DESKTOP_RELEASE_SHA: ${{ needs.preflight.outputs.release_sha }}
     steps:
       - name: Revalidate immutable tag before checkout
         shell: bash
@@ -594,6 +597,25 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Bind desktop package to published epic runtime artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RUNTIME_APP_IMAGE" || { echo 'PROPR_DESKTOP_RUNTIME_APP_IMAGE is missing' >&2; exit 1; }
+          test -n "$RUNTIME_UI_IMAGE" || { echo 'PROPR_DESKTOP_RUNTIME_UI_IMAGE is missing' >&2; exit 1; }
+          if [ "${{ matrix.platform }}" = linux ]; then
+            docker buildx imagetools inspect "$RUNTIME_APP_IMAGE" >/dev/null
+            docker buildx imagetools inspect "$RUNTIME_UI_IMAGE" >/dev/null
+          fi
+          runtime_manifest="$RUNNER_TEMP/propr-desktop-runtime/manifest.json"
+          node apps/desktop/scripts/desktop-runtime-manifest.mjs release \
+            --source-revision "$PROPR_DESKTOP_RELEASE_SHA" \
+            --app-image "$RUNTIME_APP_IMAGE" \
+            --ui-image "$RUNTIME_UI_IMAGE" \
+            --api-compatibility 2026-06-27 \
+            --output "$runtime_manifest"
+          echo "PROPR_DESKTOP_RUNTIME_MANIFEST=$runtime_manifest" >> "$GITHUB_ENV"
 
       - name: Install native Linux package tools
         if: matrix.platform == 'linux'

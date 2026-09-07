@@ -1139,6 +1139,24 @@ test("an unhealthy backend fails setup and does not launch the UI", async () => 
   assert.equal(result.completed, false);
 });
 
+test("a host compatibility failure keeps its actionable recovery before completion", async () => {
+  const result = await runSetup({
+    root: "/stack",
+    actions: mockActions({
+      checkBackendHealth: async () => ({
+        healthy: false,
+        detail: "desktop runtime propr/app:0.8.15 is incompatible",
+        nextAction: "Install the app image released for API compatibility 2026-06-27, then retry local setup.",
+      }),
+    }),
+  });
+  const step = getStep(result.state, "start-stack");
+  assert.equal(step?.status, "failed");
+  assert.match(step?.detail ?? "", /propr\/app:0\.8\.15/);
+  assert.match(step?.nextAction ?? "", /2026-06-27.*retry local setup/);
+  assert.equal(result.completed, false);
+});
+
 test("backend access errors preserve the distinction between 401 and 403", () => {
   assert.deepEqual(classifyBackendAccessError(Object.assign(new Error("Unauthorized"), { status: 401 })), {
     healthy: false,

@@ -292,6 +292,33 @@ describe('desktop local setup controller', () => {
     }
   });
 
+  it('requires a legacy completed profile to pass the new runtime gate on retry', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const statePath = join(appData, 'setup', 'state.json');
+    mkdirSync(join(appData, 'setup'), { mode: 0o700 });
+    writeFileSync(statePath, `${JSON.stringify({
+      version: 1, phase: 'completed', resume: {
+        agents: [], reinitialize: false, github: { mode: 'keep' }, intake: { mode: 'keep' },
+        whitelist: null, repository: null,
+      },
+      profile: { id: '22222222-2222-4222-8222-222222222222', name: 'This computer', baseUrl: 'http://localhost:4000', kind: 'local' },
+    })}\n`, { mode: 0o600 });
+    const controller = new DesktopSetupController({
+      actions: {} as SetupActions, platform: 'linux', appDataDir: appData,
+      defaultRootDir: join(appData, 'local-runtime'), statePath, sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const restored = await controller.status();
+      assert.equal(restored.phase, 'interrupted');
+      assert.equal(restored.profile, undefined);
+      assert.match(restored.error ?? '', /could not be restored/i);
+      assert.equal(restored.resumeAvailable, true);
+    } finally { await controller.shutdown(); rmSync(appData, { recursive: true, force: true }); }
+  });
+
   it('turns an unresolvable persisted completion into explicit interrupted recovery', async () => {
     const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
     chmodSync(appData, 0o700);

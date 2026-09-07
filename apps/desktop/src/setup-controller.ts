@@ -5,7 +5,7 @@ import {
   getLocalSetupCapability, retrySetup, runSetup,
   type GithubAuthDecision, type SetupActions, type SetupRunResult,
 } from '@propr/local-setup';
-import { DEFAULT_PROPR_GH_RELAY_URL } from '@propr/shared';
+import { DEFAULT_PROPR_GH_RELAY_URL, PROPR_API_COMPATIBILITY } from '@propr/shared';
 import { bindRootOperations, RootDirectoryAuthority, SetupFilesystemCapabilities, SetupSecretCapabilities } from './setup-capabilities';
 import { parseDesktopSetupRequest, SetupRequestError } from './setup-schema';
 import type {
@@ -21,10 +21,12 @@ interface ResolvedRequest {
 }
 
 interface PersistedSetup {
-  version: 1;
+  version: 1 | 2;
   phase: 'running' | 'cancelled' | 'failed' | 'completed';
   resume: DesktopSetupResumeView;
   profile?: DesktopSetupSnapshot['profile'];
+  /** Present only after the pre-completion desktop runtime gate succeeded. */
+  apiCompatibility?: string;
 }
 
 export interface DesktopSetupControllerOptions {
@@ -297,10 +299,12 @@ export class DesktopSetupController {
     if (this.#loaded) return; this.#loaded = true;
     try {
       const persisted = JSON.parse(readFileSync(this.#options.statePath, 'utf8')) as PersistedSetup;
-      if (persisted.version !== 1 || !persisted.resume || !SETUP_PHASES.has(persisted.phase)) throw new Error('invalid');
+      if (![1, 2].includes(persisted.version) || !persisted.resume || !SETUP_PHASES.has(persisted.phase)) throw new Error('invalid');
       const policy = enforceDesktopResumePolicy(persisted.resume);
       this.#resume = policy.resume;
-      const completedProfile = persisted.phase === 'completed' && !policy.message && validCompletedProfile(persisted.profile)
+      const completedProfile = persisted.version === 2
+        && persisted.apiCompatibility === PROPR_API_COMPATIBILITY
+        && persisted.phase === 'completed' && !policy.message && validCompletedProfile(persisted.profile)
         ? structuredClone(persisted.profile) : undefined;
       const restorationFailed = persisted.phase === 'completed' && !completedProfile && !policy.message;
       this.#snapshot = { ...this.#snapshot,
@@ -316,9 +320,10 @@ export class DesktopSetupController {
 
   #persist(): void {
     if (!this.#resume || this.#snapshot.phase === 'idle' || this.#snapshot.phase === 'unsupported') return;
-    const value: PersistedSetup = { version: 1,
+    const value: PersistedSetup = { version: 2,
       phase: this.#snapshot.phase === 'interrupted' ? 'running' : this.#snapshot.phase,
       resume: this.#resume,
+      ...(this.#snapshot.phase === 'completed' ? { apiCompatibility: PROPR_API_COMPATIBILITY } : {}),
       ...(this.#snapshot.phase === 'completed' && this.#snapshot.profile ? { profile: this.#snapshot.profile } : {}),
     };
     const path = this.#options.statePath; const temp = `${path}.tmp`;

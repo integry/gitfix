@@ -90,6 +90,11 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
       const selected = new Set(agentTypes);
       const result: PullImagesResult = { pulledCore: [], pulledAgents: [], failedCore: [], failedAgents: [] };
+      const desktopRuntime = cfg.manifest.desktopRuntime as Record<string, unknown> | undefined;
+      const sourceBuiltImageKeys = desktopRuntime?.schemaVersion === 1
+        && desktopRuntime.distribution === "local"
+        ? new Set(["app", "ui"])
+        : new Set<string>();
 
       for (const [key, tag] of Object.entries(cfg.images)) {
         signal?.throwIfAborted();
@@ -98,6 +103,19 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
         // Pull the shared agent image when the user selected any agent; core images
         // (api/worker/daemon/redis/…) always pull.
         if (isAgent && selected.size === 0) continue;
+
+        // A source validation manifest deliberately names images built into the
+        // local Docker daemon.  They are never claimed to be published and must
+        // not be sent to Docker Hub; inspect the exact tag instead.  A missing
+        // image remains a fatal core-image failure and setup stops safely.
+        if (sourceBuiltImageKeys.has(key)) {
+          onLog?.(`checking source-built image ${tag}…`);
+          const inspected = await orch.dockerAsync(["image", "inspect", tag], { signal });
+          signal?.throwIfAborted();
+          if (inspected.status === 0) result.pulledCore.push(tag);
+          else result.failedCore.push(tag);
+          continue;
+        }
 
         onLog?.(`pulling ${tag}…`);
         // Async exec keeps the event loop free so the wizard's Ink spinner keeps

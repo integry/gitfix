@@ -82,6 +82,8 @@
     "desktop:acceptance": "npm run acceptance:package -w @propr/desktop",
     "desktop:acceptance:verify": "npm run acceptance:verify -w @propr/desktop",
     "desktop:make": "npm run make -w @propr/desktop",
+    "desktop:runtime:build": "npm run prepare:renderer -w @propr/desktop && node apps/desktop/scripts/desktop-runtime-manifest.mjs local --api-compatibility 2026-06-27",
+    "desktop:runtime:smoke": "bash apps/desktop/scripts/smoke-local-runtime.sh",
     "audit:runtime": "npm audit --package-lock-only --omit=dev --audit-level=low",
     "desktop:audit:packaging": "npm audit --package-lock-only --workspace=@propr/desktop --include=dev --audit-level=high",
     "desktop:audit": "npm run audit:runtime && npm run desktop:audit:packaging",

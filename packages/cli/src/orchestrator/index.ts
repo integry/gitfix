@@ -25,12 +25,18 @@ export type {
 let cached: OrchestratorModule | undefined;
 let cachedPath: string | undefined;
 let configuredOrchestratorPath: string | undefined;
+let configuredManifestPath: string | undefined;
 
 /** Pin the packaged desktop to its checksum-covered orchestrator resource. */
 export function configureOrchestratorAssetPath(path: string | undefined): void {
   configuredOrchestratorPath = path;
   cached = undefined;
   cachedPath = undefined;
+}
+
+/** Pin desktop provisioning to the release-aligned manifest packaged beside the app. */
+export function configureOrchestratorManifestPath(path: string | undefined): void {
+  configuredManifestPath = path;
 }
 
 /**
@@ -78,6 +84,9 @@ function resolveOrchestratorPath(): string {
 
 /** Resolve the bundled manifest.json path (sits next to orchestrator.mjs). */
 function resolveManifestPath(orchestratorPath: string): string | undefined {
+  if (configuredManifestPath) {
+    return existsSync(configuredManifestPath) ? configuredManifestPath : undefined;
+  }
   const manifest = join(dirname(orchestratorPath), "manifest.json");
   return existsSync(manifest) ? manifest : undefined;
 }

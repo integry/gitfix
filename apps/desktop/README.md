@@ -12,8 +12,10 @@ DEB, RPM, and ZIP; macOS artifacts are DMG and ZIP. Windows source and security 
 Use **Set up this computer** on Linux to create an isolated desktop-managed local runtime. It requires a maintained
 Docker Engine, a reachable daemon, permission for the current user to use its socket without interactive `sudo`, image
 registry access, GitHub access, and enough disk/memory for the selected agents. The wizard checks the host, creates its
-private stack root below the isolated desktop profile, pulls images, opens interactive authentication in a visible
-terminal when needed, starts the stack, checks health, and then saves/probes/pairs/activates the ordinary local profile.
+private stack root below the isolated desktop profile, pulls release-aligned images, opens interactive authentication in a visible
+terminal when needed, starts the stack, checks health and the complete public desktop contract, and only then
+saves/probes/pairs/activates the ordinary local profile. A legacy image that exposes only `/api/compatibility` fails with
+the required contract and image named in the recovery action; it is never reported as successful setup.
 Cancel waits for the active host or authentication child and rolls back completed mutations where supported. A cancelled,
 failed, or interrupted run retains only the bounded resume choices needed for **Retry setup** or **Review saved choices**.
 
@@ -62,6 +64,44 @@ npm run make:rpm -w @propr/desktop
 # macOS only, after packaging the selected architecture:
 npm run make:dmg -w @propr/desktop -- --arch=arm64
 ```
+
+### Source-built Linux local runtime
+
+The checked-in `0.8.15` launcher manifest describes the already-published general release and is deliberately not
+rewritten to pretend that the desktop-epic backend has been published. To build the current committed epic source under
+commit-scoped local tags, generate its explicit local-only manifest, smoke the discovery/auth capability surface in
+owned ephemeral containers, and package the desktop against that manifest:
+
+```sh
+npm run desktop:runtime:build
+revision="$(git rev-parse HEAD)"
+npm run desktop:runtime:smoke -- "$revision" 2026-06-27
+PROPR_DESKTOP_RUNTIME_MANIFEST="$PWD/.propr/desktop-runtime/$revision/manifest.json" npm run desktop:package
+```
+
+`desktop:runtime:build` requires a clean checkout and binds the build to its exact current commit. It builds only
+`propr-desktop-local/app:<full-commit>` and `propr-desktop-local/ui:<full-commit>`, and marks them `local` in the generated
+manifest. The wizard inspects those exact local images instead of attempting a registry pull. The smoke uses a unique
+labelled network, Redis/API containers, random loopback port, and private temporary data root; its cleanup refuses any
+container or network it does not own. It does not address or replace an existing ProPR stack.
+
+Run the focused non-Docker regressions with:
+
+```sh
+npm run build -w @propr/shared
+npm run build -w @propr/local-setup
+npm run build -w @propr/cli
+npx tsx --test packages/cli/src/desktopLocalSetup.test.ts packages/cli/src/commands/setup/engine.test.ts
+node --test apps/desktop/scripts/desktop-runtime-manifest.test.mjs
+npm run desktop:typecheck
+```
+
+Production desktop jobs do not accept local tags or the ordinary launcher manifest. The protected release environment
+must provide `PROPR_DESKTOP_RUNTIME_APP_IMAGE` and `PROPR_DESKTOP_RUNTIME_UI_IMAGE` as existing Docker Hub references in
+the form `propr/<image>:<40-character-release-commit>@sha256:<digest>`. Linux release runners verify both references in
+Docker Hub; every platform then generates and packages the same revision-, digest-, and compatibility-bound manifest.
+Publish the epic app/UI images from the exact desktop release commit before creating `desktop-v*`; image publication
+requires Docker Hub release authority and is intentionally outside the desktop workflow.
 
 Desktop development, typecheck, package, and make commands build required renderer workspace dependencies through the
 desktop workspace lifecycle, in dependency order (`@propr/shared`, `@propr/local-setup`, `@propr/cli`, then

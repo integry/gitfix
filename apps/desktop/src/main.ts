@@ -1632,6 +1632,9 @@ if (!hasSingleInstanceLock) {
           configDir: join(app.getPath('userData'), 'local-setup', 'cli'),
           authenticationHandoff: launchDesktopAuthentication,
           ...(app.isPackaged ? { resourcesPath: process.resourcesPath } : {}),
+          ...(!app.isPackaged && process.env.PROPR_DESKTOP_RUNTIME_MANIFEST
+            ? { runtimeManifestPath: process.env.PROPR_DESKTOP_RUNTIME_MANIFEST }
+            : {}),
         })
       : { actions: {} as SetupActions, resolveApiBaseUrl: async () => { throw new Error('Local setup is unsupported'); } };
     const setup = new DesktopSetupController({
