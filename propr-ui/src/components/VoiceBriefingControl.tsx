@@ -36,13 +36,14 @@ function hasAcknowledgedDisclosure(): boolean {
 }
 
 function phaseMessage(phase: VoiceBriefingPhase, hasBriefing: boolean, error: string | null): string {
+  if (error !== null) return error;
   switch (phase) {
     case 'loading': return 'Loading your briefing.';
     case 'speaking': return 'Speaking your briefing.';
     case 'listening': return 'Listening for one short command.';
     case 'confirming': return 'Action awaiting confirmation.';
     case 'executing': return 'Applying the confirmed action.';
-    case 'error': return error ?? 'The voice briefing encountered an error.';
+    case 'error': return 'The voice briefing encountered an error.';
     default: return hasBriefing ? 'Briefing ready.' : 'Ready for a briefing.';
   }
 }
@@ -161,7 +162,8 @@ export default function VoiceBriefingControl() {
       }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (!dialogRef.current.contains(document.activeElement)) {
+      if (document.activeElement === dialogRef.current
+        || !dialogRef.current.contains(document.activeElement)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
       } else if (event.shiftKey && document.activeElement === first) {

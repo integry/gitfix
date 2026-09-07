@@ -1,12 +1,14 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { voiceBriefingResponseSchema, type VoiceBriefingResponse } from '@propr/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getVoiceBriefing } from '../api/voiceApi';
 import {
   useVoiceBriefing,
   type PendingVoiceBriefingAction,
   type VoiceBriefingController,
 } from '../hooks/useVoiceBriefing';
+import { getBrowserSpeechCapabilities, speakOnce } from '../voice/browserSpeech';
 import VoiceBriefingControl, {
   VOICE_RECOGNITION_DISCLOSURE_STORAGE_KEY,
 } from './VoiceBriefingControl';
@@ -14,6 +16,19 @@ import VoiceBriefingControl, {
 vi.mock('../hooks/useVoiceBriefing', () => ({
   useVoiceBriefing: vi.fn(),
 }));
+
+vi.mock('../api/voiceApi', () => ({
+  getVoiceBriefing: vi.fn(),
+}));
+
+vi.mock('../voice/browserSpeech', async importOriginal => {
+  const actual = await importOriginal<typeof import('../voice/browserSpeech')>();
+  return {
+    ...actual,
+    getBrowserSpeechCapabilities: vi.fn(),
+    speakOnce: vi.fn(),
+  };
+});
 
 const briefing: VoiceBriefingResponse = voiceBriefingResponseSchema.parse({
   generatedAt: '2026-09-07T09:35:00.000Z',
@@ -71,6 +86,7 @@ function renderControl(value: VoiceBriefingController) {
 describe('VoiceBriefingControl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useVoiceBriefing).mockReset();
     window.localStorage.clear();
   });
 
@@ -140,5 +156,47 @@ describe('VoiceBriefingControl', () => {
     expect(value.stopAudio).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: 'Voice briefing' })).not.toBeInTheDocument();
     expect(launcher).toHaveFocus();
+  });
+
+  it('wraps reverse tab from the initially focused dialog to its last control', () => {
+    renderControl(controller());
+    fireEvent.click(screen.getByRole('button', { name: 'Voice briefing' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Voice briefing' });
+    expect(dialog).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+
+    expect(screen.getByRole('button', { name: 'Listen' })).toHaveFocus();
+  });
+
+  it('announces a rejected speech synthesis attempt after the controller settles to idle', async () => {
+    const speechError = 'The browser could not play this briefing.';
+    vi.mocked(getBrowserSpeechCapabilities).mockReturnValue({
+      speechSynthesis: true,
+      speechRecognition: true,
+    });
+    vi.mocked(getVoiceBriefing).mockResolvedValue(briefing);
+    vi.mocked(speakOnce).mockImplementation(() => ({
+      promise: Promise.reject(new Error(speechError)),
+      cancel: vi.fn(),
+    }));
+    const actual = await vi.importActual<typeof import('../hooks/useVoiceBriefing')>(
+      '../hooks/useVoiceBriefing',
+    );
+    vi.mocked(useVoiceBriefing).mockImplementation(actual.useVoiceBriefing);
+    render(
+      <MemoryRouter>
+        <VoiceBriefingControl />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Voice briefing' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Catch me up' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(speechError);
+    });
+    expect(screen.getByRole('heading', { name: briefing.headline })).toBeInTheDocument();
   });
 });
