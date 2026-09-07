@@ -52,6 +52,7 @@ export interface NativeNotificationServiceOptions {
   navigate(path: string): void;
   now?: () => number;
   batchDelayMs?: number;
+  beforePersist?(): Promise<void>;
   log?(level: 'warn' | 'error', event: string): void;
 }
 
@@ -231,6 +232,7 @@ export class NativeNotificationService {
     await this.#load();
     const key = scopeStorageKey(scope);
     if (update.enabled === false) this.#clearDeliveries(scope);
+    else this.#removeDisabledPending(scope, update);
     return this.#queueUpdate(scope, key, update);
   }
 
@@ -240,11 +242,11 @@ export class NativeNotificationService {
     await this.#load();
     const settings = this.#settings(scope);
     if (!settings.capability.supported || !settings.preferences.enabled) return { invoked: false };
-    this.#display(scope, {
+    const invoked = this.#display(scope, {
       title: 'Desktop notifications are ready',
       body: 'ProPR can send task status updates on this device.',
     }, '/tasks');
-    return { invoked: true };
+    return { invoked };
   }
 
   async publish(
@@ -295,6 +297,25 @@ export class NativeNotificationService {
     }
     for (const notification of this.#live) notification.close();
     this.#live.clear();
+  }
+
+  #removeDisabledPending(
+    scope: DesktopNotificationScope,
+    update: Partial<DesktopNotificationPreferences>,
+  ): void {
+    const disabledKinds = new Set<NotificationKind>();
+    if (update.taskStarted === false) disabledKinds.add('started');
+    if (update.taskCompleted === false) disabledKinds.add('completed');
+    if (update.taskFailed === false) disabledKinds.add('failed');
+    if (update.taskNeedsAttention === false) disabledKinds.add('needs-attention');
+    if (disabledKinds.size === 0) return;
+    this.#pending = this.#pending.filter(notice => (
+      !sameScope(notice.scope, scope) || !disabledKinds.has(notice.kind)
+    ));
+    if (this.#pending.length === 0 && this.#batchTimer) {
+      clearTimeout(this.#batchTimer);
+      this.#batchTimer = null;
+    }
   }
 
   close(): void {
@@ -376,8 +397,8 @@ export class NativeNotificationService {
     }
   }
 
-  #display(scope: DesktopNotificationScope, payload: NativeNotificationPayload, path: string): void {
-    if (this.#closed || !this.#isCurrentScope(scope) || this.#availableDeliveries() === 0) return;
+  #display(scope: DesktopNotificationScope, payload: NativeNotificationPayload, path: string): boolean {
+    if (this.#closed || !this.#isCurrentScope(scope) || this.#availableDeliveries() === 0) return false;
     this.#deliveryTimes.push(this.#now());
     let handle: NativeNotificationHandle;
     handle = this.#options.show(payload, () => {
@@ -386,6 +407,7 @@ export class NativeNotificationService {
     });
     this.#live.add(handle);
     handle.onClose?.(() => this.#live.delete(handle));
+    return true;
   }
 
   #availableDeliveries(): number {
@@ -437,6 +459,7 @@ export class NativeNotificationService {
     const contents = `${JSON.stringify(state, null, 2)}\n`;
     const temporary = `${this.#options.statePath}.tmp`;
     try {
+      await this.#options.beforePersist?.();
       await mkdir(dirname(this.#options.statePath), { recursive: true, mode: 0o700 });
       await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, this.#options.statePath);

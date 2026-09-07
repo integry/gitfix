@@ -40,7 +40,17 @@ interface ShownNotification {
   closed: boolean;
 }
 
-const fixture = async (overrides: { platform?: NodeJS.Platform; supported?: boolean } = {}) => {
+const deferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(settle => { resolve = settle; });
+  return { promise, resolve };
+};
+
+const fixture = async (overrides: {
+  platform?: NodeJS.Platform;
+  supported?: boolean;
+  beforePersist?: () => Promise<void>;
+} = {}) => {
   const directory = await mkdtemp(join(tmpdir(), 'propr-native-notifications-'));
   const shown: ShownNotification[] = [];
   const navigated: string[] = [];
@@ -63,6 +73,7 @@ const fixture = async (overrides: { platform?: NodeJS.Platform; supported?: bool
     navigate: path => navigated.push(path),
     now: () => now,
     batchDelayMs: 5,
+    beforePersist: overrides.beforePersist,
   });
   const service = createService();
   return {
@@ -253,19 +264,38 @@ test('each event preference independently blocks its matching transition', async
   }
 });
 
-test('disabling a queued event kind before the batch flush suppresses its notice', async () => {
-  const item = await fixture();
+test('disabling a queued event kind suppresses it while the preference write is unresolved', async () => {
+  const writeStarted = deferred<void>();
+  const releaseWrite = deferred<void>();
+  let holdWrite = false;
+  const item = await fixture({
+    beforePersist: async () => {
+      if (!holdWrite) return;
+      writeStarted.resolve();
+      await releaseWrite.promise;
+    },
+  });
   try {
-    await item.service.update(scope, { enabled: true });
+    await item.service.update(scope, { enabled: true, taskCompleted: true });
     assert.equal((await item.service.publish(
       scope, transition('failed', 'processing', 'queued-failure'),
     )).accepted, true);
+    assert.equal((await item.service.publish(
+      scope, transition('completed', 'processing', 'queued-completion'),
+    )).accepted, true);
 
-    await item.service.update(scope, { taskFailed: false });
+    holdWrite = true;
+    const update = item.service.update(scope, { taskFailed: false });
+    await writeStarted.promise;
+    assert.equal((await item.service.get(scope)).preferences.taskFailed, true);
     await settleBatch();
 
-    assert.equal(item.shown.length, 0);
+    assert.equal(item.shown.length, 1);
+    assert.equal(item.shown[0].payload.title, 'Task completed');
+    releaseWrite.resolve();
+    assert.equal((await update).preferences.taskFailed, false);
   } finally {
+    releaseWrite.resolve();
     item.service.close();
     await item.cleanup();
   }
@@ -373,6 +403,8 @@ test('rate limits repeated small batches across the delivery window', async () =
       )).accepted, true);
       await settleBatch();
     }
+    assert.equal(item.shown.length, 6);
+    assert.equal((await item.service.test(scope)).invoked, false);
     assert.equal(item.shown.length, 6);
   } finally {
     item.service.close();
