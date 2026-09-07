@@ -109,6 +109,21 @@ describe('VoiceBriefingControl', () => {
     expect(value.startListening).toHaveBeenCalledOnce();
   });
 
+  it('explains that continuing without voice commands does not disable spoken playback', () => {
+    const value = controller();
+    renderControl(value);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Voice briefing' }));
+
+    expect(screen.getByText(/Catch me up may still play the briefing aloud/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue without voice commands' }));
+
+    expect(screen.queryByRole('heading', { name: 'Before you use voice recognition' }))
+      .not.toBeInTheDocument();
+    expect(value.startListening).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(VOICE_RECOGNITION_DISCLOSURE_STORAGE_KEY)).toBeNull();
+  });
+
   it('keeps a structured briefing usable when browser speech is unavailable', () => {
     renderControl(controller({
       briefing,

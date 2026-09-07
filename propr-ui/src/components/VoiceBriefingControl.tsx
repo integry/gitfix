@@ -76,7 +76,7 @@ function BriefingItem({ item, onOpen }: { item: VoiceBriefingItem; onOpen: () =>
           </div>
           {item.repository && <p className="mt-0.5 truncate text-xs text-slate-500">{item.repository}</p>}
           <p className="mt-1 text-xs leading-5 text-slate-600">{item.summary}</p>
-          <p className="mt-1 text-[11px] font-medium text-slate-400">Say “{item.reference}” in a command</p>
+          <p className="mt-1 text-[11px] font-medium text-slate-600">Say “{item.reference}” in a command</p>
         </div>
       </div>
     </li>
@@ -262,9 +262,12 @@ export default function VoiceBriefingControl() {
                           onClick={() => setIsDisclosureVisible(false)}
                           className="min-h-10 rounded-lg px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-700"
                         >
-                          Use text only
+                          Continue without voice commands
                         </button>
                       </div>
+                      <p className="mt-2 text-xs leading-5 text-amber-900">
+                        Catch me up may still play the briefing aloud when spoken playback is supported.
+                      </p>
                     </div>
                   </div>
                 </section>
