@@ -239,6 +239,7 @@ const tryTerminal = async (
   const runtimeDirectory = await mkdtemp(join(tmpdir(), 'propr-desktop-auth-'));
   const wrapperPath = join(runtimeDirectory, 'run-authentication');
   const stateBase = join(runtimeDirectory, 'command');
+  const resultPath = `${stateBase}.result`;
   const cancelPath = `${stateBase}.cancel`;
   let terminalChild: ChildProcess | null = null;
   let terminalClosed = false;
@@ -273,7 +274,7 @@ const tryTerminal = async (
 
     const startDeadline = Date.now() + START_TIMEOUT_MS;
     while (true) {
-      const status = parseStatus(await readOwnedMarker(`${stateBase}.result`));
+      const status = parseStatus(await readOwnedMarker(resultPath));
       if (status !== null) {
         completed = true;
         if (cancellationWritten) throw abortError();
@@ -282,6 +283,14 @@ const tryTerminal = async (
 
       started ||= hasStartedCommand(await readOwnedMarker(`${stateBase}.started`));
       if (signal?.aborted && !cancellationWritten) {
+        // The result read above may have completed before the awaited started
+        // read. Revalidate at cancellation admission so a completion published
+        // in that gap remains the terminal outcome.
+        const completedStatus = parseStatus(await readOwnedMarker(resultPath));
+        if (completedStatus !== null) {
+          completed = true;
+          return completedStatus;
+        }
         await writeFile(cancelPath, '', { mode: 0o600, flag: 'wx' });
         cancellationWritten = true;
       }
