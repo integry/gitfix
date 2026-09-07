@@ -97,6 +97,10 @@ describe('voice command parser', () => {
       type: 'pending_action',
       instruction: 'write the word please',
     });
+    expect(parseVoiceCommand('follow up plan one to rerun 2 tests', briefing)).toMatchObject({
+      type: 'pending_action',
+      instruction: 'rerun 2 tests',
+    });
 
     const maximum = 'x'.repeat(MAX_VOICE_FOLLOW_UP_INSTRUCTION_LENGTH);
     expect(parseVoiceCommand(`follow up plan 1 to ${maximum}`, briefing)).toMatchObject({
@@ -157,6 +161,14 @@ describe('voice command parser', () => {
       reason: expect.stringContaining('URL or API endpoint'),
     });
     expect(parseVoiceCommand('follow up plan one to POST /api#fragment', briefing)).toMatchObject({
+      type: 'invalid',
+      reason: expect.stringContaining('URL or API endpoint'),
+    });
+    expect(parseVoiceCommand('follow up plan one to POST /v1/run', briefing)).toMatchObject({
+      type: 'invalid',
+      reason: expect.stringContaining('URL or API endpoint'),
+    });
+    expect(parseVoiceCommand('follow up plan one to inspect /internal/admin', briefing)).toMatchObject({
       type: 'invalid',
       reason: expect.stringContaining('URL or API endpoint'),
     });

@@ -179,6 +179,7 @@ function normalizedInstruction(value: string): string {
 
 const URL_SCHEME_PATTERN = /\b[a-z][a-z\d+.-]*:\S+/i;
 const NETWORK_PATH_PATTERN = /(?:^|[\s"'(\[{<=>])\/\/\S+/i;
+const ROOT_RELATIVE_PATH_PATTERN = /(?:^|[\s"'(\[{<=>:])\/(?![\/\s])\S+/i;
 const BARE_HOST_PATTERN = new RegExp(
   '(?:^|[^@\\w.-])'
     + '(?:[a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?\\.)+'
@@ -192,8 +193,6 @@ const NETWORK_HOST_PATTERN = new RegExp(
     + ')',
   'i',
 );
-const API_PATH_PATTERN = /(?:^|[\s"'(\[{<=>:])\/api(?:\/|\?|#|\s|$)/i;
-
 function isIpLiteral(value: string): boolean {
   const ipv4Parts = value.split('.');
   if (ipv4Parts.length === 4) {
@@ -217,16 +216,6 @@ function containsIpEndpoint(value: string): boolean {
       .replace(/^["'({<=>]+/, '')
       .replace(/["')}>.,!?;]+$/, '');
 
-    try {
-      // The URL host parser canonicalizes every IPv4 syntax accepted in URLs,
-      // including abbreviated, integer, hexadecimal, and octal forms.
-      const hostname = new URL(`http://${token}`).hostname;
-      const unbracketedHostname = hostname.replace(/^\[|\]$/g, '');
-      if (isIpLiteral(unbracketedHostname)) return true;
-    } catch {
-      // Bare IPv6 literals require brackets in URLs and are checked below.
-    }
-
     if (token.startsWith('[')) {
       const closingBracket = token.indexOf(']');
       if (closingBracket < 0) return false;
@@ -236,17 +225,29 @@ function containsIpEndpoint(value: string): boolean {
     }
 
     const authority = token.split(/[/?#]/, 1)[0];
-    return isIpLiteral(authority);
+    if (isIpLiteral(authority)) return true;
+
+    if (!/[:/?#]/.test(token)) return false;
+    try {
+      // Endpoint context disambiguates legacy abbreviated, integer,
+      // hexadecimal, and octal IPv4 forms from ordinary numeric prose.
+      const hostname = new URL(`http://${token}`).hostname;
+      const unbracketedHostname = hostname.replace(/^\[|\]$/g, '');
+      return isIpLiteral(unbracketedHostname);
+    } catch {
+      // Bare IPv6 literals require brackets in URLs and were checked above.
+      return false;
+    }
   });
 }
 
 function containsEndpoint(value: string): boolean {
   return URL_SCHEME_PATTERN.test(value)
     || NETWORK_PATH_PATTERN.test(value)
+    || ROOT_RELATIVE_PATH_PATTERN.test(value)
     || BARE_HOST_PATTERN.test(value)
     || NETWORK_HOST_PATTERN.test(value)
-    || containsIpEndpoint(value)
-    || API_PATH_PATTERN.test(value);
+    || containsIpEndpoint(value);
 }
 
 function parseFollowUp(
