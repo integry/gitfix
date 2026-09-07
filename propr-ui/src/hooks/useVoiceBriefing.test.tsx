@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { voiceBriefingResponseSchema, type VoiceBriefingResponse } from '@propr/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { postTaskFollowup, stopTaskExecution } from '../api/proprApi';
@@ -53,6 +53,31 @@ function snapshot(
       href: '/tasks/task-1',
       requiresAttention: true,
       actions: ['open', 'stop', 'follow_up'],
+      updatedAt: '2026-09-07T09:30:00.000Z',
+    }],
+  });
+}
+
+function planSnapshot(status: 'generating' | 'review'): VoiceBriefingResponse {
+  const action = status === 'generating' ? 'stop' : 'follow_up';
+  return voiceBriefingResponseSchema.parse({
+    generatedAt: '2026-09-07T09:35:00.000Z',
+    scope: 'all',
+    headline: 'One plan needs attention',
+    speechText: 'One plan needs attention.',
+    counts: { running: 0, queued: 0, attention: status === 'review' ? 1 : 0, plans: 1, total: 1 },
+    items: [{
+      reference: 'plan 1',
+      position: 1,
+      kind: 'plan',
+      id: 'draft-1',
+      title: 'Plan for integry/propr',
+      repository: 'integry/propr',
+      status,
+      summary: `Plan for integry/propr is ${status}.`,
+      href: '/studio/draft-1',
+      requiresAttention: status === 'review',
+      actions: ['open', action],
       updatedAt: '2026-09-07T09:30:00.000Z',
     }],
   });
@@ -160,6 +185,23 @@ describe('useVoiceBriefing', () => {
     expect(getVoiceBriefing).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ['generating', 'stop plan one'],
+    ['review', 'follow up plan one to rerun the tests'],
+  ] as const)('rejects a %s plan action without a task execution target', async (status, command) => {
+    vi.mocked(getVoiceBriefing).mockResolvedValue(planSnapshot(status));
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+
+    await act(async () => result.current.handleTranscript(command));
+
+    expect(result.current.phase).toBe('error');
+    expect(result.current.error).toMatch(/does not identify a task execution/);
+    expect(result.current.pendingAction).toBeNull();
+    expect(stopTaskExecution).not.toHaveBeenCalled();
+    expect(postTaskFollowup).not.toHaveBeenCalled();
+  });
+
   it('clears a pending action when cancelled without mutating the task', async () => {
     const { result } = renderHook(() => useVoiceBriefing());
     await act(async () => result.current.requestBriefing());
@@ -226,6 +268,37 @@ describe('useVoiceBriefing', () => {
     act(() => { void result.current.startListening(); });
     unmount();
     expect(abortObserved).toHaveBeenCalledOnce();
+  });
+
+  it('settles to idle when the document is hidden during refreshed speech', async () => {
+    const refreshedSpeech = deferred<void>();
+    const cancelRefreshedSpeech = vi.fn(() => refreshedSpeech.resolve());
+    vi.mocked(speakOnce)
+      .mockReturnValueOnce({ promise: Promise.resolve(), cancel: vi.fn() })
+      .mockReturnValueOnce({ promise: Promise.resolve(), cancel: vi.fn() })
+      .mockReturnValueOnce({
+        promise: refreshedSpeech.promise,
+        cancel: cancelRefreshedSpeech,
+      });
+    vi.mocked(getVoiceBriefing)
+      .mockResolvedValueOnce(snapshot())
+      .mockResolvedValueOnce(snapshot('The stop was requested.', 'stopping'));
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+    await act(async () => result.current.handleTranscript('stop task one'));
+
+    let confirmation!: Promise<void>;
+    act(() => {
+      confirmation = result.current.confirmPendingAction();
+    });
+    await waitFor(() => expect(result.current.phase).toBe('speaking'));
+
+    currentVisibility = 'hidden';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await act(async () => confirmation);
+
+    expect(cancelRefreshedSpeech).toHaveBeenCalledOnce();
+    expect(result.current.phase).toBe('idle');
   });
 
   it('does not create polling or delayed-refresh timers after a confirmed mutation', async () => {

@@ -68,6 +68,16 @@ function confirmationPrompt(action: PendingVoiceBriefingAction): string {
   return `Follow up on ${action.item.reference} with: ${action.instruction}. Say confirm to send it, or cancel.`;
 }
 
+function taskMutationTarget(item: VoiceBriefingItem): string | null {
+  if (item.kind !== 'task') return null;
+  return item.href === `/tasks/${encodeURIComponent(item.id)}` ? item.id : null;
+}
+
+function missingMutationTargetMessage(action: PendingVoiceBriefingAction): string {
+  const actionName = action.action === 'follow_up' ? 'follow up on' : 'stop';
+  return `Cannot ${actionName} ${action.item.reference} because it does not identify a task execution.`;
+}
+
 /**
  * Coordinate one on-demand briefing and one-shot browser speech interactions.
  * The hook deliberately owns no socket, interval, or task-completion polling.
@@ -208,6 +218,11 @@ export function useVoiceBriefing(
   const confirmPendingAction = useCallback(async (): Promise<void> => {
     const action = pendingActionRef.current;
     if (!action || mutationInFlightRef.current) return;
+    const taskId = taskMutationTarget(action.item);
+    if (!taskId) {
+      showError(missingMutationTargetMessage(action));
+      return;
+    }
 
     mutationInFlightRef.current = true;
     cancelRecognition();
@@ -221,9 +236,9 @@ export function useVoiceBriefing(
 
     try {
       if (action.action === 'stop') {
-        await stopTaskExecution(action.item.id);
+        await stopTaskExecution(taskId);
       } else {
-        await postTaskFollowup(action.item.id, action.instruction);
+        await postTaskFollowup(taskId, action.instruction);
       }
     } catch (mutationError) {
       if (mountedRef.current) {
@@ -243,6 +258,9 @@ export function useVoiceBriefing(
       const refreshed = await getVoiceBriefing(scopeRef.current);
       if (!mountedRef.current) return;
       storeBriefing(refreshed);
+      // The mutation and its required refresh are settled before optional speech.
+      // This lets hidden-tab cancellation return the controller to idle immediately.
+      mutationInFlightRef.current = false;
       await speak(refreshed.speechText, 'idle');
     } catch (refreshError) {
       if (mountedRef.current) {
@@ -280,6 +298,10 @@ export function useVoiceBriefing(
         setPhase('idle');
         return;
       case 'pending_action':
+        if (!taskMutationTarget(command.item)) {
+          showError(missingMutationTargetMessage(command));
+          return;
+        }
         pendingActionRef.current = command;
         setPendingAction(command);
         await speak(confirmationPrompt(command), 'confirming', false);
