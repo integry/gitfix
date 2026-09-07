@@ -22,10 +22,14 @@ const storedProfile: StoredProfile = {
   createdAt: '2026-08-29T00:00:00.000Z',
   updatedAt: '2026-08-29T00:00:00.000Z',
 };
+const pairingOperationId = (attempt: number) =>
+  `00000000-0000-4000-8000-${attempt.toString().padStart(12, '0')}`;
 
 const bridgeFixture = () => {
   let profiles = [storedProfile];
   let activeProfileId: string | null = null;
+  let pairingAttempt = 0;
+  const admit = vi.fn(async () => ({ operationId: pairingOperationId(++pairingAttempt) }));
   const pair = vi.fn(async () => ({ paired: true as const }));
   const onDeepLink = vi.fn(() => () => undefined);
   const probe = vi.fn(async () => ({
@@ -77,7 +81,7 @@ const bridgeFixture = () => {
       remove: async profileId => { profiles = profiles.filter(profile => profile.id !== profileId); },
       setActive: async profileId => { activeProfileId = profileId; },
     },
-    authentication: { pair, cancel: vi.fn(async () => undefined) },
+    authentication: { admit, pair, cancel: vi.fn(async () => undefined) },
     connection: { probe, activate, discard, invalidate: vi.fn(async () => ({ invalidated: false })) },
     discovery: { supported: true, discover, rediscover },
     lifecycle: {
@@ -97,7 +101,7 @@ const bridgeFixture = () => {
       onProgress: () => () => undefined,
     },
   };
-  return { bridge, onDeepLink, pair, probe, activate, discard, discover, rediscover, profiles: () => profiles };
+  return { bridge, onDeepLink, admit, pair, probe, activate, discard, discover, rediscover, profiles: () => profiles };
 };
 
 describe('Electron remote instance adapters', () => {
@@ -155,8 +159,8 @@ describe('Electron remote instance adapters', () => {
       progressListener = listener;
       return () => { progressListener = undefined; };
     };
-    vi.mocked(fixture.bridge.authentication.pair).mockImplementationOnce(async () => {
-      progressListener?.({ profileId: storedProfile.id, stage: 'browser-open-failed' });
+    vi.mocked(fixture.bridge.authentication.pair).mockImplementationOnce(async (_profile, operationId) => {
+      progressListener?.({ operationId, profileId: storedProfile.id, stage: 'browser-open-failed' });
       return { paired: false, code: 'APPROVAL_EXPIRED' };
     });
     const adapters = createElectronDesktopAdapters(fixture.bridge);
@@ -169,6 +173,36 @@ describe('Electron remote instance adapters', () => {
 
     expect(progress).toEqual(['browser-open-failed']);
     expect(progressListener).toBeUndefined();
+  });
+
+  it('rejects stale same-profile progress after cancellation and immediate retry', async () => {
+    const fixture = bridgeFixture();
+    const listeners = new Set<Parameters<NonNullable<DesktopBridge['authentication']['onProgress']>>[0]>();
+    fixture.bridge.authentication.onProgress = listener => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    };
+    fixture.pair.mockImplementation(async () => await new Promise(() => undefined));
+    const adapters = createElectronDesktopAdapters(fixture.bridge);
+    const profile = (await adapters.profiles.list())[0];
+    const oldProgress: string[] = [];
+    const currentProgress: string[] = [];
+
+    void adapters.authentication.authenticate(profile, stage => oldProgress.push(stage));
+    await vi.waitFor(() => expect(fixture.pair).toHaveBeenCalledTimes(1));
+    await adapters.authentication.cancel?.(profile.id);
+    void adapters.authentication.authenticate(profile, stage => currentProgress.push(stage));
+    await vi.waitFor(() => expect(fixture.pair).toHaveBeenCalledTimes(2));
+
+    listeners.forEach(listener => listener({
+      operationId: pairingOperationId(1), profileId: profile.id, stage: 'browser-open-failed',
+    }));
+    expect(oldProgress).toEqual(['browser-open-failed']);
+    expect(currentProgress).toEqual([]);
+    listeners.forEach(listener => listener({
+      operationId: pairingOperationId(2), profileId: profile.id, stage: 'approval-pending',
+    }));
+    expect(currentProgress).toEqual(['approval-pending']);
   });
   it('matches the shared canonical origin parity table before profile IPC', async () => {
     const fixture = bridgeFixture();
@@ -201,7 +235,7 @@ describe('Electron remote instance adapters', () => {
       id: profile.id,
       label: profile.name,
       apiBaseUrl: profile.baseUrl,
-    });
+    }, pairingOperationId(1));
     expect(result).toEqual({ status: 'ready', version: '0.8.15', activationTicket: 'ticket-7' });
     expect('credentials' in fixture.bridge).toBe(false);
 

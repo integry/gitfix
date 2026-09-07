@@ -131,11 +131,12 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
   } : {}),
   authentication: {
     async authenticate(profile, onProgress) {
+      const { operationId } = await bridge.authentication.admit(profile.id);
       const unsubscribe = bridge.authentication.onProgress?.(progress => {
-        if (progress.profileId === profile.id) onProgress?.(progress.stage);
+        if (progress.profileId === profile.id && progress.operationId === operationId) onProgress?.(progress.stage);
       }) ?? (() => undefined);
       try {
-        const result = await bridge.authentication.pair(toStoredProfile(profile));
+        const result = await bridge.authentication.pair(toStoredProfile(profile), operationId);
         if (!result.paired) throw new DesktopAuthenticationError(result.code);
       } finally {
         unsubscribe();

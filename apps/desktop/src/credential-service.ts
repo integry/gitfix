@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   DESKTOP_DISCOVERY_AUTHENTICATION_REQUIRED,
   ProprClient,
@@ -25,6 +25,7 @@ import {
   type DesktopConnectionScope,
   type DesktopPairingFailureCode as ContractDesktopPairingFailureCode,
   type DesktopPairingProgress as ContractDesktopPairingProgress,
+  isDesktopPairingOperationId,
 } from './shared/contract';
 import { normalizeApiBaseUrl } from './security';
 import type { PendingCredentialRevocation, ProfileStore, StoredCredential } from './profile-store';
@@ -636,12 +637,15 @@ export class DesktopCredentialService {
     this.#pairingControllers.delete(profileId);
   }
 
-  async pair(input: DesktopProfileInput): Promise<{ paired: true }> {
+  async pair(input: DesktopProfileInput, operationId: string = randomUUID()): Promise<{ paired: true }> {
     const operation = this.#beginOperation();
     try {
     await this.#waitForPairPublish();
     this.#schedulePendingRevocationRetry();
     if (!input.id) throw new Error('Desktop profile id is required');
+    if (!isDesktopPairingOperationId(operationId)) {
+      throw new Error('Invalid desktop pairing operation');
+    }
     if (!this.#profiles.security().available) {
       throw new DesktopPairingFailureError('SECURE_STORAGE_FAILED');
     }
@@ -694,21 +698,21 @@ export class DesktopCredentialService {
           this.#assertPairingCurrent(
             proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
           );
-          this.#reportFixedPairingProgress({ profileId: proposed.id, stage: 'browser-opening' });
+          this.#reportFixedPairingProgress({ operationId, profileId: proposed.id, stage: 'browser-opening' });
           try {
             await this.#openPairingBrowser({
               apiBaseUrl: proposed.apiBaseUrl,
               pairingId,
               approvalUrl,
             });
-            this.#reportFixedPairingProgress({ profileId: proposed.id, stage: 'approval-pending' });
+            this.#reportFixedPairingProgress({ operationId, profileId: proposed.id, stage: 'approval-pending' });
           } catch (error) {
             if (!isDesktopPairingBrowserOpenError(error)) throw error;
             // Linux desktop portals can reject xdg-open after the selected
             // browser has already started. Keep the server-owned pairing
             // deadline and poll alive; an approval that actually arrived must
             // win over this ambiguous OS launch acknowledgement.
-            this.#reportFixedPairingProgress({ profileId: proposed.id, stage: 'browser-open-failed' });
+            this.#reportFixedPairingProgress({ operationId, profileId: proposed.id, stage: 'browser-open-failed' });
           }
         },
       });

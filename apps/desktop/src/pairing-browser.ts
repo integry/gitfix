@@ -4,6 +4,9 @@ import type { DesktopPairingBrowserRequest } from './credential-service';
 const REJECTED_PAIRING_URL_ERROR = 'Desktop pairing browser request was rejected';
 const OPEN_PAIRING_BROWSER_ERROR = 'Desktop pairing browser could not be opened';
 
+export const supportsAmbiguousPairingLaunchRecovery = (platform: NodeJS.Platform): boolean =>
+  platform === 'linux';
+
 /**
  * Identifies an OS browser-launch rejection without exposing the URL or the
  * host-specific portal error across process or logging boundaries.

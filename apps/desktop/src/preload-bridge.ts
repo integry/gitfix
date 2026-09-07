@@ -5,7 +5,7 @@ import type {
   DesktopDeepLinkDelivery,
   DesktopPairingProgress,
 } from './shared/contract';
-import { IPC_CHANNELS } from './shared/contract';
+import { IPC_CHANNELS, isDesktopPairingOperationId } from './shared/contract';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -71,7 +71,8 @@ export const createDesktopBridge = (
   ipc.on(IPC_CHANNELS.authenticationProgress, (_event, value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
     const progress = value as Record<string, unknown>;
-    if (Object.keys(progress).length !== 2
+    if (Object.keys(progress).length !== 3
+      || !isDesktopPairingOperationId(progress.operationId)
       || typeof progress.profileId !== 'string'
       || progress.profileId.length === 0
       || progress.profileId.length > 128
@@ -79,6 +80,7 @@ export const createDesktopBridge = (
         progress.stage as string,
       )) return;
     const safeProgress: DesktopPairingProgress = {
+      operationId: progress.operationId,
       profileId: progress.profileId,
       stage: progress.stage as DesktopPairingProgress['stage'],
     };
@@ -110,7 +112,18 @@ export const createDesktopBridge = (
       setActive: (profileId) => invoke(ipc, IPC_CHANNELS.profilesSetActive, profileId),
     },
     authentication: {
-      pair: (profile) => invoke(ipc, IPC_CHANNELS.authenticationPair, profile),
+      admit: async (profileId) => {
+        const admission = await invoke<unknown>(ipc, IPC_CHANNELS.authenticationPairAdmit, profileId);
+        if (!admission || typeof admission !== 'object' || Array.isArray(admission)) {
+          throw new Error('Desktop pairing admission failed');
+        }
+        const value = admission as Record<string, unknown>;
+        if (Object.keys(value).length !== 1 || !isDesktopPairingOperationId(value.operationId)) {
+          throw new Error('Desktop pairing admission failed');
+        }
+        return { operationId: value.operationId };
+      },
+      pair: (profile, operationId) => invoke(ipc, IPC_CHANNELS.authenticationPair, profile, operationId),
       cancel: (profileId) => invoke(ipc, IPC_CHANNELS.authenticationCancel, profileId),
       onProgress: listener => {
         pairingProgressListeners.add(listener);

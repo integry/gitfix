@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { DesktopPairingBrowserOpenError, openApprovedDesktopPairingUrl } from './pairing-browser';
+import {
+  DesktopPairingBrowserOpenError,
+  openApprovedDesktopPairingUrl,
+  supportsAmbiguousPairingLaunchRecovery,
+} from './pairing-browser';
 
 const pairingId = `dpr_${'A'.repeat(22)}`;
 const fallback = `https://api.example.test/api/desktop/pairings/${pairingId}/browser`;
 
 describe('desktop pairing browser final sink', () => {
+  it('limits ambiguous OS launch recovery to Linux', () => {
+    assert.equal(supportsAmbiguousPairingLaunchRecovery('linux'), true);
+    assert.equal(supportsAmbiguousPairingLaunchRecovery('darwin'), false);
+    assert.equal(supportsAmbiguousPairingLaunchRecovery('win32'), false);
+  });
+
   it('opens only the exact canonical API browser route', async () => {
     const opened: string[] = [];
     await openApprovedDesktopPairingUrl({

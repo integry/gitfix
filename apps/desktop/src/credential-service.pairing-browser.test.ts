@@ -18,6 +18,7 @@ const pairingNow = Date.parse('2026-01-01T00:00:00.000Z');
 const origin = 'https://api.example.test';
 const approvalUrl = `${origin}/api/desktop/pairings/${pairingId}/browser`;
 const instanceToken = `propr_it_${'T'.repeat(43)}`;
+const pairingOperationId = '123e4567-e89b-42d3-a456-426614174000';
 const temporaryDirectories: string[] = [];
 const services: DesktopCredentialService[] = [];
 
@@ -196,12 +197,14 @@ describe('DesktopCredentialService pairing browser sink', () => {
       openExternal: async () => { throw new Error('host portal detail must stay private'); },
     }, { ambiguousOsLaunchFailure: true }), { onProgress: value => progress.push(value) });
 
-    const paired = await service.pair({ id: 'profile-a', label: 'Remote ProPR', apiBaseUrl: origin });
+    const paired = await service.pair(
+      { id: 'profile-a', label: 'Remote ProPR', apiBaseUrl: origin }, pairingOperationId,
+    );
 
     assert.deepEqual(paired, { paired: true });
     assert.deepEqual(progress, [
-      { profileId: 'profile-a', stage: 'browser-opening' },
-      { profileId: 'profile-a', stage: 'browser-open-failed' },
+      { operationId: pairingOperationId, profileId: 'profile-a', stage: 'browser-opening' },
+      { operationId: pairingOperationId, profileId: 'profile-a', stage: 'browser-open-failed' },
     ]);
     assert.equal(JSON.stringify(progress).includes('portal detail'), false);
     assert.equal(JSON.stringify(progress).includes(approvalUrl), false);

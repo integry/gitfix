@@ -3,12 +3,15 @@ import { describe, it } from 'node:test';
 import { createDesktopBridge, type PreloadIpc } from './preload-bridge';
 import { IPC_CHANNELS } from './shared/contract';
 
+const pairingOperationId = '123e4567-e89b-42d3-a456-426614174000';
+
 class FakeIpc implements PreloadIpc {
   readonly invocations: Array<{ channel: string; args: unknown[] }> = [];
   readonly listeners = new Map<string, (event: unknown, value: unknown) => void>();
 
   async invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     this.invocations.push({ channel, args });
+    if (channel === IPC_CHANNELS.authenticationPairAdmit) return { operationId: pairingOperationId };
     return undefined;
   }
 
@@ -36,7 +39,11 @@ describe('desktop preload bridge', () => {
     const bridge = createDesktopBridge(ipc);
     await bridge.auth.logout('http://localhost:4000');
     await bridge.profiles.save({ label: 'Local', apiBaseUrl: 'http://localhost:4000' });
-    await bridge.authentication.pair({ id: 'profile-1', label: 'Local', apiBaseUrl: 'http://localhost:4000' });
+    const admission = await bridge.authentication.admit('profile-1');
+    await bridge.authentication.pair(
+      { id: 'profile-1', label: 'Local', apiBaseUrl: 'http://localhost:4000' },
+      admission.operationId,
+    );
     await bridge.connection.activate('activation-ticket');
     await bridge.connection.discard({ profileId: 'profile-1', transportScope: 'transport-scope' });
     await bridge.discovery.discover();
@@ -49,8 +56,15 @@ describe('desktop preload bridge', () => {
         args: [{ label: 'Local', apiBaseUrl: 'http://localhost:4000' }],
       },
       {
+        channel: IPC_CHANNELS.authenticationPairAdmit,
+        args: ['profile-1'],
+      },
+      {
         channel: IPC_CHANNELS.authenticationPair,
-        args: [{ id: 'profile-1', label: 'Local', apiBaseUrl: 'http://localhost:4000' }],
+        args: [
+          { id: 'profile-1', label: 'Local', apiBaseUrl: 'http://localhost:4000' },
+          pairingOperationId,
+        ],
       },
       { channel: IPC_CHANNELS.connectionActivate, args: ['activation-ticket'] },
       {
@@ -71,17 +85,20 @@ describe('desktop preload bridge', () => {
     const unsubscribe = bridge.authentication.onProgress?.(value => received.push(value));
 
     ipc.listeners.get(IPC_CHANNELS.authenticationProgress)?.({}, {
-      profileId: 'profile-1', stage: 'approval-pending', approvalUrl: 'https://must-not-leak.invalid',
+      operationId: pairingOperationId, profileId: 'profile-1', stage: 'approval-pending',
+      approvalUrl: 'https://must-not-leak.invalid',
     });
     ipc.listeners.get(IPC_CHANNELS.authenticationProgress)?.({}, {
-      profileId: 'profile-1', stage: 'unknown',
+      operationId: pairingOperationId, profileId: 'profile-1', stage: 'unknown',
     });
     ipc.listeners.get(IPC_CHANNELS.authenticationProgress)?.({}, {
-      profileId: 'profile-1', stage: 'browser-open-failed',
+      operationId: pairingOperationId, profileId: 'profile-1', stage: 'browser-open-failed',
     });
     unsubscribe?.();
 
-    assert.deepEqual(received, [{ profileId: 'profile-1', stage: 'browser-open-failed' }]);
+    assert.deepEqual(received, [{
+      operationId: pairingOperationId, profileId: 'profile-1', stage: 'browser-open-failed',
+    }]);
   });
 
   it('can advertise an unsupported host without exposing a renderer-selected root', () => {

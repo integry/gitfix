@@ -42,7 +42,7 @@ import {
 import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
-import { openApprovedDesktopPairingUrl } from './pairing-browser';
+import { openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
 import {
   clearPackagedApprovalStorage,
   createPackagedApprovalNavigation,
@@ -1546,7 +1546,7 @@ if (!hasSingleInstanceLock) {
         : packagedAcceptanceTest
           ? async () => undefined
           : request => openApprovedDesktopPairingUrl(request, shell, {
-              ambiguousOsLaunchFailure: true,
+              ambiguousOsLaunchFailure: supportsAmbiguousPairingLaunchRecovery(process.platform),
             }),
       clientName: `ProPR Desktop (${process.platform})`,
       reportRevocationFailure: diagnostic => {
