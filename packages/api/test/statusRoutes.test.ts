@@ -50,10 +50,9 @@ type StatusAgentRegistry = {
   };
 };
 
-// Env vars that influence the resolved auth mode, intake mode, and legacy
-// githubAuth health. They are snapshotted before each test and restored after so
-// a developer shell or CI runner with any of them set can't make the assertions
-// nondeterministic.
+// Env vars that influence resolved auth, intake, and agent status. They are
+// snapshotted before each test and restored after so a developer shell or CI
+// runner with any of them set can't make the assertions nondeterministic.
 const MANAGED_ENV_VARS = [
   'NODE_ENV',
   'PROPR_DEMO_MODE',
@@ -66,6 +65,8 @@ const MANAGED_ENV_VARS = [
   'GITHUB_EVENT_INTAKE_MODE',
   'ENABLE_GITHUB_WEBHOOKS',
   'API_PUBLIC_URL',
+  'AGENT_DOCKER_IMAGE',
+  'CLAUDE_CONFIG_PATH',
 ] as const;
 
 const originalEnv: Record<string, string | undefined> = Object.fromEntries(
@@ -290,10 +291,38 @@ test('/api/desktop/discovery redacts identity persistence failures', async () =>
 });
 
 test('/api/status reports Claude auth not applicable when no agents are configured', async () => {
-  const body = await readStatus();
+  const implicitDefault = createAgentConfig({
+    id: 'default-claude-agent', type: 'claude', alias: 'default',
+  });
+  const body = await readStatus({
+    agentRegistry: createRegistry([createAgent(implicitDefault, async () => false)]),
+  });
 
   assert.deepEqual(body.agents, []);
   assert.equal(body.claudeAuth, 'not_applicable');
+});
+
+test('/api/status preserves an explicitly environment-configured legacy Claude agent', async () => {
+  const legacyClaude = createAgentConfig({
+    id: 'default-claude-agent',
+    type: 'claude',
+    alias: 'default',
+    dockerImage: 'registry.example/propr/claude:legacy',
+    configPath: '/tmp/legacy-claude',
+  });
+  const body = await readStatus({
+    agentRegistry: createRegistry([createAgent(legacyClaude, async () => false)]),
+  }, () => {
+    process.env.CLAUDE_CONFIG_PATH = legacyClaude.configPath;
+  });
+
+  assert.deepEqual(body.agents, [{
+    id: 'default-claude-agent',
+    type: 'claude',
+    alias: 'default',
+    status: 'disconnected',
+  }]);
+  assert.equal(body.claudeAuth, 'disconnected');
 });
 
 test('/api/status derives Claude applicability and health from enabled configured agents', async () => {

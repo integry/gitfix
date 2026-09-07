@@ -437,6 +437,18 @@ async function getAgentStatusSnapshot(
   const registeredById = new Map(registry.getAllAgents().map(agent => [agent.config.id, agent]));
   const registeredByAlias = new Map(registry.getAllAgents().map(agent => [agent.config.alias, agent]));
 
+  // With no persisted configs the registry still supports the legacy,
+  // environment-configured Claude runtime. Only surface the concrete enabled
+  // agent that the registry actually created, and only when its legacy
+  // environment configuration is explicit. This avoids reviving the old
+  // fabricated disconnected default for genuinely unconfigured instances.
+  const legacyClaudeAgent = configuredAgents.length === 0 && hasExplicitLegacyClaudeConfiguration()
+    ? registeredById.get('default-claude-agent')
+    : undefined;
+  const enabledLegacyClaudeAgent = legacyClaudeAgent?.config.enabled && legacyClaudeAgent.config.type === 'claude'
+    ? legacyClaudeAgent
+    : undefined;
+
   const directStatuses = await Promise.all(configuredAgents
     .filter(agent => agent.enabled)
     .map(async (config) => {
@@ -466,8 +478,12 @@ async function getAgentStatusSnapshot(
       };
     }));
 
-  const agents = [...directStatuses, ...syntheticStatuses];
-  const claudeApplicable = configuredAgents.some(agent => agent.enabled && agent.type === 'claude');
+  const legacyClaudeStatuses = enabledLegacyClaudeAgent
+    ? [await buildRegisteredAgentStatus(enabledLegacyClaudeAgent, healthTimeoutMs)]
+    : [];
+  const agents = [...directStatuses, ...legacyClaudeStatuses, ...syntheticStatuses];
+  const claudeApplicable = configuredAgents.some(agent => agent.enabled && agent.type === 'claude')
+    || enabledLegacyClaudeAgent !== undefined;
   return {
     agents,
     claudeAuth: !claudeApplicable
@@ -476,6 +492,10 @@ async function getAgentStatusSnapshot(
         ? 'connected'
         : 'disconnected',
   };
+}
+
+function hasExplicitLegacyClaudeConfiguration(): boolean {
+  return Boolean(process.env.AGENT_DOCKER_IMAGE?.trim() || process.env.CLAUDE_CONFIG_PATH?.trim());
 }
 
 async function buildConfiguredAgentStatus(
