@@ -7,6 +7,7 @@ import {
   applyDevelopmentRendererCsp,
   connectApiBaseUrlFromDeepLink,
   dashboardPathFromDeepLink,
+  hasExactArgument,
   isSafeExternalUrl,
   isTrustedRendererUrl,
   normalizeApiBaseUrl,
@@ -108,6 +109,15 @@ describe('desktop URL security', () => {
     assert.equal(normalizeDeepLink('propr://delete-everything'), null);
     assert.equal(normalizeDeepLink('https://propr.example.com'), null);
     assert.equal(normalizeDeepLink('propr://user:secret@connect'), null);
+  });
+
+  it('matches native smoke evidence only as an exact argv element', () => {
+    const fixture = 'https://native-evidence.invalid/unsafe';
+
+    assert.equal(hasExactArgument(['electron', fixture], fixture), true);
+    assert.equal(hasExactArgument(['electron', `--url=${fixture}`], fixture), false);
+    assert.equal(hasExactArgument(['electron', `${fixture}/extra`], fixture), false);
+    assert.equal(hasExactArgument(['electron', fixture.toUpperCase()], fixture), false);
   });
 
   it('accepts only one bounded canonical Connect API candidate', () => {
