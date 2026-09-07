@@ -175,6 +175,10 @@ describe('voice command parser', () => {
   test.each([
     'send results to 127.0.0.1:3000/admin',
     'send results to 10.0.0.25/v1/run',
+    'send results to 127.1/admin',
+    'send results to 2130706433/admin',
+    'send results to 0x7f000001/admin',
+    'send results to 0177.0.0.1/admin',
     'send results to localhost:8080/v1/run',
     'send results to localhost/admin',
     'send results to build-agent:8080/v1/run',

@@ -217,6 +217,16 @@ function containsIpEndpoint(value: string): boolean {
       .replace(/^["'({<=>]+/, '')
       .replace(/["')}>.,!?;]+$/, '');
 
+    try {
+      // The URL host parser canonicalizes every IPv4 syntax accepted in URLs,
+      // including abbreviated, integer, hexadecimal, and octal forms.
+      const hostname = new URL(`http://${token}`).hostname;
+      const unbracketedHostname = hostname.replace(/^\[|\]$/g, '');
+      if (isIpLiteral(unbracketedHostname)) return true;
+    } catch {
+      // Bare IPv6 literals require brackets in URLs and are checked below.
+    }
+
     if (token.startsWith('[')) {
       const closingBracket = token.indexOf(']');
       if (closingBracket < 0) return false;
@@ -226,11 +236,6 @@ function containsIpEndpoint(value: string): boolean {
     }
 
     const authority = token.split(/[/?#]/, 1)[0];
-    const ipv4WithOptionalPort = authority.match(
-      /^((?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?$/,
-    );
-    if (ipv4WithOptionalPort) return isIpLiteral(ipv4WithOptionalPort[1]);
-
     return isIpLiteral(authority);
   });
 }
