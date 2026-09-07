@@ -60,6 +60,7 @@ test('bounds output while continuously draining both child streams', async () =>
 test('timeout terminates the owned process group including a descendant', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'propr-darwin-bound-'));
   const descendantPidPath = join(fixtureRoot, 'descendant.pid');
+  let descendantPid;
   try {
     await assert.rejects(runBoundedProcess({
       executable: process.execPath,
@@ -73,8 +74,10 @@ test('timeout terminates the owned process group including a descendant', async 
       timeoutMs: 300,
       terminationGraceMs: 100,
       maxOutputBytes: 1_024,
+      // Start the real timeout only after the descendant fixture is ready.
+      // This keeps CI scheduling delay out of the behavior the test is measuring.
+      onSpawn: () => { descendantPid = waitForFixtureProcessId(descendantPidPath); },
     }), error => error instanceof BoundedProcessError && error.reason === 'timeout');
-    const descendantPid = Number(await readFile(descendantPidPath, 'utf8'));
     assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
     await waitForProcessExit(descendantPid);
   } finally {
