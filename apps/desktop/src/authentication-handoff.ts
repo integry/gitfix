@@ -36,6 +36,12 @@ cancel_file="\${state_base}.cancel"
 umask 077
 wrapper=$$
 termination_requested=0
+abort_before_admission() {
+  if [ "$termination_requested" -ne 0 ]; then
+    printf '%s\n' 1 > "$result_file"
+    exit 1
+  fi
+}
 # Record terminal shutdowns while the child is being spawned and its identity is
 # captured. The full handler cannot safely signal until child ownership is known.
 trap 'termination_requested=1' HUP INT TERM
@@ -43,12 +49,15 @@ if [ -t 0 ]; then
   # Keep the command in the terminal's session so /dev/tty remains its
   # controlling terminal. Starting a new session here preserves the tty file
   # descriptor but makes interactive programs unable to open /dev/tty.
+  abort_before_admission
   "$@" </dev/tty &
   mode=process
 elif command -v setsid >/dev/null 2>&1; then
+  abort_before_admission
   setsid -- "$@" &
   mode=group
 else
+  abort_before_admission
   "$@" &
   mode=process
 fi

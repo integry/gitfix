@@ -219,18 +219,45 @@ exit 0
     }
   });
 
-  it('drains a TERM-resistant command after the terminal sends HUP', async () => {
+  it('drains a TERM-resistant command after HUP during child identity capture', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-hup-test-'));
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
     const pidPath = join(directory, 'authentication.pid');
+    const admittedPath = join(directory, 'wrapper.child-admitted');
+    const terminationObservedPath = join(directory, 'wrapper.termination-observed');
+    const releaseIdentityPath = join(directory, 'wrapper.release-identity');
     try {
       await writeExecutable(terminal, `#!/bin/sh
-state_base=$2
-"$@" >/dev/null 2>&1 &
+controlled_wrapper="$1.controlled"
+awk \\
+  -v admitted="${admittedPath}" \\
+  -v termination_observed="${terminationObservedPath}" \\
+  -v release_identity="${releaseIdentityPath}" '
+BEGIN { provisional = 0; admission = 0; quote = sprintf("%c", 34); sq = sprintf("%c", 39) }
+{
+  if (index($0, "trap") == 1 && index($0, "termination_requested=1") > 0) {
+    print "trap " sq "termination_requested=1; printf ready > " quote termination_observed quote sq " HUP INT TERM"
+    provisional++
+    next
+  }
+  print
+  if ($0 == "child=$!") {
+    print "printf ready > " quote admitted quote
+    print "while [ ! -f " quote release_identity quote " ]; do sleep 0.01; done"
+    admission++
+  }
+}
+END { if (provisional != 1 || admission != 1) exit 1 }
+' "$1" > "$controlled_wrapper" || exit 91
+chmod 700 "$controlled_wrapper" || exit 92
+shift
+"$controlled_wrapper" "$@" >/dev/null 2>&1 &
 wrapper=$!
-while [ ! -s "${pidPath}" ] || [ ! -s "$state_base.started" ]; do sleep 0.01; done
+while [ ! -s "${admittedPath}" ] || [ ! -s "${pidPath}" ]; do sleep 0.01; done
 kill -HUP "$wrapper"
+while [ ! -s "${terminationObservedPath}" ]; do sleep 0.01; done
+printf release > "${releaseIdentityPath}"
 wait "$wrapper"
 `);
       await writeExecutable(authentication, `#!/bin/sh\ntrap '' TERM INT HUP\nprintf '%s' "$$" > "${pidPath}"\nwhile :; do sleep 1; done\n`);
@@ -245,42 +272,37 @@ wait "$wrapper"
     }
   });
 
-  it('defers HUP during wrapper initialization until it can drain the owned command', async () => {
+  it('does not execute authentication after HUP before child admission', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-early-hup-test-'));
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
-    const pidPath = join(directory, 'authentication.pid');
+    const executedPath = join(directory, 'authentication.executed');
     const provisionalReadyPath = join(directory, 'wrapper.provisional-ready');
+    const terminationObservedPath = join(directory, 'wrapper.termination-observed');
     const releaseLaunchPath = join(directory, 'wrapper.release-launch');
-    const ownershipReadyPath = join(directory, 'wrapper.ownership-ready');
-    const releaseHandlerPath = join(directory, 'wrapper.release-handler');
     const controller = new AbortController();
     let timeout: NodeJS.Timeout | undefined;
     try {
-      // Add test-only barriers around the real wrapper's provisional/full trap
-      // handoff so HUP delivery cannot depend on scheduler timing.
+      // Add a test-only barrier after the provisional trap so HUP delivery
+      // deterministically precedes the wrapper's child-admission check.
       await writeExecutable(terminal, `#!/bin/sh
 controlled_wrapper="$1.controlled"
 awk \\
   -v provisional_ready="${provisionalReadyPath}" \\
-  -v release_launch="${releaseLaunchPath}" \\
-  -v ownership_ready="${ownershipReadyPath}" \\
-  -v release_handler="${releaseHandlerPath}" '
-BEGIN { provisional = 0; full = 0; quote = sprintf("%c", 34) }
+  -v termination_observed="${terminationObservedPath}" \\
+  -v release_launch="${releaseLaunchPath}" '
+BEGIN { provisional = 0; quote = sprintf("%c", 34); sq = sprintf("%c", 39) }
 {
-  if ($0 == "trap terminate HUP INT TERM") {
-    print "printf ready > " quote ownership_ready quote
-    print "while [ ! -f " quote release_handler quote " ]; do sleep 0.01; done"
-    full++
-  }
-  print
   if (index($0, "trap") == 1 && index($0, "termination_requested=1") > 0) {
+    print "trap " sq "termination_requested=1; printf ready > " quote termination_observed quote sq " HUP INT TERM"
     print "printf ready > " quote provisional_ready quote
     print "while [ ! -f " quote release_launch quote " ]; do sleep 0.01; done"
     provisional++
+    next
   }
+  print
 }
-END { if (provisional != 1 || full != 1) exit 1 }
+END { if (provisional != 1) exit 1 }
 ' "$1" > "$controlled_wrapper" || exit 91
 chmod 700 "$controlled_wrapper" || exit 92
 shift
@@ -288,19 +310,17 @@ shift
 wrapper=$!
 while [ ! -s "${provisionalReadyPath}" ]; do sleep 0.01; done
 kill -HUP "$wrapper"
+while [ ! -s "${terminationObservedPath}" ]; do sleep 0.01; done
 printf release > "${releaseLaunchPath}"
-while [ ! -s "${ownershipReadyPath}" ] || [ ! -s "${pidPath}" ]; do sleep 0.01; done
-printf release > "${releaseHandlerPath}"
 wait "$wrapper"
 `);
-      await writeExecutable(authentication, `#!/bin/sh\ntrap '' TERM INT HUP\nprintf '%s' "$$" > "${pidPath}"\nwhile :; do sleep 1; done\n`);
+      await writeExecutable(authentication, `#!/bin/sh\nprintf executed > "${executedPath}"\n`);
 
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
       timeout = setTimeout(() => controller.abort(), 3_000);
       const handoff = launch(authentication, [], { title: 'Controlled early terminal close', signal: controller.signal });
-      assert.deepEqual(await handoff, { status: 137 });
-      const pid = Number(await readFile(pidPath, 'utf8'));
-      await waitForProcessExit(pid);
+      assert.deepEqual(await handoff, { status: 1 });
+      await assert.rejects(readFile(executedPath), { code: 'ENOENT' });
     } finally {
       if (timeout) clearTimeout(timeout);
       controller.abort();
