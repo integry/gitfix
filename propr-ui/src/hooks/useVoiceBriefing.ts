@@ -102,7 +102,7 @@ export function useVoiceBriefing(
   const recognitionRef = useRef<AbortController | null>(null);
   const mutationInFlightRef = useRef(false);
   const requestRunRef = useRef(0);
-  const activeBriefingRequestsRef = useRef(0);
+  const unresolvedBriefingRequestRunRef = useRef<number | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -174,6 +174,7 @@ export function useVoiceBriefing(
     if (mutationInFlightRef.current) return;
     const run = requestRunRef.current + 1;
     requestRunRef.current = run;
+    unresolvedBriefingRequestRunRef.current = run;
     cancelRecognition();
     cancelSpeech();
     pendingActionRef.current = null;
@@ -184,7 +185,6 @@ export function useVoiceBriefing(
     setPhase('loading');
 
     let next: VoiceBriefingResponse;
-    activeBriefingRequestsRef.current += 1;
     try {
       next = await getVoiceBriefing(scope);
     } catch (requestError) {
@@ -192,7 +192,9 @@ export function useVoiceBriefing(
       showError(messageFrom(requestError, 'The voice briefing could not be loaded.'));
       return;
     } finally {
-      activeBriefingRequestsRef.current -= 1;
+      if (unresolvedBriefingRequestRunRef.current === run) {
+        unresolvedBriefingRequestRunRef.current = null;
+      }
     }
 
     if (!mountedRef.current || requestRunRef.current !== run) return;
@@ -285,7 +287,7 @@ export function useVoiceBriefing(
   const handleTranscript = useCallback(async (spokenText: string): Promise<void> => {
     if (!mountedRef.current
       || mutationInFlightRef.current
-      || activeBriefingRequestsRef.current > 0) return;
+      || unresolvedBriefingRequestRunRef.current !== null) return;
     setTranscript(spokenText);
     setError(null);
     const command = parseVoiceCommand(spokenText, briefingRef.current);
@@ -342,7 +344,7 @@ export function useVoiceBriefing(
   const startListening = useCallback(async (): Promise<void> => {
     if (recognitionRef.current
       || mutationInFlightRef.current
-      || phaseRef.current === 'loading') return;
+      || unresolvedBriefingRequestRunRef.current !== null) return;
     if (document.visibilityState === 'hidden') {
       setPhase(pendingActionRef.current ? 'confirming' : 'idle');
       return;
@@ -353,17 +355,16 @@ export function useVoiceBriefing(
     const controller = new AbortController();
     recognitionRef.current = controller;
 
-    // listenOnce starts recognition synchronously here, preserving user-gesture activation.
-    const listening = listenOnce({
-      signal: controller.signal,
-      lang: optionsRef.current.language,
-      timeoutMs: optionsRef.current.recognitionTimeoutMs,
-    });
+    let spokenText: string;
     try {
-      const spokenText = await listening;
+      // listenOnce starts recognition synchronously here, preserving user-gesture activation.
+      spokenText = await listenOnce({
+        signal: controller.signal,
+        lang: optionsRef.current.language,
+        timeoutMs: optionsRef.current.recognitionTimeoutMs,
+      });
       if (!mountedRef.current || recognitionRef.current !== controller) return;
       recognitionRef.current = null;
-      await handleTranscript(spokenText);
     } catch (recognitionError) {
       if (!mountedRef.current || recognitionRef.current !== controller) return;
       recognitionRef.current = null;
@@ -373,6 +374,15 @@ export function useVoiceBriefing(
         return;
       }
       showError(messageFrom(recognitionError, 'The voice command could not be recognized.'));
+      return;
+    }
+
+    try {
+      await handleTranscript(spokenText);
+    } catch (commandError) {
+      if (mountedRef.current) {
+        showError(messageFrom(commandError, 'The voice command could not be processed.'));
+      }
     }
   }, [cancelSpeech, handleTranscript, setPhase, showError]);
 

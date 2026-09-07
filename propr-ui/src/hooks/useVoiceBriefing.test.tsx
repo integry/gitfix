@@ -310,6 +310,70 @@ describe('useVoiceBriefing', () => {
     expect(result.current.briefing).toEqual(refreshed);
   });
 
+  it('recognizes commands from the latest snapshot while an older request remains unresolved', async () => {
+    const olderRequest = deferred<VoiceBriefingResponse>();
+    const newerRequest = deferred<VoiceBriefingResponse>();
+    const recognition = deferred<string>();
+    const current = snapshot('Task three is now current.', 'running', 'task-3');
+    vi.mocked(getVoiceBriefing)
+      .mockResolvedValueOnce(snapshot())
+      .mockReturnValueOnce(olderRequest.promise)
+      .mockReturnValueOnce(newerRequest.promise);
+    vi.mocked(listenOnce).mockReturnValue(recognition.promise);
+    const onOpenItem = vi.fn();
+    const { result } = renderHook(() => useVoiceBriefing({ onOpenItem }));
+    await act(async () => result.current.requestBriefing());
+
+    let older!: Promise<void>;
+    let newer!: Promise<void>;
+    act(() => {
+      older = result.current.requestBriefing();
+      newer = result.current.requestBriefing();
+    });
+
+    await act(async () => {
+      newerRequest.resolve(current);
+      await newer;
+    });
+    expect(result.current.phase).toBe('idle');
+
+    let listening!: Promise<void>;
+    act(() => {
+      listening = result.current.startListening();
+    });
+    expect(result.current.phase).toBe('listening');
+
+    await act(async () => {
+      recognition.resolve('open task one');
+      await listening;
+    });
+    expect(onOpenItem).toHaveBeenCalledWith(current.items[0]);
+    expect(result.current.phase).toBe('idle');
+
+    await act(async () => {
+      olderRequest.resolve(snapshot('Stale task two.', 'running', 'task-2'));
+      await older;
+    });
+    expect(result.current.briefing).toEqual(current);
+    expect(result.current.phase).toBe('idle');
+  });
+
+  it('moves to an error state when a recognized command callback throws', async () => {
+    vi.mocked(listenOnce).mockResolvedValue('open task one');
+    const onOpenItem = vi.fn(() => {
+      throw new Error('Navigation failed.');
+    });
+    const { result } = renderHook(() => useVoiceBriefing({ onOpenItem }));
+    await act(async () => result.current.requestBriefing());
+
+    await act(async () => result.current.startListening());
+
+    expect(onOpenItem).toHaveBeenCalledOnce();
+    expect(result.current.transcript).toBe('open task one');
+    expect(result.current.error).toBe('Navigation failed.');
+    expect(result.current.phase).toBe('error');
+  });
+
   it('aborts recognition and speech when the document is hidden or the hook unmounts', async () => {
     const speech = deferred<void>();
     const cancelSpeech = vi.fn(() => speech.resolve());
