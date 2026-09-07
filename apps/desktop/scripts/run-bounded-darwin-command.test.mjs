@@ -119,6 +119,52 @@ test('SIGKILL escalation survives leader close and removes a TERM-ignoring desce
   }
 });
 
+test('a throwing readiness hook cleans up the owned process group', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'propr-darwin-readiness-'));
+  const descendantPidPath = join(fixtureRoot, 'descendant.pid');
+  const readinessError = new Error('readiness-hook-failed');
+  let groupLeaderPid;
+  let descendantPid;
+  try {
+    await assert.rejects(runBoundedProcess({
+      executable: process.execPath,
+      arguments: ['-e', [
+        'const { spawn } = require("node:child_process");',
+        'spawn(process.execPath, ["-e", [',
+        '  "const { writeFileSync } = require(\\"node:fs\\");",',
+        '  "process.on(\\"SIGTERM\\", () => {});",',
+        '  "writeFileSync(process.argv[1], String(process.pid));",',
+        '  "setInterval(() => {}, 1000);",',
+        '].join(" "), process.argv[1]], { stdio: "ignore" });',
+        'setInterval(() => {}, 1000);',
+      ].join(' '), descendantPidPath],
+      timeoutMs: 2_000,
+      terminationGraceMs: 150,
+      maxOutputBytes: 1_024,
+      onSpawn: child => {
+        groupLeaderPid = child.pid;
+        descendantPid = waitForFixtureProcessId(descendantPidPath);
+        throw readinessError;
+      },
+    }), error => error instanceof BoundedProcessError
+      && error.reason === 'spawn-or-io'
+      && error.result.cause === readinessError);
+    assert.ok(Number.isInteger(groupLeaderPid) && groupLeaderPid > 0);
+    assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+    await Promise.all([
+      waitForProcessExit(groupLeaderPid),
+      waitForProcessExit(descendantPid),
+    ]);
+  } finally {
+    if (groupLeaderPid) {
+      try { process.kill(-groupLeaderPid, 'SIGKILL'); } catch (error) {
+        if (error?.code !== 'ESRCH') throw error;
+      }
+    }
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test('timeout remains primary while TERM runs the wrapper cleanup', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'propr-darwin-cleanup-'));
   const cleanupPath = join(fixtureRoot, 'cleanup.txt');
