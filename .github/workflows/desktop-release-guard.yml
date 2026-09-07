@@ -245,6 +245,17 @@ jobs:
           test ! -e apps/desktop/out
           npm run desktop:package
 
+      - name: Verify packaged Linux and macOS native icon assets and metadata
+        if: matrix.platform == 'linux' || matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = linux ]; then
+            application="$(pwd)/apps/desktop/out/propr-desktop-linux-${{ matrix.arch }}"
+          else
+            application="$(pwd)/apps/desktop/out/propr-desktop-darwin-${{ matrix.arch }}/propr-desktop.app"
+          fi
+          npm run icons:verify-packaged -w @propr/desktop -- "${{ matrix.platform }}" "$application"
+
       - name: Run Linux transaction durability parity
         if: matrix.platform == 'linux'
         run: npm run test:native-durability -w @propr/desktop
@@ -714,6 +725,16 @@ jobs:
           test ! -e packages/client/dist
           test ! -e apps/desktop/out
           npm run desktop:package
+
+      - name: Verify signed packaged Linux and macOS native icon assets and metadata
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = linux ]; then
+            application="$(pwd)/apps/desktop/out/propr-desktop-linux-${{ matrix.arch }}"
+          else
+            application="$(pwd)/apps/desktop/out/propr-desktop-darwin-${{ matrix.arch }}/propr-desktop.app"
+          fi
+          npm run icons:verify-packaged -w @propr/desktop -- "${{ matrix.platform }}" "$application"
 
       - name: Typecheck and test production desktop runtime
         shell: bash

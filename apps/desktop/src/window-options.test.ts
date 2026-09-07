@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import type { NativeImage } from 'electron';
 import {
   clampBrowserWindowSizing,
   createBrowserWindowOptions,
@@ -9,6 +10,7 @@ import {
 } from './window-options';
 
 const normalWorkArea = { x: 0, y: 0, width: 1920, height: 1040 };
+const desktopIcon = {} as NativeImage;
 
 describe('desktop BrowserWindow security', () => {
   it('uses the production 1280x820 size with safe minimum dimensions', () => {
@@ -20,7 +22,8 @@ describe('desktop BrowserWindow security', () => {
   });
 
   it('isolates and sandboxes the renderer without Node or webviews', () => {
-    const options = createBrowserWindowOptions('/app/preload.cjs', true, normalWorkArea, 'linux');
+    const options = createBrowserWindowOptions('/app/preload.cjs', true, normalWorkArea, 'linux', desktopIcon);
+    assert.equal(options.icon, desktopIcon);
     assert.deepEqual(options.webPreferences, {
       preload: '/app/preload.cjs',
       contextIsolation: true,
@@ -55,10 +58,18 @@ describe('desktop BrowserWindow security', () => {
       false,
       { x: -1600, y: 40, width: 1600, height: 900 },
       'linux',
+      desktopIcon,
     );
     assert.deepEqual(
       { x: options.x, y: options.y, width: options.width, height: options.height },
       { x: -1440, y: 80, width: 1280, height: 820 },
+    );
+  });
+
+  it('fails closed instead of showing Electron branding on Linux', () => {
+    assert.throws(
+      () => createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'linux'),
+      /require the branded native icon/,
     );
   });
 });

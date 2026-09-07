@@ -22,6 +22,9 @@ import {
 } from './scripts/desktop-runtime-manifest.mjs';
 
 const DESKTOP_EXECUTABLE_NAME = 'propr-desktop';
+const desktopIconDirectory = fileURLToPath(new URL('./assets/icons', import.meta.url));
+const desktopLinuxIcon = resolve(desktopIconDirectory, 'propr-desktop.png');
+const desktopMacIcon = resolve(desktopIconDirectory, 'propr-desktop.icns');
 
 const connectNativePrebuilds = fileURLToPath(new URL('../../packages/cli/native/prebuilds', import.meta.url));
 const connectOrchestrator = fileURLToPath(new URL('../../packages/cli/dist/orchestrator', import.meta.url));
@@ -50,6 +53,7 @@ if (configuredRuntimeManifest) {
 const linuxSetupResources = process.platform === 'linux'
   ? {
       extraResource: [
+        desktopLinuxIcon,
         resolve(connectOrchestrator, 'orchestrator.mjs'),
         desktopRuntimeManifest,
         setupAssets,
@@ -138,6 +142,7 @@ const config: ForgeConfig = {
     name: DESKTOP_EXECUTABLE_NAME,
     executableName: DESKTOP_EXECUTABLE_NAME,
     protocols: [{ name: 'ProPR Desktop', schemes: ['propr'] }],
+    ...(process.platform === 'darwin' ? { icon: desktopMacIcon } : {}),
     ...(macSigning ? {
       osxSign: {
         continueOnError: false,
@@ -231,6 +236,7 @@ const config: ForgeConfig = {
           productName: 'ProPR Desktop',
           version: releaseVersion,
           bin: DESKTOP_EXECUTABLE_NAME,
+          icon: desktopLinuxIcon,
           mimeType: ['x-scheme-handler/propr'],
         },
       })]
@@ -242,6 +248,7 @@ const config: ForgeConfig = {
           productName: 'ProPR Desktop',
           version: releaseVersion,
           bin: DESKTOP_EXECUTABLE_NAME,
+          icon: desktopLinuxIcon,
           mimeType: ['x-scheme-handler/propr'],
         },
       })]

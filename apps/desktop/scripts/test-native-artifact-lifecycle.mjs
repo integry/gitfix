@@ -33,6 +33,12 @@ import {
 } from './packaged-smoke-support.mjs';
 import { signDarwinPackagedConnectApplication } from './sign-darwin-packaged-connect.mjs';
 import { verifyDarwinPackagedConnectSignature } from './verify-darwin-packaged-connect-signature.mjs';
+import {
+  DESKTOP_ICON_FILE,
+  verifyLinuxLauncherIcon,
+  verifyMacApplicationIcon,
+  verifyPackagedLinuxIcon,
+} from './desktop-icon-assets.mjs';
 
 const EXECUTABLE = 'propr-desktop';
 const APP_ID = 'dev.propr.desktop';
@@ -677,6 +683,7 @@ const locateApplication = async ({ platform, arch, kind, installRoot }) => {
       applicationRoot,
       executable: join(applicationRoot, EXECUTABLE),
       desktopFile: kind === 'zip' ? null : join(installRoot, 'usr', 'share', 'applications', `${EXECUTABLE}.desktop`),
+      iconFile: kind === 'zip' ? null : join(installRoot, 'usr', 'share', 'pixmaps', DESKTOP_ICON_FILE),
     };
   }
   const candidates = (await readdir(installRoot, { withFileTypes: true }))
@@ -687,6 +694,7 @@ const locateApplication = async ({ platform, arch, kind, installRoot }) => {
     applicationRoot,
     executable: join(applicationRoot, 'Contents', 'MacOS', EXECUTABLE),
     desktopFile: null,
+    iconFile: null,
   };
 };
 
@@ -811,12 +819,9 @@ const validateIdentity = async ({ target, kind, application }) => {
     throw new Error('Extracted native artifact executable identity is invalid');
   }
   if (target.platform === 'linux') {
+    await verifyPackagedLinuxIcon(application.applicationRoot);
     if (kind !== 'zip') {
-      const desktop = await readFile(application.desktopFile, 'utf8');
-      if (!/^Name=ProPR Desktop$/m.test(desktop) || !/^Exec=propr-desktop(?:\s+%U)?$/m.test(desktop)
-        || !/^MimeType=.*x-scheme-handler\/propr;.*$/m.test(desktop)) {
-        throw new Error('Linux package launcher identity or protocol declaration is invalid');
-      }
+      await verifyLinuxLauncherIcon({ desktopFile: application.desktopFile, iconFile: application.iconFile });
     }
     return;
   }
@@ -828,6 +833,7 @@ const validateIdentity = async ({ target, kind, application }) => {
     || await readPlist('CFBundleURLTypes.0.CFBundleURLSchemes.0') !== 'propr') {
     throw new Error('macOS application identity, version, or protocol declaration is invalid');
   }
+  await verifyMacApplicationIcon({ applicationRoot: application.applicationRoot, readPlist });
 };
 
 const readFixedEvidenceEvents = async path => {
