@@ -150,6 +150,7 @@ describe('desktop terminal authentication handoff', () => {
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
     const pidPath = join(directory, 'terminal.pid');
+    const readyPath = join(directory, 'terminal.ready');
     const cleanupPath = join(directory, 'terminal.cleanup');
     try {
       await writeExecutable(terminal, `#!/bin/sh
@@ -165,12 +166,20 @@ on_term() {
   exit 0
 }
 trap on_term TERM
-while :; do sleep 1; done
+printf ready > "${readyPath}"
+# Keep the fixture responsive when terminal cleanup has to fall back from
+# process-group termination to signalling only the owned launcher process. A
+# shell defers its TERM trap while waiting for a foreground command, so a
+# one-second sleep consumed the entire production grace before on_term's
+# intentional delay could prove that runtime state was still present.
+while :; do sleep 0.05; done
 `);
       await writeExecutable(authentication, '#!/bin/sh\nexit 0\n');
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
 
-      assert.deepEqual(await launch(authentication, [], { title: 'Controlled startup timeout' }), { status: null });
+      const handoff = launch(authentication, [], { title: 'Controlled startup timeout' });
+      await waitForFile(readyPath);
+      assert.deepEqual(await handoff, { status: null });
       const pid = Number(await readFile(pidPath, 'utf8'));
       assert.equal(await readFile(cleanupPath, 'utf8'), 'preserved');
       await waitForProcessExit(pid);
