@@ -33,7 +33,7 @@ const guidedAdapter = (overrides: Partial<DesktopGuidedLocalSetupAdapter> = {}):
 const openAndSubmitWizard = async () => {
   fireEvent.click(await screen.findByRole('button', { name: /Set up this computer/i }));
   await screen.findByRole('heading', { name: 'Check the essentials' });
-  for (const heading of ['Private local storage', 'Connect GitHub', 'Choose GitHub event intake', 'Select coding agents', 'Ready to install']) {
+  for (const heading of ['Private local storage', 'Connect GitHub', 'GitHub event intake', 'Select coding agents', 'Ready to install']) {
     fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
     await screen.findByRole('heading', { name: heading });
   }
@@ -42,6 +42,44 @@ const openAndSubmitWizard = async () => {
 
 describe('production local setup journey', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('removes Demo and fixes ProPR Connect to readable WebSocket intake', async () => {
+    render(<LocalSetupWizard adapter={guidedAdapter()} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    await screen.findByRole('heading', { name: 'Check the essentials' });
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    expect(await screen.findByRole('heading', { name: 'Connect GitHub' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Demo/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'ProPR Connect' })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    expect(await screen.findByRole('heading', { name: 'GitHub event intake' })).toBeInTheDocument();
+    expect(screen.getByText('ProPR Connect uses a persistent WebSocket connection for GitHub events.')).toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  });
+
+  it('keeps Custom GitHub App polling and direct webhook choices readable', async () => {
+    const adapter = guidedAdapter({
+      selectPrivateKey: vi.fn(async () => ({ capability: 'private-key-capability-123456789012', label: 'github-app.pem' })),
+    });
+    render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    await screen.findByRole('heading', { name: 'Check the essentials' });
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Custom GitHub App' }));
+    fireEvent.change(screen.getByLabelText('App ID'), { target: { value: '123' } });
+    fireEvent.change(screen.getByLabelText('Installation ID'), { target: { value: '456' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Choose private key' }));
+    await screen.findByText('github-app.pem');
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+
+    expect(await screen.findByRole('heading', { name: 'GitHub event intake' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Polling' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Direct webhook' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'WebSocket' })).not.toBeInTheDocument();
+  });
 
   it('opens the real wizard and settles cancellation before retrying', async () => {
     let progress: ((snapshot: DesktopSetupSnapshot) => void) | undefined;
@@ -156,6 +194,65 @@ describe('production local setup journey', () => {
     expect(retry).toHaveBeenCalledWith();
   });
 
+  it('requires a supported choice when a legacy saved setup used Demo mode', async () => {
+    const legacy: DesktopSetupSnapshot = {
+      ...idle, phase: 'failed', error: 'Demo mode is no longer available in desktop setup.',
+      resumeAvailable: true, reconfigurationRequired: true,
+      resume: {
+        agents: ['codex'], reinitialize: false, github: { mode: 'demo' }, intake: { mode: 'keep' },
+        whitelist: null, repository: null, reconfigurationStage: 'github',
+      },
+    };
+    const retry = vi.fn(async () => completed);
+    render(<LocalSetupWizard adapter={guidedAdapter({ status: vi.fn(async () => legacy), retry })} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(await screen.findByLabelText('Selected configuration')).toHaveTextContent('Demo mode (unsupported)');
+    fireEvent.click(screen.getByRole('button', { name: 'Review saved choices' }));
+    expect(await screen.findByRole('heading', { name: 'Connect GitHub' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Demo/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Keep existing configuration' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Select ProPR Connect');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'ProPR Connect' }));
+    for (const heading of ['GitHub event intake', 'Select coding agents', 'Ready to install']) {
+      fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+      await screen.findByRole('heading', { name: heading });
+    }
+    expect(screen.getByLabelText('Selected configuration')).toHaveTextContent('ProPR Connect');
+    expect(screen.getByLabelText('Selected configuration')).toHaveTextContent('WebSocket');
+    fireEvent.click(screen.getByRole('button', { name: /Install ProPR/i }));
+    expect(retry).toHaveBeenCalledWith(expect.objectContaining({
+      github: { mode: 'relay' }, intake: { mode: 'routing_websocket' },
+    }));
+  });
+
+  it('shows and confirms corrected WebSocket intake for stale ProPR Connect recovery', async () => {
+    const corrected: DesktopSetupSnapshot = {
+      ...idle, phase: 'failed', error: 'ProPR Connect now requires WebSocket intake.',
+      resumeAvailable: true, reconfigurationRequired: true,
+      resume: {
+        agents: ['codex'], reinitialize: false, github: { mode: 'relay' }, intake: { mode: 'routing_websocket' },
+        whitelist: null, repository: null, reconfigurationStage: 'intake',
+      },
+    };
+    const retry = vi.fn(async () => completed);
+    render(<LocalSetupWizard adapter={guidedAdapter({ status: vi.fn(async () => corrected), retry })} onBack={vi.fn()} onComplete={vi.fn()} />);
+
+    const saved = await screen.findByLabelText('Selected configuration');
+    expect(saved).toHaveTextContent('ProPR Connect');
+    expect(saved).toHaveTextContent('WebSocket');
+    fireEvent.click(screen.getByRole('button', { name: 'Review saved choices' }));
+    expect(await screen.findByText('ProPR Connect uses a persistent WebSocket connection for GitHub events.')).toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    for (const heading of ['Select coding agents', 'Ready to install']) {
+      fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
+      await screen.findByRole('heading', { name: heading });
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Install ProPR/i }));
+    expect(retry).toHaveBeenCalledWith(expect.objectContaining({ intake: { mode: 'routing_websocket' } }));
+  });
+
   it.each(['failed', 'cancelled', 'interrupted'] as const)('lets a resumable %s setup revise ordinary saved choices', async phase => {
     const recoverable: DesktopSetupSnapshot = {
       ...idle, phase, error: 'ProPR Connect could not be configured.',
@@ -171,8 +268,8 @@ describe('production local setup journey', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Review saved choices' }));
     expect(await screen.findByRole('heading', { name: 'Connect GitHub' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('radio', { name: 'Demo mode' }));
-    for (const heading of ['Choose GitHub event intake', 'Select coding agents', 'Ready to install']) {
+    fireEvent.click(screen.getByRole('radio', { name: 'Keep existing configuration' }));
+    for (const heading of ['GitHub event intake', 'Select coding agents', 'Ready to install']) {
       fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
       await screen.findByRole('heading', { name: heading });
     }
@@ -180,7 +277,7 @@ describe('production local setup journey', () => {
 
     expect(await screen.findByRole('heading', { name: 'ProPR is ready' })).toBeInTheDocument();
     expect(retry).toHaveBeenCalledWith(expect.objectContaining({
-      github: { mode: 'demo' }, intake: { mode: 'keep' },
+      github: { mode: 'keep' }, intake: { mode: 'routing_websocket' },
     }));
   });
 
@@ -208,7 +305,7 @@ describe('production local setup journey', () => {
     render(<LocalSetupWizard adapter={adapter} onBack={vi.fn()} onComplete={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Review saved choices' }));
-    expect(await screen.findByRole('heading', { name: 'Choose GitHub event intake' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'GitHub event intake' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Enter webhook secret securely' }));
     await screen.findByText('Secret entered');
     fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
