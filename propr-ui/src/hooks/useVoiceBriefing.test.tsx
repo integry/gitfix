@@ -34,6 +34,7 @@ vi.mock('../voice/browserSpeech', async importOriginal => {
 function snapshot(
   speechText = 'One task needs attention.',
   status = 'running',
+  taskId = 'task-1',
 ): VoiceBriefingResponse {
   return voiceBriefingResponseSchema.parse({
     generatedAt: '2026-09-07T09:35:00.000Z',
@@ -45,12 +46,12 @@ function snapshot(
       reference: 'task 1',
       position: 1,
       kind: 'task',
-      id: 'task-1',
+      id: taskId,
       title: 'Voice controller',
       repository: 'integry/propr',
       status,
       summary: 'Waiting for a decision.',
-      href: '/tasks/task-1',
+      href: `/tasks/${taskId}`,
       requiresAttention: true,
       actions: ['open', 'stop', 'follow_up'],
       updatedAt: '2026-09-07T09:30:00.000Z',
@@ -236,6 +237,77 @@ describe('useVoiceBriefing', () => {
     });
     expect(onOpenItem).toHaveBeenCalledWith(result.current.briefing?.items[0]);
     expect(result.current.transcript).toBe('open task one');
+  });
+
+  it('does not start recognition while the document is already hidden', async () => {
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+    await act(async () => result.current.handleTranscript('stop task one'));
+    expect(result.current.phase).toBe('confirming');
+
+    currentVisibility = 'hidden';
+    await act(async () => result.current.startListening());
+
+    expect(listenOnce).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe('confirming');
+  });
+
+  it('cancels active recognition before repeating the briefing', async () => {
+    const abortObserved = vi.fn();
+    vi.mocked(listenOnce).mockImplementation(({ signal } = {}) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => {
+        abortObserved();
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+    }));
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+
+    let listening!: Promise<void>;
+    act(() => {
+      listening = result.current.startListening();
+    });
+    expect(result.current.phase).toBe('listening');
+
+    await act(async () => {
+      await result.current.repeatBriefing();
+      await listening;
+    });
+
+    expect(abortObserved).toHaveBeenCalledOnce();
+    expect(speakOnce).toHaveBeenCalledTimes(2);
+    expect(result.current.phase).toBe('idle');
+  });
+
+  it('waits for an active briefing request before processing a destructive command', async () => {
+    const activeRequest = deferred<VoiceBriefingResponse>();
+    const current = snapshot('Task two is now current.', 'running', 'task-2');
+    const refreshed = snapshot('Task two is stopping.', 'stopping', 'task-2');
+    vi.mocked(getVoiceBriefing)
+      .mockResolvedValueOnce(snapshot())
+      .mockReturnValueOnce(activeRequest.promise)
+      .mockResolvedValueOnce(refreshed);
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current.requestBriefing();
+    });
+    await act(async () => result.current.handleTranscript('stop task one'));
+    expect(result.current.pendingAction).toBeNull();
+    expect(stopTaskExecution).not.toHaveBeenCalled();
+
+    await act(async () => {
+      activeRequest.resolve(current);
+      await request;
+    });
+    await act(async () => result.current.handleTranscript('stop task one'));
+    await act(async () => result.current.confirmPendingAction());
+
+    expect(stopTaskExecution).toHaveBeenCalledOnce();
+    expect(stopTaskExecution).toHaveBeenCalledWith('task-2');
+    expect(result.current.briefing).toEqual(refreshed);
   });
 
   it('aborts recognition and speech when the document is hidden or the hook unmounts', async () => {

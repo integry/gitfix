@@ -102,6 +102,7 @@ export function useVoiceBriefing(
   const recognitionRef = useRef<AbortController | null>(null);
   const mutationInFlightRef = useRef(false);
   const requestRunRef = useRef(0);
+  const activeBriefingRequestsRef = useRef(0);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -182,19 +183,26 @@ export function useVoiceBriefing(
     }
     setPhase('loading');
 
+    let next: VoiceBriefingResponse;
+    activeBriefingRequestsRef.current += 1;
     try {
-      const next = await getVoiceBriefing(scope);
-      if (!mountedRef.current || requestRunRef.current !== run) return;
-      storeBriefing(next);
-      await speak(next.speechText, 'idle');
+      next = await getVoiceBriefing(scope);
     } catch (requestError) {
       if (!mountedRef.current || requestRunRef.current !== run) return;
       showError(messageFrom(requestError, 'The voice briefing could not be loaded.'));
+      return;
+    } finally {
+      activeBriefingRequestsRef.current -= 1;
     }
+
+    if (!mountedRef.current || requestRunRef.current !== run) return;
+    storeBriefing(next);
+    await speak(next.speechText, 'idle');
   }, [cancelRecognition, cancelSpeech, setPhase, showError, speak, storeBriefing]);
 
   const repeatBriefing = useCallback(async (): Promise<void> => {
     if (mutationInFlightRef.current) return;
+    cancelRecognition();
     const latest = briefingRef.current;
     if (!latest) {
       showError('Get a briefing first so it can be repeated.');
@@ -202,7 +210,7 @@ export function useVoiceBriefing(
     }
     if (mountedRef.current) setError(null);
     await speak(latest.speechText, pendingActionRef.current ? 'confirming' : 'idle');
-  }, [showError, speak]);
+  }, [cancelRecognition, showError, speak]);
 
   const cancelPendingAction = useCallback(() => {
     cancelRecognition();
@@ -275,7 +283,9 @@ export function useVoiceBriefing(
   }, [cancelRecognition, cancelSpeech, setPhase, showError, speak, storeBriefing]);
 
   const handleTranscript = useCallback(async (spokenText: string): Promise<void> => {
-    if (!mountedRef.current || mutationInFlightRef.current) return;
+    if (!mountedRef.current
+      || mutationInFlightRef.current
+      || activeBriefingRequestsRef.current > 0) return;
     setTranscript(spokenText);
     setError(null);
     const command = parseVoiceCommand(spokenText, briefingRef.current);
@@ -333,6 +343,10 @@ export function useVoiceBriefing(
     if (recognitionRef.current
       || mutationInFlightRef.current
       || phaseRef.current === 'loading') return;
+    if (document.visibilityState === 'hidden') {
+      setPhase(pendingActionRef.current ? 'confirming' : 'idle');
+      return;
+    }
     cancelSpeech();
     if (mountedRef.current) setError(null);
     setPhase('listening');
