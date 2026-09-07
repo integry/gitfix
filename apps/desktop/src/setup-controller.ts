@@ -124,7 +124,13 @@ export class DesktopSetupController {
 
   async retry(input?: unknown): Promise<DesktopSetupSnapshot> {
     this.#load(); this.#assertSupported();
-    if (input !== undefined) return this.#begin(parseDesktopSetupRequest(input), true);
+    if (input !== undefined) {
+      const request = parseDesktopSetupRequest(input);
+      if (this.#resume?.github.mode === 'demo' && request.github.mode === 'keep') {
+        throw new SetupRequestError('Select ProPR Connect or Custom GitHub App before retrying a legacy Demo configuration.');
+      }
+      return this.#begin(request, true);
+    }
     if (this.#current) throw new SetupRequestError('Local setup is already running.');
     if (!this.#resume) throw new SetupRequestError('There is no local setup to retry.');
     if (!this.#resolved) {

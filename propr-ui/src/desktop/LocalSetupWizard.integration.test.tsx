@@ -210,6 +210,7 @@ describe('production local setup journey', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review saved choices' }));
     expect(await screen.findByRole('heading', { name: 'Connect GitHub' })).toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: /Demo/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Keep existing configuration' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Continue/i }));
     expect(screen.getByRole('alert')).toHaveTextContent('Select ProPR Connect');
 

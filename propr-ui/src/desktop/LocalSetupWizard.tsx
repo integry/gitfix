@@ -41,6 +41,8 @@ const intakeModeLabel = (mode: IntakeMode): string => mode === 'routing_websocke
   : mode === 'polling' ? 'Polling'
     : mode === 'direct_webhook' ? 'Direct webhook' : 'Keep existing configuration';
 
+const githubModesFor = (allowKeep: boolean): GithubMode[] => allowKeep ? ['relay', 'app', 'keep'] : ['relay', 'app'];
+
 const InlineError: React.FC<{ message: string | null }> = ({ message }) => message
   ? <div className="desktop-inline-error" role="alert">{message}</div>
   : null;
@@ -87,9 +89,10 @@ const Recovery: React.FC<{ snapshot: DesktopSetupSnapshot; busy: boolean; error:
 };
 
 const Form: React.FC<{ stage: Stage; draft: Draft; busy: boolean; error: string | null; back(): void; next(): void;
-  setDraft: React.Dispatch<React.SetStateAction<Draft>>; chooseKey(): void; acquireSecret(): void }> = props => {
+  allowGithubKeep: boolean; setDraft: React.Dispatch<React.SetStateAction<Draft>>; chooseKey(): void; acquireSecret(): void }> = props => {
   const { stage, draft, setDraft } = props;
   const index = stages.indexOf(stage);
+  const githubModes = githubModesFor(props.allowGithubKeep);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft(current => ({ ...current, [key]: value }));
   const selectGithubMode = (mode: GithubMode) => setDraft(current => ({ ...current, githubMode: mode,
     intakeMode: mode === 'relay' ? 'routing_websocket'
@@ -100,7 +103,7 @@ const Form: React.FC<{ stage: Stage; draft: Draft; busy: boolean; error: string 
     {stage === 'directory' && <><h1>Private local storage</h1><p>Environment, data, logs, and repositories stay in a fixed owner-only directory managed by ProPR Desktop.</p><div className="desktop-setup-note">Desktop-managed local runtime</div></>}
     {stage === 'github' && <><h1>Connect GitHub</h1><p>Secrets stay in the trusted desktop process and are never returned to this page.</p>
       {draft.githubMode === 'demo' && <div className="desktop-setup-recovery">Demo mode is no longer available in desktop setup. Select a supported GitHub configuration to continue.</div>}
-      <div className="desktop-setup-options">{(['relay', 'app', 'keep'] as GithubMode[]).map(mode => <label key={mode}><input type="radio" checked={draft.githubMode === mode} onChange={() => selectGithubMode(mode)} /><span><strong>{githubModeLabel(mode)}</strong></span></label>)}</div>
+      <div className="desktop-setup-options">{githubModes.map(mode => <label key={mode}><input type="radio" checked={draft.githubMode === mode} onChange={() => selectGithubMode(mode)} /><span><strong>{githubModeLabel(mode)}</strong></span></label>)}</div>
       {draft.githubMode === 'app' && <div className="desktop-setup-grid"><label>App ID<input value={draft.appId} onChange={event => set('appId', event.target.value)} /></label>
         <label>Installation ID<input value={draft.installationId} onChange={event => set('installationId', event.target.value)} /></label>
         <div className="desktop-setup-wide"><button type="button" className="desktop-secondary-button" onClick={props.chooseKey}><KeyRound /> Choose private key</button><small>{draft.privateKey?.label ?? ' No key selected'}</small></div></div>}</>}
@@ -172,9 +175,10 @@ export const LocalSetupWizard: React.FC<{ adapter: DesktopGuidedLocalSetupAdapte
   if (['failed', 'cancelled', 'interrupted'].includes(snapshot.phase) && !reconfiguring) return <Recovery snapshot={snapshot} busy={busy} error={error} back={onBack} retry={() => void run(true)} review={() => void run(true, true)} />;
   if (snapshot.phase === 'completed' && snapshot.profile) return <main className="desktop-setup-wizard"><div className="desktop-setup-success"><Check /></div><span className="desktop-eyebrow">Setup complete</span><h1>ProPR is ready</h1><p>The local stack is healthy. Continue through the normal identity and pairing checks to open it.</p><div className="desktop-setup-footer"><button className="desktop-primary-button" onClick={() => onComplete(snapshot.profile!)}>Connect securely</button></div></main>;
   const index = stages.indexOf(stage);
+  const recoveringLegacyDemo = reconfiguring && snapshot.resume?.github.mode === 'demo';
   const next = () => { setError(null); if (stage === 'github' && draft.githubMode === 'demo') return setError('Select ProPR Connect, Custom GitHub App, or keep an existing supported configuration.');
     if (stage === 'github' && draft.githubMode === 'app' && (!/^\d{1,20}$/.test(draft.appId) || !/^\d{1,20}$/.test(draft.installationId) || !draft.privateKey)) return setError('Enter numeric App and installation IDs, then choose the private key.');
     if (stage === 'intake' && draft.intakeMode === 'direct_webhook' && !draft.webhookSecret) return setError('Enter the webhook secret securely.');
     if (index === stages.length - 1) void run(reconfiguring); else setStage(stages[index + 1]); };
-  return <Form stage={stage} draft={draft} setDraft={setDraft} busy={busy} error={error} chooseKey={() => void chooseKey()} acquireSecret={() => void acquireSecret()} next={next} back={index ? () => setStage(stages[index - 1]) : onBack} />;
+  return <Form stage={stage} draft={draft} allowGithubKeep={!recoveringLegacyDemo} setDraft={setDraft} busy={busy} error={error} chooseKey={() => void chooseKey()} acquireSecret={() => void acquireSecret()} next={next} back={index ? () => setStage(stages[index - 1]) : onBack} />;
 };
