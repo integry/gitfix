@@ -25,6 +25,7 @@ app.whenReady().then(async () => {
   const initialDocumentId = `${initialFrame.processId}:${initialFrame.frameToken}`;
   let navigationStarted;
   let navigationCommitted;
+  let initialNavigationCompleted = false;
   window.webContents.on('did-start-navigation', (details, deprecatedUrl) => {
     const frame = window.webContents.mainFrame;
     navigationStarted = {
@@ -46,43 +47,48 @@ app.whenReady().then(async () => {
       initialDocumentIdMatches: initialDocumentId === `${firstGetter.processId}:${firstGetter.frameToken}`,
     };
   });
-  ipcMain.handle('ready', event => {
-    const firstGetter = event.sender.mainFrame;
-    const secondGetter = event.sender.mainFrame;
-    const report = {
-      navigationStarted,
-      navigationCommitted,
-      readiness: {
-        senderFrameMatchesFirstGetter: event.senderFrame === firstGetter,
-        firstGetterMatchesSecondGetter: firstGetter === secondGetter,
-        initialFrameMatchesGetter: initialFrame === firstGetter,
-        initialDocumentIdMatches: initialDocumentId === `${firstGetter.processId}:${firstGetter.frameToken}`,
-      },
-    };
-    const webContents = window.webContents;
-    window.once('closed', () => {
-      let getterError;
-      try {
-        void window.webContents;
-      } catch (error) {
-        getterError = {
-          name: error instanceof Error ? error.name : typeof error,
-          message: error instanceof Error ? error.message : String(error),
-        };
-      }
-      process.stdout.write(`${JSON.stringify({
-        ...report,
-        teardown: {
-          windowDestroyed: window.isDestroyed(),
-          cachedWebContentsAccessible: typeof webContents.isDestroyed() === 'boolean',
-          getterError,
+  const readinessReport = new Promise(resolve => {
+    ipcMain.handle('ready', event => {
+      const firstGetter = event.sender.mainFrame;
+      const secondGetter = event.sender.mainFrame;
+      resolve({
+        navigationStarted,
+        navigationCommitted,
+        readiness: {
+          senderFrameMatchesFirstGetter: event.senderFrame === firstGetter,
+          firstGetterMatchesSecondGetter: firstGetter === secondGetter,
+          initialFrameMatchesGetter: initialFrame === firstGetter,
+          initialDocumentIdMatches: initialDocumentId === `${firstGetter.processId}:${firstGetter.frameToken}`,
         },
-      })}\n`);
-      app.quit();
+      });
     });
-    setTimeout(() => window.destroy(), 50);
   });
   await window.loadURL('propr-readiness-fixture://app/renderer.html');
+  initialNavigationCompleted = true;
+  const report = await readinessReport;
+  const webContents = window.webContents;
+  window.once('closed', () => {
+    let getterError;
+    try {
+      void window.webContents;
+    } catch (error) {
+      getterError = {
+        name: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+    process.stdout.write(`${JSON.stringify({
+      ...report,
+      teardown: {
+        initialNavigationCompleted,
+        windowDestroyed: window.isDestroyed(),
+        cachedWebContentsAccessible: typeof webContents.isDestroyed() === 'boolean',
+        getterError,
+      },
+    })}\n`);
+    app.quit();
+  });
+  window.destroy();
 }).catch(error => {
   process.stderr.write(`${error.stack || error}\n`);
   app.exit(1);
