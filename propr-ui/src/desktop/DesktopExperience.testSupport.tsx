@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
-import { DesktopTitleBar } from './DesktopTitleBar';
+import { DesktopInstanceSelector } from './DesktopInstanceSelector';
 import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
 
 export const localProfile: DesktopProfile = {
@@ -47,7 +47,7 @@ export function deferred<T>() {
 
 export const renderConnectedExperience = (adapters: DesktopAdapters, content?: string) => render(
   <DesktopExperience adapters={adapters}>
-    <DesktopTitleBar />
+    <DesktopInstanceSelector />
     {content && <div>{content}</div>}
   </DesktopExperience>
 );

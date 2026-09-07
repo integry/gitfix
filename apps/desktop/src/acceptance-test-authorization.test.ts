@@ -149,16 +149,16 @@ describe('packaged acceptance authorization', () => {
       "'other'",
     ]) assert.ok(uiSummary.includes(labelCategory), labelCategory);
     for (const booleanField of [
-      'connectionPillPresent',
+      'instanceSelectorPresent',
       'navigatorOnline',
-      'desktopTitleBarPresent',
+      'redundantDesktopChromeAbsent',
       'routeLayoutPresent',
       'loadingSpinnerPresent',
       'validatedCurrentUserMarkerPresent',
       'dashboardMarkerPresent',
     ]) assert.ok(uiSummary.includes(booleanField), booleanField);
-    assert.match(uiSummary, /document\.querySelector\('\.desktop-connection-pill'\)/);
-    assert.match(uiSummary, /document\.querySelector\('\.desktop-titlebar'\)/);
+    assert.match(uiSummary, /document\.querySelector\('\.desktop-instance-selector-button'\)/);
+    assert.match(uiSummary, /document\.querySelector\('\.desktop-titlebar'\) === null/);
     assert.match(uiSummary, /main\.mobile-content-clearance/);
     assert.match(uiSummary, /a\[href="\/admin\/members"\]/);
     assert.doesNotMatch(uiSummary, /outerHTML|innerHTML|document\.body\.textContent/);

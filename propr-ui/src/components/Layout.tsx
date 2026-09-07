@@ -15,7 +15,7 @@ import { useCurrentUser, userHasPermission } from '../contexts/AuthContext';
 import { ConnectCapacityBanner } from './ConnectPlusBanner';
 import { useNotificationCenter } from '../contexts/NotificationCenterContext';
 import { publicAssetUrl } from '../config/runtimeMode';
-import { DesktopTitleBar } from '../desktop/DesktopTitleBar';
+import { DesktopInstanceSelector } from '../desktop/DesktopInstanceSelector';
 import { useDesktop } from '../desktop/DesktopContext';
 
 interface LayoutProps {
@@ -169,7 +169,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   return (
     <div className="desktop-shell flex h-full min-h-0 flex-col overflow-hidden bg-light-100 relative">
-      {desktop && <DesktopTitleBar transportReady={isConnected && user !== null} />}
       <div className="desktop-shell-content relative flex min-h-0 flex-1 overflow-hidden">
       {/* Mobile Overlay */}
       {isSidebarOpen && (
@@ -182,11 +181,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Sidebar - Responsive */}
       <aside className={`
         fixed lg:static inset-y-0 left-0 z-30
-        w-60 bg-white border-r border-gray-200 shadow-sm
+        desktop-sidebar flex flex-col w-60 bg-white border-r border-gray-200 shadow-sm
         transform transition-transform duration-200 ease-in-out
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
-        <div className="flex items-center justify-between px-4 py-4 sm:py-6 h-12 sm:h-16">
+        <div className="desktop-sidebar-header flex flex-none items-center justify-between px-4 py-4 sm:py-6 h-12 sm:h-16">
           <Link to="/" className="flex items-center" aria-label="ProPR dashboard">
             <img src={publicAssetUrl('/media/logo-and-name.png')} alt="ProPR" className="h-8 w-auto" />
           </Link>
@@ -198,7 +197,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             <CloseIcon className="w-6 h-6" />
           </button>
         </div>
-        <div className="flex flex-col h-[calc(100%-3rem)] sm:h-[calc(100%-4rem)]">
+        {desktop && <DesktopInstanceSelector transportReady={isConnected && user !== null} />}
+        <div className="flex min-h-0 flex-1 flex-col">
           <nav className="flex flex-col gap-1 overflow-y-auto flex-1">
             {navigation.map((item) => (
               <Link
@@ -260,7 +260,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </aside>
 
       {/* Main content wrapper */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="desktop-main-content flex-1 flex flex-col min-w-0">
         {/* GlobalHeader replaces the old inline header */}
         <GlobalHeader
           user={user}

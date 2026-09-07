@@ -1,5 +1,4 @@
 :root {
-  --desktop-titlebar-height: 2.75rem;
   --desktop-focus: #0f766e;
 }
 
@@ -194,32 +193,24 @@
 .desktop-spin { animation: desktop-spin 1s linear infinite; }
 @keyframes desktop-spin { to { transform: rotate(360deg); } }
 
-.desktop-titlebar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--desktop-titlebar-height);
-  min-height: var(--desktop-titlebar-height);
-  border-bottom: 1px solid #dbe4e4;
-  color: #526565;
-  background: rgba(247, 250, 250, .94);
-  user-select: none;
-  z-index: 60;
-}
-.desktop-titlebar-drag { position: absolute; inset: 0; -webkit-app-region: drag; }
-.desktop-window-title { position: relative; font-size: .72rem; font-weight: 700; pointer-events: none; }
-.desktop-titlebar-actions { position: absolute; right: .7rem; display: flex; align-items: center; -webkit-app-region: no-drag; }
-.desktop-platform-macos .desktop-titlebar-actions { right: .75rem; }
-.desktop-platform-macos .desktop-window-title { padding-left: 4.5rem; }
-.desktop-connection-pill { position: relative; display: flex; align-items: center; gap: .4rem; max-width: 15rem; border: 1px solid #d4dfdf; border-radius: 999px; padding: .27rem .55rem; color: #536666; background: rgba(255,255,255,.85); font-size: .68rem; font-weight: 650; }
-.desktop-connection-pill:hover { border-color: #a5c5c3; background: #fff; }
-.desktop-connection-pill > svg { width: .78rem; height: .78rem; }
-.desktop-connection-pill > span:not(.desktop-connection-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-instance-selector { flex: none; padding: .35rem .65rem .75rem; border-bottom: 1px solid #e4ebeb; }
+.desktop-instance-selector-label { display: block; margin: 0 .35rem .3rem; color: #718080; font-size: .625rem; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+.desktop-instance-selector-button { display: grid; grid-template-columns: 1.8rem minmax(0, 1fr) .9rem; align-items: center; gap: .55rem; width: 100%; min-width: 0; border: 1px solid #d4dfdf; border-radius: .65rem; padding: .48rem .55rem; color: #354b4a; background: #fff; text-align: left; transition: border-color .15s ease, background-color .15s ease; }
+.desktop-instance-selector-button:hover { border-color: #9fc2c0; background: #f8fbfb; }
+.desktop-instance-icon { display: grid; place-items: center; width: 1.8rem; height: 1.8rem; border-radius: .48rem; color: #147b76; background: #eaf5f4; }
+.desktop-instance-icon svg, .desktop-instance-action { width: .9rem; height: .9rem; }
+.desktop-instance-copy { min-width: 0; }
+.desktop-instance-copy strong, .desktop-instance-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-instance-copy strong { color: #283d3c; font-size: .75rem; line-height: 1.2; }
+.desktop-instance-copy small { margin-top: .18rem; color: #71807f; font-size: .625rem; line-height: 1.2; }
+.desktop-instance-copy .desktop-instance-status { margin-top: .12rem; }
+.desktop-instance-copy .desktop-connection-dot { display: inline-block; margin-right: .32rem; vertical-align: .04rem; }
+.desktop-instance-action { color: #7c8d8c; }
 .desktop-connection-dot { width: .42rem; height: .42rem; border-radius: 50%; background: #24a36f; box-shadow: 0 0 0 2px rgba(36,163,111,.12); }
 .desktop-connection-offline .desktop-connection-dot { background: #d47b36; }
 .desktop-connection-incompatible .desktop-connection-dot { background: #c4483b; }
-.desktop-pill-retry { margin-left: .1rem; }
+.desktop-connection-offline .desktop-instance-icon { color: #a45d24; background: #fff3e8; }
+.desktop-connection-incompatible .desktop-instance-icon { color: #ad392e; background: #fff0ed; }
 
 .desktop-modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 1.5rem; background: rgba(18, 34, 34, .35); backdrop-filter: blur(2px); z-index: 100; }
 .desktop-profile-manager { width: min(100%, 32rem); max-height: min(42rem, calc(100vh - 3rem)); overflow-y: auto; border: 1px solid #d8e2e2; border-radius: 1rem; padding: 1.35rem; background: white; box-shadow: 0 30px 80px rgba(17, 34, 34, .25); }
@@ -231,6 +222,18 @@
 .desktop-app .desktop-shell-content > aside nav a { border-right-width: 0; border-left: 2px solid transparent; }
 .desktop-app .desktop-shell-content > aside nav a.bg-red-50 { border-left-color: #1d8a8a; background: #edf7f6; }
 .desktop-app .desktop-shell-content header { box-shadow: none; }
+.desktop-app .desktop-sidebar-header,
+.desktop-app .desktop-main-content > header { -webkit-app-region: drag; }
+.desktop-app .desktop-sidebar-header a,
+.desktop-app .desktop-sidebar-header button,
+.desktop-app .desktop-main-content > header a,
+.desktop-app .desktop-main-content > header button,
+.desktop-app .desktop-main-content > header input { -webkit-app-region: no-drag; }
+.desktop-platform-macos .desktop-sidebar-header { padding-left: 5rem; }
+
+@media (max-width: 1023px) {
+  .desktop-platform-macos .desktop-main-content > header { padding-left: 5rem; }
+}
 
 .desktop-setup-wizard { width: min(100%, 46rem); border: 1px solid #d7e3e2; border-radius: 1.2rem; padding: 2rem; color: #263938; background: rgba(255,255,255,.97); box-shadow: 0 24px 70px rgba(25,48,48,.12); }
 .desktop-setup-wizard > .desktop-back-button { margin-bottom: 1.4rem; }
