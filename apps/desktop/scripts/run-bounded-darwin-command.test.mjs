@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as nodeExecFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -9,6 +10,21 @@ import { fileURLToPath } from 'node:url';
 import { BoundedProcessError, runBoundedProcess } from './run-bounded-darwin-command.mjs';
 
 const helperPath = join(dirname(fileURLToPath(import.meta.url)), 'run-bounded-darwin-command.mjs');
+
+const waitForFixtureProcessId = pidPath => {
+  const waitState = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const processId = Number(readFileSync(pidPath, 'utf8'));
+      if (Number.isInteger(processId) && processId > 0) return processId;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    Atomics.wait(waitState, 0, 0, 20);
+  }
+  assert.fail('timed-out waiting for descendant fixture readiness');
+};
 
 const waitForProcessExit = async processId => {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -69,6 +85,7 @@ test('timeout terminates the owned process group including a descendant', async 
 test('SIGKILL escalation survives leader close and removes a TERM-ignoring descendant', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'propr-darwin-escalation-'));
   const descendantPidPath = join(fixtureRoot, 'descendant.pid');
+  let descendantPid;
   try {
     await assert.rejects(runBoundedProcess({
       executable: process.execPath,
@@ -86,10 +103,12 @@ test('SIGKILL escalation survives leader close and removes a TERM-ignoring desce
       timeoutMs: 500,
       terminationGraceMs: 150,
       maxOutputBytes: 1_024,
+      // Start the real timeout only after the descendant has installed its TERM handler.
+      // This keeps CI scheduling delay out of the behavior the test is measuring.
+      onSpawn: () => { descendantPid = waitForFixtureProcessId(descendantPidPath); },
     }), error => error instanceof BoundedProcessError
       && error.reason === 'timeout'
       && error.result.exitCode === 0);
-    const descendantPid = Number(await readFile(descendantPidPath, 'utf8'));
     assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
     await waitForProcessExit(descendantPid);
   } finally {
