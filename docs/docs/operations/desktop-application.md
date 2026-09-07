@@ -43,8 +43,11 @@ The Linux wizard uses an app-owned private runtime directory and the same setup 
 sure the current user can run `docker info` without an interactive `sudo` prompt and can reach GitHub and the image
 registry. Follow the screens to choose GitHub authentication, event intake, coding agents, and an optional user allowlist.
 
-Setup checks prerequisites before stack mutation, initializes the private root, pulls images, configures GitHub and agent
-authentication, starts the services, and verifies health. Interactive authentication opens in an installed terminal
+Setup checks prerequisites before stack mutation, initializes the private root, pulls images bound to the desktop
+release, configures GitHub and agent authentication, starts the services, and verifies both health and the strict public
+desktop discovery contract. That final pre-completion gate requires instance identity, browser pairing, REST bearer, and
+Socket.IO bearer capabilities; a legacy `/api/compatibility` response cannot produce a completed local profile.
+Interactive authentication opens in an installed terminal
 (`x-terminal-emulator`, GNOME Terminal, Konsole, or xterm). The desktop waits for the authentication command itself even
 when the terminal delegates work to an existing server process.
 
@@ -79,7 +82,11 @@ See [Desktop pairing protocol](./desktop-pairing.md) for the wire contract and t
   plaintext credential file.
 - **Offline:** restore DNS/network/API reachability and retry the saved profile. The profile is not deleted.
 - **Revoked or expired:** pair again in the browser. A role/allowlist change can also require fresh authorization.
-- **Incompatible:** upgrade the desktop app or instance until their advertised API/UI contracts match.
+- **Incompatible:** follow the setup recovery action, which names the selected app image and required API contract. Upgrade
+  to a desktop-aligned runtime; retrying an unchanged legacy image cannot complete setup. When the incompatible runtime
+  is an already-running Desktop-managed stack, use **Restart with aligned runtime**. The app explicitly replaces only
+  containers owned by that private stack root and starts the currently packaged images; its bind-mounted database,
+  credentials, logs, repositories, and network are retained. Ordinary **Retry setup** continues to leave it untouched.
 - **Tunnel root returns 404:** this can be correct. Connect tunnels expose canonical `/api/*` and `/socket.io/*` routes;
   validation uses discovery/status rather than assuming `/` is served.
 
@@ -97,3 +104,9 @@ Production publication is allowed only from a new protected `desktop-v<major>.<m
 Approval-protected jobs sign and notarize both macOS architectures, sign the release manifest, aggregate the exact ten
 packages plus `SHA256SUMS` and `desktop-release.json`, and fail closed before publication if any target, hash, signer,
 notarization, update, environment, or tag-protection predicate is missing.
+
+The same protected environment must provide digest-pinned `PROPR_DESKTOP_RUNTIME_APP_IMAGE` and
+`PROPR_DESKTOP_RUNTIME_UI_IMAGE` references whose full commit tag equals the desktop release commit. Linux jobs verify
+that both Docker Hub artifacts exist, and all package jobs embed a generated manifest bound to those digests and the
+desktop API compatibility contract. This deliberately makes desktop distribution wait for the corresponding app/UI
+image publication instead of falling back to an older version tag.

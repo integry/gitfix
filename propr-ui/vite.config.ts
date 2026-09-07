@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import { configDefaults } from 'vitest/config'
 
 // Read the product version from the root package.json so the UI footer stays
 // in sync with the published release version.
@@ -47,6 +48,7 @@ export default defineConfig({
   plugins: [react(), pwaShellAssetManifest()],
   test: {
     environment: 'jsdom',
+    exclude: [...configDefaults.exclude, 'scripts/docker-context-inputs.test.mjs'],
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
   },

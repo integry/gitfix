@@ -57,6 +57,40 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
       : createApiClient(options);
   };
 
+  const startConfiguredStack = async ({ rootDir, ui, docs, onLog, signal }: {
+    rootDir: string;
+    ui?: boolean;
+    docs?: boolean;
+    onLog?: (line: string) => void;
+    signal?: AbortSignal;
+  }): Promise<void> => {
+    signal?.throwIfAborted();
+    const { getHostConfig } = await import("../../orchestrator/index.js");
+    const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
+    // Pre-create the host Vibe prompt-cache dir owned by this user so Docker
+    // does not auto-create it as root on first bind-mount — a root-owned dir
+    // would fail the writability check and block future `propr start` runs.
+    try {
+      const { ensureVibePromptCacheDir } = await import("../initStack.js");
+      ensureVibePromptCacheDir(cfg.hostVibePromptCacheDir);
+    } catch {
+      /* best-effort: startup validation will surface an actionable error */
+    }
+    const validation = orch.validateEnv(cfg);
+    for (const warning of validation.warnings) onLog?.(`warning: ${warning}`);
+    if (!validation.ok) {
+      throw new Error(`stack environment is not ready:\n  - ${validation.errors.join("\n  - ")}`);
+    }
+    await orch.ensureNetworkAsync(cfg, onLog, signal);
+    await orch.startStackAsync(cfg, {
+      ui: ui ?? configManager?.getUiEnabled() ?? true,
+      docs: docs ?? cfg.docsEnabled,
+      onLog,
+      signal,
+    });
+    signal?.throwIfAborted();
+  };
+
   return {
     // Agent enablement + image-login actions, bound to the local stack.
     ...createDefaultAgentSetupActions(configManager, { authenticationHandoff: options.authenticationHandoff }),
@@ -90,6 +124,11 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
       const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
       const selected = new Set(agentTypes);
       const result: PullImagesResult = { pulledCore: [], pulledAgents: [], failedCore: [], failedAgents: [] };
+      const desktopRuntime = cfg.manifest.desktopRuntime as Record<string, unknown> | undefined;
+      const sourceBuiltImageKeys = desktopRuntime?.schemaVersion === 1
+        && desktopRuntime.distribution === "local"
+        ? new Set(["app", "ui"])
+        : new Set<string>();
 
       for (const [key, tag] of Object.entries(cfg.images)) {
         signal?.throwIfAborted();
@@ -98,6 +137,19 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
         // Pull the shared agent image when the user selected any agent; core images
         // (api/worker/daemon/redis/…) always pull.
         if (isAgent && selected.size === 0) continue;
+
+        // A source validation manifest deliberately names images built into the
+        // local Docker daemon.  They are never claimed to be published and must
+        // not be sent to Docker Hub; inspect the exact tag instead.  A missing
+        // image remains a fatal core-image failure and setup stops safely.
+        if (sourceBuiltImageKeys.has(key)) {
+          onLog?.(`checking source-built image ${tag}…`);
+          const inspected = await orch.dockerAsync(["image", "inspect", tag], { signal });
+          signal?.throwIfAborted();
+          if (inspected.status === 0) result.pulledCore.push(tag);
+          else result.failedCore.push(tag);
+          continue;
+        }
 
         onLog?.(`pulling ${tag}…`);
         // Async exec keeps the event loop free so the wizard's Ink spinner keeps
@@ -123,34 +175,18 @@ export function createDefaultActions(configManager?: ConfigManager, options: {
       return orch.isStackRunningAsync(cfg, signal);
     },
     async startStack({ rootDir, ui, docs, onLog, signal }) {
-      signal?.throwIfAborted();
-      const { getHostConfig } = await import("../../orchestrator/index.js");
-      const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
-      // Pre-create the host Vibe prompt-cache dir owned by this user so Docker
-      // does not auto-create it as root on first bind-mount — a root-owned dir
-      // would fail the writability check and block future `propr start` runs.
-      try {
-        const { ensureVibePromptCacheDir } = await import("../initStack.js");
-        ensureVibePromptCacheDir(cfg.hostVibePromptCacheDir);
-      } catch {
-        /* best-effort: startup validation will surface an actionable error */
-      }
-      const validation = orch.validateEnv(cfg);
-      for (const warning of validation.warnings) onLog?.(`warning: ${warning}`);
-      if (!validation.ok) {
-        throw new Error(`stack environment is not ready:\n  - ${validation.errors.join("\n  - ")}`);
-      }
       // Use the async start path: `propr setup` drives this from behind a live
       // Ink TUI, so the blocking synchronous startStack would freeze the spinner
       // and swallow keystrokes for the seconds-to-minutes a cold start takes.
-      await orch.ensureNetworkAsync(cfg, onLog, signal);
-      await orch.startStackAsync(cfg, {
-        ui: ui ?? configManager?.getUiEnabled() ?? true,
-        docs: docs ?? cfg.docsEnabled,
-        onLog,
-        signal,
-      });
+      await startConfiguredStack({ rootDir, ui, docs, onLog, signal });
+    },
+    async replaceRunningStack({ rootDir, ui, docs, onLog, signal }) {
       signal?.throwIfAborted();
+      const { getHostConfig } = await import("../../orchestrator/index.js");
+      const { orch, cfg } = await getHostConfig({ configManager, root: rootDir });
+      await orch.replaceStackContainersAsync(cfg, { onLog, signal });
+      signal?.throwIfAborted();
+      await startConfiguredStack({ rootDir, ui, docs, onLog, signal });
     },
     async checkBackendHealth({ rootDir, timeoutMs = 60_000, signal }) {
       signal?.throwIfAborted();

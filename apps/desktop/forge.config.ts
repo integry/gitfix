@@ -8,6 +8,7 @@ import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync } from 'node
 import { rm } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PROPR_API_COMPATIBILITY } from '@propr/shared';
 import {
   readCompleteEnvironmentGroup,
   parseWindowsSignerPins,
@@ -15,14 +16,50 @@ import {
   resolveDesktopVersion,
   resolveTrustedUpdateBuildConfig,
 } from './src/release-config';
+import {
+  normalizeDesktopRuntimeManifestMode,
+  readDesktopRuntimeManifest,
+} from './scripts/desktop-runtime-manifest.mjs';
 
 const DESKTOP_EXECUTABLE_NAME = 'propr-desktop';
 
 const connectNativePrebuilds = fileURLToPath(new URL('../../packages/cli/native/prebuilds', import.meta.url));
 const connectOrchestrator = fileURLToPath(new URL('../../packages/cli/dist/orchestrator', import.meta.url));
 const setupAssets = fileURLToPath(new URL('../../packages/cli/dist/assets', import.meta.url));
+const configuredRuntimeManifest = process.env.PROPR_DESKTOP_RUNTIME_MANIFEST?.trim();
+if (process.env.PROPR_DESKTOP_PRODUCTION_RELEASE === '1' && !configuredRuntimeManifest) {
+  throw new Error('Production desktop releases require an aligned published runtime manifest');
+}
+const desktopRuntimeManifest = configuredRuntimeManifest
+  ? resolve(configuredRuntimeManifest)
+  : resolve(connectOrchestrator, 'manifest.json');
+if (basename(desktopRuntimeManifest) !== 'manifest.json') {
+  throw new Error('PROPR_DESKTOP_RUNTIME_MANIFEST must name a manifest.json file');
+}
+if (configuredRuntimeManifest) {
+  readDesktopRuntimeManifest(desktopRuntimeManifest, {
+    apiCompatibility: PROPR_API_COMPATIBILITY,
+    ...(process.env.PROPR_DESKTOP_RELEASE_SHA
+      ? { sourceRevision: process.env.PROPR_DESKTOP_RELEASE_SHA }
+      : {}),
+    ...(process.env.PROPR_DESKTOP_PRODUCTION_RELEASE === '1'
+      ? { distribution: 'published' as const }
+      : {}),
+  });
+}
 const linuxSetupResources = process.platform === 'linux'
-  ? { [['extra', 'Resource'].join('')]: [connectOrchestrator, setupAssets] }
+  ? {
+      extraResource: [
+        resolve(connectOrchestrator, 'orchestrator.mjs'),
+        desktopRuntimeManifest,
+        setupAssets,
+      ],
+      afterCopyExtraResources: [({ buildPath, platform }: { buildPath: string; platform: string }) => {
+        if (platform === 'linux') {
+          normalizeDesktopRuntimeManifestMode(resolve(buildPath, 'resources', 'manifest.json'));
+        }
+      }],
+    }
   : {};
 
 const packagedConnectNativeArtifacts = (platform: string, arch: string): string[] => {

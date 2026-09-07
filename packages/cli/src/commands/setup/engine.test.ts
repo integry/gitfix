@@ -1318,6 +1318,24 @@ test("an unhealthy backend fails setup and does not launch the UI", async () => 
   assert.equal(result.completed, false);
 });
 
+test("a host compatibility failure keeps its actionable recovery before completion", async () => {
+  const result = await runSetup({
+    root: "/stack",
+    actions: mockActions({
+      checkBackendHealth: async () => ({
+        healthy: false,
+        detail: "desktop runtime propr/app:0.8.15 is incompatible",
+        nextAction: "Install the app image released for API compatibility 2026-06-27, then retry local setup.",
+      }),
+    }),
+  });
+  const step = getStep(result.state, "start-stack");
+  assert.equal(step?.status, "failed");
+  assert.match(step?.detail ?? "", /propr\/app:0\.8\.15/);
+  assert.match(step?.nextAction ?? "", /2026-06-27.*retry local setup/);
+  assert.equal(result.completed, false);
+});
+
 test("backend access errors preserve the distinction between 401 and 403", () => {
   assert.deepEqual(classifyBackendAccessError(Object.assign(new Error("Unauthorized"), { status: 401 })), {
     healthy: false,
@@ -1389,6 +1407,65 @@ test("an already-running stack is reused, not restarted", async () => {
   });
   assert.equal(started, false, "a running stack must not be restarted");
   assert.equal(statusOf(result.state, "start-stack"), "done");
+});
+
+test("an explicitly confirmed desktop-owned replacement gates the aligned running runtime", async () => {
+  let runtime: "retained" | "aligned" = "retained";
+  let ordinaryStarts = 0;
+  let replacements = 0;
+  const result = await runSetup({
+    root: "/desktop-managed-root",
+    prompts: {
+      confirmReplaceRunningStack: async ({ rootDir, detail }) => {
+        assert.equal(rootDir, "/desktop-managed-root");
+        assert.match(detail, /0\.8\.15.*incompatible/);
+        return true;
+      },
+    },
+    actions: mockActions({
+      isStackRunning: async () => true,
+      startStack: async () => { ordinaryStarts += 1; },
+      replaceRunningStack: async ({ rootDir }) => {
+        assert.equal(rootDir, "/desktop-managed-root");
+        replacements += 1;
+        runtime = "aligned";
+      },
+      checkBackendHealth: async () => runtime === "retained"
+        ? {
+            healthy: false,
+            detail: "desktop runtime propr/app:0.8.15 is incompatible",
+            nextAction: "Restart with aligned runtime while retaining managed data.",
+            recoveryAction: "replace-running-stack",
+          }
+        : { healthy: true, detail: "desktop contract ready" },
+    }),
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(ordinaryStarts, 0, "the retained stack must not take the ordinary start path");
+  assert.equal(replacements, 1);
+  assert.match(getStep(result.state, "start-stack")?.detail ?? "", /restarted with aligned images/);
+});
+
+test("an incompatible running stack is left intact without explicit replacement confirmation", async () => {
+  let replacements = 0;
+  const result = await runSetup({
+    root: "/desktop-managed-root",
+    actions: mockActions({
+      isStackRunning: async () => true,
+      replaceRunningStack: async () => { replacements += 1; },
+      checkBackendHealth: async () => ({
+        healthy: false,
+        detail: "desktop runtime propr/app:0.8.15 is incompatible",
+        nextAction: "Choose Restart with aligned runtime.",
+        recoveryAction: "replace-running-stack",
+      }),
+    }),
+  });
+
+  assert.equal(result.completed, false);
+  assert.equal(replacements, 0);
+  assert.equal(getStep(result.state, "start-stack")?.recoveryAction, "replace-running-stack");
 });
 
 test("selecting polling selects the mode via GITHUB_EVENT_INTAKE_MODE", async () => {

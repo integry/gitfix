@@ -186,6 +186,11 @@ export interface OrchestratorModule {
 
   isStackRunning(cfg: OrchestratorConfig): boolean;
   isStackRunningAsync(cfg: OrchestratorConfig, signal?: AbortSignal): Promise<boolean>;
+  isStackReplacementPending(cfg: OrchestratorConfig): boolean;
+  replaceStackContainersAsync(
+    cfg: OrchestratorConfig,
+    opts?: { onLog?: (line: string) => void; signal?: AbortSignal }
+  ): Promise<void>;
 
   startService(cfg: OrchestratorConfig, service: string, opts?: OnLogOption): ServiceState | undefined;
   startServiceAsync(cfg: OrchestratorConfig, service: string, opts?: OnLogOption): Promise<ServiceState | undefined>;

@@ -254,6 +254,11 @@ export interface SetupPrompts {
   /** Confirm starting the stack. Default: start it. */
   confirmStartStack?(ctx: { rootDir: string; alreadyRunning: boolean }): Promise<boolean>;
   /**
+   * Confirm replacing only this root's running containers after a definitive
+   * runtime compatibility failure. Default: leave the running stack intact.
+   */
+  confirmReplaceRunningStack?(ctx: { rootDir: string; detail: string }): Promise<boolean>;
+  /**
    * Choose which of the selected agents to authenticate through their image
    * (only agents with an image-login plan are offered). Returns the subset to
    * log in. Default: authenticate none.
@@ -398,6 +403,10 @@ export interface BackendHealthParams {
 export interface BackendHealth {
   healthy: boolean;
   detail: string;
+  /** Host-specific recovery guidance for a definitive runtime contract failure. */
+  nextAction?: string;
+  /** Fixed recovery exposed only for a running, incompatible managed stack. */
+  recoveryAction?: "replace-running-stack";
   /**
    * Set when the backend answered the probe (it is reachable and running) but
    * rejected the request for authentication or authorization reasons rather
@@ -449,6 +458,8 @@ export interface SetupActions extends AgentSetupActions {
   pullImages(params: PullImagesParams): Promise<PullImagesResult>;
   isStackRunning(rootDir: string, signal?: AbortSignal): Promise<boolean>;
   startStack(params: StartStackParams): Promise<void>;
+  /** Stop/remove this root's labelled containers and start them from current images. */
+  replaceRunningStack?(params: StartStackParams): Promise<void>;
   checkBackendHealth(params: BackendHealthParams): Promise<BackendHealth>;
   addRepository(selection: RepoSelection, rootDir: string): Promise<void>;
   resolveUiUrl(rootDir: string): Promise<string>;
@@ -591,7 +602,9 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       };
       throw new SetupCancellation(state);
     }
-    state = updateStep(state, id, { status: "active", detail: undefined, nextAction: undefined });
+    state = updateStep(state, id, {
+      status: "active", detail: undefined, nextAction: undefined, recoveryAction: undefined,
+    });
     emit();
     const step = safeStep(stepOf(id));
     reporter.onStepStart?.(step);
@@ -1282,25 +1295,37 @@ async function runSetupAttempt(options: RunSetupOptions): Promise<SetupRunResult
       } else {
         await actions.startStack({ rootDir, onLog: log, signal: options.signal });
       }
-      const health = await actions.checkBackendHealth({ rootDir, signal: options.signal });
+      let health = await actions.checkBackendHealth({ rootDir, signal: options.signal });
+      let replacedRunningStack = false;
+      if (!health.healthy && alreadyRunning && health.recoveryAction === "replace-running-stack"
+        && actions.replaceRunningStack && prompts.confirmReplaceRunningStack
+        && await prompts.confirmReplaceRunningStack({ rootDir, detail: health.detail })) {
+        log("replacing only the desktop-managed stack containers; data and credentials remain in the managed root");
+        await actions.replaceRunningStack({ rootDir, onLog: log, signal: options.signal });
+        replacedRunningStack = true;
+        health = await actions.checkBackendHealth({ rootDir, signal: options.signal });
+      }
       if (health.healthy) {
         backendReady = true;
         settle("start-stack", {
           status: "done",
-          detail: alreadyRunning ? `stack already running — ${health.detail}` : health.detail,
+          detail: replacedRunningStack
+            ? `desktop-managed stack restarted with aligned images — ${health.detail}`
+            : alreadyRunning ? `stack already running — ${health.detail}` : health.detail,
         });
       } else {
         settle("start-stack", {
           status: "failed",
           detail: health.detail,
+          recoveryAction: health.recoveryAction,
           // The backend answered, so access failures need account-oriented
           // remediation rather than service-health troubleshooting. A 401 calls
           // for login; a 403 calls for permission/configuration checks.
-          nextAction: health.accessFailure === "unauthorized"
+          nextAction: health.nextAction ?? (health.accessFailure === "unauthorized"
             ? "Run `propr login` to obtain a GitHub user token, then re-run `propr setup`; the running stack will be reused."
             : health.accessFailure === "forbidden"
               ? "Check the authenticated account, the stack's bootstrap-admin configuration, and its access permissions, then re-run `propr setup`; the running stack will be reused."
-            : "Run `propr status` / `propr remote-status` and inspect the API logs, then re-run setup.",
+            : "Run `propr status` / `propr remote-status` and inspect the API logs, then re-run setup."),
         });
       }
     }

@@ -84,6 +84,64 @@ const relayActions = (rootDir: string, overrides: Partial<SetupActions> = {}): S
 };
 
 describe('desktop local setup controller', () => {
+  it('admits the fixed owned-stack replacement only from the offered recovery control', async () => {
+    const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
+    chmodSync(appData, 0o700);
+    const rootDir = join(appData, 'local-runtime');
+    mkdirSync(rootDir, { mode: 0o700 });
+    let aligned = false;
+    let replacements = 0;
+    const actions: SetupActions = {
+      ...successfulActions(rootDir),
+      readEnvVars: () => ({ PROPR_ADMIN_USERS: 'fixture', GITHUB_EVENT_INTAKE_MODE: 'polling' }),
+      detectGithubAuthMode: () => ({ mode: 'app', warnings: [] }),
+      hasGithubToken: () => true,
+      checkBackendHealth: async () => aligned
+        ? { healthy: true, detail: 'desktop contract ready' }
+        : {
+            healthy: false,
+            detail: 'desktop runtime propr/app:0.8.15 is incompatible',
+            nextAction: 'Choose Restart with aligned runtime.',
+            recoveryAction: 'replace-running-stack',
+          },
+      replaceRunningStack: async ({ rootDir: requestedRoot }) => {
+        assert.equal(requestedRoot, rootDir);
+        replacements += 1;
+        aligned = true;
+      },
+    };
+    const controller = new DesktopSetupController({
+      actions, platform: 'linux', appDataDir: appData, defaultRootDir: rootDir,
+      statePath: join(appData, 'setup', 'state.json'), sessionId: request.sessionId,
+      selectPrivateKey: async () => null, promptWebhookSecret: async () => null,
+      resolveApiBaseUrl: async () => 'http://localhost:4000', emit: () => undefined,
+    });
+    try {
+      const failed = await controller.start(request);
+      assert.equal(failed.phase, 'failed');
+      assert.equal(
+        failed.state?.steps.find(step => step.id === 'start-stack')?.recoveryAction,
+        'replace-running-stack',
+        JSON.stringify(failed.state?.steps),
+      );
+      await assert.rejects(controller.retry({
+        sessionId: request.sessionId,
+        recoveryAction: 'unknown',
+      }), /Invalid local setup recovery request/);
+      assert.equal(replacements, 0);
+
+      const completed = await controller.retry({
+        sessionId: request.sessionId,
+        recoveryAction: 'replace-running-stack',
+      });
+      assert.equal(completed.phase, 'completed');
+      assert.equal(replacements, 1);
+    } finally {
+      await controller.shutdown();
+      rmSync(appData, { recursive: true, force: true });
+    }
+  });
+
   it('publishes safe identity metadata and validates an explicit installation choice', async () => {
     const appData = realpathSync.native(mkdtempSync(join(tmpdir(), 'propr-setup-controller-')));
     chmodSync(appData, 0o700);

@@ -151,6 +151,11 @@ export interface DesktopSetupRequest {
   repository: { fullName: string; alias?: string; baseBranch?: string } | null;
 }
 
+export interface DesktopSetupRecoveryRequest {
+  sessionId: string;
+  recoveryAction: 'replace-running-stack';
+}
+
 export interface DesktopFilesystemSelection { capability: string; label: string }
 export interface DesktopSecretSelection { capability: string; label: 'Secret entered' }
 
@@ -265,7 +270,7 @@ export interface DesktopBridge {
   localSetup: {
     status(): Promise<DesktopSetupSnapshot>;
     start(request: DesktopSetupRequest): Promise<DesktopSetupSnapshot>;
-    retry(request?: DesktopSetupRequest): Promise<DesktopSetupSnapshot>;
+    retry(request?: DesktopSetupRequest | DesktopSetupRecoveryRequest): Promise<DesktopSetupSnapshot>;
     cancel(): Promise<DesktopSetupSnapshot>;
     selectPrivateKey(): Promise<DesktopFilesystemSelection | null>;
     acquireWebhookSecret(): Promise<DesktopSecretSelection | null>;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseProprDesktopDiscovery } from "@propr/shared";
+import { parseProprDesktopDiscovery, PROPR_API_COMPATIBILITY } from "@propr/shared";
 import {
   CONNECT_STATUS_EXIT,
   probeConnectDiscovery,
@@ -29,8 +29,8 @@ function discovery(overrides: Record<string, unknown> = {}): Record<string, unkn
     canonicalEndpoint: ENDPOINT,
     publicInstanceIdentity: IDENTITY,
     version: "0.8.15",
-    apiCompatibility: "2026-06-27",
-    uiCompatibility: "2026-06-27",
+    apiCompatibility: PROPR_API_COMPATIBILITY,
+    uiCompatibility: PROPR_API_COMPATIBILITY,
     desktopAuthentication: {
       protocolVersion: 2,
       browserPairing: true,
@@ -103,7 +103,7 @@ test("ready requires matching canonical origin, identity, and compatibility", as
   assert.equal(status.status, "ready");
   assert.equal(status.apiReady, true);
   assert.equal(status.restartRequired, false);
-  assert.equal(status.compatibility, "2026-06-27");
+  assert.equal(status.compatibility, PROPR_API_COMPATIBILITY);
   assert.equal(status.version, "0.8.15");
   assert.deepEqual(status.reasonCodes, []);
 });
