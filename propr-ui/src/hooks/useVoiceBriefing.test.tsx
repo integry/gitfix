@@ -533,6 +533,67 @@ describe('useVoiceBriefing', () => {
     expect(abortObserved).toHaveBeenCalledOnce();
   });
 
+  it('does not speak a briefing that resolves after a hide and show transition', async () => {
+    const pendingBriefing = deferred<VoiceBriefingResponse>();
+    const next = snapshot('Deferred briefing.');
+    vi.mocked(getVoiceBriefing).mockReturnValueOnce(pendingBriefing.promise);
+    const { result } = renderHook(() => useVoiceBriefing());
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current.requestBriefing();
+    });
+    expect(result.current.phase).toBe('loading');
+
+    currentVisibility = 'hidden';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    currentVisibility = 'visible';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+
+    await act(async () => {
+      pendingBriefing.resolve(next);
+      await request;
+    });
+
+    expect(result.current.briefing).toEqual(next);
+    expect(result.current.phase).toBe('idle');
+    expect(speakOnce).not.toHaveBeenCalled();
+
+    await act(async () => result.current.repeatBriefing());
+    expect(speakOnce).toHaveBeenCalledOnce();
+  });
+
+  it('does not speak a mutation refresh that resolves after a hide and show transition', async () => {
+    const mutation = deferred<Awaited<ReturnType<typeof stopTaskExecution>>>();
+    vi.mocked(stopTaskExecution).mockReturnValueOnce(mutation.promise);
+    vi.mocked(getVoiceBriefing)
+      .mockResolvedValueOnce(snapshot())
+      .mockResolvedValueOnce(snapshot('The stop was requested.', 'stopping'));
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+    await act(async () => result.current.handleTranscript('stop task one'));
+
+    let confirmation!: Promise<void>;
+    act(() => {
+      confirmation = result.current.confirmPendingAction();
+    });
+    expect(result.current.phase).toBe('executing');
+
+    currentVisibility = 'hidden';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    currentVisibility = 'visible';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+
+    await act(async () => {
+      mutation.resolve({ success: true, message: 'Stopping', containerStopped: true });
+      await confirmation;
+    });
+
+    expect(result.current.briefing?.speechText).toBe('The stop was requested.');
+    expect(result.current.phase).toBe('idle');
+    expect(speakOnce).toHaveBeenCalledTimes(2);
+  });
+
   it('settles to idle when the document is hidden during refreshed speech', async () => {
     const refreshedSpeech = deferred<void>();
     const cancelRefreshedSpeech = vi.fn(() => refreshedSpeech.resolve());

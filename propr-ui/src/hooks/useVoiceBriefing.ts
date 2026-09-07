@@ -480,6 +480,7 @@ export function useVoiceBriefing(
     mountedRef.current = true;
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'hidden') return;
+      suppressSpeechRef.current = true;
       cancelRecognition();
       cancelSpeech();
       if (!mutationInFlightRef.current && phaseRef.current !== 'loading') {

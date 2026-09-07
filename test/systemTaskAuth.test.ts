@@ -20,6 +20,7 @@ import type { SystemTaskJobData } from '@propr/core';
  */
 
 const TEST_SECRET = 'test-secret-key-for-unit-tests';
+const SERIALIZED_PRE_USER_ID_JOB = '{"type":"revert","owner":"testorg","repoName":"testrepo","prNumber":42,"requestingUser":"alice","commitHash":"abc1234def5678","targetCommentId":99999,"prBranch":"feature-branch","authTimestamp":1700000000000,"authToken":"8d0ce055c03d268b057200c2ee5374fac103f1b1545f9058e4b565e1a442b5cb","correlationId":"test-correlation"}';
 
 after(async () => {
     await closeConnection();
@@ -116,6 +117,16 @@ describe('System Task Authorization', () => {
             assert.strictEqual(result.valid, true);
         });
 
+        test('accepts a serialized job signed before userId was added', (t) => {
+            t.mock.method(Date, 'now', () => 1700000000000);
+            const data = JSON.parse(SERIALIZED_PRE_USER_ID_JOB) as SystemTaskJobData;
+
+            assert.strictEqual('userId' in data, false);
+            const result = verifyAuthToken(data, TEST_SECRET);
+
+            assert.strictEqual(result.valid, true);
+        });
+
         test('missing SYSTEM_TASK_SECRET rejects', () => {
             const data = makeJobData();
             data.authToken = generateAuthToken(data, TEST_SECRET);
@@ -190,6 +201,15 @@ describe('System Task Authorization', () => {
             const data = makeJobData();
             data.authToken = generateAuthToken(data, TEST_SECRET);
             data.userId = 'github-user-2';
+            const result = verifyAuthToken(data, TEST_SECRET);
+            assert.strictEqual(result.valid, false);
+            assert.strictEqual(result.reason, 'HMAC mismatch');
+        });
+
+        test('removing userId from a current token cannot downgrade it to legacy verification', () => {
+            const data = makeJobData();
+            data.authToken = generateAuthToken(data, TEST_SECRET);
+            delete (data as Partial<SystemTaskJobData>).userId;
             const result = verifyAuthToken(data, TEST_SECRET);
             assert.strictEqual(result.valid, false);
             assert.strictEqual(result.reason, 'HMAC mismatch');
