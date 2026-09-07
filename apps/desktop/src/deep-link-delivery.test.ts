@@ -12,13 +12,14 @@ describe('desktop deep-link delivery', () => {
     isDestroyed: () => false,
     webContents: {
       isLoading: () => false,
+      mainFrame: {},
       send: (_channel, value) => sent.push(value),
     },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   const activateWindow = (delivery: DeepLinkDelivery<DeepLinkWindow>, window: DeepLinkWindow) => {
     delivery.setWindow(window);
-    assert.equal(delivery.rendererConsumerReady(window.webContents), true);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, window.webContents.mainFrame), true);
   };
 
   it('keeps the production acknowledgement deadline while bounding a native-smoke allowance', () => {
@@ -133,6 +134,7 @@ describe('desktop deep-link delivery', () => {
       isDestroyed: () => false,
       webContents: {
         isLoading: () => false,
+        mainFrame: {},
         send: (_channel, value) => {
           if (failNextSend) {
             failNextSend = false;
@@ -272,7 +274,7 @@ describe('desktop deep-link delivery', () => {
     assert.equal(sent.length, 0);
     assert.deepEqual(failures, []);
 
-    assert.equal(delivery.rendererConsumerReady(window.webContents), true);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, window.webContents.mainFrame), true);
     assert.equal(sent.length, 1);
     const dispatched = sent[0];
     assert.ok(dispatched);
@@ -284,18 +286,32 @@ describe('desktop deep-link delivery', () => {
     assert.deepEqual(failures, []);
   });
 
-  it('requires fresh consumer readiness after a renderer navigation starts', async () => {
+  it('rejects outgoing-document readiness after navigation starts', async () => {
     const sent: DesktopDeepLinkDelivery[] = [];
+    const outgoingFrame = {};
+    const currentFrame = {};
+    let mainFrame = outgoingFrame;
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        isLoading: () => false,
+        get mainFrame() { return mainFrame; },
+        send: (_channel, value) => sent.push(value),
+      },
+    };
     const delivery = new DeepLinkDelivery<DeepLinkWindow>(
       'desktop:deep-link', [], undefined, undefined, Date.now, 1_000, 20, true,
     );
-    const window = createWindow(sent);
     activateWindow(delivery, window);
     delivery.didStartLoading(window);
-
     delivery.deliver('propr://open?path=%2Ftasks');
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents, outgoingFrame), false);
+    mainFrame = currentFrame;
+    delivery.didFinishLoad(window);
     assert.equal(sent.length, 0);
-    assert.equal(delivery.rendererConsumerReady(window.webContents), true);
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents, currentFrame), true);
     assert.equal(sent.length, 1);
     const dispatched = sent[0];
     assert.ok(dispatched);

@@ -1651,7 +1651,7 @@ if (!hasSingleInstanceLock) {
       packagedRendererUrl,
       openExternal: openAllowedExternalUrl,
       rendererConsumerReady: event => {
-        const ready = deepLinkDelivery.rendererConsumerReady(event.sender);
+        const ready = deepLinkDelivery.rendererConsumerReady(event.sender, event.senderFrame);
         if (ready) recordNativeEvent('desktop.deeplink.consumer_ready');
         return ready;
       },

@@ -17,6 +17,7 @@ export interface DeepLinkWindow {
   isDestroyed(): boolean;
   webContents: {
     isLoading(): boolean;
+    readonly mainFrame: object;
     send(channel: string, value: DesktopDeepLinkDelivery): void;
   };
 }
@@ -24,7 +25,8 @@ export interface DeepLinkWindow {
 /** Coordinates protocol delivery across the window creation/load boundary. */
 export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   private window: TWindow | null = null;
-  private readonly readyWebContents = new WeakSet<object>();
+  private readonly readyRendererFrames = new WeakSet<object>();
+  private readonly staleRendererFrames = new WeakSet<object>();
   private readonly recentlyAccepted = new Map<string, number>();
   private deliveryId = 0;
   private draining = false;
@@ -81,13 +83,18 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   }
 
   didStartLoading(window: TWindow): void {
-    this.readyWebContents.delete(window.webContents);
+    const frame = window.webContents.mainFrame;
+    this.readyRendererFrames.delete(frame);
+    this.staleRendererFrames.add(frame);
   }
 
   /** Starts delivery only after the renderer has installed its consumer. */
-  rendererConsumerReady(sender: unknown): boolean {
-    if ((typeof sender !== 'object' && typeof sender !== 'function') || sender === null) return false;
-    this.readyWebContents.add(sender);
+  rendererConsumerReady(sender: unknown, senderFrame: unknown): boolean {
+    if ((typeof sender !== 'object' && typeof sender !== 'function') || sender === null
+      || (typeof senderFrame !== 'object' && typeof senderFrame !== 'function') || senderFrame === null
+      || !('mainFrame' in sender) || sender.mainFrame !== senderFrame
+      || this.staleRendererFrames.has(senderFrame)) return false;
+    this.readyRendererFrames.add(senderFrame);
     if (this.window?.webContents === sender) void this.drain();
     return true;
   }
@@ -138,7 +145,8 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
       while (this.pending.length > 0) {
         const window = this.window;
         if (!window || window.isDestroyed() || window.webContents.isLoading()
-          || (this.requireRendererConsumerReady && !this.readyWebContents.has(window.webContents))) return;
+          || (this.requireRendererConsumerReady
+            && !this.readyRendererFrames.has(window.webContents.mainFrame))) return;
         const value = this.pending.shift();
         if (value === undefined) return;
         const delivery = { deliveryId: ++this.deliveryId, url: value };

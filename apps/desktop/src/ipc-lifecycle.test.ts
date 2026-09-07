@@ -932,6 +932,7 @@ describe('desktop IPC shutdown gate', () => {
     );
     const sender = {
       isLoading: () => false,
+      mainFrame: { url: 'propr-renderer://app/index.html' },
       send: (_channel: string, delivery: DesktopDeepLinkDelivery) => { sent.push(delivery); },
     };
     const window: DeepLinkWindow = {
@@ -960,13 +961,13 @@ describe('desktop IPC shutdown gate', () => {
       devServerUrl: undefined,
       packagedRendererUrl: 'propr-renderer://app/index.html',
       openExternal: async () => undefined,
-      rendererConsumerReady: event => deepLinks.rendererConsumerReady(event.sender),
+      rendererConsumerReady: event => deepLinks.rendererConsumerReady(event.sender, event.senderFrame),
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinks.acknowledgeSender(event.sender, acknowledgement),
     });
     const event = {
       sender,
-      senderFrame: { url: 'propr-renderer://app/index.html' },
+      senderFrame: sender.mainFrame,
     } as unknown as IpcMainInvokeEvent;
     const invoke = (channel: string, ...args: unknown[]) =>
       Promise.resolve(handlers.get(channel)!(event, ...args));
