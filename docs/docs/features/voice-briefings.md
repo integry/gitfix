@@ -26,7 +26,7 @@ Before its first recognition attempt, the Web UI shows this vendor-processing di
 
 ## Text Web Push is not voice playback
 
-[Web Push](../operations/pwa-web-push.md) can deliver a text notification while an installed PWA is in the background. It does not carry briefing audio and does not make ProPR speak. Voice playback uses the browser's speech synthesizer only after the user opens the Voice Briefing control and requests **Catch me up** or **Repeat** in a visible app.
+[Web Push](../operations/pwa-web-push.md) can deliver a text notification while an installed PWA is in the background. It does not carry briefing audio and does not make ProPR speak. Voice playback follows an explicit interaction or recognized command only while the Voice Briefing control is open and visible; it is never initiated by Push.
 
 Moving the app into the background or locking the screen cancels active listening and playback. A completed task may produce a text Push notification, but it cannot cause background auto-play.
 

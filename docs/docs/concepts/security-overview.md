@@ -18,7 +18,7 @@ ProPR is self-hosted: the delivery layer, task history, credentials, and reposit
 
 Model calls go directly from your stack to the provider you configured. ProPR is not a proxy for LLM traffic and never sees or marks up your tokens.
 
-[Voice Briefings](../features/voice-briefings.md) have a separate browser-vendor boundary. The ProPR server returns text JSON and does not accept raw microphone audio, provide server-side TTS, or keep a call or WebRTC session open. Speech recognition belongs to the browser or operating system and may send audio to its vendor, so it must not be assumed to run locally. Only a confirmed follow-up instruction is sent to ProPR as text through the normal authenticated task API.
+[Voice Briefings](../features/voice-briefings.md) have a separate browser-vendor boundary. The ProPR server returns text JSON and does not accept raw microphone audio, provide server-side TTS, or keep a call or WebRTC session open. Speech recognition belongs to the browser or operating system and may send audio to its vendor, so it must not be assumed to run locally. Only a confirmed follow-up instruction is sent to ProPR as text through the normal authenticated task or plan API, as applicable.
 
 ## Isolation Model
 
