@@ -182,6 +182,37 @@ describe('agent login session manager', () => {
     }
   });
 
+  test('uses the same Codex host mapping for login when backend HOME differs', () => {
+    const previousHome = process.env.HOME;
+    const previousContainerized = process.env.PROPR_CONTAINERIZED;
+    const previousCodexPath = process.env.CODEX_CONFIG_PATH;
+    const previousHostCodexPath = process.env.HOST_CODEX_DIR;
+    try {
+      process.env.HOME = '/root';
+      process.env.PROPR_CONTAINERIZED = '1';
+      process.env.CODEX_CONFIG_PATH = '/home/desktop-user/.codex';
+      process.env.HOST_CODEX_DIR = '/home/wrong-account/.codex';
+
+      assert.equal(
+        resolveAgentLoginConfigPath(agent({ configPath: '~/.codex' })),
+        '/home/desktop-user/.codex',
+      );
+      assert.equal(
+        resolveAgentLoginConfigPath(agent({ configPath: '/srv/custom-codex' })),
+        '/srv/custom-codex',
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousContainerized === undefined) delete process.env.PROPR_CONTAINERIZED;
+      else process.env.PROPR_CONTAINERIZED = previousContainerized;
+      if (previousCodexPath === undefined) delete process.env.CODEX_CONFIG_PATH;
+      else process.env.CODEX_CONFIG_PATH = previousCodexPath;
+      if (previousHostCodexPath === undefined) delete process.env.HOST_CODEX_DIR;
+      else process.env.HOST_CODEX_DIR = previousHostCodexPath;
+    }
+  });
+
   test('rejects unsafe credential roots and option-like image names', () => {
     assert.throws(
       () => resolveAgentLoginConfigPath(agent({ configPath: '/' })),

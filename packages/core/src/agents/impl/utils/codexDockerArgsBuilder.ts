@@ -1,6 +1,10 @@
 import logger from '../../../utils/logger.js';
 import type { AgentConfig } from '../../types.js';
-import { resolveConfigPath, type CodexRuntimeReasoningLevel } from '../../../config/configManager.js';
+import {
+    assertCodexConfigPathAvailable,
+    resolveCodexConfigPath,
+    type CodexRuntimeReasoningLevel
+} from '../../../config/configManager.js';
 import { wrapDockerRunArgsWithRepoSetup } from '../../../claude/docker/repoSetupWrapper.js';
 import { createContainerExecutionId } from './containerExecutionId.js';
 import {
@@ -118,7 +122,8 @@ export function buildCodexDockerArgs(config: AgentConfig, params: CodexDockerArg
     }
 
     const dockerImage = config.dockerImage;
-    const configPath = resolveConfigPath(config.configPath);
+    const configPath = resolveCodexConfigPath(config.configPath);
+    assertCodexConfigPathAvailable(configPath);
     const envVars = buildEnvironmentVariableArgs([config.envVars, environment], repositoryInspection);
     const streamConfig = resolveCodexStreamConfig({
         ...process.env,

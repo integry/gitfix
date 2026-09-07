@@ -8,10 +8,11 @@ process.env.NODE_ENV = 'test';
 
 let migrateAgentConfig: typeof import('../packages/core/src/config/configManagerAgents.js').migrateAgentConfig;
 let resolveConfigPath: typeof import('../packages/core/src/config/configManagerAgents.js').resolveConfigPath;
+let resolveCodexConfigPath: typeof import('../packages/core/src/config/configManagerAgents.js').resolveCodexConfigPath;
 let closeConnection: typeof import('../packages/core/src/db/connection.js').closeConnection;
 
 before(async () => {
-    ({ migrateAgentConfig, resolveConfigPath } = await import('../packages/core/src/config/configManagerAgents.js'));
+    ({ migrateAgentConfig, resolveCodexConfigPath, resolveConfigPath } = await import('../packages/core/src/config/configManagerAgents.js'));
     ({ closeConnection } = await import('../packages/core/src/db/connection.js'));
 });
 
@@ -33,6 +34,68 @@ function createAgent(overrides: Partial<AgentConfig>): AgentConfig {
 }
 
 describe('agent config migration', () => {
+    test('uses the mounted Codex host mapping instead of the backend HOME for the portable default', () => {
+        const environment = {
+            HOME: '/root',
+            PROPR_CONTAINERIZED: '1',
+            CODEX_CONFIG_PATH: '/home/desktop-user/.codex'
+        };
+        assert.strictEqual(resolveConfigPath('~/.codex', environment), '/home/desktop-user/.codex');
+        assert.strictEqual(resolveCodexConfigPath('~/.codex', environment), '/home/desktop-user/.codex');
+    });
+
+    test('uses HOST_CODEX_DIR when the normalized backend mapping is not present', () => {
+        assert.strictEqual(
+            resolveCodexConfigPath('~/.codex', {
+                HOME: '/root',
+                PROPR_CONTAINERIZED: '1',
+                HOST_CODEX_DIR: '/home/desktop-user/.codex'
+            }),
+            '/home/desktop-user/.codex'
+        );
+    });
+
+    test('preserves an explicit custom Codex config path despite a provider-wide mapping', () => {
+        assert.strictEqual(
+            resolveCodexConfigPath('/srv/custom-codex', {
+                HOME: '/root',
+                PROPR_CONTAINERIZED: '1',
+                CODEX_CONFIG_PATH: '/home/desktop-user/.codex'
+            }),
+            '/srv/custom-codex'
+        );
+    });
+
+    test('rejects an ambiguous custom tilde path instead of using the backend account', () => {
+        assert.throws(
+            () => resolveCodexConfigPath('~/.codex-other', {
+                HOME: '/root',
+                PROPR_CONTAINERIZED: '1',
+                CODEX_CONFIG_PATH: '/home/desktop-user/.codex'
+            }),
+            /Custom Codex credential paths must be absolute/
+        );
+    });
+
+    test('preserves a managed Codex path despite a provider-wide mapping', () => {
+        assert.strictEqual(
+            resolveCodexConfigPath(getManagedAgentConfigPath('codex-1', 'codex'), {
+                HOME: '/root',
+                PROPR_CONTAINERIZED: '1',
+                CODEX_CONFIG_PATH: '/home/desktop-user/.codex',
+                PROPR_MANAGED_CREDENTIALS_DIR: '/srv/propr-managed'
+            }),
+            '/srv/propr-managed/codex-1/.codex'
+        );
+    });
+
+    test('fails clearly when a containerized portable Codex config has no host mapping', () => {
+        assert.throws(
+            () => resolveCodexConfigPath('~/.codex', { HOME: '/root', PROPR_CONTAINERIZED: '1' }),
+            /has no host mapping.*HOST_CODEX_DIR/
+        );
+    });
+
     test('resolves portable managed credentials through the deployment root', () => {
         const previous = process.env.PROPR_MANAGED_CREDENTIALS_DIR;
         try {

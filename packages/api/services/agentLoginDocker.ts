@@ -10,7 +10,11 @@ import {
   type AgentLoginDescriptor,
   type AgentType,
 } from '@propr/shared';
-import type { AgentConfig } from '@propr/core';
+import {
+  AgentConfigPathUnavailableError,
+  resolveCodexConfigPath,
+  type AgentConfig,
+} from '@propr/core';
 
 const CONTAINER_WORKSPACE = '/home/node/workspace';
 
@@ -87,6 +91,20 @@ export function resolveAgentLoginConfigPath(agent: AgentConfig): string {
       path.join(managedRoot, managedRelativePath),
       'Agent credential path',
     );
+  }
+
+  if (agent.type === 'codex' && configured === AGENT_DEFAULTS.codex.configPath) {
+    try {
+      return validateAbsoluteCredentialPath(
+        resolveCodexConfigPath(configured),
+        'Agent credential path',
+      );
+    } catch (error) {
+      if (error instanceof AgentConfigPathUnavailableError) {
+        throw new AgentLoginInputError(error.message);
+      }
+      throw error;
+    }
   }
 
   let resolved = configured;
