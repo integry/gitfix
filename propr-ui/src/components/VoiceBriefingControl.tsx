@@ -189,7 +189,7 @@ export default function VoiceBriefingControl() {
         ref={launcherRef}
         type="button"
         onClick={openPanel}
-        className="fixed bottom-[calc(var(--mobile-bottom-navigation-height)+0.75rem)] right-3 z-30 inline-flex min-h-11 items-center gap-2 rounded-full bg-slate-900 px-3.5 py-2.5 text-sm font-semibold text-white shadow-lg ring-1 ring-white/40 transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 md:bottom-5 md:right-5"
+        className="fixed bottom-[calc(var(--mobile-bottom-navigation-height)+0.75rem)] right-[max(0.75rem,env(safe-area-inset-right))] z-30 inline-flex min-h-11 items-center gap-2 rounded-full bg-slate-900 px-3.5 py-2.5 text-sm font-semibold text-white shadow-lg ring-1 ring-white/40 transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 md:bottom-5 md:right-5"
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-label="Voice briefing"
@@ -200,7 +200,7 @@ export default function VoiceBriefingControl() {
       </button>
 
       {isOpen && (
-        <div className="fixed inset-0 z-[70] flex items-end bg-slate-950/50 md:items-center md:justify-center md:p-5">
+        <div className="fixed inset-0 z-[70] flex items-end bg-slate-950/50 pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] pt-[max(1rem,env(safe-area-inset-top))] md:items-center md:justify-center md:p-5">
           <div
             className="absolute inset-0 h-full w-full cursor-default"
             onClick={closePanel}
@@ -213,7 +213,7 @@ export default function VoiceBriefingControl() {
             aria-labelledby="voice-briefing-title"
             aria-describedby="voice-briefing-description"
             tabIndex={-1}
-            className="relative flex max-h-[calc(100dvh-1rem)] w-full flex-col overflow-hidden rounded-t-2xl bg-slate-50 shadow-2xl focus:outline-none md:max-h-[min(90vh,46rem)] md:max-w-xl md:rounded-2xl"
+            className="relative flex max-h-[calc(100dvh-max(1rem,env(safe-area-inset-top)))] w-full flex-col overflow-hidden rounded-t-2xl bg-slate-50 shadow-2xl focus:outline-none md:max-h-[min(90vh,46rem)] md:max-w-xl md:rounded-2xl"
           >
             <header className="flex items-start gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
               <div className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-primary-50 text-primary-700">
