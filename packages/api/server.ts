@@ -32,6 +32,7 @@ import {
   createAgentRuntimeRoutes, createNotificationRoutes,
   createAdminRoutes,
   createVisualPreviewAuthRoutes,
+  createVoiceRoutes,
   createInstanceCatalogRoutes,
   attachmentUpload
 } from './routes/index.js';
@@ -52,6 +53,7 @@ import {
   closeUltrafixStateRedis,
   getActiveTasksForPR,
   AGENT_RUNTIME_BUILD_QUEUE_NAME,
+  notificationService,
   runMigrations
 } from '@propr/core';
 import { initializeUltrafix } from './services/ultrafixInit.js';
@@ -77,6 +79,7 @@ import {
   startVisualPreviewOAuthRefreshScheduler,
   type VisualPreviewOAuthRefreshScheduler,
 } from './services/visualPreviewOAuth.js';
+import { createVoiceBriefingService } from './services/voiceBriefingService.js';
 
 type ShutdownTask = { name: string; close: () => Promise<unknown> };
 
@@ -280,6 +283,12 @@ function setupRoutes(): void {
   const userRepoPreferencesRoutes = createUserRepoPreferencesRoutes();
   const agentRuntimeRoutes = createAgentRuntimeRoutes({ getRuntimeBuildQueue: () => runtimeBuildQueue });
   const notificationRoutes = createNotificationRoutes({ webPushDispatcherConfigured });
+  const voiceBriefingService = createVoiceBriefingService({
+    database: db,
+    taskQueue,
+    notificationService,
+  });
+  const voiceRoutes = createVoiceRoutes({ briefingService: voiceBriefingService });
   const adminRoutes = createAdminRoutes();
   const visualPreviewAuthRoutes = createVisualPreviewAuthRoutes();
   const instanceCatalogRoutes = createInstanceCatalogRoutes();
@@ -303,6 +312,7 @@ function setupRoutes(): void {
     ['get', '/api/stats/overview', statsRoutes.getOverview], ['get', '/api/stats/generating-plans', statsRoutes.getGeneratingPlansCount], ['get', '/api/summaries/:owner/:repo/status', summaryBrowserRoutes.getIndexingStatus], ['get', '/api/summaries/:owner/:repo/tree', summaryBrowserRoutes.getDirectoryTree],
     ['get', SUMMARY_TREE_ROUTE_PATH, summaryBrowserRoutes.getDirectoryTree], ['get', SUMMARY_PATH_ROUTE_PATH, summaryBrowserRoutes.getPathSummary], ['post', '/api/repos/chat', repoChatRoutes.postChat], ['get', '/api/repos/chat/messages', repoChatRoutes.getMessages],
     ['post', '/api/repos/chat/messages', repoChatRoutes.saveMessages], ['delete', '/api/repos/chat/messages/:messageId', repoChatRoutes.deleteMessage], ['delete', '/api/repos/chat/messages', repoChatRoutes.clearMessages], ['post', '/api/repos/improvements', repoImprovementsRoutes.postImprovements],
+    ['get', '/api/voice/capabilities', voiceRoutes.getCapabilities], ['get', '/api/voice/briefing', voiceRoutes.getBriefing],
     ['get', '/api/repos/todos/categories', repoTodoRoutes.getCategories], ['post', '/api/repos/todos/categories', repoTodoRoutes.createCategory], ['put', '/api/repos/todos/categories/:categoryId', repoTodoRoutes.updateCategory], ['delete', '/api/repos/todos/categories/:categoryId', repoTodoRoutes.deleteCategory],
     ['post', '/api/repos/todos/categories/reorder', repoTodoRoutes.reorderCategories], ['get', '/api/repos/todos', repoTodoRoutes.getTodos], ['get', '/api/repos/todos/:todoId', repoTodoRoutes.getTodo], ['post', '/api/repos/todos', repoTodoRoutes.createTodo],
     ['put', '/api/repos/todos/:todoId', repoTodoRoutes.updateTodo], ['delete', '/api/repos/todos/:todoId', repoTodoRoutes.deleteTodo], ['post', '/api/repos/todos/reorder', repoTodoRoutes.reorderTodos], ['get', '/api/user/repo-preferences', userRepoPreferencesRoutes.getRepoPreferences],

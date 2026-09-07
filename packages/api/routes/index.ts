@@ -30,3 +30,4 @@ export { createAgentRuntimeRoutes } from './agentRuntimeRoutes.js';
 export { createNotificationRoutes } from './notificationRoutes.js';
 export { createAdminRoutes } from './adminRoutes.js';
 export { createVisualPreviewAuthRoutes } from './visualPreviewAuthRoutes.js';
+export { createVoiceRoutes } from './voiceRoutes.js';
