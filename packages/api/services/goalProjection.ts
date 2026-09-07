@@ -1,6 +1,7 @@
 import type { Knex } from 'knex';
 import type { RedisClientType } from 'redis';
 import {
+  goalTitleFallback,
   parseGoalArtifacts,
   type GoalArtifactStats,
   type GoalLaunchStrategy,
@@ -12,6 +13,7 @@ export interface GoalProjectionRow {
   owner_id: string;
   owner_login: string;
   repository: string;
+  title: string | null;
   objective: string;
   launch_strategy: GoalLaunchStrategy;
   initial_prompt: string;
@@ -149,6 +151,7 @@ export async function serializeGoal(
     id: row.goal_id,
     owner: row.owner_login,
     repository: row.repository,
+    title: row.title || goalTitleFallback(row.objective),
     objective: row.objective,
     launchStrategy: row.launch_strategy,
     initialPrompt: row.initial_prompt,

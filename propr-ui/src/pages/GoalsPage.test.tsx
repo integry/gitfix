@@ -25,7 +25,7 @@ const capability = {
   models: ['gpt-5.6-sol', 'gpt-5.6-luna'], defaultModel: 'gpt-5.6-sol',
 };
 const goal: goalsApi.Goal = {
-  id: 'goal-1', owner: 'owner', repository: 'acme/web', objective: 'Ship the dashboard',
+  id: 'goal-1', owner: 'owner', repository: 'acme/web', title: 'Launch Customer Analytics Dashboard', objective: 'Ship the dashboard',
   launchStrategy: 'orchestrate', initialPrompt: '/goal Ship the dashboard\n\nLaunch strategy — Agent orchestrates through ProPR',
   baseBranch: null, branchName: 'goal/dashboard', worktreePath: '/tmp/worktree',
   agent: { id: 'agent-1', alias: 'codex', type: 'codex' }, requestedModel: 'gpt-5.6-sol', effectiveModel: 'gpt-5.6-sol',
@@ -190,6 +190,7 @@ describe('GoalsPage', () => {
     expect(screen.getByText('1/1 open issues')).toBeInTheDocument();
     expect(screen.getByText('1/1 open PRs')).toBeInTheDocument();
     expect(screen.getByText('Implement API')).toBeInTheDocument();
+    expect(screen.getByText(goal.title)).toHaveClass('line-clamp-2');
     expect(screen.getByText(goal.objective)).toHaveClass('line-clamp-2');
     expect(screen.getAllByText('Codex')).toHaveLength(2);
     expect(screen.getAllByText('GPT-5.6 Sol')).toHaveLength(2);
@@ -200,6 +201,8 @@ describe('GoalsPage', () => {
     expect((await screen.findAllByText('Implement API')).length).toBeGreaterThan(0);
     expect(screen.getByText('15')).toBeInTheDocument();
     expect(screen.getByText('Agent orchestrates through ProPR')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: goal.title })).toBeInTheDocument();
+    expect(screen.getByText('Goal description')).toBeInTheDocument();
     expect(screen.getByText(/\/goal Ship the dashboard/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: "What's done?" }));
     await waitFor(() => expect(goalsApi.sendGoalInput).toHaveBeenCalledWith('goal-1', { canned: 'done' }));

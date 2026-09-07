@@ -5,6 +5,7 @@ import { down, up } from '../packages/core/src/db/migrations/20260902000000_crea
 import { down as downHardening, up as upHardening } from '../packages/core/src/db/migrations/20260902010000_harden_native_goals.js';
 import { down as downCheckpoints, up as upCheckpoints } from '../packages/core/src/db/migrations/20260903000000_add_direct_goal_checkpoints.js';
 import { down as downDeclarations, up as upDeclarations } from '../packages/core/src/db/migrations/20260906000000_add_goal_checkpoint_declarations.js';
+import { down as downGoalTitles, up as upGoalTitles } from '../packages/core/src/db/migrations/20260907000000_add_goal_titles.js';
 
 test('goal migration stores only the durable owner/session execution envelope', async () => {
     const database = knex({
@@ -24,9 +25,10 @@ test('goal migration stores only the durable owner/session execution envelope', 
         await database('goals').insert(base);
         await upCheckpoints(database);
         await upDeclarations(database);
+        await upGoalTitles(database);
         const columns = await database('goals').columnInfo();
         assert.deepEqual(
-            ['goal_id', 'owner_id', 'repository', 'objective', 'launch_strategy', 'initial_prompt', 'agent_id', 'requested_model', 'desired_state', 'current_task_id', 'session_id', 'worktree_path']
+            ['goal_id', 'owner_id', 'repository', 'title', 'objective', 'launch_strategy', 'initial_prompt', 'agent_id', 'requested_model', 'desired_state', 'current_task_id', 'session_id', 'worktree_path']
                 .filter(column => !columns[column]),
             [],
         );
@@ -63,6 +65,7 @@ test('goal migration stores only the durable owner/session execution envelope', 
             database('goals').insert({ ...base, goal_id: 'goal-2' }),
             /unique/i,
         );
+        await downGoalTitles(database);
         await downDeclarations(database);
         await downCheckpoints(database);
         await downHardening(database);

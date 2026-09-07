@@ -5,6 +5,8 @@ import {
     db,
     getAuthenticatedOctokit,
     getRepoUrl,
+    getModelShortName,
+    goalTitleFallback,
     InvalidCheckpointScopeError,
     parseGoalArtifacts,
     pushBranch,
@@ -43,6 +45,7 @@ interface PublishableGoal {
     goal_id: string;
     owner_id: string;
     repository: string;
+    title: string | null;
     objective: string;
     launch_strategy: string;
     base_branch: string | null;
@@ -63,6 +66,13 @@ interface PullRequestInfo {
     url: string;
     state: string;
     draft: boolean;
+}
+
+export function buildGoalPullRequestTitle(
+    goal: Pick<PublishableGoal, 'title' | 'objective' | 'requested_model'>,
+): string {
+    const title = goal.title?.trim() || goalTitleFallback(goal.objective);
+    return `[Goal by ${getModelShortName(goal.requested_model)}] ${title}`;
 }
 
 const publicationLocks = new Map<string, Promise<unknown>>();
@@ -122,7 +132,7 @@ async function createDraftPr(
         return existing;
     }
     const [owner, repo] = goal.repository.split('/');
-    const title = `[Goal by ${goal.requested_model}] ${goal.objective.replace(/\s+/g, ' ').trim().slice(0, 160)}`;
+    const title = buildGoalPullRequestTitle(goal);
     const body = [
         '## Goal implementation',
         '',

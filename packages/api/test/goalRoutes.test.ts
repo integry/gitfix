@@ -7,6 +7,7 @@ import { up as createGoals } from '../../core/src/db/migrations/20260902000000_c
 import { up as hardenGoals } from '../../core/src/db/migrations/20260902010000_harden_native_goals.js';
 import { up as addGoalCheckpoints } from '../../core/src/db/migrations/20260903000000_add_direct_goal_checkpoints.js';
 import { up as addGoalCheckpointDeclarations } from '../../core/src/db/migrations/20260906000000_add_goal_checkpoint_declarations.js';
+import { up as addGoalTitles } from '../../core/src/db/migrations/20260907000000_add_goal_titles.js';
 import { createGoalRoutes } from '../routes/goalRoutes.js';
 
 function request(userId: string, params: Record<string, string> = {}, body: unknown = {}): Request {
@@ -37,6 +38,7 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         await hardenGoals(database);
         await addGoalCheckpoints(database);
         await addGoalCheckpointDeclarations(database);
+        await addGoalTitles(database);
         await database.schema.createTable('task_history', table => {
             table.increments('id');
             table.string('task_id');
@@ -54,7 +56,7 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
             table.string('execution_id');
         });
         const common = {
-            owner_login: 'alice', repository: 'acme/repo', objective: 'Ship it',
+            owner_login: 'alice', repository: 'acme/repo', title: 'Ship Reliable Goal Delivery', objective: 'Ship it',
             launch_strategy: 'direct', initial_prompt: '/goal Ship it\n\nSaved policy',
             agent_id: 'agent-1', agent_alias: 'claude', agent_type: 'claude', requested_model: 'gpt-5.6',
             desired_state: 'paused', run_generation: 2, run_claim: 'claim-2', session_id: 'thread-1',
@@ -136,9 +138,10 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         const listed = response();
         await routes.list(request('owner-1'), listed.res);
         assert.equal(listed.state.status, 200);
-        const listedGoals = (listed.state.body as { goals: Array<{ id: string; launchStrategy: string; initialPrompt: string; liveSummary: { currentTask: string; todos: unknown[]; tokenUsage: { input_tokens: number } } }> }).goals;
+        const listedGoals = (listed.state.body as { goals: Array<{ id: string; title: string; launchStrategy: string; initialPrompt: string; liveSummary: { currentTask: string; todos: unknown[]; tokenUsage: { input_tokens: number } } }> }).goals;
         assert.deepEqual(listedGoals.map(goal => goal.id), ['goal-1']);
         assert.equal(listedGoals[0].launchStrategy, 'direct');
+        assert.equal(listedGoals[0].title, 'Ship Reliable Goal Delivery');
         assert.equal(listedGoals[0].initialPrompt, '/goal Ship it\n\nSaved policy');
         assert.equal(listedGoals[0].liveSummary.currentTask, 'Run tests');
         assert.equal(listedGoals[0].liveSummary.todos.length, 2);

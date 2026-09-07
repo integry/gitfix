@@ -8,6 +8,7 @@ import {
     getStateManager,
     goalAttemptLabel,
     goalJobId,
+    goalTitleFallback,
     TaskStates,
     logger,
 } from '@propr/core';
@@ -31,6 +32,7 @@ interface RecoverableGoal {
     final_pr_number?: number | null;
     final_pr_url?: string | null;
     failure_reason?: string | null;
+    title?: string | null;
     objective?: string;
     requested_model?: string;
     agent_alias?: string;
@@ -210,7 +212,7 @@ async function reconcileGoalTask(goal: RecoverableGoal): Promise<void> {
             type: 'goal',
             modelName: goal.requested_model,
             agentAlias: goal.agent_alias,
-            title: goal.objective,
+            title: goal.title || goalTitleFallback(goal.objective || ''),
             goalId: goal.goal_id,
         }, goal.goal_id);
     }

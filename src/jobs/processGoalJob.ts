@@ -14,6 +14,7 @@ import {
     getRepoUrl,
     getStateManager,
     goalAttemptLabel,
+    goalTitleFallback,
     logger,
     recordLLMMetrics,
     runWithExecutionAbortSignal,
@@ -123,7 +124,7 @@ async function initializeGoalTask(goal: GoalRow): Promise<void> {
     if (!state) {
         state = await stateManager.createTaskState(goal.current_task_id, {
             number: 0, repoOwner, repoName, type: 'goal', modelName: goal.requested_model,
-            agentAlias: goal.agent_alias, title: goal.objective, goalId: goal.goal_id,
+            agentAlias: goal.agent_alias, title: goal.title || goalTitleFallback(goal.objective), goalId: goal.goal_id,
         }, goal.goal_id);
     }
     await stateManager.updateTaskState(goal.current_task_id, TaskStates.PROCESSING, {

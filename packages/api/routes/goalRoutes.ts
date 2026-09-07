@@ -12,8 +12,11 @@ import {
   MIN_GOAL_CHECKPOINT_INTERVAL_MINUTES,
   buildNativeGoalCommand,
   codexGoalPromptValidationError,
+  generateGoalTitle,
   getAuthenticatedOctokit,
+  goalTitleFallback,
   goalJobId,
+  logger,
   type GoalCapability,
   type GoalJobData,
   type GoalLaunchStrategy,
@@ -28,6 +31,7 @@ interface GoalRoutesDeps {
   taskQueue: Queue;
   redisClient: RedisClientType;
   getCapabilities?: (options?: { force?: boolean }) => Promise<GoalCapability[]>;
+  generateTitle?: typeof generateGoalTitle;
   stopExecution?: (taskId: string, options: Parameters<typeof stopTaskExecution>[1]) => Promise<StopTaskExecutionResult>;
 }
 
@@ -57,6 +61,18 @@ function mutationHash(operation: string, payload: Record<string, unknown>): stri
 }
 
 class IdempotencyConflictError extends Error {}
+
+async function resolveGoalTitle(
+  generateTitle: typeof generateGoalTitle,
+  options: Parameters<typeof generateGoalTitle>[0],
+): Promise<string> {
+  try {
+    return await generateTitle(options);
+  } catch (error) {
+    logger.warn({ goalId: options.correlationId, error: (error as Error).message }, 'Failed to generate goal title; using bounded objective fallback');
+    return goalTitleFallback(options.objective);
+  }
+}
 
 // eslint-disable-next-line max-params -- the mutation identity tuple is deliberately explicit at this persistence boundary
 async function existingMutation(
@@ -306,11 +322,18 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     const claimId = randomUUID();
     const taskId = `goal-${goalId}`;
     const now = new Date().toISOString();
+    const title = await resolveGoalTitle(deps.generateTitle ?? generateGoalTitle, {
+      objective: body.objective as string,
+      repository: body.repository as string,
+      taskId,
+      correlationId: goalId,
+    });
     const row = {
       goal_id: goalId,
       owner_id: ownerId,
       owner_login: req.user!.username,
       repository: body.repository,
+      title,
       objective: body.objective as string,
       launch_strategy: launchStrategy,
       initial_prompt: initialPrompt,

@@ -7,6 +7,7 @@ export interface GoalRow {
     goal_id: string;
     owner_id: string;
     repository: string;
+    title: string | null;
     objective: string;
     launch_strategy: 'direct' | 'orchestrate';
     initial_prompt: string;

@@ -30,6 +30,13 @@ export {
     type GoalResultState,
 } from './goals.js';
 export type { GoalJobData } from './queue/taskQueue.types.js';
+export {
+    MAX_GOAL_TITLE_LENGTH,
+    buildGoalTitlePrompt,
+    generateGoalTitle,
+    goalTitleFallback,
+    normalizeGoalTitle,
+} from './goals/goalTitle.js';
 export type {
     GoalCheckpointOutcome,
     GoalCheckpointRejection,

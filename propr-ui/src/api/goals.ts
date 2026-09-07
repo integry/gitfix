@@ -27,6 +27,7 @@ export interface Goal {
   id: string;
   owner: string;
   repository: string;
+  title: string;
   objective: string;
   launchStrategy: GoalLaunchStrategy;
   initialPrompt: string;
