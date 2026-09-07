@@ -233,6 +233,11 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
         pollTimer.unref();
         options.log('info', 'desktop.tray.ready', { platform: options.platform });
       } catch {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = undefined;
+        if (tray) {
+          try { tray.destroy(); } catch { /* Initialization already failed; allow a clean retry. */ }
+        }
         tray = null;
         options.log('warn', 'desktop.tray.unavailable', { platform: options.platform });
       }

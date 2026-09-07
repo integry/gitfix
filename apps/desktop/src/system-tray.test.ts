@@ -120,6 +120,69 @@ describe('desktop system tray', () => {
     assert.equal(badges.at(-1), 0);
   });
 
+  it('cleans up a partially initialized tray and its poller before retrying safely', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    const trays: FakeTray[] = [];
+    let fetches = 0;
+    let failInitialization = true;
+    const controller = createDesktopTrayController({
+      platform: 'linux',
+      icon: {} as NativeImage,
+      createTray: () => {
+        const created = new FakeTray();
+        trays.push(created);
+        return created as unknown as Tray;
+      },
+      buildMenu: () => ({} as Menu),
+      setBadgeCount: () => false,
+      fetchActiveWork: async () => {
+        fetches += 1;
+        return { status: 'disconnected' };
+      },
+      openWindow: () => undefined,
+      quit: () => undefined,
+      log: (level) => {
+        if (level === 'info' && failInitialization) {
+          failInitialization = false;
+          throw new Error('late initialization failure');
+        }
+      },
+      debounceMs: 0,
+      minimumRefreshIntervalMs: 0,
+      pollIntervalMs: 100,
+    });
+
+    controller.start();
+    assert.equal(trays.length, 1);
+    assert.equal(trays[0]?.destroyed, true);
+
+    t.mock.timers.tick(50);
+    controller.start();
+    assert.equal(trays.length, 2, 'a failed initialization can be retried');
+    assert.equal(trays[1]?.destroyed, false);
+
+    controller.connectionAvailable();
+    t.mock.timers.tick(0);
+    await Promise.resolve();
+    assert.equal(fetches, 1);
+
+    t.mock.timers.tick(50);
+    t.mock.timers.tick(0);
+    await Promise.resolve();
+    assert.equal(fetches, 1, 'the failed initialization did not retain its polling timer');
+
+    t.mock.timers.tick(50);
+    t.mock.timers.tick(0);
+    await Promise.resolve();
+    assert.equal(fetches, 2, 'only the retried tray retains a polling timer');
+
+    controller.close();
+    assert.equal(trays[1]?.destroyed, true);
+    t.mock.timers.tick(100);
+    await Promise.resolve();
+    assert.equal(fetches, 2);
+  });
+
   it('drops scoped stale responses and marks network failures unavailable instead of zero', async () => {
     const fakeTray = new FakeTray();
     let resolveFetch!: (value: { status: 'response'; response: Response }) => void;
