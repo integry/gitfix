@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- controller lifecycle regressions share one focused fixture */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { voiceBriefingResponseSchema, type VoiceBriefingResponse } from '@propr/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

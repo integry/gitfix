@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- voice session state and lifecycle remain centralized in this controller */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   VoiceBriefingItem,
