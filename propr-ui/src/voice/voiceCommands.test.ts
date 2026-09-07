@@ -156,6 +156,10 @@ describe('voice command parser', () => {
       type: 'invalid',
       reason: expect.stringContaining('URL or API endpoint'),
     });
+    expect(parseVoiceCommand('follow up plan one to POST /api#fragment', briefing)).toMatchObject({
+      type: 'invalid',
+      reason: expect.stringContaining('URL or API endpoint'),
+    });
     expect(parseVoiceCommand(
       'follow up plan one to check example.com/results',
       briefing,

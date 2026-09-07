@@ -192,7 +192,7 @@ const NETWORK_HOST_PATTERN = new RegExp(
     + ')',
   'i',
 );
-const API_PATH_PATTERN = /(?:^|[\s"'(\[{<=>:])\/api(?:\/|\?|\s|$)/i;
+const API_PATH_PATTERN = /(?:^|[\s"'(\[{<=>:])\/api(?:\/|\?|#|\s|$)/i;
 
 function isIpLiteral(value: string): boolean {
   const ipv4Parts = value.split('.');
