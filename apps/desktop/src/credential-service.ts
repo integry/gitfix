@@ -112,6 +112,10 @@ export interface DesktopCurrentUserProxyEvidence {
   rejectionCategory: DesktopCurrentUserProxyRejectionCategory;
 }
 
+export type DesktopActiveWorkFetchResult =
+  | { status: 'disconnected' | 'stale' }
+  | { status: 'response'; response: Response };
+
 export interface DesktopPairingBrowserRequest {
   apiBaseUrl: string;
   pairingId: string;
@@ -488,6 +492,32 @@ export class DesktopCredentialService {
     const operation = this.#beginOperation();
     try {
       return this.#profiles.security();
+    } finally {
+      operation.done();
+    }
+  }
+
+  /** Fixed main-process fetch for the native tray; no URL or credential crosses IPC. */
+  async fetchActiveWork(signal: AbortSignal): Promise<DesktopActiveWorkFetchResult> {
+    const operation = this.#beginOperation();
+    try {
+      const active = this.#active;
+      if (!active
+        || this.#generation(active.profileId) !== active.profileGeneration
+        || this.#selectionGeneration !== active.selectionGeneration
+        || !active.connectClaim.isCurrent()) return { status: 'disconnected' };
+
+      const response = await this.#authenticatedFetch(
+        active,
+        '/api/desktop/active-work',
+        { cache: 'no-store', signal },
+        8_000,
+      );
+      if (this.#active !== active
+        || this.#generation(active.profileId) !== active.profileGeneration
+        || this.#selectionGeneration !== active.selectionGeneration
+        || !active.connectClaim.isCurrent()) return { status: 'stale' };
+      return { status: 'response', response };
     } finally {
       operation.done();
     }

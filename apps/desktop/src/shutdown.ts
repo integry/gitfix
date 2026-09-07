@@ -15,6 +15,7 @@ interface ShutdownOptions {
   setup?: { shutdown(): Promise<void> };
   ipc: RegisteredIpcHandlers;
   deepLinks?: { close(): void; whenIdle(): Promise<void> };
+  tray?: { close(): void };
   profiles: { close(): Promise<void> };
   sessionSecurity: { close(): void; dispose(): void };
   disposeRendererProtocol(): void;
@@ -78,6 +79,8 @@ export const createDesktopShutdownCoordinator = (
       step('admission-closed');
       options.deepLinks?.close();
       if (options.deepLinks) step('deep-links-closed');
+      options.tray?.close();
+      if (options.tray) step('tray-closed');
       options.ipc.close();
       step('ipc-closed');
       options.sessionSecurity.close();

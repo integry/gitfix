@@ -34,6 +34,7 @@ import {
   createVisualPreviewAuthRoutes,
   createInstanceCatalogRoutes,
   createDesktopAuthRoutes,
+  createActiveWorkRoutes,
   attachmentUpload
 } from './routes/index.js';
 import { agentLoginSessionManager } from './services/agentLoginSessionManager.js';
@@ -301,8 +302,10 @@ function setupRoutes(): void {
   const visualPreviewAuthRoutes = createVisualPreviewAuthRoutes();
   const instanceCatalogRoutes = createInstanceCatalogRoutes();
   const agentVersionRoutes = createAgentVersionRoutes();
+  const activeWorkRoutes = createActiveWorkRoutes({ db, taskQueue });
 
   const operationalRoutes: RouteEntry[] = [
+    ['get', '/api/desktop/active-work', activeWorkRoutes.getActiveWork],
     ['get', '/api/status', statusRoutes.getStatus], ['get', '/api/tasks', taskRoutes.getTasks], ['get', '/api/tasks/revert-preview', taskRoutes.getRevertPreview], ['post', '/api/tasks/revert', taskRoutes.revertChanges],
     ['post', '/api/tasks/:taskId/followup', taskRoutes.postFollowup], ...createTaskDeleteRouteEntries({ taskRoutes }), ['get', '/api/task/:taskId/history', taskHistoryRoutes.getTaskHistory], ['get', '/api/task/:taskId/live-details', liveDetailsRoutes.getLiveDetails],
     ['get', '/api/task/:taskId/file-changes', fileChangesRoutes.getFileChanges], ['get', '/api/queue/stats', queueRoutes.getQueueStats], ['get', '/api/activity', queueRoutes.getActivity], ['get', '/api/metrics', queueRoutes.getMetrics],

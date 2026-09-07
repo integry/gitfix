@@ -61,6 +61,7 @@ const bridgeFixture = () => {
       getMetadata: async () => ({
         name: 'ProPR Desktop', version: '0.8.15', platform: 'linux', arch: 'x64', packaged: true,
       }),
+      refreshActiveWork: async () => undefined,
       onDeepLink,
     },
     auth: { logout: async () => undefined },

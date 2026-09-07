@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -50,6 +50,7 @@ import {
   packagedApprovalPartition,
 } from './packaged-approval-session';
 import { createDesktopShutdownCoordinator } from './shutdown';
+import { createDesktopTrayController } from './system-tray';
 import { DesktopSetupController } from './setup-controller';
 import { promptForWebhookSecret } from './secure-secret-prompt';
 import {
@@ -1395,6 +1396,21 @@ const createMainWindow = async (
   return window;
 };
 
+const restoreMainWindow = (): void => {
+  if (shutdownStarted) return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  void createMainWindow(null).then(window => {
+    mainWindow = window;
+    window.show();
+    window.focus();
+  }).catch(error => log('error', 'desktop.window.restore_failed', { error }));
+};
+
 app.on('open-url', (event, url) => {
   event.preventDefault();
   if (shutdownStarted) return;
@@ -1617,6 +1633,27 @@ if (!hasSingleInstanceLock) {
     }
     const lifecycle = new LocalLifecycleController();
     nativeProfiles = profiles;
+    const trayArtworkPath = app.isPackaged
+      ? join(process.resourcesPath, 'logo-only-small.png')
+      : join(app.getAppPath(), '..', '..', 'media', 'logo-only-small.png');
+    const trayArtwork = nativeImage.createFromPath(trayArtworkPath);
+    const trayIcon = trayArtwork.isEmpty()
+      ? trayArtwork
+      : trayArtwork.resize({ width: process.platform === 'darwin' ? 18 : 22 });
+    if (process.platform === 'darwin' && !trayIcon.isEmpty()) trayIcon.setTemplateImage(true);
+    const desktopTray = createDesktopTrayController({
+      platform: process.platform,
+      icon: trayIcon,
+      createTray: icon => new Tray(icon),
+      buildMenu: template => Menu.buildFromTemplate(template),
+      setBadgeCount: count => {
+        try { return app.setBadgeCount(count); } catch { return false; }
+      },
+      fetchActiveWork: signal => credentials.fetchActiveWork(signal),
+      openWindow: restoreMainWindow,
+      quit: () => app.quit(),
+      log: (level, event, fields) => log(level, event, fields),
+    });
     const setupHost = process.platform === 'linux'
       ? await createDesktopSetupHost({
           configDir: join(app.getPath('userData'), 'local-setup', 'cli'),
@@ -1665,6 +1702,9 @@ if (!hasSingleInstanceLock) {
       },
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinkDelivery.acknowledgeSender(event.sender, acknowledgement),
+      onActiveWorkConnectionAvailable: () => desktopTray.connectionAvailable(),
+      onActiveWorkConnectionUnavailable: reason => desktopTray.connectionUnavailable(reason),
+      onActiveWorkRefresh: () => desktopTray.refresh(),
       ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {
         onRendererActiveProfileChanged: (origin: string | null) => {
           if (packagedAcceptanceTest) return;
@@ -1697,6 +1737,7 @@ if (!hasSingleInstanceLock) {
       credentials,
       lifecycle: shutdownLifecycle,
       deepLinks: deepLinkDelivery,
+      tray: desktopTray,
       setup,
       ipc: registeredIpc,
       profiles,
@@ -1710,6 +1751,7 @@ if (!hasSingleInstanceLock) {
     app.on('before-quit', event => shutdown.beforeQuit(event));
 
     mainWindow = await createMainWindow();
+    desktopTray.start();
 
     if (connectSmoke) {
       reportPackagedConnectJourneyStage('JOURNEY_DISCOVERY_RENDERER');

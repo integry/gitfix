@@ -34,6 +34,7 @@ describe('desktop preload bridge', () => {
   it('maps profile and main-process authentication operations to fixed channels', async () => {
     const ipc = new FakeIpc();
     const bridge = createDesktopBridge(ipc);
+    await bridge.app.refreshActiveWork();
     await bridge.auth.logout('http://localhost:4000');
     await bridge.profiles.save({ label: 'Local', apiBaseUrl: 'http://localhost:4000' });
     await bridge.authentication.pair({ id: 'profile-1', label: 'Local', apiBaseUrl: 'http://localhost:4000' });
@@ -43,6 +44,7 @@ describe('desktop preload bridge', () => {
     await bridge.discovery.rediscover('profile-1');
     await bridge.lifecycle.start();
     assert.deepEqual(ipc.invocations, [
+      { channel: IPC_CHANNELS.activeWorkRefresh, args: [] },
       { channel: IPC_CHANNELS.authLogout, args: ['http://localhost:4000'] },
       {
         channel: IPC_CHANNELS.profilesSave,

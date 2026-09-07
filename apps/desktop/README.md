@@ -26,6 +26,14 @@ instance returns 401, **Sign in in browser** opens its API-supplied approval pag
 finish pairing. Use the **Connected: _name_** control to switch, edit, remove, or re-pair saved profiles. Profile metadata
 survives relaunch; the credential remains in the OS secure store.
 
+Linux and macOS expose one native ProPR tray/menu-bar item. Its **Active work** total is the sum of current running
+queue tasks, the signed-in account's generating/refining plans, and that account's incomplete repository goals which
+have not been converted into a plan. The disjoint definition prevents a linked goal from being counted again as a
+plan. The tooltip and menu retain separate Tasks, Plans, and Goals values; `Unavailable` means the instance or active
+authenticated profile could not be verified and is intentionally distinct from a verified zero. Tray clicks restore
+and focus ProPR, while **Quit ProPR** uses the normal coordinated shutdown. Closing a window keeps the existing
+platform behavior—it does not enable a new hidden background mode. Windows tray support remains deferred.
+
 ### Recovery and troubleshooting
 
 - If Linux does not show **Set up this computer**, confirm that the running artifact is a current Linux package. The
