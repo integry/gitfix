@@ -35,14 +35,13 @@ export interface VoiceBriefingQueueSnapshot {
 
 export interface VoiceBriefingPlanRow {
   draft_id: unknown;
-  name: unknown;
   repository: unknown;
   status: unknown;
   updated_at: unknown;
 }
 
 export interface VoiceBriefingDataLoaders {
-  loadQueueJobs(): Promise<VoiceBriefingQueueSnapshot>;
+  loadQueueJobs(userId: string): Promise<VoiceBriefingQueueSnapshot>;
   loadPlans(userId: string): Promise<readonly VoiceBriefingPlanRow[]>;
   loadNotifications(userId: string): Promise<readonly Notification[]>;
 }
@@ -79,6 +78,11 @@ interface NormalizedQueueEntry {
   stableId: string;
 }
 
+interface QueueRecipientIdentity {
+  userId: string;
+  githubUsername?: string;
+}
+
 /**
  * Construct production data loaders. Only explicitly allowlisted columns and fields
  * cross the data-loading boundary; draft prompts and notification metadata are never
@@ -88,18 +92,23 @@ export function createVoiceBriefingDataLoaders(
   dependencies: VoiceBriefingLoaderDependencies,
 ): VoiceBriefingDataLoaders {
   return {
-    async loadQueueJobs() {
+    async loadQueueJobs(userId) {
+      const recipient = await loadQueueRecipientIdentity(dependencies.database, userId);
       const [active, waiting, delayed] = await Promise.all([
         dependencies.taskQueue.getJobs(['active']),
         dependencies.taskQueue.getJobs(['waiting']),
         dependencies.taskQueue.getJobs(['delayed']),
       ]);
-      return { active, waiting, delayed } as VoiceBriefingQueueSnapshot;
+      return {
+        active: active.filter(job => queueJobBelongsToRecipient(job, recipient)),
+        waiting: waiting.filter(job => queueJobBelongsToRecipient(job, recipient)),
+        delayed: delayed.filter(job => queueJobBelongsToRecipient(job, recipient)),
+      } as VoiceBriefingQueueSnapshot;
     },
 
     async loadPlans(userId) {
       return dependencies.database('task_drafts')
-        .select('draft_id', 'name', 'repository', 'status', 'updated_at')
+        .select('draft_id', 'repository', 'status', 'updated_at')
         .where({ user_id: userId })
         .whereIn('status', INCLUDED_PLAN_STATUSES) as unknown as Promise<VoiceBriefingPlanRow[]>;
     },
@@ -128,7 +137,7 @@ export class VoiceBriefingService {
   ): Promise<VoiceBriefingResponse> {
     const generatedAt = normalizeISO8601Timestamp(this.now());
     const [queueSnapshot, plans, notifications] = await Promise.all([
-      this.loaders.loadQueueJobs(),
+      this.loaders.loadQueueJobs(userId),
       this.loaders.loadPlans(userId),
       this.loaders.loadNotifications(userId),
     ]);
@@ -214,6 +223,41 @@ async function loadAllAuthorizedNotifications(
   return notifications;
 }
 
+async function loadQueueRecipientIdentity(
+  database: Knex,
+  userId: string,
+): Promise<QueueRecipientIdentity> {
+  const member = await database('instance_members')
+    .select('github_username')
+    .where({ github_user_id: userId })
+    .first() as { github_username?: unknown } | undefined;
+  const username = nonEmptyString(member?.github_username);
+  return {
+    userId,
+    ...(username ? { githubUsername: username } : {}),
+  };
+}
+
+function queueJobBelongsToRecipient(
+  job: VoiceBriefingQueueJob,
+  recipient: QueueRecipientIdentity,
+): boolean {
+  const data = recordValue(job.data);
+  const explicitOwnerIds = [data.userId, data.user_id, data.githubUserId];
+  if (explicitOwnerIds.some(value => nonEmptyString(value) === recipient.userId)) return true;
+
+  const username = recipient.githubUsername;
+  if (!username) return false;
+  const producerAuthenticatedOwners = job.name === 'processTaskImport'
+    ? [data.user]
+    : job.name === 'processSystemTask' ? [data.requestingUser] : [];
+
+  return producerAuthenticatedOwners.some(value => {
+    const owner = nonEmptyString(value);
+    return owner ? owner.toLowerCase() === username.toLowerCase() : false;
+  });
+}
+
 function normalizeQueueEntries(snapshot: VoiceBriefingQueueSnapshot): NormalizedQueueEntry[] {
   const entries: NormalizedQueueEntry[] = [];
   const seenIds = new Set<string>();
@@ -279,8 +323,8 @@ function planCandidate(
   if (!draftId) return [];
 
   const id = safeIdentifier(draftId, 'plan');
-  const title = safeTitle(nonEmptyString(row.name) ?? 'Untitled plan');
   const repository = safeRepository(row.repository);
+  const title = safeTitle(repository ? `Plan for ${repository}` : 'Plan');
   const requiresAttention = status === 'review';
   const running = status === 'generating' || status === 'executing';
   const actions: VoiceBriefingAction[] = requiresAttention
@@ -293,7 +337,7 @@ function planCandidate(
     title,
     repository,
     status,
-    summary: safeSummary(title, repository, planStatusSummary(status)),
+    summary: safeSummary(title, null, planStatusSummary(status)),
     href: `/studio/${safePathSegment(draftId)}`,
     requiresAttention,
     actions,

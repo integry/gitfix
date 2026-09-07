@@ -95,7 +95,7 @@ test('briefing preserves complete job counts, prioritizes attention, deduplicate
   };
   const plans: VoiceBriefingPlanRow[] = [{
     draft_id: 'draft-1',
-    name: 'Secure voice workflow',
+    name: 'SECRET PLAN PROMPT',
     repository: 'integry/propr',
     status: 'review',
     updated_at: '2026-09-07T01:10:00.000Z',
@@ -147,6 +147,7 @@ test('briefing preserves complete job counts, prioritizes attention, deduplicate
     'plan 1',
   ]);
   assert.equal(first.items.filter(item => item.id === 'task-1').length, 1);
+  assert.equal(first.items.find(item => item.id === 'draft-1')?.title, 'Plan for integry/propr');
   assert.deepEqual(second.items, first.items, 'the same snapshot has stable reference ordering');
 
   const serialized = JSON.stringify(first);
@@ -162,6 +163,7 @@ test('briefing preserves complete job counts, prioritizes attention, deduplicate
 });
 
 test('running and attention scopes filter details while retaining complete snapshot counts', async () => {
+  const requestedQueueUsers: string[] = [];
   const requestedPlanUsers: string[] = [];
   const requestedNotificationUsers: string[] = [];
   const queue: VoiceBriefingQueueSnapshot = {
@@ -170,20 +172,23 @@ test('running and attention scopes filter details while retaining complete snaps
     delayed: [],
   };
   const testLoaders: VoiceBriefingDataLoaders = {
-    loadQueueJobs: async () => queue,
+    loadQueueJobs: async userId => {
+      requestedQueueUsers.push(userId);
+      return queue;
+    },
     loadPlans: async userId => {
       requestedPlanUsers.push(userId);
       return [
         {
-          draft_id: 'generating-plan', name: 'Generating plan', repository: 'integry/propr',
+          draft_id: 'generating-plan', repository: 'integry/propr',
           status: 'generating', updated_at: '2026-09-07T01:18:00.000Z',
         },
         {
-          draft_id: 'review-plan', name: 'Review plan', repository: 'integry/propr',
+          draft_id: 'review-plan', repository: 'integry/propr',
           status: 'review', updated_at: '2026-09-07T01:17:00.000Z',
         },
         {
-          draft_id: 'approved-plan', name: 'Approved plan', repository: 'integry/propr',
+          draft_id: 'approved-plan', repository: 'integry/propr',
           status: 'approved', updated_at: '2026-09-07T01:16:00.000Z',
         },
       ];
@@ -208,17 +213,18 @@ test('running and attention scopes filter details while retaining complete snaps
   assert.deepEqual(attention.items.map(item => item.id), ['stalled-task', 'review-plan']);
   assert.ok(attention.items.every(item => item.requiresAttention));
   assert.deepEqual(running.counts, attention.counts);
+  assert.deepEqual(requestedQueueUsers, ['authenticated-user', 'authenticated-user']);
   assert.deepEqual(requestedPlanUsers, ['authenticated-user', 'authenticated-user']);
   assert.deepEqual(requestedNotificationUsers, ['authenticated-user', 'authenticated-user']);
 });
 
-test('production loaders constrain the plan query and page through recipient-authorized notifications', async () => {
+test('production loaders authorize queue jobs, constrain plans, and page notifications', async () => {
   const queryTrace: Array<[string, unknown]> = [];
   const planRows = [{
-    draft_id: 'owned-plan', name: 'Owned plan', repository: 'integry/propr',
+    draft_id: 'owned-plan', repository: 'integry/propr',
     status: 'review', updated_at: NOW,
   }];
-  const query = {
+  const planQuery = {
     select(...columns: string[]) {
       queryTrace.push(['select', columns]);
       return this;
@@ -232,15 +238,54 @@ test('production loaders constrain the plan query and page through recipient-aut
       return Promise.resolve(planRows);
     },
   };
+  const memberQuery = {
+    select(...columns: string[]) {
+      queryTrace.push(['select', columns]);
+      return this;
+    },
+    where(value: unknown) {
+      queryTrace.push(['where', value]);
+      return this;
+    },
+    first() {
+      queryTrace.push(['first', undefined]);
+      return Promise.resolve({ github_username: 'Owner-Login' });
+    },
+  };
   const database = ((table: string) => {
     queryTrace.push(['table', table]);
-    return query;
+    return table === 'instance_members' ? memberQuery : planQuery;
   }) as unknown as Knex;
   const queueStates: string[][] = [];
   const taskQueue = {
     async getJobs(states: string[]) {
       queueStates.push(states);
-      return [];
+      if (states[0] === 'active') {
+        return [
+          job('owned-active', 'Owned active task', NOW, {
+            userId: 'owner-user',
+          }),
+          job('foreign-active', 'FOREIGN ACTIVE TITLE', NOW, {
+            userId: 'foreign-user',
+            repository: 'foreign/private',
+          }),
+        ];
+      }
+      if (states[0] === 'waiting') {
+        return [
+          {
+            ...job('owned-import', 'Owned import', NOW),
+            name: 'processTaskImport',
+            data: { repository: 'integry/propr', user: 'owner-login' },
+          },
+          job('unowned-waiting', 'UNOWNED WAITING TITLE', NOW),
+        ];
+      }
+      return [{
+        ...job('foreign-system', 'FOREIGN SYSTEM TITLE', NOW),
+        name: 'processSystemTask',
+        data: { owner: 'foreign', repoName: 'private', requestingUser: 'someone-else' },
+      }];
     },
   };
   const notificationCalls: Array<{ userId: string; cursor: string | null; limit?: number }> = [];
@@ -265,18 +310,47 @@ test('production loaders constrain the plan query and page through recipient-aut
   });
 
   const [snapshot, loadedPlans, loadedNotifications] = await Promise.all([
-    dataLoaders.loadQueueJobs(),
+    dataLoaders.loadQueueJobs('owner-user'),
     dataLoaders.loadPlans('owner-user'),
     dataLoaders.loadNotifications('owner-user'),
   ]);
 
-  assert.deepEqual(snapshot, { active: [], waiting: [], delayed: [] });
+  assert.deepEqual(snapshot.active.map(queueJob => queueJob.id), ['owned-active']);
+  assert.deepEqual(snapshot.waiting.map(queueJob => queueJob.id), ['owned-import']);
+  assert.deepEqual(snapshot.delayed, []);
+  const briefing = await new VoiceBriefingService({
+    loaders: loaders({ queue: snapshot, plans: [...loadedPlans] }),
+    now: () => NOW,
+  }).getBriefing('owner-user');
+  assert.deepEqual(briefing.counts, {
+    running: 1,
+    queued: 1,
+    attention: 1,
+    plans: 1,
+    total: 3,
+  });
+  const serialized = JSON.stringify(briefing);
+  for (const foreignValue of [
+    'foreign-active',
+    'FOREIGN ACTIVE TITLE',
+    'foreign/private',
+    'unowned-waiting',
+    'UNOWNED WAITING TITLE',
+    'foreign-system',
+    'FOREIGN SYSTEM TITLE',
+  ]) {
+    assert.equal(serialized.includes(foreignValue), false);
+  }
   assert.deepEqual(queueStates, [['active'], ['waiting'], ['delayed']]);
   assert.deepEqual(loadedPlans, planRows);
   assert.deepEqual(loadedNotifications, []);
   assert.deepEqual(queryTrace, [
+    ['table', 'instance_members'],
+    ['select', ['github_username']],
+    ['where', { github_user_id: 'owner-user' }],
+    ['first', undefined],
     ['table', 'task_drafts'],
-    ['select', ['draft_id', 'name', 'repository', 'status', 'updated_at']],
+    ['select', ['draft_id', 'repository', 'status', 'updated_at']],
     ['where', { user_id: 'owner-user' }],
     ['whereIn', ['status', ['generating', 'executing', 'review', 'approved']]],
   ]);
