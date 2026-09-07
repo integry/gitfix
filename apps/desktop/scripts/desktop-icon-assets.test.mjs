@@ -59,7 +59,10 @@ describe('desktop native icon assets', () => {
     ]);
     assert.match(forge, /process\.platform === 'darwin' \? \{ icon: desktopMacIcon \} : \{\}/);
     assert.equal(forge.match(/icon: desktopLinuxIcon/g)?.length, 2);
-    assert.match(forge, /extraResource: \[\s*desktopLinuxIcon,/);
+    assert.match(
+      forge,
+      /extraResource: \[\s*desktopTrayArtwork,\s*\.\.\.\(process\.platform === 'linux' \? \[\s*desktopLinuxIcon,/,
+    );
     assert.match(main, /loadDesktopWindowIcon/);
     assert.match(main, /desktopWindowIcon\?\.image/);
     assert.equal(workflow.match(/icons:verify-packaged/g)?.length, 2);
