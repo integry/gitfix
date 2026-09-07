@@ -26,22 +26,54 @@ const waitForFixtureProcessId = pidPath => {
   assert.fail('timed-out waiting for descendant fixture readiness');
 };
 
-const waitForProcessExit = async processId => {
+const waitForProcessExit = async (processId, {
+  killProcess = process.kill,
+  platform = process.platform,
+  readProcessStat = id => readFile(`/proc/${id}/stat`, 'utf8'),
+  wait = delay,
+} = {}) => {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
-      process.kill(processId, 0);
-      if (process.platform === 'linux') {
-        const processState = (await readFile(`/proc/${processId}/stat`, 'utf8')).split(' ')[2];
-        if (processState === 'Z') return;
-      }
-      await delay(20);
+      killProcess(processId, 0);
     } catch (error) {
       if (error?.code === 'ESRCH') return;
       throw error;
     }
+    if (platform === 'linux') {
+      try {
+        const processState = (await readProcessStat(processId)).split(' ')[2];
+        if (processState === 'Z') return;
+      } catch (error) {
+        if (error?.code === 'ENOENT') return;
+        throw error;
+      }
+    }
+    await wait(20);
   }
   assert.fail('timed-out descendant process remained alive');
 };
+
+test('observes Linux process exit when proc stat disappears after the liveness check', async () => {
+  const processId = 2173;
+  let livenessChecked = false;
+  let procStatReads = 0;
+  await waitForProcessExit(processId, {
+    platform: 'linux',
+    killProcess: (observedProcessId, signal) => {
+      assert.equal(observedProcessId, processId);
+      assert.equal(signal, 0);
+      livenessChecked = true;
+    },
+    readProcessStat: async observedProcessId => {
+      assert.equal(observedProcessId, processId);
+      assert.equal(livenessChecked, true);
+      procStatReads += 1;
+      throw Object.assign(new Error('proc stat disappeared'), { code: 'ENOENT' });
+    },
+    wait: async () => assert.fail('missing proc stat should observe process exit without retrying'),
+  });
+  assert.equal(procStatReads, 1);
+});
 
 test('bounds output while continuously draining both child streams', async () => {
   const result = await runBoundedProcess({
