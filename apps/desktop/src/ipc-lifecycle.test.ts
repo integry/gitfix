@@ -932,7 +932,7 @@ describe('desktop IPC shutdown gate', () => {
     );
     const sender = {
       isLoading: () => false,
-      mainFrame: { url: 'propr-renderer://app/index.html' },
+      mainFrame: { frameToken: 'current-document', processId: 1, url: 'propr-renderer://app/index.html' },
       send: (_channel: string, delivery: DesktopDeepLinkDelivery) => { sent.push(delivery); },
     };
     const window: DeepLinkWindow = {

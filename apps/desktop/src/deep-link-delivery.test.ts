@@ -12,7 +12,7 @@ describe('desktop deep-link delivery', () => {
     isDestroyed: () => false,
     webContents: {
       isLoading: () => false,
-      mainFrame: {},
+      mainFrame: { frameToken: 'current-document', processId: 1 },
       send: (_channel, value) => sent.push(value),
     },
   });
@@ -134,7 +134,7 @@ describe('desktop deep-link delivery', () => {
       isDestroyed: () => false,
       webContents: {
         isLoading: () => false,
-        mainFrame: {},
+        mainFrame: { frameToken: 'current-document', processId: 1 },
         send: (_channel, value) => {
           if (failNextSend) {
             failNextSend = false;
@@ -286,16 +286,15 @@ describe('desktop deep-link delivery', () => {
     assert.deepEqual(failures, []);
   });
 
-  it('rejects outgoing-document readiness after navigation starts', async () => {
+  it('fences navigation by document token when Electron reuses its main-frame wrapper', async () => {
     const sent: DesktopDeepLinkDelivery[] = [];
-    const outgoingFrame = {};
-    const currentFrame = {};
-    let mainFrame = outgoingFrame;
+    const mainFrame = { frameToken: 'outgoing-document', processId: 1 };
+    const outgoingFrameAfterCommit = { frameToken: 'outgoing-document', processId: 1 };
     const window: DeepLinkWindow = {
       isDestroyed: () => false,
       webContents: {
         isLoading: () => false,
-        get mainFrame() { return mainFrame; },
+        mainFrame,
         send: (_channel, value) => sent.push(value),
       },
     };
@@ -303,21 +302,59 @@ describe('desktop deep-link delivery', () => {
       'desktop:deep-link', [], undefined, undefined, Date.now, 1_000, 20, true,
     );
     activateWindow(delivery, window);
-    delivery.didStartLoading(window);
+    delivery.didStartMainFrameNavigation(window);
     delivery.deliver('propr://open?path=%2Ftasks');
 
-    assert.equal(delivery.rendererConsumerReady(window.webContents, outgoingFrame), false);
-    mainFrame = currentFrame;
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), false);
+    mainFrame.frameToken = 'incoming-document';
     delivery.didFinishLoad(window);
     assert.equal(sent.length, 0);
 
-    assert.equal(delivery.rendererConsumerReady(window.webContents, currentFrame), true);
+    assert.equal(window.webContents.mainFrame, mainFrame);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, outgoingFrameAfterCommit), false);
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
     assert.equal(sent.length, 1);
     const dispatched = sent[0];
     assert.ok(dispatched);
     assert.equal(delivery.acknowledge(window, {
       ...dispatched,
       consumption: { kind: 'open-queued', target: '/tasks' },
+    }), true);
+    await delivery.whenIdle();
+  });
+
+  it('accepts initial readiness after Electron commits into the reused main-frame wrapper', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const mainFrame = { frameToken: 'initial-empty-document', processId: 1 };
+    const window: DeepLinkWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        isLoading: () => false,
+        mainFrame,
+        send: (_channel, value) => sent.push(value),
+      },
+    };
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      ['propr://connect?api=http%3A%2F%2Flocalhost%3A44111'],
+      undefined,
+      undefined,
+      Date.now,
+      1_000,
+      20,
+      true,
+    );
+
+    delivery.didStartMainFrameNavigation(window);
+    mainFrame.frameToken = 'loaded-renderer-document';
+    delivery.didFinishLoad(window);
+    delivery.setWindow(window);
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents, mainFrame), true);
+    assert.equal(sent.length, 1);
+    assert.equal(delivery.acknowledge(window, {
+      ...sent[0],
+      consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
     }), true);
     await delivery.whenIdle();
   });

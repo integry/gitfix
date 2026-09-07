@@ -1249,8 +1249,10 @@ const createMainWindow = async (
   window.webContents.on('did-finish-load', () => {
     deepLinkDelivery.didFinishLoad(window);
   });
-  window.webContents.on('did-start-loading', () => {
-    deepLinkDelivery.didStartLoading(window);
+  window.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      deepLinkDelivery.didStartMainFrameNavigation(window);
+    }
   });
   window.on('closed', () => {
     deepLinkDelivery.clearWindow(window);

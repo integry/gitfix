@@ -17,16 +17,27 @@ export interface DeepLinkWindow {
   isDestroyed(): boolean;
   webContents: {
     isLoading(): boolean;
-    readonly mainFrame: object;
+    readonly mainFrame: {
+      readonly frameToken: string;
+      readonly processId: number;
+    };
     send(channel: string, value: DesktopDeepLinkDelivery): void;
   };
 }
 
+const rendererDocumentId = (frame: unknown): string | null => {
+  if ((typeof frame !== 'object' && typeof frame !== 'function') || frame === null
+    || !('frameToken' in frame) || typeof frame.frameToken !== 'string'
+    || frame.frameToken.length === 0
+    || !('processId' in frame) || !Number.isSafeInteger(frame.processId)) return null;
+  return `${String(frame.processId)}:${frame.frameToken}`;
+};
+
 /** Coordinates protocol delivery across the window creation/load boundary. */
 export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   private window: TWindow | null = null;
-  private readonly readyRendererFrames = new WeakSet<object>();
-  private readonly staleRendererFrames = new WeakSet<object>();
+  private readonly readyRendererDocuments = new WeakMap<object, string>();
+  private readonly staleRendererDocuments = new WeakMap<object, Set<string>>();
   private readonly recentlyAccepted = new Map<string, number>();
   private deliveryId = 0;
   private draining = false;
@@ -82,19 +93,26 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     if (this.window === window) this.flush(window);
   }
 
-  didStartLoading(window: TWindow): void {
-    const frame = window.webContents.mainFrame;
-    this.readyRendererFrames.delete(frame);
-    this.staleRendererFrames.add(frame);
+  didStartMainFrameNavigation(window: TWindow): void {
+    const { webContents } = window;
+    // Electron retains the WebFrameMain wrapper across document swaps while
+    // replacing its render-frame identity, so stale the identity, not the wrapper.
+    const documentId = rendererDocumentId(webContents.mainFrame);
+    if (documentId === null) return;
+    const stale = this.staleRendererDocuments.get(webContents) ?? new Set<string>();
+    stale.add(documentId);
+    this.staleRendererDocuments.set(webContents, stale);
   }
 
   /** Starts delivery only after the renderer has installed its consumer. */
   rendererConsumerReady(sender: unknown, senderFrame: unknown): boolean {
+    const documentId = rendererDocumentId(senderFrame);
     if ((typeof sender !== 'object' && typeof sender !== 'function') || sender === null
       || (typeof senderFrame !== 'object' && typeof senderFrame !== 'function') || senderFrame === null
       || !('mainFrame' in sender) || sender.mainFrame !== senderFrame
-      || this.staleRendererFrames.has(senderFrame)) return false;
-    this.readyRendererFrames.add(senderFrame);
+      || documentId === null
+      || this.staleRendererDocuments.get(sender)?.has(documentId)) return false;
+    this.readyRendererDocuments.set(sender, documentId);
     if (this.window?.webContents === sender) void this.drain();
     return true;
   }
@@ -105,7 +123,11 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   }
 
   clearWindow(window: TWindow): void {
-    if (this.window === window) this.window = null;
+    if (this.window === window) {
+      this.window = null;
+      this.readyRendererDocuments.delete(window.webContents);
+      this.staleRendererDocuments.delete(window.webContents);
+    }
   }
 
   acknowledge(window: TWindow, acknowledgement: DesktopDeepLinkAcknowledgement): boolean {
@@ -144,9 +166,11 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     try {
       while (this.pending.length > 0) {
         const window = this.window;
-        if (!window || window.isDestroyed() || window.webContents.isLoading()
-          || (this.requireRendererConsumerReady
-            && !this.readyRendererFrames.has(window.webContents.mainFrame))) return;
+        if (!window || window.isDestroyed() || window.webContents.isLoading()) return;
+        const currentDocumentId = rendererDocumentId(window.webContents.mainFrame);
+        if (this.requireRendererConsumerReady && (currentDocumentId === null
+          || this.readyRendererDocuments.get(window.webContents) !== currentDocumentId
+          || this.staleRendererDocuments.get(window.webContents)?.has(currentDocumentId))) return;
         const value = this.pending.shift();
         if (value === undefined) return;
         const delivery = { deliveryId: ++this.deliveryId, url: value };
