@@ -39,9 +39,9 @@
     "release:stage": "node scripts/release-artifacts.mjs stage",
     "release:finalize": "node scripts/release-artifacts.mjs finalize",
     "premake:deb": "npm run prepare:renderer",
-    "make:deb": "PROPR_DESKTOP_ENABLE_DEB=1 electron-forge make --targets @electron-forge/maker-deb",
+    "make:deb": "PROPR_DESKTOP_ENABLE_DEB=1 electron-forge make --targets deb",
     "premake:rpm": "npm run prepare:renderer",
-    "make:rpm": "PROPR_DESKTOP_ENABLE_RPM=1 electron-forge make --targets @electron-forge/maker-rpm"
+    "make:rpm": "PROPR_DESKTOP_ENABLE_RPM=1 electron-forge make --targets rpm"
   },
   "devDependencies": {
     "@electron-forge/cli": "8.0.0-alpha.10",
