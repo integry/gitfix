@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, net, Notification, protocol, safeStorage, screen, session, shell } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -41,6 +41,7 @@ import {
 } from './ipc';
 import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
+import { NativeNotificationService } from './native-notifications';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
 import { openApprovedDesktopPairingUrl } from './pairing-browser';
 import {
@@ -1616,6 +1617,29 @@ if (!hasSingleInstanceLock) {
       }
     }
     const lifecycle = new LocalLifecycleController();
+    const notifications = new NativeNotificationService({
+      statePath: join(app.getPath('userData'), 'desktop-notification-preferences.json'),
+      platform: process.platform,
+      isSupported: () => Notification.isSupported(),
+      isActiveScope: scope => credentials.isActiveConnectionScope(scope),
+      show: (payload, onClick) => {
+        const notification = new Notification({ title: payload.title, body: payload.body });
+        notification.once('click', onClick);
+        notification.show();
+        return {
+          close: () => notification.close(),
+          onClose: listener => { notification.once('close', listener); },
+        };
+      },
+      navigate: path => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        mainWindow.webContents.send(IPC_CHANNELS.notificationNavigate, path);
+      },
+      log: (level, event) => log(level, event),
+    });
     nativeProfiles = profiles;
     const setupHost = process.platform === 'linux'
       ? await createDesktopSetupHost({
@@ -1653,6 +1677,7 @@ if (!hasSingleInstanceLock) {
       connectDiscovery,
       lifecycle,
       setup,
+      notifications,
       logger,
       desktopSession: session.defaultSession,
       devServerUrl,
@@ -1665,8 +1690,9 @@ if (!hasSingleInstanceLock) {
       },
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinkDelivery.acknowledgeSender(event.sender, acknowledgement),
-      ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {
-        onRendererActiveProfileChanged: (origin: string | null) => {
+      onRendererActiveProfileChanged: (origin: string | null) => {
+          notifications.clear();
+          if (!app.isPackaged || rendererPolicyPinnedForSmoke) return;
           if (packagedAcceptanceTest) return;
           const nextOrigins = origin?.startsWith('http://') ? [origin] : [];
           if (rendererPolicyOrigins.length === nextOrigins.length
@@ -1677,7 +1703,6 @@ if (!hasSingleInstanceLock) {
           // both fail closed for the new active endpoint.
           reloadCurrentRendererForPolicyChange();
         },
-      } : {}),
       ...(journeyStages ? {
         reportAcceptanceJourneyStage: (stage: DesktopAcceptanceJourneyStage) => {
           journeyStages.record(stage);
@@ -1700,6 +1725,7 @@ if (!hasSingleInstanceLock) {
       setup,
       ipc: registeredIpc,
       profiles,
+      notifications,
       sessionSecurity,
       disposeRendererProtocol,
       getWindow: () => mainWindow,

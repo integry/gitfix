@@ -53,6 +53,7 @@ export const createDesktopBridge = (
     await invoke(ipc, IPC_CHANNELS.deepLinkAcknowledgement, acknowledgement).catch(() => undefined);
   };
   const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
+  const notificationNavigationListeners = new Set<(path: string) => void>();
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
@@ -65,6 +66,10 @@ export const createDesktopBridge = (
     setupProgressListeners.forEach(listener => listener(
       value as Awaited<ReturnType<DesktopBridge['localSetup']['status']>>,
     ));
+  });
+  ipc.on(IPC_CHANNELS.notificationNavigate, (_event, value) => {
+    if (typeof value !== 'string' || !(/^\/tasks(?:\/[A-Za-z0-9_.~!$&'()*+,;=:@%-]+)?$/.test(value))) return;
+    notificationNavigationListeners.forEach(listener => listener(value));
   });
 
   const bridge: DesktopBridge = {
@@ -129,6 +134,17 @@ export const createDesktopBridge = (
       onProgress: listener => {
         setupProgressListeners.add(listener);
         return () => setupProgressListeners.delete(listener);
+      },
+    },
+    notifications: {
+      get: scope => invoke(ipc, IPC_CHANNELS.notificationsGet, scope),
+      update: (scope, preferences) => invoke(ipc, IPC_CHANNELS.notificationsUpdate, scope, preferences),
+      test: scope => invoke(ipc, IPC_CHANNELS.notificationsTest, scope),
+      publish: (scope, transition) => invoke(ipc, IPC_CHANNELS.notificationsPublish, scope, transition),
+      clear: scope => invoke(ipc, IPC_CHANNELS.notificationsClear, scope),
+      onNavigate: listener => {
+        notificationNavigationListeners.add(listener);
+        return () => notificationNavigationListeners.delete(listener);
       },
     },
     ...(connectJourneyAcceptance ? {

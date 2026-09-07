@@ -24,11 +24,42 @@ class FakeIpc implements PreloadIpc {
 describe('desktop preload bridge', () => {
   it('exposes only the narrow frozen namespaces', () => {
     const bridge = createDesktopBridge(new FakeIpc());
-    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'localSetup', 'profiles', 'storage']);
+    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'localSetup', 'notifications', 'profiles', 'storage']);
     assert.equal(Object.isFrozen(bridge), true);
     assert.equal(Object.values(bridge).every(Object.isFrozen), true);
     assert.equal('fs' in bridge, false);
     assert.equal('exec' in bridge, false);
+  });
+
+  it('maps notifications to fixed channels and accepts only internal task navigation', async () => {
+    const ipc = new FakeIpc();
+    const bridge = createDesktopBridge(ipc);
+    const native = bridge.notifications;
+    assert.ok(native);
+    const scope = { profileId: 'profile-1', transportScope: 'abcdefghijklmnopqrstuv', userId: '42' };
+    const event = {
+      taskId: 'task-1', state: 'failed', previousState: 'processing',
+      timestamp: '2026-09-07T18:45:00.000Z', version: 2,
+    };
+    await native.get(scope);
+    await native.update(scope, { enabled: true });
+    await native.test(scope);
+    await native.publish(scope, event);
+    await native.clear(scope);
+    const paths: string[] = [];
+    const unsubscribe = native.onNavigate(path => paths.push(path));
+    ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, '/tasks/task-1');
+    ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, 'https://attacker.example');
+    ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, '/settings');
+    unsubscribe();
+    assert.deepEqual(paths, ['/tasks/task-1']);
+    assert.deepEqual(ipc.invocations, [
+      { channel: IPC_CHANNELS.notificationsGet, args: [scope] },
+      { channel: IPC_CHANNELS.notificationsUpdate, args: [scope, { enabled: true }] },
+      { channel: IPC_CHANNELS.notificationsTest, args: [scope] },
+      { channel: IPC_CHANNELS.notificationsPublish, args: [scope, event] },
+      { channel: IPC_CHANNELS.notificationsClear, args: [scope] },
+    ]);
   });
 
   it('maps profile and main-process authentication operations to fixed channels', async () => {

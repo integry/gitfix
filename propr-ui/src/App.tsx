@@ -24,6 +24,7 @@ import { NotificationCenterProvider } from './contexts/NotificationCenterContext
 import { isDesktopRuntime, publicAssetUrl } from './config/runtimeMode'
 import { DesktopPresentationBoundary } from './desktop/DesktopPresentationBoundary'
 import { useCurrentUserBootstrap } from './hooks/useCurrentUserBootstrap'
+import { DesktopTaskNotificationAdapter } from './desktop/DesktopTaskNotificationAdapter'
 
 const Router = isDesktopRuntime() ? HashRouter : BrowserRouter;
 
@@ -157,6 +158,7 @@ const AppContent: React.FC = () => {
           <DemoModeBanner />
           <div className="min-h-0 flex-1">
             <AuthProvider user={currentUser} refreshUser={refreshCurrentUser}>
+              <DesktopTaskNotificationAdapter />
               <BrowserPushProvider>
                 <NotificationCenterProvider key={currentUser?.id ?? (isDemoMode ? 'demo' : 'anonymous')}>
                   <Router>

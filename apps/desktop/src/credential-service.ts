@@ -1137,6 +1137,17 @@ export class DesktopCredentialService {
       && active.connectClaim.isCurrent();
   }
 
+  /** Secret-free scope check for main-process features fed by the authenticated renderer stream. */
+  isActiveConnectionScope(value: { profileId: string; transportScope: string }): boolean {
+    const active = this.#active;
+    return active !== null
+      && value.profileId === active.profileId
+      && value.transportScope === active.transportScope
+      && this.#generation(active.profileId) === active.profileGeneration
+      && this.#selectionGeneration === active.selectionGeneration
+      && active.connectClaim.isCurrent();
+  }
+
   prepareRequest(
     url: string,
     originalHeaders: RequestHeaders,

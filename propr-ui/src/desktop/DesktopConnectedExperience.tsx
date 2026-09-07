@@ -61,6 +61,16 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
     authenticate: () => adapters.authentication.authenticate(profile),
     openConnectionHelp: () => adapters.externalBrowser.open('https://propr.dev'),
     retry,
+    ...(adapters.notifications && result.transportScope ? {
+      notifications: {
+        bridge: adapters.notifications,
+        scopeFor: (userId: string) => ({
+          profileId: profile.id,
+          transportScope: result.transportScope!,
+          userId,
+        }),
+      },
+    } : {}),
     ...(adapters.acceptance ? {
       reportConnectedRendererReady: () => adapters.acceptance!.reportJourneyStage('REACT_CONNECTED'),
     } : {}),

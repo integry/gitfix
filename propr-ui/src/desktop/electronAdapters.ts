@@ -124,6 +124,7 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
       return fromDiscoveryCandidate(candidate);
     },
   },
+  notifications: bridge.notifications,
   ...(bridge.acceptance ? {
     acceptance: {
       reportJourneyStage: stage => bridge.acceptance!.reportJourneyStage(stage),

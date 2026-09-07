@@ -119,6 +119,7 @@ export interface DesktopAdapters {
   localSetup: DesktopLocalSetupAdapter;
   connection: DesktopConnectionAdapter;
   managedTunnelRecovery?: DesktopManagedTunnelRecoveryAdapter;
+  notifications?: import('../../../apps/desktop/src/shared/contract').DesktopBridge['notifications'];
   /** @internal Authorized packaged-journey evidence; absent in production use. */
   acceptance?: {
     reportJourneyStage(stage: DesktopAcceptanceJourneyStage): Promise<void>;
