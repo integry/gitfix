@@ -10,8 +10,10 @@ export const IPC_CHANNELS = Object.freeze({
   profilesSave: 'desktop:profiles-save',
   profilesRemove: 'desktop:profiles-remove',
   profilesSetActive: 'desktop:profiles-set-active',
+  authenticationPairAdmit: 'desktop:authentication-pair-admit',
   authenticationPair: 'desktop:authentication-pair',
   authenticationCancel: 'desktop:authentication-cancel',
+  authenticationProgress: 'desktop:authentication-progress',
   connectionProbe: 'desktop:connection-probe',
   connectionActivate: 'desktop:connection-activate',
   connectionDiscard: 'desktop:connection-discard',
@@ -81,6 +83,27 @@ export interface DesktopProfileInput {
   id?: string;
   label: string;
   apiBaseUrl: string;
+}
+
+export type DesktopPairingFailureCode =
+  | 'APPROVAL_EXPIRED'
+  | 'SECURE_STORAGE_FAILED'
+  | 'PAIRING_REJECTED'
+  | 'PAIRING_UNREACHABLE'
+  | 'PAIRING_CANCELLED';
+
+export type DesktopPairingResult =
+  | { paired: true }
+  | { paired: false; code: DesktopPairingFailureCode };
+
+export const isDesktopPairingOperationId = (value: unknown): value is string =>
+  typeof value === 'string'
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+
+export interface DesktopPairingProgress {
+  operationId: string;
+  profileId: string;
+  stage: 'browser-opening' | 'approval-pending' | 'browser-open-failed';
 }
 
 /** Secret-free candidate projected by the trusted main-process discovery service. */
@@ -251,8 +274,10 @@ export interface DesktopBridge {
     setActive(profileId: string | null): Promise<void>;
   };
   authentication: {
-    pair(profile: DesktopProfileInput): Promise<{ paired: true }>;
+    admit(profileId: string): Promise<{ operationId: string }>;
+    pair(profile: DesktopProfileInput, operationId: string): Promise<DesktopPairingResult>;
     cancel(profileId: string): Promise<void>;
+    onProgress?(listener: (progress: DesktopPairingProgress) => void): () => void;
   };
   connection: {
     probe(profile: DesktopProfileInput): Promise<DesktopConnectionResult>;

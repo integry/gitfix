@@ -8,7 +8,8 @@ import {
   PROPR_API_COMPATIBILITY,
   PROPR_UI_COMPATIBILITY,
 } from '@propr/shared';
-import { DesktopCredentialService, type DesktopPairingBrowserRequest } from './credential-service';
+import { ProprClientError } from '@propr/client';
+import { DesktopCredentialService, desktopPairingFailureCode, type DesktopPairingBrowserRequest, type DesktopPairingProgress } from './credential-service';
 import { openApprovedDesktopPairingUrl } from './pairing-browser';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
 
@@ -17,6 +18,7 @@ const pairingNow = Date.parse('2026-01-01T00:00:00.000Z');
 const origin = 'https://api.example.test';
 const approvalUrl = `${origin}/api/desktop/pairings/${pairingId}/browser`;
 const instanceToken = `propr_it_${'T'.repeat(43)}`;
+const pairingOperationId = '123e4567-e89b-42d3-a456-426614174000';
 const temporaryDirectories: string[] = [];
 const services: DesktopCredentialService[] = [];
 
@@ -50,6 +52,7 @@ const discovery = {
 interface PairingProofOptions {
   beforeProvisional?(): void;
   onRequest?(request: { url: string; authorization: string | null }): void;
+  onProgress?(progress: DesktopPairingProgress): void;
 }
 
 const createService = async (
@@ -64,6 +67,7 @@ const createService = async (
     clientName: 'Pairing sink test',
     pairingTiming: { now: () => pairingNow, sleep: async () => undefined },
     openPairingBrowser,
+    reportPairingProgress: proof.onProgress,
     fetch: async (input, init) => {
       const url = input.toString();
       proof.onRequest?.({
@@ -113,6 +117,21 @@ afterEach(async () => {
 });
 
 describe('DesktopCredentialService pairing browser sink', () => {
+  it('maps protocol expiry, transport, rejection, and cancellation to fixed failure codes', () => {
+    assert.equal(desktopPairingFailureCode(new ProprClientError('private expiry detail', {
+      kind: 'authentication', code: 'PAIRING_EXPIRED',
+    })), 'APPROVAL_EXPIRED');
+    assert.equal(desktopPairingFailureCode(new ProprClientError('private network detail', {
+      kind: 'network',
+    })), 'PAIRING_UNREACHABLE');
+    assert.equal(desktopPairingFailureCode(new ProprClientError('private backend detail', {
+      kind: 'http', status: 403,
+    })), 'PAIRING_REJECTED');
+    assert.equal(desktopPairingFailureCode(new ProprClientError('private cancellation detail', {
+      kind: 'aborted',
+    })), 'PAIRING_CANCELLED');
+  });
+
   it('pairs through the browser journey and rejects a response URL replacement', async () => {
     const opened: string[] = [];
     const requests: Array<{ url: string; authorization: string | null }> = [];
@@ -170,5 +189,48 @@ describe('DesktopCredentialService pairing browser sink', () => {
       /Desktop pairing browser request was rejected/,
     );
     assert.deepEqual(replacedOpened, []);
+  });
+
+  it('keeps polling when the OS rejects browser launch after accepting the validated URL', async () => {
+    const progress: DesktopPairingProgress[] = [];
+    const service = await createService(request => openApprovedDesktopPairingUrl(request, {
+      openExternal: async () => { throw new Error('host portal detail must stay private'); },
+    }, { ambiguousOsLaunchFailure: true }), { onProgress: value => progress.push(value) });
+
+    const paired = await service.pair(
+      { id: 'profile-a', label: 'Remote ProPR', apiBaseUrl: origin }, pairingOperationId,
+    );
+
+    assert.deepEqual(paired, { paired: true });
+    assert.deepEqual(progress, [
+      { operationId: pairingOperationId, profileId: 'profile-a', stage: 'browser-opening' },
+      { operationId: pairingOperationId, profileId: 'profile-a', stage: 'browser-open-failed' },
+    ]);
+    assert.equal(JSON.stringify(progress).includes('portal detail'), false);
+    assert.equal(JSON.stringify(progress).includes(approvalUrl), false);
+  });
+
+  it('classifies unavailable OS secure storage without starting discovery or pairing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-pairing-storage-'));
+    temporaryDirectories.push(directory);
+    let fetched = false;
+    const service = new DesktopCredentialService({
+      profiles: new ProfileStore(directory, {
+        isEncryptionAvailable: () => false,
+        backend: () => 'basic_text',
+        encrypt: value => Buffer.from(value, 'utf8'),
+        decrypt: value => value.toString('utf8'),
+      }),
+      clientName: 'Pairing storage test',
+      openPairingBrowser: async () => undefined,
+      fetch: async () => { fetched = true; return new Response(); },
+    });
+    services.push(service);
+
+    await assert.rejects(
+      service.pair({ id: 'profile-a', label: 'Remote ProPR', apiBaseUrl: origin }),
+      error => desktopPairingFailureCode(error) === 'SECURE_STORAGE_FAILED',
+    );
+    assert.equal(fetched, false);
   });
 });

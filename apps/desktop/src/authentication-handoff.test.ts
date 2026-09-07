@@ -45,6 +45,48 @@ const waitForProcessExit = async (pid: number): Promise<void> => {
   throw new Error('Controlled authentication process was not reaped');
 };
 
+const readFixturePid = async (path: string): Promise<number> => {
+  const recorded = await readFile(path, 'utf8');
+  assert.match(recorded, /^[1-9][0-9]{0,9}$/);
+  const pid = Number(recorded);
+  assert.ok(Number.isSafeInteger(pid));
+  return pid;
+};
+
+const fixtureOwnsProcess = async (pid: number, command: string): Promise<boolean> => {
+  if (process.platform !== 'linux') return false;
+  try {
+    const commandLine = await readFile(`/proc/${pid}/cmdline`, 'utf8');
+    return commandLine.split('\0').includes(command);
+  }
+  catch {
+    return false;
+  }
+};
+
+const stopFixtureProcess = async (pid: number, command: string): Promise<void> => {
+  if (!await fixtureOwnsProcess(pid, command)) return;
+  try { process.kill(pid, 'SIGTERM'); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+    throw error;
+  }
+
+  try {
+    await waitForProcessExit(pid);
+    return;
+  }
+  catch {
+    if (!await fixtureOwnsProcess(pid, command)) return;
+    try { process.kill(pid, 'SIGKILL'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+      throw error;
+    }
+  }
+  await waitForProcessExit(pid);
+};
+
 const waitForPublishedStatus = (path: string, expected: string): void => {
   const deadline = Date.now() + 2_000;
   const pause = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
@@ -280,12 +322,34 @@ wait "$wrapper"
     const executedPath = join(directory, 'authentication.executed');
     const guardPassedPath = join(directory, 'wrapper.guard-passed');
     const terminationObservedPath = join(directory, 'wrapper.termination-observed');
+    const terminalCompletedPath = join(directory, 'terminal.completed');
+    const terminalPidPath = join(directory, 'terminal.pid');
     const controller = new AbortController();
+    let terminalPid: number | undefined;
+    let terminalReaped = false;
     let timeout: NodeJS.Timeout | undefined;
     try {
       // Add a test-only barrier after the last flag guard and before the
       // signal-handler transition that commits admission.
       await writeExecutable(terminal, `#!/bin/sh
+printf '%s' "$$" > "${terminalPidPath}"
+wrapper=
+cleanup() {
+  if [ -n "$wrapper" ]; then
+    kill -TERM "$wrapper" 2>/dev/null || true
+    wait "$wrapper" 2>/dev/null || true
+  fi
+}
+wait_for_nonempty_file() {
+  attempts=0
+  while [ ! -s "$1" ]; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 500 ] || return 1
+    sleep 0.01
+  done
+}
+trap cleanup 0
+trap 'exit 143' HUP INT TERM
 controlled_wrapper="$1.controlled"
 awk \\
   -v guard_passed="${guardPassedPath}" \\
@@ -311,21 +375,31 @@ chmod 700 "$controlled_wrapper" || exit 92
 shift
 "$controlled_wrapper" "$@" >/dev/null 2>&1 &
 wrapper=$!
-while [ ! -s "${guardPassedPath}" ]; do sleep 0.01; done
-kill -HUP "$wrapper"
-while [ ! -s "${terminationObservedPath}" ]; do sleep 0.01; done
+wait_for_nonempty_file "${guardPassedPath}" || exit 93
+kill -HUP "$wrapper" || exit 94
+wait_for_nonempty_file "${terminationObservedPath}" || exit 95
 wait "$wrapper"
+wrapper_status=$?
+wrapper=
+printf complete > "${terminalCompletedPath}"
+exit "$wrapper_status"
 `);
       await writeExecutable(authentication, `#!/bin/sh\nprintf executed > "${executedPath}"\n`);
 
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
       timeout = setTimeout(() => controller.abort(), 3_000);
       const handoff = launch(authentication, [], { title: 'Controlled early terminal close', signal: controller.signal });
+      await waitForFile(terminalPidPath);
+      terminalPid = await readFixturePid(terminalPidPath);
       assert.deepEqual(await handoff, { status: 1 });
+      await waitForFile(terminalCompletedPath);
+      await waitForProcessExit(terminalPid);
+      terminalReaped = true;
       await assert.rejects(readFile(executedPath), { code: 'ENOENT' });
     } finally {
       if (timeout) clearTimeout(timeout);
       controller.abort();
+      if (terminalPid !== undefined && !terminalReaped) await stopFixtureProcess(terminalPid, terminal);
       await rm(directory, { recursive: true, force: true });
     }
   });

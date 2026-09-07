@@ -39,8 +39,34 @@ export interface DesktopAuthenticationAdapter {
    * installed credentials that are ready for requests to this profile.
    * Opening the system browser alone is not successful authentication.
    */
-  authenticate(profile: DesktopProfile): Promise<void>;
+  authenticate(
+    profile: DesktopProfile,
+    onProgress?: (stage: DesktopAuthenticationProgressStage) => void,
+  ): Promise<void>;
   cancel?(profileId: string): Promise<void>;
+}
+
+export type DesktopAuthenticationProgressStage =
+  | 'starting'
+  | 'browser-opening'
+  | 'approval-pending'
+  | 'browser-open-failed';
+
+export type DesktopAuthenticationFailureCode =
+  | 'APPROVAL_EXPIRED'
+  | 'SECURE_STORAGE_FAILED'
+  | 'PAIRING_REJECTED'
+  | 'PAIRING_UNREACHABLE'
+  | 'PAIRING_CANCELLED';
+
+export class DesktopAuthenticationError extends Error {
+  readonly code: DesktopAuthenticationFailureCode;
+
+  constructor(code: DesktopAuthenticationFailureCode) {
+    super('Desktop authentication failed');
+    this.name = 'DesktopAuthenticationError';
+    this.code = code;
+  }
 }
 
 export const DESKTOP_AUTHENTICATION_COMPLETE_EVENT = 'propr:desktop-authentication-complete';

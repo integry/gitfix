@@ -28,6 +28,7 @@ import { registerPackagedAcceptanceZoomIpc } from './acceptance-zoom';
 import { DeepLinkDelivery, deepLinkAcknowledgementTimeoutMs } from './deep-link-delivery';
 import { handleDeepLinkDeliveryFailure } from './deep-link-failure-policy';
 import { clearDesktopInstanceCookies } from './desktop-session';
+import { loadDesktopWindowIcon } from './desktop-icon';
 import {
   DesktopCredentialService,
   type DesktopCurrentUserProxyEvidence,
@@ -42,7 +43,7 @@ import {
 import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
-import { openApprovedDesktopPairingUrl } from './pairing-browser';
+import { openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
 import {
   clearPackagedApprovalStorage,
   createPackagedApprovalNavigation,
@@ -92,6 +93,7 @@ const PACKAGED_RENDERER_SCHEME = 'propr-app';
 const PACKAGED_RENDERER_HOST = 'renderer';
 const PACKAGED_LAYOUT_READY_EVENT = 'desktop.renderer.layout.ready';
 const PACKAGED_REDUCED_NATIVE_WINDOW_READY_EVENT = 'desktop.native.reduced_window.ready';
+const PACKAGED_NATIVE_ICON_READY_EVENT = 'desktop.native.icon.ready';
 const PACKAGED_CONNECT_DISCOVERY_MILESTONE_EVENT = 'desktop.renderer.connect_discovery.milestone';
 const PACKAGED_CONNECT_JOURNEY_STAGE_EVENT = 'desktop.renderer.connect_journey.stage';
 const PACKAGED_CONNECT_JOURNEY_FAILURE_EVENT = 'desktop.renderer.connect_journey.failure';
@@ -207,6 +209,13 @@ let nativeCompletionStarted = false;
 let nativeProfiles: ProfileStore | null = null;
 let logger: DesktopLogger | null = null;
 let shutdownStarted = false;
+const desktopWindowIcon = loadDesktopWindowIcon({
+  platform: process.platform,
+  isPackaged: app.isPackaged,
+  mainBundleDirectory: __dirname,
+  resourcesPath: process.resourcesPath,
+  nativeImage,
+});
 if (process.platform === 'win32') {
   app.setAppUserModelId('dev.propr.desktop');
 }
@@ -738,7 +747,13 @@ const inspectPackagedReducedNativeWindow = (): Record<string, unknown> => {
   const displayWorkArea = selectInitialWindowWorkArea(screen);
   const workArea = createReducedSmokeWorkArea(displayWorkArea);
   const probeWindow = new BrowserWindow(
-    createBrowserWindowOptions(join(__dirname, 'preload.cjs'), false, workArea),
+    createBrowserWindowOptions(
+      join(__dirname, 'preload.cjs'),
+      false,
+      workArea,
+      process.platform,
+      desktopWindowIcon?.image,
+    ),
   );
   try {
     const [minimumWidth, minimumHeight] = probeWindow.getMinimumSize();
@@ -1224,8 +1239,20 @@ const createMainWindow = async (
 ): Promise<BrowserWindow> => {
   const workArea = selectInitialWindowWorkArea(screen);
   const window = new BrowserWindow(
-    createBrowserWindowOptions(join(__dirname, 'preload.cjs'), !app.isPackaged, workArea),
+    createBrowserWindowOptions(
+      join(__dirname, 'preload.cjs'),
+      !app.isPackaged,
+      workArea,
+      process.platform,
+      desktopWindowIcon?.image,
+    ),
   );
+  if (packagedSmokeTest && desktopWindowIcon) {
+    log('info', PACKAGED_NATIVE_ICON_READY_EVENT, {
+      asset: basename(desktopWindowIcon.path),
+      ...desktopWindowIcon.size,
+    });
+  }
   const disposeAcceptanceZoomIpc = registerPackagedAcceptanceZoomIpc({
     authorized: packagedAcceptanceTest,
     ipcMain,
@@ -1551,10 +1578,20 @@ if (!hasSingleInstanceLock) {
         ? packagedJourneyApprovals.open
         : packagedAcceptanceTest
           ? async () => undefined
-          : request => openApprovedDesktopPairingUrl(request, shell),
+          : request => openApprovedDesktopPairingUrl(request, shell, {
+              ambiguousOsLaunchFailure: supportsAmbiguousPairingLaunchRecovery(process.platform),
+            }),
       clientName: `ProPR Desktop (${process.platform})`,
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
+      },
+      reportPairingProgress: progress => {
+        log(progress.stage === 'browser-open-failed' ? 'warn' : 'info', 'desktop.authentication_pair.progress', {
+          stage: progress.stage,
+        });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.authenticationProgress, progress);
+        }
       },
       ...(packagedAcceptanceTest ? {
         reportWebSocketHandshake: (evidence: DesktopWebSocketHandshakeEvidence) => {

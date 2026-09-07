@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import type { App, IpcMain, IpcMainInvokeEvent, Session } from 'electron';
 import { clearDesktopInstanceCookies, logoutDesktopSession } from './desktop-session';
-import type { DesktopCredentialService } from './credential-service';
+import { desktopPairingFailureCode, type DesktopCredentialService } from './credential-service';
 import type { DesktopConnectDiscoveryService } from './connect-discovery';
 import type { DesktopLogger } from './logger';
 import type { LocalLifecycleController } from './lifecycle';
@@ -12,7 +13,7 @@ import {
   isSafeExternalUrl,
   isTrustedRendererUrl,
 } from './security';
-import { IPC_CHANNELS } from './shared/contract';
+import { IPC_CHANNELS, isDesktopPairingOperationId } from './shared/contract';
 import type { DesktopAcceptanceJourneyStage, DesktopDeepLinkAcknowledgement } from './shared/contract';
 
 export type DesktopAcceptanceOperation = 'PROFILE_SAVE' | 'PAIR' | 'PROBE' | 'ACTIVATE';
@@ -79,6 +80,8 @@ const acceptanceOperations = new Map<string, DesktopAcceptanceOperation>([
 ]);
 
 const acceptanceStatus = (result: unknown): DesktopAcceptanceOperationStatus => {
+  if (result && typeof result === 'object' && !Array.isArray(result)
+    && 'paired' in result && (result as { paired?: unknown }).paired === false) return 'REJECTED';
   if (!result || typeof result !== 'object' || Array.isArray(result) || !('status' in result)) {
     return 'COMPLETED';
   }
@@ -118,6 +121,7 @@ export const isValidDesktopDeepLinkAcknowledgement = (
 export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcHandlers => {
   const channels = new Set<string>();
   const active = new Set<Promise<unknown>>();
+  let pairingAdmission: { profileId: string; operationId: string } | null = null;
   let closing = false;
   let rendererActiveProfileReconciliationGeneration = 0;
   const trusted = (event: IpcMainInvokeEvent): boolean => {
@@ -242,13 +246,44 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     await reconcileRendererActiveProfile();
     options.onActiveWorkConnectionUnavailable?.('profile-changed');
   });
-  handle(IPC_CHANNELS.authenticationPair, async (_event, profile) => {
-    const paired = await options.credentials.pair(profile);
-    await reconcileRendererActiveProfile();
-    reconcileActiveWorkConnection();
-    return paired;
+  handle(IPC_CHANNELS.authenticationPairAdmit, (_event, profileId, ...args) => {
+    if (args.length || typeof profileId !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(profileId)) {
+      throw new Error('Invalid desktop pairing admission');
+    }
+    const operationId = randomUUID();
+    pairingAdmission = { profileId, operationId };
+    return { operationId };
   });
-  handle(IPC_CHANNELS.authenticationCancel, (_event, profileId) => options.credentials.cancelPairing(profileId));
+  handle(IPC_CHANNELS.authenticationPair, async (_event, profile, operationId, ...args) => {
+    const admittedOperation = pairingAdmission;
+    if (args.length || !profile || typeof profile !== 'object' || Array.isArray(profile)
+      || typeof profile.id !== 'string' || !isDesktopPairingOperationId(operationId)
+      || admittedOperation?.profileId !== profile.id || admittedOperation?.operationId !== operationId) {
+      throw new Error('Invalid desktop pairing operation');
+    }
+    pairingAdmission = null;
+    try {
+      const paired = await options.credentials.pair(profile, operationId);
+      await reconcileRendererActiveProfile();
+      reconcileActiveWorkConnection();
+      return paired;
+    } catch (error) {
+      // A shutdown-owned cancellation must retain the admitted-work fence: do not
+      // turn it into a renderer result while the renderer and IPC are closing.
+      if (closing) throw error;
+      const code = desktopPairingFailureCode(error);
+      if (code === null) throw error;
+      options.logger.log(code === 'PAIRING_CANCELLED' ? 'info' : 'warn', 'desktop.authentication_pair.failed', {
+        code,
+      });
+      return { paired: false as const, code };
+    }
+  });
+  handle(IPC_CHANNELS.authenticationCancel, (_event, profileId) => {
+    if (pairingAdmission?.profileId === profileId) pairingAdmission = null;
+    return options.credentials.cancelPairing(profileId);
+  });
   handle(IPC_CHANNELS.connectionProbe, (_event, profile) => options.credentials.probe(profile));
   handle(IPC_CHANNELS.connectionActivate, async (_event, activationTicket) => {
     const before = await options.credentials.listProfiles();
@@ -341,6 +376,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     close() {
       if (closing) return;
       closing = true;
+      pairingAdmission = null;
       for (const channel of channels) {
         // This channel completes deep links accepted before admission closed.
         // Final disposal removes it after the bounded shutdown drain.
@@ -354,6 +390,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     },
     dispose() {
       closing = true;
+      pairingAdmission = null;
       for (const channel of channels) options.ipcMain.removeHandler(channel);
     },
   };
