@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -11,7 +12,11 @@ import {
   type NativeNotificationHandle,
   type NativeNotificationPayload,
 } from './native-notifications';
-import type { DesktopNotificationScope, DesktopTaskTransition } from './shared/contract';
+import type {
+  DesktopNotificationPreferences,
+  DesktopNotificationScope,
+  DesktopTaskTransition,
+} from './shared/contract';
 
 const scope: DesktopNotificationScope = {
   profileId: 'profile-a',
@@ -94,6 +99,81 @@ test('uses quiet defaults and persists account/instance/device preferences', asy
     assert.equal((await restarted.get(scope)).preferences.enabled, true);
     restarted.close();
   } finally {
+    await item.cleanup();
+  }
+});
+
+test('failed writes roll back in-memory changes and do not poison later saves', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'propr-native-notification-write-'));
+  const blockedParent = join(directory, 'blocked');
+  await writeFile(blockedParent, 'not a directory');
+  const statePath = join(blockedParent, 'preferences.json');
+  const service = new NativeNotificationService({
+    statePath,
+    platform: 'linux',
+    isSupported: () => true,
+    isActiveScope: () => true,
+    show: () => ({ close: () => undefined }),
+    navigate: () => undefined,
+  });
+  try {
+    await service.get(scope);
+    await assert.rejects(
+      service.update(scope, { enabled: true }),
+      /Desktop notification preferences could not be saved/,
+    );
+    assert.equal((await service.get(scope)).preferences.enabled, false);
+
+    await rm(blockedParent);
+    await mkdir(blockedParent);
+    const recovered = await service.update(scope, { taskCompleted: true });
+    assert.equal(recovered.preferences.enabled, false);
+    assert.equal(recovered.preferences.taskCompleted, true);
+    const stored = JSON.parse(await readFile(statePath, 'utf8')) as {
+      accounts: Record<string, { enabled: boolean; taskCompleted: boolean }>;
+    };
+    assert.equal(Object.values(stored.accounts)[0].enabled, false);
+    assert.equal(Object.values(stored.accounts)[0].taskCompleted, true);
+  } finally {
+    service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('rejects a new account before exceeding the readable storage limit', async () => {
+  const item = await fixture();
+  const existingScope = { ...scope, userId: 'existing-user' };
+  const existingKey = createHash('sha256')
+    .update(`${existingScope.profileId}\0${existingScope.userId}`)
+    .digest('base64url');
+  const accounts: Record<string, DesktopNotificationPreferences> = Object.fromEntries(
+    Array.from({ length: 999 }, (_, index) => [
+      `stored-account-${index}`,
+      { ...DEFAULT_DESKTOP_NOTIFICATION_PREFERENCES },
+    ]),
+  );
+  accounts[existingKey] = { ...DEFAULT_DESKTOP_NOTIFICATION_PREFERENCES, enabled: true };
+  const statePath = join(item.directory, 'preferences.json');
+  await writeFile(statePath, JSON.stringify({ version: 1, accounts }));
+  let restarted: NativeNotificationService | null = null;
+  try {
+    await assert.rejects(
+      item.service.update(scope, { enabled: true }),
+      /preference account limit reached/,
+    );
+    await item.service.idle();
+    const stored = JSON.parse(await readFile(statePath, 'utf8')) as {
+      accounts: Record<string, DesktopNotificationPreferences>;
+    };
+    assert.equal(Object.keys(stored.accounts).length, 1_000);
+
+    item.service.close();
+    item.setUser(existingScope.userId);
+    restarted = item.restart();
+    assert.equal((await restarted.get(existingScope)).preferences.enabled, true);
+  } finally {
+    item.service.close();
+    restarted?.close();
     await item.cleanup();
   }
 });

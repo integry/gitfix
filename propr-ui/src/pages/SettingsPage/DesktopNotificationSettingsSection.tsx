@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BellRing, Loader2 } from 'lucide-react';
 import type {
   DesktopNotificationPreferences,
@@ -50,16 +50,24 @@ const DesktopNotificationSettingsSection: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const scopeGeneration = useRef(0);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
 
   useEffect(() => {
-    if (!notifications || !scope) return;
+    const generation = ++scopeGeneration.current;
     let current = true;
     setSettings(null);
+    setBusy(false);
     setError(null);
+    setTestResult(null);
+    if (!notifications || !scope) return;
     void notifications.bridge.get(scope).then(value => {
-      if (current) setSettings(value);
+      if (current && scopeGeneration.current === generation) setSettings(value);
     }).catch(loadError => {
-      if (current) setError((loadError as Error).message || 'Desktop notification settings could not be loaded.');
+      if (current && scopeGeneration.current === generation) {
+        setError((loadError as Error).message || 'Desktop notification settings could not be loaded.');
+      }
     });
     return () => { current = false; };
   }, [notifications, scope]);
@@ -67,31 +75,46 @@ const DesktopNotificationSettingsSection: React.FC = () => {
   if (!notifications || !scope) return null;
 
   const update = async (change: Partial<DesktopNotificationPreferences>): Promise<void> => {
+    const generation = scopeGeneration.current;
+    const operationScope = scope;
+    const operationIsCurrent = (): boolean => scopeGeneration.current === generation
+      && currentScope.current === operationScope;
     setBusy(true);
     setError(null);
     setTestResult(null);
     try {
-      setSettings(await notifications.bridge.update(scope, change));
+      const value = await notifications.bridge.update(scope, change);
+      if (operationIsCurrent()) setSettings(value);
     } catch (updateError) {
-      setError((updateError as Error).message || 'Desktop notification settings could not be saved.');
+      if (operationIsCurrent()) {
+        setError((updateError as Error).message || 'Desktop notification settings could not be saved.');
+      }
     } finally {
-      setBusy(false);
+      if (operationIsCurrent()) setBusy(false);
     }
   };
 
   const test = async (): Promise<void> => {
+    const generation = scopeGeneration.current;
+    const operationScope = scope;
+    const operationIsCurrent = (): boolean => scopeGeneration.current === generation
+      && currentScope.current === operationScope;
     setBusy(true);
     setError(null);
     setTestResult(null);
     try {
       const result = await notifications.bridge.test(scope);
-      setTestResult(result.invoked
-        ? 'Test sent. Your operating system decides whether a banner is displayed.'
-        : 'The native notification service is unavailable or disabled.');
+      if (operationIsCurrent()) {
+        setTestResult(result.invoked
+          ? 'Test sent. Your operating system decides whether a banner is displayed.'
+          : 'The native notification service is unavailable or disabled.');
+      }
     } catch (testError) {
-      setError((testError as Error).message || 'The test notification could not be sent.');
+      if (operationIsCurrent()) {
+        setError((testError as Error).message || 'The test notification could not be sent.');
+      }
     } finally {
-      setBusy(false);
+      if (operationIsCurrent()) setBusy(false);
     }
   };
 

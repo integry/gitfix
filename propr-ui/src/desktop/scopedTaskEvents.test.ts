@@ -31,4 +31,18 @@ describe('scoped desktop task event adapter', () => {
       repository: 'invalid', timestamp: '2026-09-07T18:45:00.000Z',
     })).toBeNull();
   });
+
+  test('rejects malformed runtime payload shapes without throwing', () => {
+    expect(normalizeScopedDesktopTaskTransition(null)).toBeNull();
+    expect(normalizeScopedDesktopTaskTransition('task update')).toBeNull();
+    expect(normalizeScopedDesktopTaskTransition([])).toBeNull();
+    expect(normalizeScopedDesktopTaskTransition({
+      eventType: TASK_UPDATE,
+      taskId: 'task-1',
+      state: 'failed',
+      previousState: 'processing',
+      repository: null,
+      timestamp: '2026-09-07T18:45:00.000Z',
+    })).toBeNull();
+  });
 });

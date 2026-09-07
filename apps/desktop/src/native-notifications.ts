@@ -66,6 +66,7 @@ const TERMINAL_KINDS = new Set<NotificationKind>(['completed', 'failed']);
 const MAX_EVENT_AGE_MS = 2 * 60_000;
 const MAX_FUTURE_SKEW_MS = 60_000;
 const MAX_REMEMBERED_EVENTS = 2_048;
+const MAX_STORED_ACCOUNTS = 1_000;
 const MAX_INDIVIDUAL_BURST = 3;
 const DELIVERY_RATE_WINDOW_MS = 30_000;
 const MAX_DELIVERIES_PER_WINDOW = 6;
@@ -137,7 +138,8 @@ const safeStoredPreferences = (value: unknown): StoredPreferences | null => {
   if (state.version !== 1 || !state.accounts || typeof state.accounts !== 'object'
     || Array.isArray(state.accounts)) return null;
   const accounts = state.accounts as Record<string, unknown>;
-  if (Object.keys(accounts).length > 1_000 || !Object.values(accounts).every(isPreferences)) return null;
+  if (Object.keys(accounts).length > MAX_STORED_ACCOUNTS
+    || !Object.values(accounts).every(isPreferences)) return null;
   return { version: 1, accounts: accounts as Record<string, DesktopNotificationPreferences> };
 };
 
@@ -228,11 +230,8 @@ export class NativeNotificationService {
     this.#activateScope(scope);
     await this.#load();
     const key = scopeStorageKey(scope);
-    const current = this.#state.accounts[key] ?? copyDefaults();
-    this.#state.accounts[key] = { ...current, ...update };
     if (update.enabled === false) this.#clearDeliveries(scope);
-    await this.#persist();
-    return this.#settings(scope);
+    return this.#queueUpdate(scope, key, update);
   }
 
   async test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }> {
@@ -409,17 +408,41 @@ export class NativeNotificationService {
     return this.#loaded;
   }
 
-  #persist(): Promise<void> {
-    const contents = `${JSON.stringify(this.#state, null, 2)}\n`;
+  #queueUpdate(
+    scope: DesktopNotificationScope,
+    key: string,
+    update: Partial<DesktopNotificationPreferences>,
+  ): Promise<DesktopNotificationSettings> {
+    const operation = this.#writeTail.then(async () => {
+      const current = this.#state.accounts[key];
+      if (!current && Object.keys(this.#state.accounts).length >= MAX_STORED_ACCOUNTS) {
+        throw new Error('Desktop notification preference account limit reached');
+      }
+      const nextState: StoredPreferences = {
+        version: 1,
+        accounts: {
+          ...this.#state.accounts,
+          [key]: { ...(current ?? copyDefaults()), ...update },
+        },
+      };
+      await this.#persist(nextState);
+      this.#state = nextState;
+      return this.#settings(scope);
+    });
+    this.#writeTail = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  async #persist(state: StoredPreferences): Promise<void> {
+    const contents = `${JSON.stringify(state, null, 2)}\n`;
     const temporary = `${this.#options.statePath}.tmp`;
-    this.#writeTail = this.#writeTail.then(async () => {
+    try {
       await mkdir(dirname(this.#options.statePath), { recursive: true, mode: 0o700 });
       await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, this.#options.statePath);
-    }).catch(() => {
+    } catch {
       this.#options.log?.('error', 'desktop.notifications.preferences_save_failed');
       throw new Error('Desktop notification preferences could not be saved');
-    });
-    return this.#writeTail;
+    }
   }
 }
