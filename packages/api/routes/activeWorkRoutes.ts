@@ -15,17 +15,9 @@ interface CountRow {
   count?: string | number;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const countActiveJobs = (
-  jobs: readonly Pick<Job, 'id' | 'data'>[],
-  userId: string,
-  sharedInstance: boolean,
-): number => {
+const countActiveJobs = (jobs: readonly Pick<Job, 'id'>[]): number => {
   const ids = new Set<string>();
   for (const job of jobs) {
-    if (!sharedInstance && (!isRecord(job.data) || job.data.userId !== userId)) continue;
     if (typeof job.id === 'string' && job.id.length > 0) ids.add(job.id);
   }
   return ids.size;
@@ -43,13 +35,20 @@ const rowCount = (row: CountRow | undefined): number => {
  * A single authenticated reconciliation snapshot for native desktop surfaces.
  * This branch has no authoritative executing state for goals. Standalone
  * incomplete repository todos are therefore reported as open backlog, never
- * as active work. Queue jobs without authoritative recipient metadata fail
- * closed outside the explicitly shared demo instance.
+ * as active work. Issue and comment execution are instance-scoped: their
+ * canonical queue data has no per-user recipient, matching the existing
+ * instance-wide task API and task socket access. The shared count is exposed
+ * only after the operational API boundary has authenticated the account and
+ * resolved its instance authorization.
  */
 export const createActiveWorkRoutes = ({ db, taskQueue }: ActiveWorkRoutesDependencies) => ({
   async getActiveWork(req: Request, res: Response): Promise<void> {
     if (!req.user?.id) {
       res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+    if (!req.authorization) {
+      res.status(403).json({ error: 'Instance access required' });
       return;
     }
 
@@ -72,7 +71,7 @@ export const createActiveWorkRoutes = ({ db, taskQueue }: ActiveWorkRoutesDepend
         plansQuery.first() as Promise<CountRow | undefined>,
         openGoalsQuery.first() as Promise<CountRow | undefined>,
       ]);
-      const tasks = countActiveJobs(activeJobs, req.user.id, sharedInstance);
+      const tasks = countActiveJobs(activeJobs);
       const plans = rowCount(planRow);
       const openGoals = rowCount(openGoalRow);
 

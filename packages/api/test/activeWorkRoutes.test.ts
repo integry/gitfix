@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import type { Request, Response as ExpressResponse } from 'express';
 import knex, { type Knex } from 'knex';
+import type { CommentJobData, IssueJobData } from '@propr/core';
+import type { InstanceAuthorization } from '../authorization.js';
 import { createActiveWorkRoutes, ACTIVE_WORK_DEFINITION } from '../routes/activeWorkRoutes.js';
 
 let database: Knex;
@@ -22,6 +24,17 @@ before(async () => {
 });
 
 after(async () => database.destroy());
+
+const instanceAuthorization: InstanceAuthorization = {
+  role: 'member',
+  permissions: [],
+  source: 'managed',
+};
+
+const authorizedRequest = (userId: string): Request => ({
+  user: { id: userId },
+  authorization: instanceAuthorization,
+} as Request);
 
 const responseRecorder = (): {
   response: ExpressResponse;
@@ -60,17 +73,17 @@ test('idle goal backlog is reported as open and cannot inflate active work', asy
       getJobs: async (states: string[]) => {
         requestedStates.push(states);
         return [
-          { id: 'task-1', data: { userId: 'user-a' } },
-          { id: 'task-2', data: { userId: 'user-a' } },
-          { id: 'task-1', data: { userId: 'user-a' } },
-          { id: undefined, data: { userId: 'user-a' } },
+          { id: 'task-1', data: { repoOwner: 'integry', repoName: 'propr', number: 2191 } },
+          { id: 'task-2', data: { repoOwner: 'integry', repoName: 'propr', number: 2192 } },
+          { id: 'task-1', data: { repoOwner: 'integry', repoName: 'propr', number: 2191 } },
+          { id: undefined, data: { repoOwner: 'integry', repoName: 'propr', number: 2193 } },
         ] as never;
       },
     } as never,
   });
   const recorded = responseRecorder();
 
-  await routes.getActiveWork({ user: { id: 'user-a' } } as Request, recorded.response);
+  await routes.getActiveWork(authorizedRequest('user-a'), recorded.response);
 
   assert.equal(recorded.status(), 200);
   assert.deepEqual(requestedStates, [['active']]);
@@ -88,31 +101,55 @@ test('idle goal backlog is reported as open and cannot inflate active work', asy
   });
 });
 
-test('active queue jobs are scoped to the authenticated account', async () => {
+test('authorized instance account sees canonical active jobs and unresolved accounts stay isolated', async () => {
   await database('task_drafts').del();
   await database('repo_todos').del();
+  const issueJobData: IssueJobData = {
+    repoOwner: 'integry',
+    repoName: 'propr',
+    number: 2191,
+    agentAlias: 'codex',
+    modelName: 'gpt-5.6-sol',
+    correlationId: 'issue-correlation',
+  };
+  const commentJobData: CommentJobData = {
+    pullRequestNumber: 2196,
+    comments: [{ id: 501, body: 'Please apply the follow-up', author: 'integry', type: 'issue' }],
+    repoOwner: 'integry',
+    repoName: 'propr',
+    branchName: '2191/system-tray',
+    llm: 'gpt-5.6-sol',
+    correlationId: 'comment-correlation',
+  };
+  assert.equal('userId' in issueJobData, false);
+  assert.equal('userId' in commentJobData, false);
   const jobs = [
-    { id: 'task-a-1', data: { userId: 'user-a' } },
-    { id: 'task-a-2', data: { userId: 'user-a' } },
-    { id: 'task-a-1', data: { userId: 'user-a' } },
-    { id: 'task-b', data: { userId: 'user-b' } },
-    { id: 'forged-owner', data: { ownerId: 'user-a' } },
-    { id: 'unowned', data: {} },
+    { id: 'issue-integry-propr-2191-codex-gpt-5.6-sol', data: issueJobData },
+    { id: 'pr-comments-batch-integry-propr-2196-501', data: commentJobData },
+    { id: 'issue-integry-propr-2191-codex-gpt-5.6-sol', data: issueJobData },
   ];
+  let queueReads = 0;
   const routes = createActiveWorkRoutes({
     db: database,
-    taskQueue: { getJobs: async () => jobs } as never,
+    taskQueue: { getJobs: async () => { queueReads += 1; return jobs; } } as never,
   });
 
-  const userA = responseRecorder();
-  await routes.getActiveWork({ user: { id: 'user-a' } } as Request, userA.response);
-  const userB = responseRecorder();
-  await routes.getActiveWork({ user: { id: 'user-b' } } as Request, userB.response);
+  const authorized = responseRecorder();
+  await routes.getActiveWork(authorizedRequest('authorized-user'), authorized.response);
 
-  assert.equal(userA.status(), 200);
-  assert.equal(userB.status(), 200);
-  assert.deepEqual((userA.body().counts as Record<string, unknown>).tasks, 2);
-  assert.deepEqual((userB.body().counts as Record<string, unknown>).tasks, 1);
+  assert.equal(authorized.status(), 200);
+  assert.equal(queueReads, 1);
+  assert.deepEqual((authorized.body().counts as Record<string, unknown>).tasks, 2);
+
+  const unresolvedAccount = responseRecorder();
+  await routes.getActiveWork(
+    { user: { id: 'account-without-resolved-instance-access' } } as Request,
+    unresolvedAccount.response,
+  );
+
+  assert.equal(unresolvedAccount.status(), 403);
+  assert.deepEqual(unresolvedAccount.body(), { error: 'Instance access required' });
+  assert.equal(queueReads, 1);
 });
 
 test('active work does not present unavailable data as a verified zero', async () => {
@@ -124,7 +161,7 @@ test('active work does not present unavailable data as a verified zero', async (
   const previousError = console.error;
   console.error = () => undefined;
   try {
-    await routes.getActiveWork({ user: { id: 'user-a' } } as Request, recorded.response);
+    await routes.getActiveWork(authorizedRequest('user-a'), recorded.response);
   } finally {
     console.error = previousError;
   }
