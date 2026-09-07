@@ -24,6 +24,7 @@ export interface DeepLinkWindow {
 /** Coordinates protocol delivery across the window creation/load boundary. */
 export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
   private window: TWindow | null = null;
+  private readonly readyWebContents = new WeakSet<object>();
   private readonly recentlyAccepted = new Map<string, number>();
   private deliveryId = 0;
   private draining = false;
@@ -49,6 +50,7 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     private readonly now: () => number = Date.now,
     private readonly duplicateWindowMs = 1_000,
     private readonly acknowledgementTimeoutMs = DEFAULT_DEEP_LINK_ACKNOWLEDGEMENT_TIMEOUT_MS,
+    private readonly requireRendererConsumerReady = false,
   ) {
     if (!Number.isFinite(duplicateWindowMs) || duplicateWindowMs < 0
       || !Number.isFinite(acknowledgementTimeoutMs) || acknowledgementTimeoutMs <= 0) {
@@ -76,6 +78,18 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
 
   didFinishLoad(window: TWindow): void {
     if (this.window === window) this.flush(window);
+  }
+
+  didStartLoading(window: TWindow): void {
+    this.readyWebContents.delete(window.webContents);
+  }
+
+  /** Starts delivery only after the renderer has installed its consumer. */
+  rendererConsumerReady(sender: unknown): boolean {
+    if ((typeof sender !== 'object' && typeof sender !== 'function') || sender === null) return false;
+    this.readyWebContents.add(sender);
+    if (this.window?.webContents === sender) void this.drain();
+    return true;
   }
 
   setWindow(window: TWindow): void {
@@ -123,7 +137,8 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     try {
       while (this.pending.length > 0) {
         const window = this.window;
-        if (!window || window.isDestroyed() || window.webContents.isLoading()) return;
+        if (!window || window.isDestroyed() || window.webContents.isLoading()
+          || (this.requireRendererConsumerReady && !this.readyWebContents.has(window.webContents))) return;
         const value = this.pending.shift();
         if (value === undefined) return;
         const delivery = { deliveryId: ++this.deliveryId, url: value };

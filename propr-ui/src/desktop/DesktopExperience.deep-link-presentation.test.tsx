@@ -44,7 +44,11 @@ it('does not acknowledge a cold Connect link until its confirmation editor is pr
   try {
     expect(await screen.findByText('Opening ProPR…')).toBeInTheDocument();
     expect(screen.queryByLabelText('Instance URL')).not.toBeInTheDocument();
-    expect(invocations).toEqual([]);
+    expect(invocations).toEqual([{
+      channel: IPC_CHANNELS.deepLinkConsumerReady,
+      args: [],
+      visibleEndpoint: null,
+    }]);
 
     await act(async () => {
       profiles.resolve([]);
@@ -53,14 +57,17 @@ it('does not acknowledge a cold Connect link until its confirmation editor is pr
     });
 
     expect(await screen.findByLabelText('Instance URL')).toHaveValue('http://localhost:44111');
-    await waitFor(() => expect(invocations).toEqual([{
-      channel: IPC_CHANNELS.deepLinkAcknowledgement,
-      args: [{
-        ...delivery,
-        consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
-      }],
-      visibleEndpoint: 'http://localhost:44111',
-    }]));
+    await waitFor(() => expect(invocations).toEqual([
+      { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [], visibleEndpoint: null },
+      {
+        channel: IPC_CHANNELS.deepLinkAcknowledgement,
+        args: [{
+          ...delivery,
+          consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
+        }],
+        visibleEndpoint: 'http://localhost:44111',
+      },
+    ]));
   } finally {
     unsubscribe();
     rendered.unmount();

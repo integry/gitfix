@@ -16,6 +16,10 @@ describe('desktop deep-link delivery', () => {
     },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
+  const activateWindow = (delivery: DeepLinkDelivery<DeepLinkWindow>, window: DeepLinkWindow) => {
+    delivery.setWindow(window);
+    assert.equal(delivery.rendererConsumerReady(window.webContents), true);
+  };
 
   it('keeps the production acknowledgement deadline while bounding a native-smoke allowance', () => {
     assert.equal(deepLinkAcknowledgementTimeoutMs(false), 5_000);
@@ -32,7 +36,7 @@ describe('desktop deep-link delivery', () => {
     );
     const window = createWindow(sent);
     delivery.deliver('propr://open?path=%2Ftasks');
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(sent.length, 1);
     assert.deepEqual(consumed, []);
@@ -69,7 +73,7 @@ describe('desktop deep-link delivery', () => {
       1_000,
     );
     const window = createWindow(sent);
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(delivery.deliver(link), true);
     assert.equal(delivery.deliver(link), false);
@@ -111,8 +115,10 @@ describe('desktop deep-link delivery', () => {
       Date.now,
       1_000,
       20,
+      true,
     );
-    delivery.setWindow(createWindow(sent));
+    const window = createWindow(sent);
+    activateWindow(delivery, window);
     delivery.deliver('propr://open?path=%2Ftasks');
     await delivery.whenIdle();
     assert.equal(sent.length, 1);
@@ -142,7 +148,7 @@ describe('desktop deep-link delivery', () => {
       undefined,
       error => { failures.push(error); },
     );
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
     await delivery.whenIdle();
@@ -171,7 +177,7 @@ describe('desktop deep-link delivery', () => {
       1_000,
       20,
     );
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
 
     assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
     assert.equal(delivery.deliver('propr://open?path=%2Fplans'), true);
@@ -198,7 +204,7 @@ describe('desktop deep-link delivery', () => {
       error => { failures.push(error); },
     );
     const window = createWindow(sent);
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
     assert.equal(delivery.deliver('propr://open?path=%2Ftasks'), true);
     assert.equal(delivery.deliver('propr://open?path=%2Fplans'), true);
     assert.equal(sent.length, 1);
@@ -236,7 +242,7 @@ describe('desktop deep-link delivery', () => {
     );
     const window = createWindow(sent);
     assert.equal(delivery.deliver(link), false);
-    delivery.setWindow(window);
+    activateWindow(delivery, window);
     assert.equal(sent.length, 1);
     delivery.acknowledge(window, {
       ...sent[0],
@@ -244,5 +250,59 @@ describe('desktop deep-link delivery', () => {
     });
     await delivery.whenIdle();
     assert.equal(sent.length, 1);
+  });
+
+  it('does not spend the acknowledgement budget before the renderer consumer is ready', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const failures: Error[] = [];
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link',
+      ['propr://connect?api=http%3A%2F%2Flocalhost%3A44111'],
+      undefined,
+      error => { failures.push(error); },
+      Date.now,
+      1_000,
+      20,
+      true,
+    );
+    const window = createWindow(sent);
+    delivery.setWindow(window);
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(sent.length, 0);
+    assert.deepEqual(failures, []);
+
+    assert.equal(delivery.rendererConsumerReady(window.webContents), true);
+    assert.equal(sent.length, 1);
+    const dispatched = sent[0];
+    assert.ok(dispatched);
+    assert.equal(delivery.acknowledge(window, {
+      ...dispatched,
+      consumption: { kind: 'connect-confirmation', target: 'http://localhost:44111' },
+    }), true);
+    await delivery.whenIdle();
+    assert.deepEqual(failures, []);
+  });
+
+  it('requires fresh consumer readiness after a renderer navigation starts', async () => {
+    const sent: DesktopDeepLinkDelivery[] = [];
+    const delivery = new DeepLinkDelivery<DeepLinkWindow>(
+      'desktop:deep-link', [], undefined, undefined, Date.now, 1_000, 20, true,
+    );
+    const window = createWindow(sent);
+    activateWindow(delivery, window);
+    delivery.didStartLoading(window);
+
+    delivery.deliver('propr://open?path=%2Ftasks');
+    assert.equal(sent.length, 0);
+    assert.equal(delivery.rendererConsumerReady(window.webContents), true);
+    assert.equal(sent.length, 1);
+    const dispatched = sent[0];
+    assert.ok(dispatched);
+    assert.equal(delivery.acknowledge(window, {
+      ...dispatched,
+      consumption: { kind: 'open-queued', target: '/tasks' },
+    }), true);
+    await delivery.whenIdle();
   });
 });
