@@ -28,24 +28,38 @@ const TERMINAL_STOP_GRACE_MS = 1_000;
 // interpolated into shell source.
 const commandWrapper = `#!/bin/sh
 set -u
+if [ "\${1-}" = --await-admission ]; then
+  admission_file=$2
+  shift 2
+  while [ ! -s "$admission_file" ]; do sleep 0.025; done
+  IFS= read -r admission < "$admission_file" || exit 1
+  [ "$admission" = admit ] || exit 1
+  exec "$@"
+fi
 state_base=$1
 shift
 started_file="\${state_base}.started"
 result_file="\${state_base}.result"
 cancel_file="\${state_base}.cancel"
+admission_file="\${state_base}.admission"
 umask 077
 wrapper=$$
+gate_wrapper=$0
+termination_requested=0
+# Record terminal shutdowns while the child is being spawned and its identity is
+# captured. The full handler cannot safely signal until child ownership is known.
+trap 'termination_requested=1' HUP INT TERM
 if [ -t 0 ]; then
   # Keep the command in the terminal's session so /dev/tty remains its
   # controlling terminal. Starting a new session here preserves the tty file
   # descriptor but makes interactive programs unable to open /dev/tty.
-  "$@" </dev/tty &
+  "$gate_wrapper" --await-admission "$admission_file" "$@" </dev/tty &
   mode=process
 elif command -v setsid >/dev/null 2>&1; then
-  setsid -- "$@" &
+  setsid -- "$gate_wrapper" --await-admission "$admission_file" "$@" &
   mode=group
 else
-  "$@" &
+  "$gate_wrapper" --await-admission "$admission_file" "$@" &
   mode=process
 fi
 child=$!
@@ -74,7 +88,6 @@ load_child_identity() {
 if load_child_identity && [ "$observed_child_parent" = "$wrapper" ]; then
   child_start=$observed_child_start
 fi
-printf '%s:%s\n' "$mode" "$child" > "$started_file"
 child_is_owned() {
   [ -n "$child_start" ] || return 1
   load_child_identity || return 1
@@ -111,7 +124,24 @@ terminate() {
     force_killer=$!
   fi
 }
+reject_before_admission() {
+  trap '' HUP INT TERM
+  printf '%s\n' reject > "$admission_file"
+  wait "$child" 2>/dev/null || true
+  printf '%s\n' 1 > "$result_file"
+  exit 1
+}
+# Signals handled before the commit below reject the gated child. This closes
+# the check-to-launch gap: authentication cannot execute while this trap owns
+# termination, including after the following flag check has completed.
+trap reject_before_admission HUP INT TERM
+[ "$termination_requested" -eq 0 ] || reject_before_admission
+[ -n "$child_start" ] || reject_before_admission
+
+# Admission commits at this signal-handler transition. A signal handled before
+# it rejects the gate; a signal handled after it drains the admitted child.
 trap terminate HUP INT TERM
+printf '%s\n' admit > "$admission_file"
 (
   trap 'exit 0' TERM
   trap '' HUP INT
@@ -119,6 +149,7 @@ trap terminate HUP INT TERM
   kill -TERM "$wrapper" 2>/dev/null || true
 ) &
 cancel_watcher=$!
+printf '%s:%s\n' "$mode" "$child" > "$started_file"
 
 status=127
 while :; do

@@ -174,7 +174,7 @@ while :; do sleep 1; done
     const controller = new AbortController();
     try {
       await writeExecutable(terminal, '#!/bin/sh\n"$@" >/dev/null 2>&1 &\nexit 0\n');
-      await writeExecutable(authentication, `#!/bin/sh\nprintf '%s' "$$" > "${pidPath}"\ntrap '' TERM INT HUP\nwhile :; do sleep 1; done\n`);
+      await writeExecutable(authentication, `#!/bin/sh\ntrap '' TERM INT HUP\nprintf '%s' "$$" > "${pidPath}"\nwhile :; do sleep 1; done\n`);
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
       const handoff = launch(authentication, [], { title: 'Controlled authentication', signal: controller.signal });
       await waitForFile(pidPath);
@@ -219,14 +219,49 @@ exit 0
     }
   });
 
-  it('drains a TERM-resistant command after the terminal sends HUP', async () => {
+  it('drains a TERM-resistant command after HUP following admission', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-auth-hup-test-'));
     const terminal = join(directory, 'terminal');
     const authentication = join(directory, 'authentication');
     const pidPath = join(directory, 'authentication.pid');
+    const admittedPath = join(directory, 'wrapper.command-admitted');
+    const terminationObservedPath = join(directory, 'wrapper.termination-observed');
+    const releaseHandlerPath = join(directory, 'wrapper.release-handler');
     try {
-      await writeExecutable(terminal, `#!/bin/sh\n"$@" >/dev/null 2>&1 &\nwrapper=$!\nwhile [ ! -f "${pidPath}" ]; do sleep 0.01; done\nkill -HUP "$wrapper"\nwait "$wrapper"\n`);
-      await writeExecutable(authentication, `#!/bin/sh\nprintf '%s' "$$" > "${pidPath}"\ntrap '' TERM INT HUP\nwhile :; do sleep 1; done\n`);
+      await writeExecutable(terminal, `#!/bin/sh
+controlled_wrapper="$1.controlled"
+awk \\
+  -v admitted="${admittedPath}" \\
+  -v termination_observed="${terminationObservedPath}" \\
+  -v release_handler="${releaseHandlerPath}" '
+BEGIN { handler = 0; admission = 0; quote = sprintf("%c", 34) }
+{
+  if ($0 == "terminate() {") {
+    print
+    print "  printf ready > " quote termination_observed quote
+    handler++
+    next
+  }
+  print
+  if (index($0, "admit >") > 0 && index($0, "admission_file") > 0) {
+    print "printf ready > " quote admitted quote
+    print "while [ ! -f " quote release_handler quote " ]; do sleep 0.01; done"
+    admission++
+  }
+}
+END { if (handler != 1 || admission != 1) exit 1 }
+' "$1" > "$controlled_wrapper" || exit 91
+chmod 700 "$controlled_wrapper" || exit 92
+shift
+"$controlled_wrapper" "$@" >/dev/null 2>&1 &
+wrapper=$!
+while [ ! -s "${admittedPath}" ] || [ ! -s "${pidPath}" ]; do sleep 0.01; done
+kill -HUP "$wrapper"
+while [ ! -s "${terminationObservedPath}" ]; do sleep 0.01; done
+printf release > "${releaseHandlerPath}"
+wait "$wrapper"
+`);
+      await writeExecutable(authentication, `#!/bin/sh\ntrap '' TERM INT HUP\nprintf '%s' "$$" > "${pidPath}"\nwhile :; do sleep 1; done\n`);
       const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
       const handoff = launch(authentication, [], { title: 'Controlled terminal close' });
       await waitForFile(pidPath);
@@ -234,6 +269,63 @@ exit 0
       assert.deepEqual(await handoff, { status: 137 });
       await waitForProcessExit(pid);
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not execute authentication after HUP between the guard and admission commit', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-auth-early-hup-test-'));
+    const terminal = join(directory, 'terminal');
+    const authentication = join(directory, 'authentication');
+    const executedPath = join(directory, 'authentication.executed');
+    const guardPassedPath = join(directory, 'wrapper.guard-passed');
+    const terminationObservedPath = join(directory, 'wrapper.termination-observed');
+    const controller = new AbortController();
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      // Add a test-only barrier after the last flag guard and before the
+      // signal-handler transition that commits admission.
+      await writeExecutable(terminal, `#!/bin/sh
+controlled_wrapper="$1.controlled"
+awk \\
+  -v guard_passed="${guardPassedPath}" \\
+  -v termination_observed="${terminationObservedPath}" '
+BEGIN { guard = 0; rejection = 0; quote = sprintf("%c", 34) }
+{
+  if ($0 == "reject_before_admission() {") {
+    print
+    print "  printf ready > " quote termination_observed quote
+    rejection++
+    next
+  }
+  print
+  if (index($0, "termination_requested") > 0 && index($0, "|| reject_before_admission") > 0) {
+    print "printf ready > " quote guard_passed quote
+    print "while :; do sleep 0.01; done"
+    guard++
+  }
+}
+END { if (guard != 1 || rejection != 1) exit 1 }
+' "$1" > "$controlled_wrapper" || exit 91
+chmod 700 "$controlled_wrapper" || exit 92
+shift
+"$controlled_wrapper" "$@" >/dev/null 2>&1 &
+wrapper=$!
+while [ ! -s "${guardPassedPath}" ]; do sleep 0.01; done
+kill -HUP "$wrapper"
+while [ ! -s "${terminationObservedPath}" ]; do sleep 0.01; done
+wait "$wrapper"
+`);
+      await writeExecutable(authentication, `#!/bin/sh\nprintf executed > "${executedPath}"\n`);
+
+      const launch = createDesktopAuthenticationLauncher([serverBackedTerminal(terminal)]);
+      timeout = setTimeout(() => controller.abort(), 3_000);
+      const handoff = launch(authentication, [], { title: 'Controlled early terminal close', signal: controller.signal });
+      assert.deepEqual(await handoff, { status: 1 });
+      await assert.rejects(readFile(executedPath), { code: 'ENOENT' });
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      controller.abort();
       await rm(directory, { recursive: true, force: true });
     }
   });
