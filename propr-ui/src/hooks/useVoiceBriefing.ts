@@ -106,11 +106,22 @@ async function executePlanAction(
     return;
   }
 
-  if (action.item.status === 'refining') {
-    await abortRefinement(draftId);
-    return;
+  switch (action.item.status) {
+    case 'generating':
+      await abortGeneration(draftId);
+      return;
+    case 'refining':
+      await abortRefinement(draftId);
+      return;
+    case 'executing':
+      throw new Error(
+        `Cannot stop ${action.item.reference} because the briefing does not identify its task execution.`,
+      );
+    default:
+      throw new Error(
+        `Cannot stop ${action.item.reference} while its plan status is ${action.item.status}.`,
+      );
   }
-  await abortGeneration(draftId);
 }
 
 /**

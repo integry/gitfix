@@ -71,7 +71,9 @@ function snapshot(
   });
 }
 
-function planSnapshot(status: 'generating' | 'refining' | 'review'): VoiceBriefingResponse {
+function planSnapshot(
+  status: 'generating' | 'refining' | 'executing' | 'review',
+): VoiceBriefingResponse {
   const action = status === 'review' ? 'follow_up' : 'stop';
   return voiceBriefingResponseSchema.parse({
     generatedAt: '2026-09-07T09:35:00.000Z',
@@ -221,6 +223,24 @@ describe('useVoiceBriefing', () => {
     expect(stopPlan).toHaveBeenCalledWith('draft-1');
     expect(stopTaskExecution).not.toHaveBeenCalled();
     expect(postTaskFollowup).not.toHaveBeenCalled();
+  });
+
+  it('rejects an executing plan stop when the briefing has no execution identifier', async () => {
+    vi.mocked(getVoiceBriefing).mockResolvedValue(planSnapshot('executing'));
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.requestBriefing());
+    await act(async () => result.current.handleTranscript('stop plan one'));
+
+    await act(async () => result.current.confirmPendingAction());
+
+    expect(result.current.phase).toBe('error');
+    expect(result.current.error).toBe(
+      'Cannot stop plan 1 because the briefing does not identify its task execution.',
+    );
+    expect(abortGeneration).not.toHaveBeenCalled();
+    expect(abortRefinement).not.toHaveBeenCalled();
+    expect(stopTaskExecution).not.toHaveBeenCalled();
+    expect(getVoiceBriefing).toHaveBeenCalledOnce();
   });
 
   it('confirms a plan follow-up and starts refinement with the current plan', async () => {
