@@ -36,6 +36,9 @@ describe('native staged artifact lifecycle authority', () => {
     assert.match(source, /mode: 'establish'[\s\S]*mode: 'stable'/u);
     assert.match(source, /PROPR_DESKTOP_NATIVE_SIGNING_KEYCHAIN/);
     assert.match(source, /beforeDigest[\s\S]*digest\(artifact\) !== beforeDigest/u);
+    assert.match(source, /verifyPackagedLinuxIcon/);
+    assert.match(source, /verifyLinuxLauncherIcon/);
+    assert.match(source, /verifyMacApplicationIcon/);
     assert.doesNotMatch(source, /add-trusted-cert|remove-trusted-cert|xattr|spctl/u);
   });
 

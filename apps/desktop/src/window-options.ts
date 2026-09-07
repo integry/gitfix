@@ -1,4 +1,4 @@
-import type { BrowserWindowConstructorOptions, Display, Point, Rectangle } from 'electron';
+import type { BrowserWindowConstructorOptions, Display, NativeImage, Point, Rectangle } from 'electron';
 import windowSizing from '../window-sizing.json';
 
 export const PREFERRED_BROWSER_WINDOW_SIZE = Object.freeze({ ...windowSizing.preferred });
@@ -67,9 +67,13 @@ export const createBrowserWindowOptions = (
   allowDevTools: boolean,
   workArea: Rectangle,
   platform: NodeJS.Platform = process.platform,
+  desktopIcon?: NativeImage,
 ): BrowserWindowConstructorOptions => {
   if (!hasUsableWorkArea(workArea)) {
     throw new Error('Cannot place the desktop window in an invalid display work area');
+  }
+  if (platform === 'linux' && !desktopIcon) {
+    throw new Error('Linux desktop windows require the branded native icon');
   }
   const sizing = clampBrowserWindowSizing(workArea);
   return {
@@ -79,6 +83,7 @@ export const createBrowserWindowOptions = (
     y: workArea.y + Math.floor((workArea.height - sizing.height) / 2),
     backgroundColor: '#f8fafc',
     show: false,
+    ...(platform === 'linux' ? { icon: desktopIcon } : {}),
     ...(platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: {
       preload: preloadPath,

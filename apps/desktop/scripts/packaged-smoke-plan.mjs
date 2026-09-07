@@ -5,6 +5,7 @@ export const TRANSPORT_PROOF = 'desktop.renderer.transport_smoke.ready';
 export const MVP_FLOWS_PROOF = 'desktop.renderer.mvp_flows.ready';
 export const LAYOUT_READY_EVENT = 'desktop.renderer.layout.ready';
 export const REDUCED_NATIVE_WINDOW_READY_EVENT = 'desktop.native.reduced_window.ready';
+export const NATIVE_ICON_READY_EVENT = 'desktop.native.icon.ready';
 export const CONNECT_DEEP_LINK = 'propr://connect?api=https%3A%2F%2Fconnect.propr.dev';
 
 export const PACKAGED_SMOKE_LAUNCH_MODES = Object.freeze([
@@ -78,6 +79,9 @@ export const createPackagedSmokeLaunch = ({
     transport,
     launchArguments: Object.freeze(launchArguments),
     childEnvironment: Object.freeze(childEnvironment),
-    requiredMarkers: transport ? transportMarkers : releaseGuardMarkers,
+    requiredMarkers: Object.freeze([
+      ...(transport ? transportMarkers : releaseGuardMarkers),
+      ...(platform === 'linux' ? [NATIVE_ICON_READY_EVENT] : []),
+    ]),
   });
 };

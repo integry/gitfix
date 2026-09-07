@@ -58,6 +58,9 @@ npm run desktop:smoke # Run under xvfb-run on a headless Linux host.
 npm run desktop:acceptance # Linux x64 package; run under Xvfb in a D-Bus/keyring session.
 npm run desktop:make
 npm run desktop:audit
+# Rebuild/check Linux PNG and macOS ICNS assets from the pinned ProPR PWA mark:
+npm run icons:generate -w @propr/desktop
+npm run icons:check -w @propr/desktop
 # On Linux hosts with the corresponding native packaging tools installed:
 npm run make:deb -w @propr/desktop
 npm run make:rpm -w @propr/desktop

@@ -192,6 +192,7 @@ describe('packaged smoke child environment', () => {
         'desktop.renderer.mvp_flows.ready',
         'desktop.renderer.layout.ready',
         'desktop.native.reduced_window.ready',
+        'desktop.native.icon.ready',
       ];
       if (mode === 'release-guard') {
         assert.equal(launch.transport, false);
