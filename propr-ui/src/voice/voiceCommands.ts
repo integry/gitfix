@@ -86,9 +86,12 @@ function normalizeCommandText(transcript: string): string {
     .trim();
 }
 
+function withoutLeadingCourtesy(text: string): string {
+  return text.replace(/^please\s+/i, '');
+}
+
 function withoutCourtesy(text: string): string {
-  return text
-    .replace(/^please\s+/i, '')
+  return withoutLeadingCourtesy(text)
     .replace(/\s+please[.!?]*$/i, '');
 }
 
@@ -174,8 +177,21 @@ function normalizedInstruction(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
+const URL_SCHEME_PATTERN = /\b[a-z][a-z\d+.-]*:\S+/i;
+const NETWORK_PATH_PATTERN = /(?:^|[\s"'(\[{<=>])\/\/\S+/i;
+const BARE_HOST_PATTERN = new RegExp(
+  '(?:^|[^@\\w.-])'
+    + '(?:[a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?\\.)+'
+    + '[a-z]{2,63}(?::\\d{1,5})?(?:[/?#]\\S*)?',
+  'i',
+);
+const API_PATH_PATTERN = /(?:^|[\s"'(\[{<=>:])\/api(?:\/|\?|\s|$)/i;
+
 function containsEndpoint(value: string): boolean {
-  return /(?:[a-z][a-z\d+.-]*:\/\/|www\.|(?:^|\s)\/\/\S|(?:^|\s)\/api(?:\/|\?|\s|$))/i.test(value);
+  return URL_SCHEME_PATTERN.test(value)
+    || NETWORK_PATH_PATTERN.test(value)
+    || BARE_HOST_PATTERN.test(value)
+    || API_PATH_PATTERN.test(value);
 }
 
 function parseFollowUp(
@@ -231,7 +247,11 @@ export function parseVoiceCommand(
 ): ParsedVoiceCommand {
   if (typeof transcript !== 'string') return invalid('The voice transcript is invalid.');
 
-  const text = withoutCourtesy(normalizeCommandText(transcript));
+  const normalizedText = normalizeCommandText(transcript);
+  const followUp = parseFollowUp(withoutLeadingCourtesy(normalizedText), latestBriefing);
+  if (followUp) return followUp;
+
+  const text = withoutCourtesy(normalizedText);
   if (!text) return invalid('No voice command was recognized.');
 
   const simpleText = text.replace(/[.!?]+$/, '').trim().toLowerCase();
@@ -240,9 +260,6 @@ export function parseVoiceCommand(
 
   const directAction = parseDirectAction(text, latestBriefing);
   if (directAction) return directAction;
-
-  const followUp = parseFollowUp(text, latestBriefing);
-  if (followUp) return followUp;
 
   return invalid(
     malformedActionReason(text)
