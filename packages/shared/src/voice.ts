@@ -282,6 +282,17 @@ export function parseVoiceBriefingResponse(value: unknown): VoiceBriefingRespons
       'a count at least as large as the visible item count',
     );
   }
+  if (
+    counts.total < counts.running
+    || counts.total < counts.queued
+    || counts.total < counts.attention
+    || counts.total < counts.plans
+  ) {
+    return invalid(
+      'voiceBriefing.counts.total',
+      'a count at least as large as each constituent aggregate count',
+    );
+  }
 
   return {
     generatedAt: timestampValue(response.generatedAt, 'voiceBriefing.generatedAt'),

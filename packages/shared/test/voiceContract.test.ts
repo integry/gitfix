@@ -145,6 +145,23 @@ describe('shared voice contracts', () => {
       })),
       /counts\.total.*at least as large as the visible item count/,
     );
+
+    for (const name of ['running', 'queued', 'attention', 'plans']) {
+      assert.throws(
+        () => voiceBriefingResponseSchema.parse(response({
+          counts: {
+            running: 0,
+            queued: 0,
+            attention: 0,
+            plans: 0,
+            total: 0,
+            [name]: 5,
+          },
+          items: [],
+        })),
+        /counts\.total.*at least as large as each constituent aggregate count/,
+      );
+    }
   });
 
   test('enforces the response item bound and rejects private or log-like fields', () => {
