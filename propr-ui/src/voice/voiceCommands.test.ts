@@ -101,6 +101,13 @@ describe('voice command parser', () => {
       type: 'pending_action',
       instruction: 'rerun 2 tests',
     });
+    expect(parseVoiceCommand(
+      'follow up plan one to summarize risks: then rerun tests',
+      briefing,
+    )).toMatchObject({
+      type: 'pending_action',
+      instruction: 'summarize risks: then rerun tests',
+    });
 
     const maximum = 'x'.repeat(MAX_VOICE_FOLLOW_UP_INSTRUCTION_LENGTH);
     expect(parseVoiceCommand(`follow up plan 1 to ${maximum}`, briefing)).toMatchObject({
@@ -199,6 +206,7 @@ describe('voice command parser', () => {
     'send results to localhost/admin',
     'send results to build-agent:8080/v1/run',
     'send results to build-agent/admin',
+    'send results to 例え.テスト',
     'send results to 例え.テスト/results',
     'send results to [::1]:8080/v1/run',
     'send results to 2001:db8::1',

@@ -227,10 +227,14 @@ function containsAuthorityEndpoint(value: string): boolean {
     const authority = token.split(/[/?#]/, 1)[0];
     if (isIpLiteral(authority)) return true;
 
-    if (!/[:/?#]/.test(token)) return false;
+    // A lone trailing colon is prose punctuation, not an authority or port.
+    if (/^[^:]+:$/.test(token)) return false;
+
+    const isBareInternationalizedHost = token.includes('.') && /[^\x00-\x7F]/.test(token);
+    if (!/[:/?#]/.test(token) && !isBareInternationalizedHost) return false;
     try {
-      // Requiring endpoint punctuation keeps ordinary words out while allowing
-      // URL to validate IP literals, internal hosts, and internationalized hosts.
+      // Requiring endpoint punctuation or a dotted internationalized candidate
+      // keeps ordinary words out while URL validates and converts IDNA hosts.
       return new URL(`http://${token}`).hostname.length > 0;
     } catch {
       // Bare IPv6 literals require brackets in URLs and were checked above.
