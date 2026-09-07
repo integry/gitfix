@@ -173,6 +173,61 @@ test('each event preference independently blocks its matching transition', async
   }
 });
 
+test('disabling a queued event kind before the batch flush suppresses its notice', async () => {
+  const item = await fixture();
+  try {
+    await item.service.update(scope, { enabled: true });
+    assert.equal((await item.service.publish(
+      scope, transition('failed', 'processing', 'queued-failure'),
+    )).accepted, true);
+
+    await item.service.update(scope, { taskFailed: false });
+    await settleBatch();
+
+    assert.equal(item.shown.length, 0);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
+test('mixed batches group only event kinds still enabled when they flush', async () => {
+  const item = await fixture();
+  try {
+    await item.service.update(scope, { enabled: true, taskCompleted: true });
+    assert.equal((await item.service.publish(
+      scope, transition('failed', 'processing', 'failed-a'),
+    )).accepted, true);
+    assert.equal((await item.service.publish(
+      scope, transition('failed', 'processing', 'failed-b'),
+    )).accepted, true);
+    assert.equal((await item.service.publish(
+      scope, transition('action_required', 'processing', 'attention-a'),
+    )).accepted, true);
+    assert.equal((await item.service.publish(
+      scope, transition('action_required', 'processing', 'attention-b'),
+    )).accepted, true);
+    assert.equal((await item.service.publish(
+      scope, transition('completed', 'processing', 'completed-a'),
+    )).accepted, true);
+    assert.equal((await item.service.publish(
+      scope, transition('completed', 'processing', 'completed-b'),
+    )).accepted, true);
+
+    await item.service.update(scope, { taskFailed: false });
+    await settleBatch();
+
+    assert.equal(item.shown.length, 1);
+    assert.equal(item.shown[0].payload.title, '4 task updates');
+    assert.match(item.shown[0].payload.body, /2 need attention/);
+    assert.match(item.shown[0].payload.body, /2 completed/);
+    assert.doesNotMatch(item.shown[0].payload.body, /failed/);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
 test('disable, stale scopes, and cleanup clear pending delivery immediately', async () => {
   const item = await fixture();
   try {

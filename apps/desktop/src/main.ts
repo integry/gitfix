@@ -43,7 +43,7 @@ import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
 import { NativeNotificationService } from './native-notifications';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
-import { openApprovedDesktopPairingUrl } from './pairing-browser';
+import { openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
 import {
   clearPackagedApprovalStorage,
   createPackagedApprovalNavigation,
@@ -1536,10 +1536,20 @@ if (!hasSingleInstanceLock) {
         ? packagedJourneyApprovals.open
         : packagedAcceptanceTest
           ? async () => undefined
-          : request => openApprovedDesktopPairingUrl(request, shell),
+          : request => openApprovedDesktopPairingUrl(request, shell, {
+              ambiguousOsLaunchFailure: supportsAmbiguousPairingLaunchRecovery(process.platform),
+            }),
       clientName: `ProPR Desktop (${process.platform})`,
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
+      },
+      reportPairingProgress: progress => {
+        log(progress.stage === 'browser-open-failed' ? 'warn' : 'info', 'desktop.authentication_pair.progress', {
+          stage: progress.stage,
+        });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.authenticationProgress, progress);
+        }
       },
       ...(packagedAcceptanceTest ? {
         reportWebSocketHandshake: (evidence: DesktopWebSocketHandshakeEvidence) => {
@@ -1690,9 +1700,9 @@ if (!hasSingleInstanceLock) {
       },
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinkDelivery.acknowledgeSender(event.sender, acknowledgement),
-      onRendererActiveProfileChanged: (origin: string | null) => {
+      ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {
+        onRendererActiveProfileChanged: (origin: string | null) => {
           notifications.clear();
-          if (!app.isPackaged || rendererPolicyPinnedForSmoke) return;
           if (packagedAcceptanceTest) return;
           const nextOrigins = origin?.startsWith('http://') ? [origin] : [];
           if (rendererPolicyOrigins.length === nextOrigins.length
@@ -1703,6 +1713,7 @@ if (!hasSingleInstanceLock) {
           // both fail closed for the new active endpoint.
           reloadCurrentRendererForPolicyChange();
         },
+      } : {}),
       ...(journeyStages ? {
         reportAcceptanceJourneyStage: (stage: DesktopAcceptanceJourneyStage) => {
           journeyStages.record(stage);

@@ -192,7 +192,7 @@ describe('production local setup journey', () => {
     fireEvent.click(screen.getByRole('button', { name: /Sign in in browser/i }));
 
     expect(await screen.findByText('Authenticated dashboard')).toBeInTheDocument();
-    expect(adapters.authentication.authenticate).toHaveBeenCalledWith(localProfile);
+    expect(adapters.authentication.authenticate).toHaveBeenCalledWith(localProfile, expect.any(Function));
     expect(adapters.connection.probe).toHaveBeenCalledTimes(2);
     expect(adapters.profiles.save).toHaveBeenCalledWith(expect.objectContaining({ id: localProfile.id }));
     expect(adapters.profiles.setActiveId).toHaveBeenCalledWith(localProfile.id);

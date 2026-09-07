@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
+import type { ExperienceState } from './desktopExperienceState';
+import {
+  DESKTOP_ACCESS_INVALID_EVENT,
+  type DesktopAccessInvalidEventDetail,
+  type DesktopAdapters,
+} from './types';
 
 const focusableSelector = [
   'a[href]',
@@ -31,6 +37,35 @@ export const useAttemptFence = (): {
   }, []);
   useEffect(() => invalidate, [invalidate]);
   return { begin, invalidate };
+};
+
+export const useDesktopAccessInvalidation = (
+  adapters: DesktopAdapters,
+  setState: Dispatch<SetStateAction<ExperienceState>>,
+): void => {
+  useEffect(() => {
+    const accessInvalid = (event: Event) => {
+      const detail = (event as CustomEvent<DesktopAccessInvalidEventDetail>).detail;
+      setState(current => {
+        if (current.phase !== 'connected') return current;
+        if (!detail || detail.profileId !== current.profile.id
+          || detail.transportScope !== current.result.transportScope) return current;
+        adapters.connection.deactivate?.();
+        return {
+          phase: 'blocked',
+          profile: current.profile,
+          result: {
+            status: 'authentication-required',
+            message: 'Access to this instance was revoked or expired. Pair again to continue.',
+            version: current.result.version,
+            authentication: current.result.authentication,
+          },
+        };
+      });
+    };
+    window.addEventListener(DESKTOP_ACCESS_INVALID_EVENT, accessInvalid);
+    return () => window.removeEventListener(DESKTOP_ACCESS_INVALID_EVENT, accessInvalid);
+  }, [adapters, setState]);
 };
 
 export const useDesktopModal = (

@@ -2,7 +2,7 @@ import { normalizeApiBaseUrl } from '@propr/client';
 import { isProprLoopbackHostname, parseProprConnectEndpoint } from '@propr/shared';
 import type { DesktopBridge, DesktopDiscoveryCandidate, DesktopProfile as StoredDesktopProfile } from '../../../apps/desktop/src/shared/contract';
 import { getDesktopConnectionScope, setDesktopConnectionScope } from '../api/apiClient';
-import type { DesktopAdapters, DesktopPlatform, DesktopProfile } from './types';
+import { DesktopAuthenticationError, type DesktopAdapters, type DesktopPlatform, type DesktopProfile } from './types';
 import { reportPackagedAcceptanceRendererLifecycle } from './packagedAcceptanceRendererLifecycle';
 
 const platform = (value: string): DesktopPlatform => {
@@ -131,10 +131,17 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
     },
   } : {}),
   authentication: {
-    async authenticate(profile) {
-      const security = await bridge.storage.security();
-      if (!security.available) throw new Error('OS-backed secure storage is required for desktop pairing.');
-      await bridge.authentication.pair(toStoredProfile(profile));
+    async authenticate(profile, onProgress) {
+      const { operationId } = await bridge.authentication.admit(profile.id);
+      const unsubscribe = bridge.authentication.onProgress?.(progress => {
+        if (progress.profileId === profile.id && progress.operationId === operationId) onProgress?.(progress.stage);
+      }) ?? (() => undefined);
+      try {
+        const result = await bridge.authentication.pair(toStoredProfile(profile), operationId);
+        if (!result.paired) throw new DesktopAuthenticationError(result.code);
+      } finally {
+        unsubscribe();
+      }
     },
     cancel(profileId) {
       return bridge.authentication.cancel(profileId);

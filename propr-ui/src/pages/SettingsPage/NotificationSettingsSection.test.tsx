@@ -39,6 +39,7 @@ function pushState(
   overrides: Partial<BrowserPushContextValue> = {},
 ): BrowserPushContextValue {
   return {
+    serviceWorkerOriginSupported: true,
     serviceWorkerSupported: true,
     pushApiSupported: true,
     notificationApiSupported: true,
@@ -93,5 +94,46 @@ describe('Notification Settings browser enrollment guidance', () => {
     expect(screen.getByText('Add to Home Screen')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Enable on this browser/ })).not.toBeInTheDocument();
     expect(mocks.push.enable).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { configured: false, vapidPublicKey: null },
+    { configured: true, vapidPublicKey: 'AQID_v8' },
+  ])('renders truthful desktop guidance when server configured is $configured', async pushCapability => {
+    mocks.push = pushState({
+      serviceWorkerOriginSupported: false,
+      serviceWorkerSupported: false,
+      capabilities: { push: pushCapability },
+    });
+
+    render(<NotificationSettingsSection />);
+
+    expect(await screen.findByText(/Browser Web Push is not available in the ProPR desktop app/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Use the Desktop notifications section on this page/))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/administrator must configure the VAPID keys/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Enable on this browser/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Inbox notifications for Plans')).toBeEnabled();
+    expect(screen.getByLabelText('Push notifications for Plans')).toBeEnabled();
+  });
+
+  test('shows VAPID configuration guidance on a capable HTTPS browser', async () => {
+    mocks.push = pushState({
+      capabilities: { push: { configured: false, vapidPublicKey: null } },
+    });
+
+    render(<NotificationSettingsSection />);
+
+    expect(await screen.findByText(/Web Push is not configured for this ProPR instance/))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Native desktop notifications/)).not.toBeInTheDocument();
+  });
+
+  test('offers enrollment on a capable, configured HTTPS browser', async () => {
+    render(<NotificationSettingsSection />);
+
+    expect(await screen.findByRole('button', { name: 'Enable on this browser' })).toBeEnabled();
+    expect(screen.getByText('Your browser will ask for permission.')).toBeInTheDocument();
   });
 });

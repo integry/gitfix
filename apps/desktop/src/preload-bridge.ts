@@ -3,8 +3,9 @@ import type {
   DesktopDeepLinkAcknowledgement,
   DesktopDeepLinkConsumption,
   DesktopDeepLinkDelivery,
+  DesktopPairingProgress,
 } from './shared/contract';
-import { IPC_CHANNELS } from './shared/contract';
+import { IPC_CHANNELS, isDesktopPairingOperationId } from './shared/contract';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -54,6 +55,7 @@ export const createDesktopBridge = (
   };
   const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
   const notificationNavigationListeners = new Set<(path: string) => void>();
+  const pairingProgressListeners = new Set<(value: DesktopPairingProgress) => void>();
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
@@ -70,6 +72,24 @@ export const createDesktopBridge = (
   ipc.on(IPC_CHANNELS.notificationNavigate, (_event, value) => {
     if (typeof value !== 'string' || !(/^\/tasks(?:\/[A-Za-z0-9_.~!$&'()*+,;=:@%-]+)?$/.test(value))) return;
     notificationNavigationListeners.forEach(listener => listener(value));
+  });
+  ipc.on(IPC_CHANNELS.authenticationProgress, (_event, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const progress = value as Record<string, unknown>;
+    if (Object.keys(progress).length !== 3
+      || !isDesktopPairingOperationId(progress.operationId)
+      || typeof progress.profileId !== 'string'
+      || progress.profileId.length === 0
+      || progress.profileId.length > 128
+      || !['browser-opening', 'approval-pending', 'browser-open-failed'].includes(
+        progress.stage as string,
+      )) return;
+    const safeProgress: DesktopPairingProgress = {
+      operationId: progress.operationId,
+      profileId: progress.profileId,
+      stage: progress.stage as DesktopPairingProgress['stage'],
+    };
+    pairingProgressListeners.forEach(listener => listener(safeProgress));
   });
 
   const bridge: DesktopBridge = {
@@ -101,8 +121,23 @@ export const createDesktopBridge = (
       setActive: (profileId) => invoke(ipc, IPC_CHANNELS.profilesSetActive, profileId),
     },
     authentication: {
-      pair: (profile) => invoke(ipc, IPC_CHANNELS.authenticationPair, profile),
+      admit: async (profileId) => {
+        const admission = await invoke<unknown>(ipc, IPC_CHANNELS.authenticationPairAdmit, profileId);
+        if (!admission || typeof admission !== 'object' || Array.isArray(admission)) {
+          throw new Error('Desktop pairing admission failed');
+        }
+        const value = admission as Record<string, unknown>;
+        if (Object.keys(value).length !== 1 || !isDesktopPairingOperationId(value.operationId)) {
+          throw new Error('Desktop pairing admission failed');
+        }
+        return { operationId: value.operationId };
+      },
+      pair: (profile, operationId) => invoke(ipc, IPC_CHANNELS.authenticationPair, profile, operationId),
       cancel: (profileId) => invoke(ipc, IPC_CHANNELS.authenticationCancel, profileId),
+      onProgress: listener => {
+        pairingProgressListeners.add(listener);
+        return () => pairingProgressListeners.delete(listener);
+      },
     },
     connection: {
       probe: (profile) => invoke(ipc, IPC_CHANNELS.connectionProbe, profile),

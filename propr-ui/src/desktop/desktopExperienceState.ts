@@ -1,9 +1,10 @@
-import type { DesktopAdapters, DesktopConnectionResult, DesktopGuidedLocalSetupAdapter, DesktopLocalSetupAdapter, DesktopProfile } from './types';
+import type { DesktopAdapters, DesktopAuthenticationProgressStage, DesktopConnectionResult, DesktopGuidedLocalSetupAdapter, DesktopLocalSetupAdapter, DesktopProfile } from './types';
 
 export type ExperienceState =
   | { phase: 'loading' }
   | { phase: 'choose' }
   | { phase: 'connecting'; profile: DesktopProfile }
+  | { phase: 'authenticating'; profile: DesktopProfile; result: Extract<DesktopConnectionResult, { status: 'authentication-required' }>; progress: DesktopAuthenticationProgressStage }
   | { phase: 'blocked'; profile: DesktopProfile; result: Exclude<DesktopConnectionResult, { status: 'ready' }> }
   | { phase: 'recovery-review'; profile: DesktopProfile; candidate: DesktopProfile }
   | { phase: 'connected'; profile: DesktopProfile; result: Extract<DesktopConnectionResult, { status: 'ready' }> };

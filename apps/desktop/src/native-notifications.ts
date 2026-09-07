@@ -349,7 +349,11 @@ export class NativeNotificationService {
   #flush(): void {
     this.#batchTimer = null;
     const pending = this.#pending.splice(0);
-    const active = pending.filter(notice => this.#isCurrentScope(notice.scope));
+    const active = pending.filter(notice => {
+      if (!this.#isCurrentScope(notice.scope)) return false;
+      const preferences = this.#state.accounts[scopeStorageKey(notice.scope)] ?? copyDefaults();
+      return preferences.enabled && preferenceForKind(preferences, notice.kind);
+    });
     const groups = new Map<string, PendingNotice[]>();
     active.forEach(notice => {
       const key = `${notice.scope.profileId}\0${notice.scope.transportScope}\0${notice.scope.userId}`;
