@@ -146,17 +146,19 @@ export class VoiceBriefingService {
     const queueCandidates = queueEntries.map(entry => queueCandidate(entry, generatedAt));
     const planCandidates = plans.flatMap(plan => planCandidate(plan, generatedAt));
     const notificationCandidates = notifications.flatMap(notificationCandidate);
-    const allCandidates = deduplicateCandidates([
+    const rawCandidates = [
       ...notificationCandidates,
       ...planCandidates,
       ...queueCandidates,
-    ]);
+    ];
+    const allCandidates = deduplicateCandidates(rawCandidates);
     const attentionCandidates = deduplicateCandidates(
       allCandidates.filter(candidate => candidate.requiresAttention),
     );
 
-    const scopedCandidates = allCandidates
-      .filter(candidate => scope === 'all' || candidate.workClass === scope)
+    const scopedCandidates = (scope === 'all'
+      ? allCandidates
+      : deduplicateCandidates(rawCandidates.filter(candidate => candidate.workClass === scope)))
       .slice(0, VOICE_BRIEFING_DETAIL_LIMIT);
     const items = assignReferences(scopedCandidates);
     const running = queueEntries.filter(entry => entry.state === 'active').length;

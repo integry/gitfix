@@ -218,6 +218,43 @@ test('running and attention scopes filter details while retaining complete snaps
   assert.deepEqual(requestedNotificationUsers, ['authenticated-user', 'authenticated-user']);
 });
 
+test('running scope retains an active task that also has an attention notification', async () => {
+  const queue: VoiceBriefingQueueSnapshot = {
+    active: [job('active-task', 'Active task', '2026-09-07T01:20:00.000Z')],
+    waiting: [],
+    delayed: [],
+  };
+  const notifications = [notification({
+    id: 'active-task-warning',
+    severity: 'warning',
+    title: 'Active task needs attention',
+    target: { type: 'task', repository: 'integry/propr', taskId: 'active-task' },
+    occurredAt: '2026-09-07T01:21:00.000Z',
+  })];
+  const service = new VoiceBriefingService({
+    loaders: loaders({ queue, notifications }),
+    now: () => NOW,
+  });
+
+  const all = await service.getBriefing('authenticated-user');
+  const running = await service.getBriefing('authenticated-user', 'running');
+
+  assert.deepEqual(all.items.map(item => [item.id, item.status]), [
+    ['active-task', 'warning'],
+  ]);
+  assert.deepEqual(running.counts, {
+    running: 1,
+    queued: 0,
+    attention: 1,
+    plans: 0,
+    total: 1,
+  });
+  assert.equal(running.headline, '1 job is running.');
+  assert.deepEqual(running.items.map(item => [item.id, item.status]), [
+    ['active-task', 'running'],
+  ]);
+});
+
 test('production loaders authorize queue jobs, constrain plans, and page notifications', async () => {
   const queryTrace: Array<[string, unknown]> = [];
   const planRows = [{
