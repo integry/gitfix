@@ -555,6 +555,7 @@ End-to-end tests run against a live ProPR instance and exercise the full workflo
 | `PROPR_E2E_REPO` | Yes | — | Test repo (e.g., `integry/propr-e2e-test`) |
 | `PROPR_E2E_SKIP_SLOW` | No | — | Set to `1` to skip plan/implementation tests |
 | `PROPR_E2E_NO_CLEANUP` | No | — | Set to `1` to keep all created resources |
+| `PROPR_E2E_MODEL_TASK_TIMEOUT_MS` | No | `1800000` | Maximum wait per live model-matrix phase (30 minutes) |
 
 ### Running
 

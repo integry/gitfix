@@ -6,8 +6,8 @@ import {
 } from "./e2e/modelTaskTimeout.js";
 
 describe("E2E model-task timeout configuration", () => {
-  test("defaults to a bounded 20-minute polling budget", () => {
-    assert.equal(DEFAULT_MODEL_TASK_TIMEOUT_MS, 1_200_000);
+  test("defaults to a bounded 30-minute polling budget", () => {
+    assert.equal(DEFAULT_MODEL_TASK_TIMEOUT_MS, 1_800_000);
     assert.equal(parseModelTaskTimeoutMs(undefined), DEFAULT_MODEL_TASK_TIMEOUT_MS);
     assert.equal(parseModelTaskTimeoutMs("   "), DEFAULT_MODEL_TASK_TIMEOUT_MS);
   });
@@ -17,7 +17,7 @@ describe("E2E model-task timeout configuration", () => {
   });
 
   test("falls back safely for invalid, zero, and negative overrides", () => {
-    const fallback = 1_200_000;
+    const fallback = 1_800_000;
     for (const value of ["invalid", "0", "-1", "1.5", "Infinity", "9007199254740992"]) {
       assert.equal(parseModelTaskTimeoutMs(value, fallback), fallback, value);
     }
