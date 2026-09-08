@@ -33,8 +33,9 @@ describe('desktop native command dispatcher', () => {
     dispatcher.connectionAvailable();
     dispatcher.dispatch('tasks');
     dispatcher.dispatch('manage-instances');
-    assert.deepEqual(sent, ['tasks', 'manage-instances']);
-    assert.equal(restores, 2);
+    dispatcher.dispatch('quit');
+    assert.deepEqual(sent, ['tasks', 'manage-instances', 'quit']);
+    assert.equal(restores, 3);
   });
 
   it('queues startup navigation but drops it after an instance switch', () => {
@@ -99,13 +100,13 @@ describe('desktop native command dispatcher', () => {
     assert.equal(enabled, false);
     assert.equal(updates, 1);
     dispatcher.dispatch('quit');
-    assert.equal(quits, 1);
+    assert.equal(quits, 0);
 
     dispatcher.close();
     dispatcher.dispatch('quit');
     dispatcher.dispatch('toggle-native-notifications');
     await tick();
-    assert.equal(quits, 1);
+    assert.equal(quits, 0);
     assert.equal(updates, 1);
     unsubscribe();
   });
@@ -142,6 +143,62 @@ describe('desktop native command dispatcher', () => {
     assert.deepEqual(writes, [false, true]);
     second.resolve();
     await tick();
+    assert.equal(enabled, true);
+  });
+
+  it('drops a queued notification toggle after the initiating connection is replaced', async () => {
+    const accountA = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    const accountB = { profileId: 'profile-b', transportScope: 'zyxwvutsrqponmlkjihgfe' };
+    let scope = accountA;
+    const preferences = new Map([[accountA.profileId, true], [accountB.profileId, true]]);
+    const writes: string[] = [];
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => scope,
+      notificationState: () => ({ available: true, enabled: preferences.get(scope.profileId) ?? false }),
+      setNativeNotificationsEnabled: async value => {
+        writes.push(scope.profileId);
+        preferences.set(scope.profileId, value);
+      },
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+
+    dispatcher.dispatch('toggle-native-notifications');
+    scope = accountB;
+    dispatcher.connectionUnavailable();
+    dispatcher.connectionAvailable();
+    await tick();
+
+    assert.deepEqual(writes, []);
+    assert.equal(preferences.get(accountA.profileId), true);
+    assert.equal(preferences.get(accountB.profileId), true);
+  });
+
+  it('drops a queued notification toggle when the dispatcher closes before its microtask', async () => {
+    let enabled = true;
+    let writes = 0;
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => ({ profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' }),
+      notificationState: () => ({ available: true, enabled }),
+      setNativeNotificationsEnabled: async value => {
+        writes += 1;
+        enabled = value;
+      },
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+
+    dispatcher.dispatch('toggle-native-notifications');
+    dispatcher.close();
+    await tick();
+
+    assert.equal(writes, 0);
     assert.equal(enabled, true);
   });
 });

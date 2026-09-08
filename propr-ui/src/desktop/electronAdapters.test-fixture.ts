@@ -54,6 +54,7 @@ export const bridgeFixture = () => {
         name: 'ProPR Desktop', version: '0.8.15', platform: 'linux', arch: 'x64', packaged: true,
       }),
       refreshActiveWork: async () => undefined,
+      quit: async () => undefined,
       onDeepLink,
       onNativeCommand: () => () => undefined,
     },

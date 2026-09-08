@@ -83,14 +83,16 @@ describe('desktop preload bridge', () => {
     const commands: string[] = [];
     const unsubscribe = bridge.app.onNativeCommand(command => commands.push(command));
     ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'notification-settings');
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'quit');
     unsubscribe();
     ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'inbox');
-    assert.deepEqual(commands, ['plans', 'notification-settings']);
+    assert.deepEqual(commands, ['plans', 'notification-settings', 'quit']);
   });
 
   it('maps profile and main-process authentication operations to fixed channels', async () => {
     const ipc = new FakeIpc();
     const bridge = createDesktopBridge(ipc);
+    await bridge.app.quit();
     await bridge.app.refreshActiveWork();
     await bridge.auth.logout('http://localhost:4000');
     await bridge.profiles.save({ label: 'Local', apiBaseUrl: 'http://localhost:4000' });
@@ -105,6 +107,7 @@ describe('desktop preload bridge', () => {
     await bridge.discovery.rediscover('profile-1');
     await bridge.lifecycle.start();
     assert.deepEqual(ipc.invocations, [
+      { channel: IPC_CHANNELS.appQuit, args: [] },
       { channel: IPC_CHANNELS.activeWorkRefresh, args: [] },
       { channel: IPC_CHANNELS.authLogout, args: ['http://localhost:4000'] },
       {

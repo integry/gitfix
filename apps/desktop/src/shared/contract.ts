@@ -2,6 +2,7 @@ export const DESKTOP_PROTOCOL = 'propr';
 
 export const IPC_CHANNELS = Object.freeze({
   appMetadata: 'desktop:app-metadata',
+  appQuit: 'desktop:app-quit',
   activeWorkRefresh: 'desktop:active-work-refresh',
   authLogout: 'desktop:auth-logout',
   openExternal: 'desktop:open-external',
@@ -53,6 +54,7 @@ export const DESKTOP_NATIVE_COMMANDS = Object.freeze([
   'inbox',
   'manage-instances',
   'notification-settings',
+  'quit',
 ] as const);
 
 export type DesktopNativeCommand = typeof DESKTOP_NATIVE_COMMANDS[number];
@@ -327,6 +329,8 @@ export interface DesktopBridge {
     getMetadata(): Promise<DesktopAppMetadata>;
     /** Request a main-owned reconciliation; the renderer cannot supply counts or native resources. */
     refreshActiveWork(): Promise<void>;
+    /** Complete a renderer-confirmed quit through the main-owned shutdown lifecycle. */
+    quit(): Promise<void>;
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;

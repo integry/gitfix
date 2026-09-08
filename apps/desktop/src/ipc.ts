@@ -196,6 +196,10 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     if (args.length) throw new Error('Invalid active work refresh request');
     options.onActiveWorkRefresh?.();
   });
+  handle(IPC_CHANNELS.appQuit, (_event, ...args) => {
+    if (args.length) throw new Error('Invalid app quit request');
+    options.app.quit();
+  });
   handle(IPC_CHANNELS.deepLinkAcknowledgement, (event, acknowledgement, ...args) => {
     if (args.length || !isValidDesktopDeepLinkAcknowledgement(acknowledgement)) {
       throw new Error('Invalid desktop deep-link acknowledgement');

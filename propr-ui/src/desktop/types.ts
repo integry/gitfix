@@ -140,6 +140,7 @@ export interface DesktopAdapters {
     onNativeCommand?(listener: (
       command: import('../../../apps/desktop/src/shared/contract').DesktopNativeCommand,
     ) => void): () => void;
+    quit?(): Promise<void>;
   };
   profiles: DesktopProfileAdapter;
   discovery: DesktopDiscoveryAdapter;

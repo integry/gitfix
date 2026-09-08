@@ -1,6 +1,6 @@
 import type { DesktopConnectionScope, DesktopNativeCommand } from './shared/contract';
 
-export type DesktopMainCommand = DesktopNativeCommand | 'open' | 'toggle-native-notifications' | 'quit';
+export type DesktopMainCommand = DesktopNativeCommand | 'open' | 'toggle-native-notifications';
 
 export interface DesktopNativeCommandState {
   authenticated: boolean;
@@ -58,6 +58,7 @@ export const createDesktopNativeCommandDispatcher = (
   let readyWindow: CommandWindow | null = null;
   let pending: { command: DesktopNativeCommand; connection: string | null } | null = null;
   let notificationToggleTail: Promise<void> = Promise.resolve();
+  let connectionGeneration = 0;
 
   const state = (): DesktopNativeCommandState => {
     const authenticated = connectionAvailable && options.activeConnectionScope() !== null;
@@ -85,10 +86,6 @@ export const createDesktopNativeCommandDispatcher = (
   return {
     dispatch(command) {
       if (closed) return;
-      if (command === 'quit') {
-        options.quit();
-        return;
-      }
       if (command === 'open') {
         options.restoreWindow();
         return;
@@ -96,13 +93,17 @@ export const createDesktopNativeCommandDispatcher = (
       if (command === 'toggle-native-notifications') {
         const current = state();
         if (!current.nativeNotificationsAvailable) return;
+        const connection = scopeKey(options.activeConnectionScope());
+        const generation = connectionGeneration;
         notificationToggleTail = notificationToggleTail.then(async () => {
+          if (closed || generation !== connectionGeneration
+            || connection !== scopeKey(options.activeConnectionScope())) return;
           const latest = state();
           if (!latest.nativeNotificationsAvailable) return;
           await options.setNativeNotificationsEnabled(!latest.nativeNotificationsEnabled);
         })
           .catch(() => options.log?.('warn', 'desktop.native_command.notifications_update_failed'))
-          .finally(notify);
+          .finally(() => { if (!closed) notify(); });
         return;
       }
 
@@ -131,6 +132,7 @@ export const createDesktopNativeCommandDispatcher = (
     },
     connectionUnavailable() {
       connectionAvailable = false;
+      connectionGeneration += 1;
       if (pending && AUTHENTICATED_COMMANDS.has(pending.command)) pending = null;
       notify();
     },
@@ -143,6 +145,7 @@ export const createDesktopNativeCommandDispatcher = (
     close() {
       if (closed) return;
       closed = true;
+      connectionGeneration += 1;
       ready = false;
       readyWindow = null;
       pending = null;

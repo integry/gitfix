@@ -122,6 +122,7 @@ export const createDesktopBridge = (
     app: {
       getMetadata: () => invoke(ipc, IPC_CHANNELS.appMetadata),
       refreshActiveWork: () => invoke(ipc, IPC_CHANNELS.activeWorkRefresh),
+      quit: () => invoke(ipc, IPC_CHANNELS.appQuit),
       onDeepLink: (listener) => {
         const consumerWasAbsent = deepLinkListeners.size === 0;
         deepLinkListeners.add(listener);

@@ -109,6 +109,60 @@ describe('DesktopExperience profile management', () => {
     window.location.hash = '#/';
   });
 
+  it('keeps composer work when native instance management is declined', async () => {
+    let nativeCommand: ((command: 'manage-instances') => void) | undefined;
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener as typeof nativeCommand;
+      return () => { nativeCommand = undefined; };
+    };
+    window.location.hash = '#/studio/draft-1';
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    render(
+      <DesktopExperience adapters={adapters}>
+        <textarea aria-label="Plan composer" defaultValue="Unsaved plan details" />
+      </DesktopExperience>,
+    );
+    expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    act(() => nativeCommand?.('manage-instances'));
+
+    expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
+    expect(screen.queryByRole('dialog', { name: 'Manage instances' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+    expect(adapters.connection.probe).toHaveBeenCalledTimes(1);
+    window.location.hash = '#/';
+  });
+
+  it('keeps composer work when native quit is declined', async () => {
+    let nativeCommand: ((command: 'quit') => void) | undefined;
+    const adapters = adaptersFor([localProfile], localProfile.id);
+    const quit = vi.fn(async () => undefined);
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener as typeof nativeCommand;
+      return () => { nativeCommand = undefined; };
+    };
+    adapters.app.quit = quit;
+    window.location.hash = '#/studio/draft-1';
+    vi.mocked(window.confirm).mockReturnValueOnce(false).mockReturnValueOnce(true);
+    render(
+      <DesktopExperience adapters={adapters}>
+        <textarea aria-label="Plan composer" defaultValue="Unsaved plan details" />
+      </DesktopExperience>,
+    );
+    expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    act(() => nativeCommand?.('quit'));
+
+    expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
+    expect(quit).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    act(() => nativeCommand?.('quit'));
+    expect(quit).toHaveBeenCalledTimes(1);
+    window.location.hash = '#/';
+  });
+
   it('reconnects an edited active instance but saves an inactive edit without connecting', async () => {
     const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
     render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);

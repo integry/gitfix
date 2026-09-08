@@ -13,12 +13,21 @@ interface DesktopNativeCommandOptions {
   onReconnect(profile: DesktopProfile): Promise<void>;
 }
 
-const commandPaths: Record<Exclude<DesktopNativeCommand, 'manage-instances'>, string> = {
+const commandPaths: Record<Exclude<DesktopNativeCommand, 'manage-instances' | 'quit'>, string> = {
   'new-plan': '/studio/new',
   tasks: '/tasks',
   plans: '/plans',
   inbox: '/inbox',
   'notification-settings': '/settings',
+};
+
+const confirmPlanStudioDiscard = (): boolean => {
+  const current = new URL(
+    window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash || '/',
+    'https://desktop.propr.invalid',
+  ).pathname;
+  return !current.startsWith('/studio/')
+    || window.confirm('Leave this plan? Any unsaved changes will be lost.');
 };
 
 export const useDesktopNativeCommands = ({
@@ -35,8 +44,17 @@ export const useDesktopNativeCommands = ({
 
   useEffect(() => {
     if (!pendingCommand) return;
+    if (pendingCommand === 'quit') {
+      if (confirmPlanStudioDiscard()) void app.quit?.().catch(() => undefined);
+      setPendingCommand(null);
+      return;
+    }
     if (pendingCommand === 'manage-instances') {
       if (state.phase === 'loading' || state.phase === 'connecting' || state.phase === 'authenticating') return;
+      if (!confirmPlanStudioDiscard()) {
+        setPendingCommand(null);
+        return;
+      }
       if (state.phase === 'connected') onManageInstances();
       else {
         if (instanceChooserBlocked) return;
@@ -52,13 +70,13 @@ export const useDesktopNativeCommands = ({
       'https://desktop.propr.invalid',
     ).pathname;
     if (current !== target && current.startsWith('/studio/')
-      && !window.confirm('Leave this plan? Any unsaved changes will be lost.')) {
+      && !confirmPlanStudioDiscard()) {
       setPendingCommand(null);
       return;
     }
     if (current !== target) navigateToUiPath(target);
     setPendingCommand(null);
-  }, [instanceChooserBlocked, onChooseInstances, onManageInstances, pendingCommand, state.phase]);
+  }, [app, instanceChooserBlocked, onChooseInstances, onManageInstances, pendingCommand, state.phase]);
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
