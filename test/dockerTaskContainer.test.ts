@@ -4,6 +4,7 @@ import {
     addTaskAttemptLabelsToDockerArgs,
     findTaskContainer,
     inspectLegacyDockerContainerLivenessForTask,
+    inspectTaskContainerLivenessForTask,
     type ExecutionResult,
 } from '../packages/core/src/claude/docker/dockerExecutor.js';
 
@@ -108,6 +109,41 @@ describe('running Docker task container lookup', () => {
         );
 
         assert.strictEqual(container, null);
+    });
+
+    test('distinguishes a preserved stopped exact-task container from a live one', async () => {
+        const stopped = await inspectTaskContainerLivenessForTask(
+            'pr-comments-propr-gitfix-1734-96957312',
+            async () => result('417758dda147\tcodex-issue-1734-96957312-old\texited\n'),
+        );
+        const running = await inspectTaskContainerLivenessForTask(
+            'pr-comments-propr-gitfix-1734-96957312',
+            async () => result('9c3a01d7f820\tcodex-issue-1734-96957312-live\trunning\n'),
+        );
+
+        assert.deepStrictEqual(stopped, {
+            liveness: 'stopped',
+            container: { id: '417758dda147', name: 'codex-issue-1734-96957312-old' },
+        });
+        assert.deepStrictEqual(running, {
+            liveness: 'running',
+            container: { id: '9c3a01d7f820', name: 'codex-issue-1734-96957312-live' },
+        });
+    });
+
+    test('fails closed when exact-task Docker inspection is unavailable or returns an unknown state', async () => {
+        assert.deepStrictEqual(await inspectTaskContainerLivenessForTask(
+            'pr-comments-propr-gitfix-1734-96957312',
+            async () => result('', 1, 'daemon unavailable'),
+        ), { liveness: 'unavailable', container: null });
+
+        assert.deepStrictEqual(await inspectTaskContainerLivenessForTask(
+            'pr-comments-propr-gitfix-1734-96957312',
+            async () => result('417758dda147\tcodex-task\tremoving\n'),
+        ), {
+            liveness: 'unavailable',
+            container: { id: '417758dda147', name: 'codex-task' },
+        });
     });
 
     test('detects a running pre-label container without authorizing removal', async () => {

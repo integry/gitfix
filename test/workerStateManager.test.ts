@@ -3,6 +3,7 @@ import assert from 'node:assert';
 
 // Mock Redis
 const mockRedisInstance = {
+    set: mock.fn(async () => 'OK' as string | null),
     setex: mock.fn(async () => 'OK'),
     get: mock.fn(async () => null),
     eval: mock.fn(async () => 1),
@@ -477,6 +478,49 @@ test('createTaskState uses correct repository format in database', async () => {
     const taskData = insertCall.arguments[0] as Record<string, unknown>;
     assert.strictEqual(taskData.repository, 'my-org/my-project');
 
+    await stateManager.close();
+});
+
+test('createTaskStateIfAbsent preserves a state that became processing before the atomic create', async () => {
+    const existingState: TaskStateData = {
+        taskId: 'replacement-task',
+        issueRef: { number: 42, repoOwner: 'owner', repoName: 'repo' },
+        correlationId: 'replacement-correlation',
+        state: TaskStates.PROCESSING,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        version: 2,
+        attempts: 0,
+        history: [],
+    };
+    mockRedisInstance.set.mock.resetCalls();
+    mockRedisInstance.set.mock.mockImplementation(async () => null);
+    mockRedisInstance.get.mock.resetCalls();
+    mockRedisInstance.get.mock.mockImplementation(async () => JSON.stringify(existingState));
+    mockRedisInstance.setex.mock.resetCalls();
+    mockDbTasksInsert.mock.resetCalls();
+    mockDbHistoryInsert.mock.resetCalls();
+    mockPublishTaskUpdate.mock.resetCalls();
+
+    const stateManager = new WorkerStateManager({
+        keyPrefix: TEST_KEY_PREFIX,
+        stateExpiry: TEST_STATE_EXPIRY,
+    });
+    const result = await stateManager.createTaskStateIfAbsent(
+        existingState.taskId,
+        existingState.issueRef,
+        'new-correlation',
+    );
+
+    assert.strictEqual(result?.state, TaskStates.PROCESSING);
+    assert.deepStrictEqual(mockRedisInstance.set.mock.calls[0].arguments.slice(2), ['EX', TEST_STATE_EXPIRY, 'NX']);
+    assert.strictEqual(mockRedisInstance.setex.mock.calls.length, 0);
+    assert.strictEqual(mockDbTasksInsert.mock.calls.length, 0);
+    assert.strictEqual(mockDbHistoryInsert.mock.calls.length, 0);
+    assert.strictEqual(mockPublishTaskUpdate.mock.calls.length, 0);
+
+    mockRedisInstance.set.mock.mockImplementation(async () => 'OK');
+    mockRedisInstance.get.mock.mockImplementation(async () => null);
     await stateManager.close();
 });
 
