@@ -32,6 +32,10 @@ select **Sign in in browser**, complete the instance-supplied browser approval, 
 comes from the validated API response; the renderer cannot replace it. A ProPR Connect discovery result or
 `propr://connect` link opens a confirmation screen and never pairs, switches profiles, or sends credentials automatically.
 
+ProPR sends external links through Electron's `shell.openExternal`, which opens the operating system's current-user
+default browser. To use Chromium, set it as that user's default HTTP and HTTPS handler in the operating-system settings.
+ProPR has no app-specific browser selection and does not change the system browser automatically.
+
 After connection, use **Connected: _instance name_** to open the profile manager. You can add, switch, edit, remove, retry,
 or re-pair profiles. Non-secret profile metadata survives relaunch. Offline profiles remain available for retry. A revoked
 or expired profile requires browser pairing again. If a managed tunnel origin or public identity changes, treat it as a
@@ -44,10 +48,13 @@ close the native `Menu.popup()` used for Linux primary activation, but a bare Xv
 prove shell-owned XEmbed or StatusNotifierItem activation.
 
 1. Start the desktop app without enabling notifications. Confirm startup does not request notification permission or
-   change **Settings → Desktop notifications**.
+   change **Settings → Desktop notifications**. The quiet defaults are **Enable on this device** (master delivery),
+   **Task started**, and **Task completed** off; **Task failed** and **Needs attention** are selected but remain inactive
+   until master delivery is enabled.
 2. Before connecting, open the tray menu once with primary click, dismiss it with Escape, then open it once with
    right-click. Confirm **Open ProPR**, **Switch / Manage Instances…**, and **Quit ProPR** work from both activation paths,
-   while account actions and the notification toggle are disabled.
+   while account actions and the notification toggle are disabled. On Linux, double-click the tray icon and confirm
+   exactly one window is focused.
 3. Connect and sign in. Confirm **New Plan**, **Tasks**, **Plans**, **Inbox**, **Switch / Manage Instances…**,
    **Notification Settings…**, and **Pause/Resume Native Notifications** appear in both the tray and application menus.
    Task and plan counts must open their matching destinations; unavailable counts must say unavailable rather than zero.
@@ -55,9 +62,10 @@ prove shell-owned XEmbed or StatusNotifierItem activation.
    restored and focused. In a plan composer, confirm leaving through a native command asks before navigating.
 5. Verify `CmdOrCtrl+N`, `CmdOrCtrl+1`, `CmdOrCtrl+2`, `CmdOrCtrl+3`, `CmdOrCtrl+Shift+I`, `CmdOrCtrl+,`, and
    `CmdOrCtrl+Shift+N`. On macOS also confirm About, Services, Hide, Window, and standard Edit roles remain native.
-6. Pause native notifications and confirm the item becomes checked and reads **Pause Native Notifications** only while
-   delivery is enabled; resume and confirm the inverse. Make the same change in Settings and reopen both menus to confirm
-   they agree. Per-event choices must remain unchanged.
+6. Pause native notifications and confirm the item becomes unchecked and reads **Resume Native Notifications** while
+   delivery is disabled. Resume and confirm it becomes checked and reads **Pause Native Notifications** while delivery is
+   enabled. Make the same change in Settings and reopen both menus to confirm they agree. Per-event choices must remain
+   unchanged.
 7. Open **Switch / Manage Instances…**, switch through the existing manager, and confirm the next command targets only the
    new instance. Sign out or disconnect and confirm stale counts disappear and account actions disable. Quit and confirm
    the tray is removed and no accelerator acts during shutdown.
@@ -122,7 +130,12 @@ See [Desktop pairing protocol](./desktop-pairing.md) for the wire contract and t
 - **Secure storage unavailable:** start an unlocked Linux Secret Service/keyring session. Pairing does not fall back to a
   plaintext credential file.
 - **Offline:** restore DNS/network/API reachability and retry the saved profile. The profile is not deleted.
-- **Revoked or expired:** pair again in the browser. A role/allowlist change can also require fresh authorization.
+- **Desktop profile token revoked or expired:** pair the profile again in the browser. A role/allowlist change can also
+  require fresh authorization.
+- **Repository GitHub authorization required:** `GITHUB_AUTHORIZATION_REQUIRED` and `GITHUB_REAUTH_REQUIRED` identify the
+  GitHub grant used for repository access, not the desktop profile token. Sign in with GitHub again in a browser to the
+  same ProPR instance, then retry the desktop repository action. Do not remove or re-pair the desktop profile for this
+  recovery.
 - **Incompatible:** follow the setup recovery action, which names the selected app image and required API contract. Upgrade
   to a desktop-aligned runtime; retrying an unchanged legacy image cannot complete setup. When the incompatible runtime
   is an already-running Desktop-managed stack, use **Restart with aligned runtime**. The app explicitly replaces only
@@ -131,8 +144,9 @@ See [Desktop pairing protocol](./desktop-pairing.md) for the wire contract and t
 - **Tunnel root returns 404:** this can be correct. Connect tunnels expose canonical `/api/*` and `/socket.io/*` routes;
   validation uses discovery/status rather than assuming `/` is served.
 
-Quit the app normally and wait for it to exit before uninstalling. Coordinated shutdown stops new work, drains admitted
-pairing/setup/deep-link operations, closes transport state, and releases the single-instance lock.
+Before uninstalling on macOS, choose **Quit ProPR** and wait for the app to exit; closing a window does not necessarily quit
+the app. Quit normally on Linux as well. Coordinated shutdown stops new work, drains admitted pairing/setup/deep-link
+operations, closes transport state, and releases the single-instance lock.
 
 ## Release verification
 

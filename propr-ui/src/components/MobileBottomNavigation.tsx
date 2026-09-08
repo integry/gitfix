@@ -22,6 +22,7 @@ import type { HeaderStats } from '../hooks/useHeaderStats';
 import type { CurrentUser } from '../api/proprTypes';
 import { userHasPermission } from '../contexts/AuthContext';
 import AgentTankSidebar from './AgentTankSidebar';
+import UserAvatar from './UserAvatar';
 
 interface MobileBottomNavigationProps {
   user: CurrentUser | null;
@@ -269,13 +270,12 @@ const MobileBottomNavigation: React.FC<MobileBottomNavigationProps> = ({
             {user && (
               <div className="border-t border-slate-100 p-4">
                 <div className="flex items-center gap-3">
-                  {user.avatarUrl ? (
-                    <img src={user.avatarUrl} alt="" className="h-10 w-10 rounded-full border border-slate-200" />
-                  ) : (
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-100 text-xs font-bold text-primary-700" aria-hidden="true">
-                      {user.username.slice(0, 2).toUpperCase()}
-                    </div>
-                  )}
+                  <UserAvatar
+                    user={user}
+                    className="flex h-10 w-10 flex-none items-center justify-center rounded-full border border-slate-200 object-cover text-xs font-bold"
+                    fallbackClassName="bg-primary-100 text-primary-700"
+                    decorative
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-slate-800">{user.displayName || user.username}</p>
                     <p className="truncate text-xs text-slate-500">@{user.username}</p>

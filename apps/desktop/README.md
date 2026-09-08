@@ -51,8 +51,9 @@ background mode. Windows tray support remains deferred.
   can be retried after connectivity returns. An incompatible instance must be upgraded before connection.
 - A ProPR Connect tunnel endpoint or public identity change is a new trust generation. Review the new origin and pair
   again; old REST cookies, bearer state, Socket.IO state, and renderer storage are not reused.
-- Quit through the application/window close path and wait for exit before uninstalling. Coordinated shutdown stops new
-  IPC work, drains admitted pairing/setup/deep-link work, closes sockets, and releases the single-instance lock.
+- Before uninstalling on macOS, choose **Quit ProPR** and wait for the app to exit; closing a window does not necessarily
+  quit the app. Quit normally on Linux as well. Coordinated shutdown stops new IPC work, drains admitted
+  pairing/setup/deep-link work, closes sockets, and releases the single-instance lock.
 
 ## Commands
 

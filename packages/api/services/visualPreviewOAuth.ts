@@ -1,5 +1,6 @@
 import {
   VisualPreviewOAuthCredentialService,
+  issueOAuthGrantRevision,
   isSupportedVisualPreviewUploadToken,
   type VisualPreviewOAuthCredentialInput,
 } from '@propr/core';
@@ -11,7 +12,10 @@ const REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
 export const visualPreviewOAuthCredentialService = new VisualPreviewOAuthCredentialService();
 
-export function visualPreviewCredentialFromUser(user: GitHubUser): VisualPreviewOAuthCredentialInput | null {
+export function visualPreviewCredentialFromUser(
+  user: GitHubUser,
+  grantRevision = issueOAuthGrantRevision(),
+): VisualPreviewOAuthCredentialInput | null {
   const accessToken = user.accessToken?.trim();
   if (!accessToken || !isSupportedVisualPreviewUploadToken(accessToken)) return null;
   return {
@@ -22,12 +26,16 @@ export function visualPreviewCredentialFromUser(user: GitHubUser): VisualPreview
     refreshToken: user.refreshToken,
     accessTokenExpiresAt: user.tokenExpiresAt,
     refreshTokenExpiresAt: user.refreshTokenExpiresAt,
+    grantRevision,
   };
 }
 
-export async function captureVisualPreviewCredentialFromAdminLogin(user: GitHubUser): Promise<boolean> {
+export async function captureVisualPreviewCredentialFromAdminLogin(
+  user: GitHubUser,
+  grantRevision = issueOAuthGrantRevision(),
+): Promise<boolean> {
   if (!isUserWhitelisted(user.username)) return false;
-  const credential = visualPreviewCredentialFromUser(user);
+  const credential = visualPreviewCredentialFromUser(user, grantRevision);
   if (!credential) return false;
   const authorization = await resolveInstanceAuthorization(user);
   if (authorization.role !== 'admin') return false;

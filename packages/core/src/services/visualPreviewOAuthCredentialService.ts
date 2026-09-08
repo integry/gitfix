@@ -14,6 +14,7 @@ const TOKEN_REFRESH_TIMEOUT_MS = 20_000;
 const REFRESH_LEASE_MS = TOKEN_REFRESH_TIMEOUT_MS + 5_000;
 const REFRESH_LEASE_POLL_MS = 100;
 const ENCRYPTION_CONTEXT = 'propr:visual-preview-oauth:v1';
+const GRANT_REVISION_PRECISION = 1_000;
 // GitHub CLI's attachment uploader accepts OAuth App and personal-access
 // tokens. It deliberately rejects both GitHub App user (`ghu_`) and
 // installation (`ghs_`) tokens before making an upload request.
@@ -33,6 +34,8 @@ export interface VisualPreviewOAuthCredentialInput {
   refreshToken?: string;
   accessTokenExpiresAt?: number;
   refreshTokenExpiresAt?: number;
+  grantRevision?: number;
+  loginRevision?: number;
 }
 
 export interface VisualPreviewOAuthCredentialStatus {
@@ -52,6 +55,8 @@ export interface VisualPreviewOAuthCredentialGrant {
   refreshToken?: string;
   accessTokenExpiresAt?: number;
   refreshTokenExpiresAt?: number;
+  grantRevision?: number;
+  loginRevision?: number;
 }
 
 interface CredentialRow {
@@ -68,6 +73,8 @@ interface CredentialRow {
   refresh_lease_until_ms: number | string | null;
   refresh_lease_owner: string | null;
   last_refreshed_at: string | null;
+  grant_revision: number | string;
+  login_revision: number | string;
   created_at: string;
   updated_at: string;
 }
@@ -115,6 +122,19 @@ function optionalTimestamp(value: number | string | null): number | undefined {
   if (value === null) return undefined;
   const timestamp = Number(value);
   return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+let lastIssuedGrantRevision = 0;
+
+export function issueOAuthGrantRevision(current?: number | string | null): number {
+  const currentRevision = current === undefined || current === null ? 0 : Number(current);
+  const nextRevision = Math.max(
+    Date.now() * GRANT_REVISION_PRECISION,
+    lastIssuedGrantRevision + 1,
+    Number.isSafeInteger(currentRevision) ? currentRevision + 1 : 0,
+  );
+  lastIssuedGrantRevision = nextRevision;
+  return nextRevision;
 }
 
 function encryptionSecret(environment: NodeJS.ProcessEnv): string | undefined {
@@ -241,12 +261,13 @@ export class VisualPreviewOAuthCredentialService {
     assertSupportedToken(input.accessToken);
     const existing = await this.credentialQuery().first();
     if (!existing || existing.github_user_id !== input.githubUserId) return false;
-    await this.store(input);
+    await this.store(input, optionalTimestamp(existing.login_revision));
     return true;
   }
 
-  private async store(input: VisualPreviewOAuthCredentialInput): Promise<void> {
+  private async store(input: VisualPreviewOAuthCredentialInput, loginRevision?: number): Promise<void> {
     const now = this.database.fn.now();
+    const grantRevision = input.grantRevision ?? issueOAuthGrantRevision();
     const values = {
       id: CREDENTIAL_ID,
       github_user_id: input.githubUserId,
@@ -258,6 +279,8 @@ export class VisualPreviewOAuthCredentialService {
         : null,
       access_token_expires_at_ms: input.accessTokenExpiresAt ?? null,
       refresh_token_expires_at_ms: input.refreshTokenExpiresAt ?? null,
+      grant_revision: grantRevision,
+      login_revision: loginRevision ?? input.loginRevision ?? grantRevision,
       status: 'active' as const,
       last_error_code: null,
       refresh_lease_until_ms: null,
@@ -321,22 +344,10 @@ export class VisualPreviewOAuthCredentialService {
     const expiresAt = optionalTimestamp(row.access_token_expires_at_ms);
     const needsRefresh = force || (expiresAt !== undefined && expiresAt - Date.now() < ACCESS_TOKEN_REFRESH_BUFFER_MS);
     if (!needsRefresh) return 'not-needed';
-    if (!row.refresh_token_encrypted) {
-      await this.markReauthRequired('missing_refresh_token');
-      return 'reauth-required';
-    }
+    if (!row.refresh_token_encrypted) return this.markMissingRefreshToken(row);
 
-    const leaseOwner = randomBytes(16).toString('hex');
-    const leaseAcquired = await this.database<CredentialRow>('visual_preview_oauth_credentials')
-      .where({ id: CREDENTIAL_ID, status: 'active' })
-      .andWhere(builder => builder
-        .whereNull('refresh_lease_until_ms')
-        .orWhere('refresh_lease_until_ms', '<', Date.now()))
-      .update({
-        refresh_lease_owner: leaseOwner,
-        refresh_lease_until_ms: Date.now() + REFRESH_LEASE_MS,
-      });
-    if (leaseAcquired === 0) {
+    const leaseOwner = await this.acquireRefreshLease(row);
+    if (!leaseOwner) {
       await this.waitForRefreshLease();
       const refreshedRow = await this.credentialQuery().first();
       if (!refreshedRow) return 'missing';
@@ -348,37 +359,112 @@ export class VisualPreviewOAuthCredentialService {
       return 'not-needed';
     }
 
+    return this.refreshWithLease(row, leaseOwner);
+  }
+
+  private async markMissingRefreshToken(
+    row: CredentialRow,
+  ): Promise<'not-needed' | 'reauth-required' | 'missing'> {
+    const marked = await this.database<CredentialRow>('visual_preview_oauth_credentials')
+      .where({
+        id: CREDENTIAL_ID,
+        github_user_id: row.github_user_id,
+        access_token_encrypted: row.access_token_encrypted,
+        status: row.status,
+      })
+      .whereNull('refresh_token_encrypted')
+      .update({
+        status: 'reauth_required',
+        last_error_code: 'missing_refresh_token',
+        updated_at: this.database.fn.now(),
+      });
+    return marked === 1 ? 'reauth-required' : this.statusAfterConcurrentCredentialChange();
+  }
+
+  private async acquireRefreshLease(row: CredentialRow): Promise<string | undefined> {
+    const leaseOwner = randomBytes(16).toString('hex');
+    let leaseQuery = this.database<CredentialRow>('visual_preview_oauth_credentials')
+      .where({ id: CREDENTIAL_ID, status: 'active' })
+      .andWhere({ github_user_id: row.github_user_id })
+      .andWhere({ access_token_encrypted: row.access_token_encrypted })
+      .andWhere(builder => builder
+        .whereNull('refresh_lease_until_ms')
+        .orWhere('refresh_lease_until_ms', '<', Date.now()));
+    leaseQuery = row.refresh_token_encrypted === null
+      ? leaseQuery.whereNull('refresh_token_encrypted')
+      : leaseQuery.andWhere({ refresh_token_encrypted: row.refresh_token_encrypted });
+    const leaseAcquired = await leaseQuery.update({
+      refresh_lease_owner: leaseOwner,
+      refresh_lease_until_ms: Date.now() + REFRESH_LEASE_MS,
+    });
+    return leaseAcquired === 1 ? leaseOwner : undefined;
+  }
+
+  private async refreshWithLease(
+    row: CredentialRow,
+    leaseOwner: string,
+  ): Promise<'not-needed' | 'refreshed' | 'reauth-required' | 'missing'> {
     try {
-      const refreshToken = decryptToken(row.refresh_token_encrypted, this.environment);
+      const refreshToken = decryptToken(row.refresh_token_encrypted!, this.environment);
       const response = await this.requestRefresh(row.source, refreshToken);
       if (response.error) {
         if (isUnrecoverableRefreshError(response.error)) {
-          await this.markReauthRequired(response.error);
-          return 'reauth-required';
+          const marked = await this.database<CredentialRow>('visual_preview_oauth_credentials')
+            .where({
+              id: CREDENTIAL_ID,
+              github_user_id: row.github_user_id,
+              refresh_lease_owner: leaseOwner,
+            })
+            .update({
+              status: 'reauth_required',
+              last_error_code: response.error.slice(0, 64),
+              refresh_lease_until_ms: null,
+              refresh_lease_owner: null,
+              updated_at: this.database.fn.now(),
+            });
+          if (marked === 1) return 'reauth-required';
+          return this.statusAfterConcurrentCredentialChange();
         }
         throw new Error(`GitHub OAuth refresh was temporarily unavailable (${response.error})`);
       }
       if (!response.access_token) throw new Error('GitHub OAuth refresh response did not include an access token');
 
       const now = Date.now();
-      await this.store({
-        githubUserId: row.github_user_id,
-        githubUsername: row.github_username,
-        source: row.source,
-        accessToken: response.access_token,
-        refreshToken: response.refresh_token || refreshToken,
-        accessTokenExpiresAt: response.expires_in ? now + response.expires_in * 1000 : undefined,
-        refreshTokenExpiresAt: response.refresh_token_expires_in
-          ? now + response.refresh_token_expires_in * 1000
-          : optionalTimestamp(row.refresh_token_expires_at_ms),
-      });
-      await this.credentialQuery().update({ last_refreshed_at: this.database.fn.now() });
-      return 'refreshed';
+      const refreshed = await this.database<CredentialRow>('visual_preview_oauth_credentials')
+        .where({
+          id: CREDENTIAL_ID,
+          github_user_id: row.github_user_id,
+          refresh_lease_owner: leaseOwner,
+        })
+        .update({
+          github_username: row.github_username,
+          source: row.source,
+          access_token_encrypted: encryptToken(response.access_token, this.environment),
+          refresh_token_encrypted: encryptToken(response.refresh_token || refreshToken, this.environment),
+          access_token_expires_at_ms: response.expires_in ? now + response.expires_in * 1000 : null,
+          refresh_token_expires_at_ms: response.refresh_token_expires_in
+            ? now + response.refresh_token_expires_in * 1000
+            : (optionalTimestamp(row.refresh_token_expires_at_ms) ?? null),
+          status: 'active',
+          last_error_code: null,
+          refresh_lease_until_ms: null,
+          refresh_lease_owner: null,
+          last_refreshed_at: this.database.fn.now(),
+          grant_revision: issueOAuthGrantRevision(row.grant_revision),
+          updated_at: this.database.fn.now(),
+        });
+      return refreshed === 1 ? 'refreshed' : this.statusAfterConcurrentCredentialChange();
     } finally {
       await this.database<CredentialRow>('visual_preview_oauth_credentials')
         .where({ id: CREDENTIAL_ID, refresh_lease_owner: leaseOwner })
         .update({ refresh_lease_owner: null, refresh_lease_until_ms: null });
     }
+  }
+
+  private async statusAfterConcurrentCredentialChange(): Promise<'missing' | 'not-needed' | 'reauth-required'> {
+    const current = await this.credentialQuery().first();
+    if (!current) return 'missing';
+    return current.status === 'active' ? 'not-needed' : 'reauth-required';
   }
 
   async refreshAndGetForOwner(
@@ -396,6 +482,17 @@ export class VisualPreviewOAuthCredentialService {
     const row = await this.credentialQuery().first();
     if (!row || row.github_user_id !== githubUserId) return null;
     if (row.status !== 'active') return { status: 'reauth_required' };
+    return this.grantFromRow(row);
+  }
+
+  async getForOwner(githubUserId: string): Promise<VisualPreviewOAuthCredentialGrant | null> {
+    const row = await this.credentialQuery().first();
+    if (!row || row.github_user_id !== githubUserId || row.source === 'static_token') return null;
+    if (row.status !== 'active') return { status: 'reauth_required' };
+    return this.grantFromRow(row);
+  }
+
+  private grantFromRow(row: CredentialRow): VisualPreviewOAuthCredentialGrant {
     return {
       status: 'active',
       accessToken: decryptToken(row.access_token_encrypted, this.environment),
@@ -404,6 +501,8 @@ export class VisualPreviewOAuthCredentialService {
         : undefined,
       accessTokenExpiresAt: optionalTimestamp(row.access_token_expires_at_ms),
       refreshTokenExpiresAt: optionalTimestamp(row.refresh_token_expires_at_ms),
+      grantRevision: optionalTimestamp(row.grant_revision),
+      loginRevision: optionalTimestamp(row.login_revision),
     };
   }
 
