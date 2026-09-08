@@ -4,10 +4,18 @@ import type { Job } from 'bullmq';
 import type { CommentJobData, UnprocessedComment } from '@propr/core';
 
 const jobs = new Map<string, Job<CommentJobData>>();
+let returnAttemptedDataForDuplicate = false;
 const queueAdd = mock.fn(async (_name: string, data: CommentJobData, options: { jobId?: string }) => {
     const jobId = options.jobId ?? `generated-${jobs.size}`;
     const existing = jobs.get(jobId);
-    if (existing) return existing;
+    if (existing) {
+        if (!returnAttemptedDataForDuplicate) return existing;
+        return {
+            id: jobId,
+            data: structuredClone(data),
+            getState: async () => 'delayed',
+        } as Job<CommentJobData>;
+    }
     const queued = {
         id: jobId,
         data: structuredClone(data),
@@ -16,10 +24,11 @@ const queueAdd = mock.fn(async (_name: string, data: CommentJobData, options: { 
     jobs.set(jobId, queued);
     return queued;
 });
+const queueGetJob = mock.fn(async (jobId: string) => jobs.get(jobId));
 
 await mock.module('@propr/core', {
     namedExports: {
-        issueQueue: { add: queueAdd },
+        issueQueue: { add: queueAdd, getJob: queueGetJob },
     },
 });
 
@@ -40,10 +49,12 @@ function makeData(comments: UnprocessedComment[]): CommentJobData {
 describe('PR comment usage-limit recovery ownership', () => {
     beforeEach(() => {
         jobs.clear();
+        returnAttemptedDataForDuplicate = false;
         queueAdd.mock.resetCalls();
+        queueGetJob.mock.resetCalls();
     });
 
-    test('uses a distinct durable owner when the deterministic retry ID already exists', async () => {
+    test('reloads a duplicate retry before selecting a durable owner', async () => {
         const existingComment = { id: 700, body: 'existing', author: 'bob', type: 'issue' as const };
         const claimedComment = { id: 701, body: 'claimed', author: 'alice', type: 'issue' as const };
         const baseJobId = 'pr-comments-batch-acme-web-42-default-feature-ratelimit-retry';
@@ -52,6 +63,7 @@ describe('PR comment usage-limit recovery ownership', () => {
             data: makeData([existingComment]),
             getState: async () => 'delayed',
         } as Job<CommentJobData>);
+        returnAttemptedDataForDuplicate = true;
         const sourceJob = {
             id: 'source-job-2',
             name: 'processPullRequestComment',
@@ -66,6 +78,8 @@ describe('PR comment usage-limit recovery ownership', () => {
         );
 
         assert.equal(queueAdd.mock.callCount(), 2);
+        assert.equal(queueGetJob.mock.callCount(), 2);
+        assert.deepStrictEqual(jobs.get(baseJobId)?.data.comments?.map(comment => comment.id), [700]);
         const fallback = queueAdd.mock.calls[1].arguments;
         assert.match(fallback[2].jobId ?? '', new RegExp(`^${baseJobId}-[0-9a-f]{16}$`));
         assert.deepStrictEqual(fallback[1].comments?.map(comment => comment.id), [701]);

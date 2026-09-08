@@ -64,15 +64,39 @@ export class WorkerStateManager {
      * @returns Task state data
      */
     async createTaskState(taskId: string, issueRef: IssueRef, correlationId: string | null = null): Promise<TaskStateData> {
+        const state = this.buildInitialTaskState(taskId, issueRef, correlationId);
+        const key = this.getTaskKey(taskId);
+        await this.redis.setex(key, this.stateExpiry, JSON.stringify(state));
+        await this.persistTaskStateCreation(state);
+        return state;
+    }
+
+    /**
+     * Creates a task state entry only when no state already exists.
+     * @returns The created state, or the concurrently-created state when present
+     */
+    async createTaskStateIfAbsent(taskId: string, issueRef: IssueRef, correlationId: string | null = null): Promise<TaskStateData | null> {
+        const state = this.buildInitialTaskState(taskId, issueRef, correlationId);
+        const key = this.getTaskKey(taskId);
+        const created = await this.redis.set(key, JSON.stringify(state), 'EX', this.stateExpiry, 'NX');
+        if (created !== 'OK') return this.getTaskState(taskId);
+
+        await this.persistTaskStateCreation(state);
+        return state;
+    }
+
+    private buildInitialTaskState(taskId: string, issueRef: IssueRef, correlationId: string | null): TaskStateData {
         const timestamp = new Date().toISOString();
-        const state: TaskStateData = {
+        return {
             taskId, issueRef, correlationId: correlationId ?? generateCorrelationId(),
             state: TaskStates.PENDING, createdAt: timestamp,
             updatedAt: timestamp, version: 1, attempts: 0,
             history: [{ state: TaskStates.PENDING, timestamp, reason: 'Task created' }]
         };
-        const key = this.getTaskKey(taskId);
-        await this.redis.setex(key, this.stateExpiry, JSON.stringify(state));
+    }
+
+    private async persistTaskStateCreation(state: TaskStateData): Promise<void> {
+        const { taskId, issueRef } = state;
         const correlatedLogger: Logger = logger.withCorrelation(state.correlationId);
         correlatedLogger.info({
             taskId, issueNumber: issueRef.number,
@@ -112,7 +136,6 @@ export class WorkerStateManager {
         } catch (error) {
             correlatedLogger.error({ error: (error as Error).message, taskId }, 'Failed to persist task state to database');
         }
-        return state;
     }
 
     /**

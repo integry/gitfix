@@ -11,10 +11,11 @@ function retryContainsComments(
 }
 
 async function isDurableRetryOwner(
-    retryJob: Job<CommentJobData>,
+    retryJob: Job<CommentJobData> | undefined,
     currentJob: Job<CommentJobData>,
     comments: UnprocessedComment[],
 ): Promise<boolean> {
+    if (!retryJob) return false;
     if (retryJob.id !== undefined && String(retryJob.id) === String(currentJob.id)) return false;
     if (!retryContainsComments(retryJob, comments)) return false;
     if (typeof retryJob.getState !== 'function') return true;
@@ -51,19 +52,22 @@ export async function schedulePRCommentUsageLimitRetry(
         jobId: baseJobId,
         delay,
     }) as Job<CommentJobData>;
-    if (await isDurableRetryOwner(initialRetry, job, comments)) {
-        return String(initialRetry.id ?? baseJobId);
+    const initialRetryJobId = String(initialRetry.id ?? baseJobId);
+    const persistedInitialRetry = await issueQueue.getJob(initialRetryJobId) as Job<CommentJobData> | undefined;
+    if (await isDurableRetryOwner(persistedInitialRetry, job, comments)) {
+        return initialRetryJobId;
     }
 
-    // BullMQ returns an existing job unchanged when a duplicate job ID is added.
-    // Give this claim a distinct, stable owner rather than silently dropping data.
+    // A duplicate add may not persist the attempted payload. Give this claim a
+    // distinct, stable owner rather than silently dropping data.
     const fallbackJobId = buildRetryFallbackJobId(baseJobId, job, comments);
     const fallbackRetry = await issueQueue.add(job.name, retryData, {
         jobId: fallbackJobId,
         delay,
     }) as Job<CommentJobData>;
-    if (!await isDurableRetryOwner(fallbackRetry, job, comments)) {
+    const persistedFallbackRetry = await issueQueue.getJob(String(fallbackRetry.id ?? fallbackJobId)) as Job<CommentJobData> | undefined;
+    if (!await isDurableRetryOwner(persistedFallbackRetry, job, comments)) {
         throw new Error(`Unable to persist usage-limit retry comments in job ${fallbackJobId}`);
     }
-    return String(fallbackRetry.id ?? fallbackJobId);
+    return String(persistedFallbackRetry?.id ?? fallbackJobId);
 }

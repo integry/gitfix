@@ -81,18 +81,14 @@ async function recordRecoveryLink(
         recoveryReason: reason,
     };
     try {
-        let replacementState = await stateManager.getTaskState(replacementTaskId);
-        if (!replacementState) {
-            await stateManager.createTaskState(replacementTaskId, {
-                number: job.data.pullRequestNumber,
-                repoOwner: job.data.repoOwner,
-                repoName: job.data.repoName,
-                type: 'pr-comment',
-                comments: job.data.comments,
-                modelName: job.data.llm ?? undefined,
-            }, job.data.correlationId);
-            replacementState = await stateManager.getTaskState(replacementTaskId);
-        }
+        const replacementState = await stateManager.createTaskStateIfAbsent(replacementTaskId, {
+            number: job.data.pullRequestNumber,
+            repoOwner: job.data.repoOwner,
+            repoName: job.data.repoName,
+            type: 'pr-comment',
+            comments: job.data.comments,
+            modelName: job.data.llm ?? undefined,
+        }, job.data.correlationId);
         if (replacementState) {
             await stateManager.updateHistoryMetadata(replacementTaskId, replacementState.state, historyMetadata);
         }
@@ -195,12 +191,19 @@ export async function handlePRCommentLockContention(
 
 async function scheduleRecoveryAndRelease(
     params: PreExecutionRecoveryParams,
-    options: { delay: number; reason: string; containerCollisionTaskId?: string; containerCollisionTaskIds?: string[] },
+    options: {
+        delay: number;
+        reason: string;
+        containerCollisionTaskId?: string;
+        containerCollisionTaskIds?: string[];
+        preserveLock?: boolean;
+    },
 ): Promise<string | undefined> {
+    const { preserveLock, ...recoveryOptions } = options;
     try {
-        return await schedulePRCommentRecovery({ ...params, ...options });
+        return await schedulePRCommentRecovery({ ...params, ...recoveryOptions });
     } finally {
-        await params.releaseLock();
+        if (!preserveLock) await params.releaseLock();
     }
 }
 
@@ -233,6 +236,7 @@ export async function evaluatePRCommentPreExecutionRecovery(
             reason: 'agent_container_already_running',
             containerCollisionTaskId: job.data.containerCollisionTaskId ?? collision.taskId,
             containerCollisionTaskIds: [...new Set([...collisionAncestorTaskIds, collision.taskId])],
+            preserveLock: collision.taskId === taskId,
         });
         return { preexistingState, result: { status: 'rescheduled', reason: 'agent_container_already_running', replacementTaskId } };
     }

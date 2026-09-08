@@ -94,9 +94,13 @@ describe('PR comment container collision recovery', () => {
         const metadataUpdates: Array<{ taskId: string; state: string; metadata: Record<string, unknown> }> = [];
         const stateManager = {
             async getTaskState(taskId: string) { return states.get(taskId) ?? null; },
-            async createTaskState(taskId: string) {
+            async createTaskStateIfAbsent(taskId: string) {
+                const existing = states.get(taskId);
+                if (existing) return existing;
                 created.push(taskId);
-                states.set(taskId, { state: 'pending' });
+                const state = { state: 'pending' };
+                states.set(taskId, state);
+                return state;
             },
             async updateHistoryMetadata(taskId: string, state: string, metadata: Record<string, unknown>) {
                 metadataUpdates.push({ taskId, state, metadata });
@@ -145,16 +149,19 @@ describe('PR comment container collision recovery', () => {
         );
     });
 
-    test('does not rewind a replacement that started before recovery-link bookkeeping', async () => {
+    test('does not rewind a replacement that starts during recovery-link bookkeeping', async () => {
         queueAdd.mock.resetCalls();
-        const replacementState = { state: 'processing' };
+        const replacementState = { state: 'pending' };
         const stateUpdates: string[] = [];
         const metadataUpdates: Array<{ taskId: string; state: string }> = [];
         const stateManager = {
             async getTaskState(taskId: string) {
-                return taskId === 'replacement-task-2' ? replacementState : { state: 'cancelled' };
+                return taskId === 'replacement-task-2' ? null : { state: 'cancelled' };
             },
-            async createTaskState() { throw new Error('replacement already exists'); },
+            async createTaskStateIfAbsent() {
+                replacementState.state = 'processing';
+                return replacementState;
+            },
             async updateTaskState(_taskId: string, state: string) { stateUpdates.push(state); },
             async updateHistoryMetadata(taskId: string, state: string) {
                 metadataUpdates.push({ taskId, state });
@@ -190,10 +197,22 @@ describe('PR comment container collision recovery', () => {
         const states = new Map<string, { state: string }>();
         const stateManager = {
             async getTaskState(taskId: string) { return states.get(taskId) ?? null; },
-            async createTaskState(taskId: string) { states.set(taskId, { state: 'pending' }); },
+            async createTaskStateIfAbsent(taskId: string) {
+                const state = states.get(taskId) ?? { state: 'pending' };
+                states.set(taskId, state);
+                return state;
+            },
             async updateHistoryMetadata() {},
         };
-        const releaseLock = mock.fn(async () => true);
+        let liveLease = 'lease-b';
+        const lockRedis = {
+            async set() { return null; },
+            async eval(script: string, _keyCount: number, _key: string, token: string) {
+                if (token !== liveLease) return 0;
+                if (script.includes("redis.call('del'")) liveLease = '';
+                return 1;
+            },
+        };
         const job = {
             id: 'attempt-b',
             name: 'processPullRequestComment',
@@ -211,27 +230,18 @@ describe('PR comment container collision recovery', () => {
             job: job as never,
             taskId: 'attempt-b',
             stateManager: stateManager as never,
-            redisClient: {} as never,
+            redisClient: lockRedis as never,
             pickedUpComments: [],
             correlatedLogger: { info: mock.fn(), warn: mock.fn() } as never,
-            releaseLock,
+            releaseLock: () => releasePRProcessingLock(lockRedis as never, 'lock:pr', 'lease-b'),
         });
 
         assert.equal(decision.result?.reason, 'agent_container_already_running');
         const queuedData = queueAdd.mock.calls[0].arguments[1];
         assert.deepStrictEqual(queuedData.containerCollisionTaskIds, ['attempt-a', 'attempt-b']);
         assert.equal(queuedData.prProcessingLockToken, undefined);
-        assert.equal(releaseLock.mock.callCount(), 1);
+        assert.equal(liveLease, 'lease-b', 'same-job recovery must not release its live predecessor lease');
 
-        let liveLease = 'lease-b';
-        const lockRedis = {
-            async set() { return null; },
-            async eval(script: string, _keyCount: number, _key: string, token: string) {
-                if (token !== liveLease) return 0;
-                if (script.includes("redis.call('del'")) liveLease = '';
-                return 1;
-            },
-        };
         const leaseC = await ensurePRProcessingLockToken(queuedData, 'correlation-1', async () => {});
         assert.notEqual(leaseC, 'lease-b');
         assert.equal(await acquirePRProcessingLock(lockRedis as never, 'lock:pr', leaseC), false);
