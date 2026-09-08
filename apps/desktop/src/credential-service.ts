@@ -270,6 +270,17 @@ const requestOrigin = (value: string): { origin: string; pathname: string; url: 
 };
 
 const CURRENT_USER_SCOPE_GENERATION_QUERY = 'proprDesktopScopeGeneration';
+const PUBLIC_GITHUB_AVATAR_HOST = 'avatars.githubusercontent.com';
+
+const isPublicGitHubAvatarRequest = (
+  target: ReturnType<typeof requestOrigin>,
+  resourceType: string | undefined,
+): boolean => target !== null
+  && target.url.protocol === 'https:'
+  && target.url.hostname === PUBLIC_GITHUB_AVATAR_HOST
+  && target.url.port === ''
+  && resourceType?.toLowerCase() === 'image';
+
 const currentUserScopeGeneration = (url: URL): {
   count: 0 | 1 | 2;
   generation: number | null;
@@ -1394,8 +1405,13 @@ export class DesktopCredentialService {
     // Chromium can cache Local Network Access after activation is discarded.
     // The live main renderer must therefore remain pinned to the exact current
     // origin even for sanitized traffic that does not carry a transport scope.
+    const publicGitHubAvatarRequest = activeIsCurrent
+      && !markedRestRequest
+      && !isSocketCandidate
+      && isPublicGitHubAvatarRequest(target, details.resourceType);
     if (details.rendererOwned === true && target
-      && (!activeIsCurrent || target.origin !== active.origin)) {
+      && (!activeIsCurrent || target.origin !== active.origin)
+      && !publicGitHubAvatarRequest) {
       reportHandshake(false, !active ? 'no-active-binding' : !activeIsCurrent ? 'stale-generation' : 'wrong-origin');
       reportCurrentUser(false, !active ? 'no-active-binding' : !activeIsCurrent ? 'stale-generation' : 'wrong-origin');
       return { cancel: true };

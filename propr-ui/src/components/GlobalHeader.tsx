@@ -12,6 +12,7 @@ import {
 } from './GlobalHeaderComponents';
 import type { CurrentUser } from '../api/proprTypes';
 import MobileBottomNavigation from './MobileBottomNavigation';
+import UserAvatar from './UserAvatar';
 
 interface GlobalHeaderProps {
   user: CurrentUser | null;
@@ -89,17 +90,11 @@ const ProfileSection: React.FC<ProfileSectionProps> = ({ user, onLogout, systemH
             @{user.username}
           </span>
         </div>
-        {user.avatarUrl ? (
-          <img
-            src={user.avatarUrl}
-            alt={user.username}
-            className="w-8 h-8 rounded-full border border-gray-200 group-hover:border-gray-300 transition-colors"
-          />
-        ) : (
-          <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-600 font-bold text-xs group-hover:bg-primary-200 transition-colors">
-            {user.username.slice(0, 2).toUpperCase()}
-          </div>
-        )}
+        <UserAvatar
+          user={user}
+          className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-gray-200 object-cover text-xs font-bold transition-colors group-hover:border-gray-300"
+          fallbackClassName="bg-primary-100 text-primary-600 group-hover:bg-primary-200"
+        />
       </a>
     )}
     {user && (
