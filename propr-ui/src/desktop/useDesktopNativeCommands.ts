@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { navigateToUiPath } from '../config/runtimeMode';
 import type {
   DesktopNativeCommand,
@@ -50,6 +50,20 @@ export const useDesktopNativeCommands = ({
   onReconnect,
 }: DesktopNativeCommandOptions): void => {
   const [pendingCommand, setPendingCommand] = useState<DesktopNativeCommandDelivery | null>(null);
+  // Keep one listener alive across connection commits so a shortcut cannot land
+  // between rendering the ready UI and replacing a state-bound passive effect.
+  const keyboardCommand = useRef({
+    nativeCommandsAvailable: Boolean(app.onNativeCommand),
+    state,
+    onManageInstances,
+    onReconnect,
+  });
+  keyboardCommand.current = {
+    nativeCommandsAvailable: Boolean(app.onNativeCommand),
+    state,
+    onManageInstances,
+    onReconnect,
+  };
 
   useEffect(() => app.onNativeCommand?.(setPendingCommand), [app]);
 
@@ -96,17 +110,18 @@ export const useDesktopNativeCommands = ({
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
-      if (state.phase !== 'connected') return;
-      if (!app.onNativeCommand && (event.metaKey || event.ctrlKey)
+      const current = keyboardCommand.current;
+      if (current.state.phase !== 'connected') return;
+      if (!current.nativeCommandsAvailable && (event.metaKey || event.ctrlKey)
         && event.shiftKey && event.key.toLowerCase() === 'i') {
         event.preventDefault();
-        if (confirmPlanStudioDiscard()) onManageInstances();
+        if (confirmPlanStudioDiscard()) current.onManageInstances();
       } else if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r') {
         event.preventDefault();
-        void onReconnect(state.profile);
+        void current.onReconnect(current.state.profile);
       }
     };
     document.addEventListener('keydown', handleKeyboard);
     return () => document.removeEventListener('keydown', handleKeyboard);
-  }, [app.onNativeCommand, onManageInstances, onReconnect, state]);
+  }, []);
 };
