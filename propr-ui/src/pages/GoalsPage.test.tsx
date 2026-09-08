@@ -220,6 +220,31 @@ describe('GoalsPage', () => {
     expect(screen.getAllByText('GPT-5.6 Sol')).toHaveLength(2);
   });
 
+  it('filters goals by repository and stores the selection in the URL', async () => {
+    const apiGoal = {
+      ...goal,
+      id: 'goal-2',
+      repository: 'acme/api',
+      title: 'Launch Billing API',
+      objective: 'Ship the billing API',
+    };
+    vi.mocked(goalsApi.listGoals).mockResolvedValue({ goals: [goal, apiGoal] });
+
+    render(<MemoryRouter initialEntries={['/goals?repository=acme/api']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText(apiGoal.title)).toBeInTheDocument();
+    expect(screen.queryByText(goal.title)).not.toBeInTheDocument();
+    const filter = screen.getByRole('group', { name: 'Filter goals by repository' });
+    expect(within(filter).getByRole('button', { name: /acme.*api/ })).toBeInTheDocument();
+
+    fireEvent.click(within(filter).getByRole('button', { name: /acme.*api/ }));
+    fireEvent.click(screen.getByRole('button', { name: /All Repos/ }));
+
+    expect(await screen.findByText(goal.title)).toBeInTheDocument();
+    expect(screen.getByText(apiGoal.title)).toBeInTheDocument();
+    expect(within(filter).getByRole('button', { name: /All Repos/ })).toBeInTheDocument();
+  });
+
   it('renders existing task live details and sends canned status input through the same session', async () => {
     render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
     expect((await screen.findAllByText('Implement API')).length).toBeGreaterThan(0);

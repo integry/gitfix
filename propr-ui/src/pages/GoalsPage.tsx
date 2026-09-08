@@ -1,9 +1,9 @@
 /* eslint-disable max-lines -- goal list and split-pane console intentionally share this route-level surface */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Activity, CheckCircle2, Circle, CircleDot, CirclePause, CirclePlay, CircleStop, Clock3,
-  Coins, ExternalLink, FileText, GitPullRequest, Github, ListTodo, LoaderCircle, Plus, Send,
+  Coins, ExternalLink, FileText, Filter, GitPullRequest, Github, ListTodo, LoaderCircle, Plus, Send,
   MoreHorizontal, Terminal, Trash2,
 } from 'lucide-react';
 import { getInstanceCatalog } from '../api/proprApi';
@@ -315,18 +315,57 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
 
 function GoalList() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const repositoryFilter = searchParams.get('repository') || 'all';
   useDocumentTitle('Goals');
   const refresh = useCallback(() => listGoals().then(data => setGoals(data.goals)).catch(err => setError((err as Error).message)), []);
   useEffect(() => { refresh(); const timer = window.setInterval(refresh, 10_000); return () => window.clearInterval(timer); }, [refresh]);
+  const repositoryOptions = useMemo<RepoOption[]>(() => {
+    const counts = new Map<string, number>();
+    goals.forEach(goal => counts.set(goal.repository, (counts.get(goal.repository) || 0) + 1));
+    return [
+      { name: 'all', enabled: true, displayName: 'All Repos', count: goals.length },
+      ...Array.from(counts, ([name, count]) => ({ name, enabled: true, count }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    ];
+  }, [goals]);
+  const visibleGoals = repositoryFilter === 'all'
+    ? goals
+    : goals.filter(goal => goal.repository === repositoryFilter);
+  const setRepositoryFilter = useCallback((repository: string) => {
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      if (repository === 'all') next.delete('repository');
+      else next.set('repository', repository);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   const goalAgents = goals.map(goal => ({ type: goal.agent.type, alias: goal.agent.alias }));
   return <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
     <div><h1 className="text-2xl font-bold text-slate-900">Goals</h1><p className="mt-1 text-sm text-slate-600">Long-running work kept in one exact coding-agent session.</p></div>
     <CreateGoalForm onCreated={goal => navigate(`/goals/${goal.id}`)} />
     {error && <p role="alert" className="text-red-600">{error}</p>}
-    <section className="space-y-3"><h2 className="text-lg font-semibold">Your goals</h2>
-      {goals.length === 0 ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No goals yet.</p> : goals.map(goal => <Link key={goal.id} to={`/goals/${goal.id}`} className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-primary-300 hover:shadow-md">
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">Your goals</h2>
+        {goals.length > 0 && <div role="group" aria-label="Filter goals by repository" className="flex min-w-0 items-center gap-2">
+          <Filter className="hidden h-4 w-4 flex-none text-slate-500 sm:block" />
+          <RepositorySelector
+            repos={repositoryOptions}
+            selectedRepo={repositoryFilter}
+            onRepoChange={setRepositoryFilter}
+            labelLayout="stacked"
+            className="w-[220px] max-w-full sm:w-[280px]"
+          />
+        </div>}
+      </div>
+      {goals.length === 0
+        ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No goals yet.</p>
+        : visibleGoals.length === 0
+          ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No goals for this repository.</p>
+          : visibleGoals.map(goal => <Link key={goal.id} to={`/goals/${goal.id}`} className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-primary-300 hover:shadow-md">
         <div className="flex items-start justify-between gap-4"><h3 className="line-clamp-2 min-w-0 font-semibold leading-5 text-slate-900" title={goal.title}>{goal.title}</h3><GoalState goal={goal} /></div>
         <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-500">{goal.objective}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
