@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- goal route regressions share one database and route fixture */
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import type { Request, Response } from 'express';
