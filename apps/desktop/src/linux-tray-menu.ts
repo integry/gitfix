@@ -24,6 +24,7 @@ interface LinuxTrayMenuPopupOptions {
   screen: LinuxTrayMenuScreen;
   createHost(options: BrowserWindowConstructorOptions): BaseWindow;
   environment?: LinuxSessionEnvironment;
+  scheduleMenuOpen?(callback: () => void): void;
   scheduleHostDestroy?(callback: () => void): void;
 }
 
@@ -125,10 +126,12 @@ export const resolveLinuxTrayMenuAnchor = (
 
 export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): LinuxTrayMenuPopup => {
   let host: BaseWindow | null = null;
+  let openingMenu: Menu | null = null;
   let openMenu: Menu | null = null;
   let closed = false;
   const canPositionHost = !isWaylandSession(options.environment ?? process.env);
   const pendingHostDestruction = new Set<BaseWindow>();
+  const scheduleMenuOpen = options.scheduleMenuOpen ?? setImmediate;
   const scheduleHostDestroy = options.scheduleHostDestroy ?? setImmediate;
 
   const destroyHostAfterNativeMenuClose = (popupHost: BaseWindow): void => {
@@ -153,6 +156,13 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
   return {
     popup(menu, activation) {
       if (closed) return;
+      if (openingMenu) {
+        const openingHost = host;
+        openingMenu = null;
+        host = null;
+        if (openingHost) destroyHostAfterNativeMenuClose(openingHost);
+        return;
+      }
       if (openMenu) {
         openMenu.closePopup(host && !host.isDestroyed() ? host : undefined);
         return;
@@ -172,6 +182,10 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
         height: 1,
         useContentSize: true,
         show: false,
+        // Linux does not implement skipTaskbar. A toolbar keeps this mapped,
+        // focusable menu owner out of task lists instead of flashing the app.
+        type: 'toolbar',
+        focusable: true,
         frame: false,
         transparent: true,
         backgroundColor: '#00000000',
@@ -188,6 +202,7 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
         },
       });
       host = popupHost;
+      openingMenu = menu;
 
       // Menu.popup() is implemented by Electron's native Views menu runner on
       // Linux. Giving it a mapped, menu-scoped owner lets it take and release
@@ -196,21 +211,30 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
       // Reapply after mapping so X11 window-manager placement cannot move the
       // otherwise invisible owner away from its monitor-relative anchor.
       if (anchor) popupHost.setPosition(anchor.x, anchor.y, false);
-      openMenu = menu;
-      try {
-        menu.popup({
-          window: popupHost,
-          // Wayland does not permit global top-level positioning. Omitting
-          // coordinates lets the native menu runner use the current cursor
-          // while retaining the transient owner for outside-click dismissal.
-          ...(anchor ? { x: 0, y: 0 } : {}),
-          sourceType: 'mouse',
-          callback: () => releaseHost(menu, popupHost),
-        });
-      } catch (error) {
-        releaseHost(menu, popupHost);
-        throw error;
-      }
+      // The Linux Tray activation is delivered from native press/release
+      // handling, and BrowserWindow mapping also completes asynchronously.
+      // Opening in that same callback makes the release dismiss the new menu
+      // on XFCE. Wait one event-loop turn so both native callbacks unwind.
+      scheduleMenuOpen(() => {
+        if (closed || openingMenu !== menu || host !== popupHost || popupHost.isDestroyed()) return;
+        if (anchor) popupHost.setPosition(anchor.x, anchor.y, false);
+        openingMenu = null;
+        openMenu = menu;
+        try {
+          menu.popup({
+            window: popupHost,
+            // Wayland does not permit global top-level positioning. Omitting
+            // coordinates lets the native menu runner use the current cursor
+            // while retaining the transient owner for outside-click dismissal.
+            ...(anchor ? { x: 0, y: 0 } : {}),
+            sourceType: 'mouse',
+            callback: () => releaseHost(menu, popupHost),
+          });
+        } catch (error) {
+          releaseHost(menu, popupHost);
+          throw error;
+        }
+      });
     },
     close() {
       if (closed) return;
@@ -220,6 +244,7 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
       if (closingMenu) {
         closingMenu.closePopup(closingHost && !closingHost.isDestroyed() ? closingHost : undefined);
       }
+      openingMenu = null;
       openMenu = null;
       host = null;
       if (closingHost) destroyHostAfterNativeMenuClose(closingHost);

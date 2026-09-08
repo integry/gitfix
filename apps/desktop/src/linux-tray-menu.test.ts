@@ -63,7 +63,11 @@ describe('Linux tray menu popup', () => {
     const positions: Array<[number, number]> = [];
     let shows = 0;
     let destroys = 0;
+    const pendingMenuOpens: Array<() => void> = [];
     const pendingDestructions: Array<() => void> = [];
+    const flushMenuOpens = () => {
+      for (const open of pendingMenuOpens.splice(0)) open();
+    };
     const flushHostDestructions = () => {
       for (const destroy of pendingDestructions.splice(0)) destroy();
     };
@@ -97,6 +101,7 @@ describe('Linux tray menu popup', () => {
       } as unknown as typeof import('electron').screen,
       createHost,
       environment: {},
+      scheduleMenuOpen: callback => { pendingMenuOpens.push(callback); },
       scheduleHostDestroy: callback => { pendingDestructions.push(callback); },
     });
     const emptyGeometry = {
@@ -108,9 +113,13 @@ describe('Linux tray menu popup', () => {
     assert.equal(hostOptions[0]?.x, -84);
     assert.equal(hostOptions[0]?.y, 30);
     assert.equal(hostOptions[0]?.show, false);
+    assert.equal(hostOptions[0]?.type, 'toolbar');
+    assert.equal(hostOptions[0]?.focusable, true);
     assert.equal(hostOptions[0]?.transparent, true);
     assert.equal(shows, 1);
     assert.deepEqual(positions, [[-84, 30]]);
+    assert.equal(popupCalls, 0, 'the native popup waits for tray activation and owner mapping to unwind');
+    flushMenuOpens();
     assert.equal(popupCalls, 1);
     assert.equal(popupOptions?.window, hosts[0]);
     assert.equal(popupOptions?.x, 0);
@@ -127,6 +136,7 @@ describe('Linux tray menu popup', () => {
     assert.equal(hosts.length, 2, 'a closed owner cannot keep Electron alive or affect app activation');
     assert.deepEqual(positions.at(-1), [-250, 30]);
     assert.equal(shows, 2);
+    flushMenuOpens();
     assert.equal(popupCalls, 2);
 
     popup.popup(menu, emptyGeometry);
@@ -136,6 +146,7 @@ describe('Linux tray menu popup', () => {
     assert.equal(destroys, 2);
 
     popup.popup(menu, emptyGeometry);
+    flushMenuOpens();
     popup.close();
     assert.equal(closeCalls, 2, 'shutdown closes the active native menu first');
     assert.equal(destroys, 2, 'shutdown also defers owner destruction past closePopup');
@@ -151,6 +162,7 @@ describe('Linux tray menu popup', () => {
     let positions = 0;
     let shows = 0;
     let destroys = 0;
+    let scheduledMenuOpen: (() => void) | undefined;
     let scheduledDestroy: (() => void) | undefined;
     const host = {
       isDestroyed: () => false,
@@ -168,6 +180,7 @@ describe('Linux tray menu popup', () => {
         return host;
       },
       environment: { XDG_SESSION_TYPE: 'wayland' },
+      scheduleMenuOpen: callback => { scheduledMenuOpen = callback; },
       scheduleHostDestroy: callback => { scheduledDestroy = callback; },
     });
     const menu = {
@@ -184,14 +197,55 @@ describe('Linux tray menu popup', () => {
     assert.equal(hostOptions?.y, undefined);
     assert.equal(positions, 0);
     assert.equal(shows, 1);
-    assert.equal(popupOptions?.window, host);
-    assert.equal(popupOptions?.x, undefined);
-    assert.equal(popupOptions?.y, undefined);
-    assert.equal(popupOptions?.sourceType, 'mouse');
+    assert.equal(popupOptions, undefined);
+    scheduledMenuOpen?.();
+    const openedPopupOptions = popupOptions as PopupOptions | undefined;
+    assert.equal(openedPopupOptions?.window, host);
+    assert.equal(openedPopupOptions?.x, undefined);
+    assert.equal(openedPopupOptions?.y, undefined);
+    assert.equal(openedPopupOptions?.sourceType, 'mouse');
 
-    popupOptions?.callback?.();
+    openedPopupOptions?.callback?.();
     assert.equal(destroys, 0, 'Wayland also keeps the native owner alive through callback unwind');
     scheduledDestroy?.();
     assert.equal(destroys, 1, 'native menu dismissal still destroys its transient owner');
+  });
+
+  it('cancels an owner that is still mapping without opening a menu during shutdown', () => {
+    let scheduledMenuOpen: (() => void) | undefined;
+    let scheduledDestroy: (() => void) | undefined;
+    let popupCalls = 0;
+    let destroys = 0;
+    const host = {
+      isDestroyed: () => false,
+      setPosition: () => {},
+      showInactive: () => {},
+      destroy: () => { destroys += 1; },
+    } as unknown as BaseWindow;
+    const popup = createLinuxTrayMenuPopup({
+      screen: {
+        getCursorScreenPoint: () => ({ x: -84, y: 12 }),
+        getDisplayNearestPoint: () => topPanelDisplay,
+      },
+      createHost: () => host,
+      environment: {},
+      scheduleMenuOpen: callback => { scheduledMenuOpen = callback; },
+      scheduleHostDestroy: callback => { scheduledDestroy = callback; },
+    });
+    const menu = {
+      popup: () => { popupCalls += 1; },
+      closePopup: () => assert.fail('a menu that never opened must not be closed'),
+    } as unknown as Menu;
+
+    popup.popup(menu, {
+      bounds: { x: 0, y: 0, width: 0, height: 0 },
+      position: { x: -84, y: 12 },
+    });
+    popup.close();
+    scheduledMenuOpen?.();
+    assert.equal(popupCalls, 0);
+    assert.equal(destroys, 0);
+    scheduledDestroy?.();
+    assert.equal(destroys, 1, 'the mapped BrowserWindow owner still uses deferred safe teardown');
   });
 });
