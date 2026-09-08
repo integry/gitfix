@@ -14,6 +14,7 @@ import { isGuidedLocalSetup, mergeProfiles, recoverableError, settleAuthenticati
 import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
 import { useDesktopDeepLinks } from './useDesktopDeepLinks';
 import { useConnectCandidatePresentation } from './useConnectCandidatePresentation';
+import { useDesktopNativeCommands } from './useDesktopNativeCommands';
 import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
 import {
   packagedAcceptanceSetupSurface,
@@ -83,6 +84,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     setEditing(null);
   }, [cancelDiscovery, clearConnectCandidate]);
   const { dialogRef: managerRef, openModal: openManager } = useDesktopModal(managerOpen, setManagerOpen, closeManager);
+
   const reportAcceptanceStage = useCallback(async (
     stage: Parameters<NonNullable<DesktopAdapters['acceptance']>['reportJourneyStage']>[0],
   ): Promise<void> => {
@@ -162,6 +164,23 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     setState,
   });
 
+  const showInstanceChooser = useCallback(() => {
+    cancelDiscovery();
+    clearConnectCandidate();
+    setEditing(null);
+    setOperationError(null);
+    setState({ phase: 'choose' });
+  }, [cancelDiscovery, clearConnectCandidate]);
+
+  useDesktopNativeCommands({
+    app: adapters.app,
+    state,
+    instanceChooserBlocked: localSetupOpen || Boolean(acceptanceSetup),
+    onManageInstances: openManager,
+    onChooseInstances: showInstanceChooser,
+    onReconnect: connect,
+  });
+
   useEffect(() => {
     let cancelled = false;
     activeProfileId.current = null;
@@ -190,22 +209,6 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   }, [adapters, connect, hasPendingConnectCandidate, invalidateDiscovery]);
 
   useDesktopAccessInvalidation(adapters, setState);
-
-  useEffect(() => {
-    const handleKeyboard = (event: KeyboardEvent) => {
-      const current = stateRef.current;
-      if (current.phase !== 'connected') return;
-      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
-        event.preventDefault();
-        openManager();
-      } else if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        void connect(current.profile);
-      }
-    };
-    document.addEventListener('keydown', handleKeyboard);
-    return () => document.removeEventListener('keydown', handleKeyboard);
-  }, [connect, openManager]);
 
   const removeProfile = async (profile: DesktopProfile) => {
     cancelDiscovery();

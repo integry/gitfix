@@ -50,6 +50,7 @@ const fixture = async (overrides: {
   platform?: NodeJS.Platform;
   supported?: boolean;
   beforePersist?: () => Promise<void>;
+  onSettingsChanged?: (changedScope?: DesktopNotificationScope) => void;
 } = {}) => {
   const directory = await mkdtemp(join(tmpdir(), 'propr-native-notifications-'));
   const shown: ShownNotification[] = [];
@@ -74,6 +75,7 @@ const fixture = async (overrides: {
     now: () => now,
     batchDelayMs: 5,
     beforePersist: overrides.beforePersist,
+    onSettingsChanged: overrides.onSettingsChanged,
   });
   const service = createService();
   return {
@@ -110,6 +112,49 @@ test('uses quiet defaults and persists account/instance/device preferences', asy
     assert.equal((await restarted.get(scope)).preferences.enabled, true);
     restarted.close();
   } finally {
+    await item.cleanup();
+  }
+});
+
+test('keeps the active native toggle synchronized with renderer settings', async () => {
+  const changes: Array<DesktopNotificationScope | undefined> = [];
+  const item = await fixture({ onSettingsChanged: changedScope => { changes.push(changedScope); } });
+  try {
+    assert.equal(item.service.activeSettings(), null);
+    await item.service.get(scope);
+    assert.equal(item.service.activeSettings()?.preferences.enabled, false);
+    await item.service.update(scope, { taskCompleted: true });
+    assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
+    await item.service.setActiveEnabled(scope, true);
+    assert.equal(item.service.activeSettings()?.preferences.enabled, true);
+    assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
+    await item.service.setActiveEnabled(scope, false);
+    assert.equal(item.service.activeSettings()?.preferences.enabled, false);
+    assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
+    item.service.clear(scope);
+    assert.equal(item.service.activeSettings(), null);
+    assert.deepEqual(changes, [undefined, scope, scope, scope, scope]);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
+test('rejects a native toggle captured for another user on the same connection', async () => {
+  const item = await fixture();
+  const replacementScope = { ...scope, userId: 'user-b' };
+  try {
+    await item.service.get(scope);
+    item.setUser(replacementScope.userId);
+    await item.service.get(replacementScope);
+
+    await assert.rejects(
+      item.service.setActiveEnabled(scope, true),
+      /No active notification account/,
+    );
+    assert.equal(item.service.activeSettings()?.preferences.enabled, false);
+  } finally {
+    item.service.close();
     await item.cleanup();
   }
 });

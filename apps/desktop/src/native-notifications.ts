@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type {
-  DesktopNotificationCapability,
-  DesktopNotificationPreferences,
-  DesktopNotificationScope,
-  DesktopNotificationSettings,
-  DesktopPlatform,
-  DesktopTaskTransition,
+import {
+  isDesktopNotificationScope,
+  type DesktopNotificationCapability,
+  type DesktopNotificationPreferences,
+  type DesktopNotificationScope,
+  type DesktopNotificationSettings,
+  type DesktopPlatform,
+  type DesktopTaskTransition,
 } from './shared/contract';
+
+export { isDesktopNotificationScope } from './shared/contract';
 
 export const DEFAULT_DESKTOP_NOTIFICATION_PREFERENCES: DesktopNotificationPreferences = Object.freeze({
   enabled: false,
@@ -59,11 +62,9 @@ export interface NativeNotificationServiceOptions {
   batchDelayMs?: number;
   beforePersist?(): Promise<void>;
   log?(level: 'warn' | 'error', event: string): void;
+  onSettingsChanged?(scope?: DesktopNotificationScope): void;
 }
 
-const PROFILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const TRANSPORT_PATTERN = /^[A-Za-z0-9_-]{22}$/;
-const SAFE_USER_PATTERN = /^[^\x00-\x20\x7f]{1,128}$/;
 const SAFE_TASK_PATTERN = /^[^\x00-\x1f\x7f]{1,512}$/;
 const SAFE_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const PROCESSING_STATES = new Set(['processing', 'claude_execution', 'post_processing']);
@@ -80,15 +81,6 @@ const MAX_DELIVERIES_PER_WINDOW = 6;
 const copyDefaults = (): DesktopNotificationPreferences => ({
   ...DEFAULT_DESKTOP_NOTIFICATION_PREFERENCES,
 });
-
-export const isDesktopNotificationScope = (value: unknown): value is DesktopNotificationScope => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const scope = value as Record<string, unknown>;
-  return Object.keys(scope).every(key => ['profileId', 'transportScope', 'userId'].includes(key))
-    && typeof scope.profileId === 'string' && PROFILE_PATTERN.test(scope.profileId)
-    && typeof scope.transportScope === 'string' && TRANSPORT_PATTERN.test(scope.transportScope)
-    && typeof scope.userId === 'string' && SAFE_USER_PATTERN.test(scope.userId);
-};
 
 export const isDesktopTaskTransition = (value: unknown): value is DesktopTaskTransition => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -233,12 +225,22 @@ export class NativeNotificationService {
     this.#requireActiveScope(scope);
     this.#activateScope(scope);
     await this.#load();
-    return this.#settings(scope);
+    const settings = this.#settings(scope);
+    this.#options.onSettingsChanged?.();
+    return settings;
   }
 
   async update(
     scope: DesktopNotificationScope,
     update: Partial<DesktopNotificationPreferences>,
+  ): Promise<DesktopNotificationSettings> {
+    return this.#update(scope, update, false);
+  }
+
+  async #update(
+    scope: DesktopNotificationScope,
+    update: Partial<DesktopNotificationPreferences>,
+    requireCurrentScope: boolean,
   ): Promise<DesktopNotificationSettings> {
     this.#requireActiveScope(scope);
     if (!update || typeof update !== 'object' || Array.isArray(update)
@@ -249,10 +251,30 @@ export class NativeNotificationService {
     }
     this.#activateScope(scope);
     await this.#load();
+    if (requireCurrentScope && !this.#isCurrentScope(scope)) {
+      throw new Error('No active notification account');
+    }
     const key = scopeStorageKey(scope);
     if (update.enabled === false) this.#clearDeliveries(scope);
     else this.#removeDisabledPending(scope, update);
-    return this.#queueUpdate(scope, key, update);
+    const settings = await this.#queueUpdate(scope, key, update, requireCurrentScope);
+    this.#options.onSettingsChanged?.(scope);
+    return settings;
+  }
+
+  activeSettings(): DesktopNotificationSettings | null {
+    const scope = this.#accountScope;
+    return scope && this.#loaded && this.#isCurrentScope(scope) ? this.#settings(scope) : null;
+  }
+
+  activeScope(): DesktopNotificationScope | null {
+    const scope = this.#accountScope;
+    return scope && this.#isCurrentScope(scope) ? { ...scope } : null;
+  }
+
+  async setActiveEnabled(scope: DesktopNotificationScope, enabled: boolean): Promise<void> {
+    if (!this.#isCurrentScope(scope)) throw new Error('No active notification account');
+    await this.#update(scope, { enabled }, true);
   }
 
   async test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }> {
@@ -316,6 +338,7 @@ export class NativeNotificationService {
   clear(scope?: DesktopNotificationScope): void {
     this.#clearDeliveries(scope);
     if (!scope || (this.#accountScope && sameScope(this.#accountScope, scope))) this.#accountScope = null;
+    this.#options.onSettingsChanged?.(scope);
   }
 
   #clearDeliveries(scope?: DesktopNotificationScope): void {
@@ -477,8 +500,12 @@ export class NativeNotificationService {
     scope: DesktopNotificationScope,
     key: string,
     update: Partial<DesktopNotificationPreferences>,
+    requireCurrentScope: boolean,
   ): Promise<DesktopNotificationSettings> {
     const operation = this.#writeTail.then(async () => {
+      if (requireCurrentScope && !this.#isCurrentScope(scope)) {
+        throw new Error('No active notification account');
+      }
       const current = this.#state.accounts[key];
       if (!current && Object.keys(this.#state.accounts).length >= MAX_STORED_ACCOUNTS) {
         throw new Error('Desktop notification preference account limit reached');

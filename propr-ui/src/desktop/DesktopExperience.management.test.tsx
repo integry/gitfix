@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
 import { DesktopInstanceSelector } from './DesktopInstanceSelector';
+import type { DesktopNativeCommandDelivery } from '../../../apps/desktop/src/shared/contract';
 import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
 
 const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
@@ -23,6 +24,21 @@ const remoteProfile: DesktopProfile = {
   baseUrl: 'https://propr.example.com',
   kind: 'remote',
 };
+
+const localConnectionScope = {
+  profileId: localProfile.id,
+  transportScope: 'abcdefghijklmnopqrstuv',
+};
+
+const remoteConnectionScope = {
+  profileId: remoteProfile.id,
+  transportScope: 'zyxwvutsrqponmlkjihgfe',
+};
+
+const nativeDelivery = (
+  command: DesktopNativeCommandDelivery['command'],
+  connectionScope = localConnectionScope,
+): DesktopNativeCommandDelivery => ({ command, connectionScope });
 
 const connectedApp = <><DesktopInstanceSelector /><div>Connected app</div></>;
 const deferred = <T,>() => {
@@ -77,13 +93,162 @@ describe('DesktopExperience profile management', () => {
     expect(apiMock.setApiBaseUrl).toHaveBeenLastCalledWith(remoteProfile.baseUrl);
   });
 
+  it('uses the native manage command to open the validated instance lifecycle surface', async () => {
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener as typeof nativeCommand;
+      return () => { nativeCommand = undefined; };
+    };
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
+    expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
+    act(() => nativeCommand?.(nativeDelivery('manage-instances')));
+    fireEvent.click(await screen.findByRole('button', { name: /Team serverRemote instance/i }));
+    expect(await screen.findByRole('button', { name: 'Connected: Team server' })).toBeInTheDocument();
+    expect(adapters.connection.probe).toHaveBeenLastCalledWith(remoteProfile);
+  });
+
+  it('leaves native menu accelerators to native command delivery', async () => {
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    adapters.app.onNativeCommand = () => () => undefined;
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
+    expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
+
+    expect(screen.queryByRole('dialog', { name: 'Manage instances' })).not.toBeInTheDocument();
+    expect(window.confirm).not.toHaveBeenCalled();
+  });
+
+  it('guards the instance-management fallback shortcut before leaving Plan Studio', async () => {
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    window.location.hash = '#/studio/draft-1';
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    render(
+      <DesktopExperience adapters={adapters}>
+        <textarea aria-label="Plan composer" defaultValue="Unsaved plan details" />
+      </DesktopExperience>,
+    );
+    expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
+
+    expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
+    expect(screen.queryByRole('dialog', { name: 'Manage instances' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+    window.location.hash = '#/';
+  });
+
+  it('asks before native navigation can leave a plan composer', async () => {
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
+    const adapters = adaptersFor(
+      [localProfile],
+      localProfile.id,
+      async () => ({ status: 'ready', version: '0.8.15', ...localConnectionScope }),
+    );
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener as typeof nativeCommand;
+      return () => { nativeCommand = undefined; };
+    };
+    window.location.hash = '#/studio/draft-1';
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
+    expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
+    act(() => nativeCommand?.(nativeDelivery('tasks')));
+    expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
+    expect(window.location.hash).toBe('#/studio/draft-1');
+    window.location.hash = '#/';
+  });
+
+  it('drops native navigation received during an instance transition when the connection changes', async () => {
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
+    const remoteProbe = deferred<DesktopConnectionResult>();
+    const probe = vi.fn()
+      .mockResolvedValueOnce({ status: 'ready', version: '0.8.15', ...localConnectionScope })
+      .mockReturnValueOnce(remoteProbe.promise);
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id, probe);
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener;
+      return () => { nativeCommand = undefined; };
+    };
+    window.location.hash = '#/';
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
+    expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
+
+    act(() => nativeCommand?.(nativeDelivery('manage-instances')));
+    fireEvent.click(await screen.findByRole('button', { name: /Team serverRemote instance/i }));
+    expect(await screen.findByText('Connecting to Team server')).toBeInTheDocument();
+    act(() => nativeCommand?.(nativeDelivery('tasks')));
+    await act(async () => remoteProbe.resolve({
+      status: 'ready', version: '0.8.15', ...remoteConnectionScope,
+    }));
+
+    expect(await screen.findByRole('button', { name: 'Connected: Team server' })).toBeInTheDocument();
+    expect(window.location.hash).toBe('#/');
+  });
+
+  it('keeps composer work when native instance management is declined', async () => {
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener as typeof nativeCommand;
+      return () => { nativeCommand = undefined; };
+    };
+    window.location.hash = '#/studio/draft-1';
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    render(
+      <DesktopExperience adapters={adapters}>
+        <textarea aria-label="Plan composer" defaultValue="Unsaved plan details" />
+      </DesktopExperience>,
+    );
+    expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    act(() => nativeCommand?.(nativeDelivery('manage-instances')));
+
+    expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
+    expect(screen.queryByRole('dialog', { name: 'Manage instances' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+    expect(adapters.connection.probe).toHaveBeenCalledTimes(1);
+    window.location.hash = '#/';
+  });
+
+  it('keeps composer work when native quit is declined', async () => {
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
+    const adapters = adaptersFor([localProfile], localProfile.id);
+    const quit = vi.fn(async () => undefined);
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener as typeof nativeCommand;
+      return () => { nativeCommand = undefined; };
+    };
+    adapters.app.quit = quit;
+    window.location.hash = '#/studio/draft-1';
+    vi.mocked(window.confirm).mockReturnValueOnce(false).mockReturnValueOnce(true);
+    render(
+      <DesktopExperience adapters={adapters}>
+        <textarea aria-label="Plan composer" defaultValue="Unsaved plan details" />
+      </DesktopExperience>,
+    );
+    expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    act(() => nativeCommand?.(nativeDelivery('quit')));
+
+    expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
+    expect(quit).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    act(() => nativeCommand?.(nativeDelivery('quit')));
+    expect(quit).toHaveBeenCalledTimes(1);
+    window.location.hash = '#/';
+  });
+
   it('reconnects an edited active instance but saves an inactive edit without connecting', async () => {
     const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
     render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
 
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
     vi.clearAllMocks();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit This computer' }));
     fireEvent.change(screen.getByLabelText('Instance URL'), { target: { value: 'https://active.example.com/' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -95,7 +260,7 @@ describe('DesktopExperience profile management', () => {
     expect(apiMock.setApiBaseUrl).toHaveBeenLastCalledWith('https://active.example.com');
 
     vi.clearAllMocks();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Team server' }));
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Renamed team server' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -115,7 +280,7 @@ describe('DesktopExperience profile management', () => {
 
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
     vi.clearAllMocks();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit This computer' }));
     fireEvent.change(screen.getByLabelText('Instance URL'), { target: { value: 'https://unavailable.example.com/' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -137,7 +302,7 @@ describe('DesktopExperience profile management', () => {
     render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
 
     expect(await screen.findByText('Connected app')).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Team server' }));
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Retryable edit' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -241,7 +406,7 @@ describe('DesktopExperience profile management', () => {
     expect(await screen.findByRole('button', { name: 'Offline: This computer' })).toBeInTheDocument();
     fireEvent(window, new Event('online'));
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit This computer' }));
     expect(screen.getByLabelText('Display name')).toHaveValue('This computer');
     expect(screen.queryByText('Opening ProPR…')).not.toBeInTheDocument();

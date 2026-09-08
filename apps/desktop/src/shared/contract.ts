@@ -2,6 +2,7 @@ export const DESKTOP_PROTOCOL = 'propr';
 
 export const IPC_CHANNELS = Object.freeze({
   appMetadata: 'desktop:app-metadata',
+  appQuit: 'desktop:app-quit',
   activeWorkRefresh: 'desktop:active-work-refresh',
   authLogout: 'desktop:auth-logout',
   openExternal: 'desktop:open-external',
@@ -41,8 +42,30 @@ export const IPC_CHANNELS = Object.freeze({
   notificationsTest: 'desktop:notifications-test',
   notificationsPublish: 'desktop:notifications-publish',
   notificationsClear: 'desktop:notifications-clear',
+  notificationsChanged: 'desktop:notifications-changed',
   notificationNavigate: 'desktop:notification-navigate',
+  nativeCommand: 'desktop:native-command',
 } as const);
+
+export const DESKTOP_NATIVE_COMMANDS = Object.freeze([
+  'new-plan',
+  'tasks',
+  'plans',
+  'inbox',
+  'manage-instances',
+  'notification-settings',
+  'quit',
+] as const);
+
+export type DesktopNativeCommand = typeof DESKTOP_NATIVE_COMMANDS[number];
+
+export const isDesktopNativeCommand = (value: unknown): value is DesktopNativeCommand =>
+  typeof value === 'string' && (DESKTOP_NATIVE_COMMANDS as readonly string[]).includes(value);
+
+export interface DesktopNativeCommandDelivery {
+  command: DesktopNativeCommand;
+  connectionScope: DesktopConnectionScope | null;
+}
 
 export interface DesktopDeepLinkDelivery {
   deliveryId: number;
@@ -157,6 +180,39 @@ export interface DesktopNotificationScope extends DesktopConnectionScope {
   /** Authenticated instance user. Preferences remain local to this device. */
   userId: string;
 }
+
+const DESKTOP_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const DESKTOP_TRANSPORT_SCOPE_PATTERN = /^[A-Za-z0-9_-]{22}$/;
+const DESKTOP_USER_ID_PATTERN = /^[^\x00-\x20\x7f]{1,128}$/;
+
+const isDesktopConnectionScope = (value: unknown): value is DesktopConnectionScope => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const scope = value as Record<string, unknown>;
+  return Object.keys(scope).length === 2
+    && typeof scope.profileId === 'string' && DESKTOP_PROFILE_ID_PATTERN.test(scope.profileId)
+    && typeof scope.transportScope === 'string'
+    && DESKTOP_TRANSPORT_SCOPE_PATTERN.test(scope.transportScope);
+};
+
+export const isDesktopNativeCommandDelivery = (
+  value: unknown,
+): value is DesktopNativeCommandDelivery => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const delivery = value as Record<string, unknown>;
+  return Object.keys(delivery).length === 2
+    && isDesktopNativeCommand(delivery.command)
+    && (delivery.connectionScope === null || isDesktopConnectionScope(delivery.connectionScope));
+};
+
+export const isDesktopNotificationScope = (value: unknown): value is DesktopNotificationScope => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const scope = value as Record<string, unknown>;
+  return Object.keys(scope).length === 3
+    && typeof scope.profileId === 'string' && DESKTOP_PROFILE_ID_PATTERN.test(scope.profileId)
+    && typeof scope.transportScope === 'string'
+    && DESKTOP_TRANSPORT_SCOPE_PATTERN.test(scope.transportScope)
+    && typeof scope.userId === 'string' && DESKTOP_USER_ID_PATTERN.test(scope.userId);
+};
 
 export interface DesktopNotificationPreferences {
   enabled: boolean;
@@ -297,9 +353,12 @@ export interface DesktopBridge {
     getMetadata(): Promise<DesktopAppMetadata>;
     /** Request a main-owned reconciliation; the renderer cannot supply counts or native resources. */
     refreshActiveWork(): Promise<void>;
+    /** Complete a renderer-confirmed quit through the main-owned shutdown lifecycle. */
+    quit(): Promise<void>;
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
+    onNativeCommand(listener: (delivery: DesktopNativeCommandDelivery) => void): () => void;
   };
   auth: {
     logout(apiBaseUrl: string): Promise<void>;
@@ -358,6 +417,7 @@ export interface DesktopBridge {
     test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }>;
     publish(scope: DesktopNotificationScope, transition: DesktopTaskTransition): Promise<{ accepted: boolean }>;
     clear(scope: DesktopNotificationScope): Promise<void>;
+    onSettingsChanged(listener: (scope: DesktopNotificationScope) => void): () => void;
     onNavigate(listener: (path: string) => void): () => void;
   };
   /** @internal Present only in an authorized packaged Connect acceptance process. */

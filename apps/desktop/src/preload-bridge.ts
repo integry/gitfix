@@ -3,9 +3,15 @@ import type {
   DesktopDeepLinkAcknowledgement,
   DesktopDeepLinkConsumption,
   DesktopDeepLinkDelivery,
+  DesktopNotificationScope,
   DesktopPairingProgress,
 } from './shared/contract';
-import { IPC_CHANNELS, isDesktopPairingOperationId } from './shared/contract';
+import {
+  IPC_CHANNELS,
+  isDesktopNativeCommandDelivery,
+  isDesktopNotificationScope,
+  isDesktopPairingOperationId,
+} from './shared/contract';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -54,8 +60,13 @@ export const createDesktopBridge = (
     await invoke(ipc, IPC_CHANNELS.deepLinkAcknowledgement, acknowledgement).catch(() => undefined);
   };
   const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
+  const notificationSettingsListeners = new Set<(value: DesktopNotificationScope) => void>();
   const notificationNavigationListeners = new Set<(path: string) => void>();
   const pairingProgressListeners = new Set<(value: DesktopPairingProgress) => void>();
+  const nativeCommandListeners = new Set<(
+    value: import('./shared/contract').DesktopNativeCommandDelivery,
+  ) => void>();
+  const pendingNativeCommands: import('./shared/contract').DesktopNativeCommandDelivery[] = [];
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
@@ -72,6 +83,15 @@ export const createDesktopBridge = (
   ipc.on(IPC_CHANNELS.notificationNavigate, (_event, value) => {
     if (typeof value !== 'string' || !(/^\/tasks(?:\/[A-Za-z0-9_.~!$&'()*+,;=:@%-]+)?$/.test(value))) return;
     notificationNavigationListeners.forEach(listener => listener(value));
+  });
+  ipc.on(IPC_CHANNELS.notificationsChanged, (_event, value) => {
+    if (!isDesktopNotificationScope(value)) return;
+    const safeScope: DesktopNotificationScope = {
+      profileId: value.profileId,
+      transportScope: value.transportScope,
+      userId: value.userId,
+    };
+    notificationSettingsListeners.forEach(listener => listener(safeScope));
   });
   ipc.on(IPC_CHANNELS.authenticationProgress, (_event, value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
@@ -91,11 +111,24 @@ export const createDesktopBridge = (
     };
     pairingProgressListeners.forEach(listener => listener(safeProgress));
   });
+  ipc.on(IPC_CHANNELS.nativeCommand, (_event, value) => {
+    if (!isDesktopNativeCommandDelivery(value)) return;
+    const delivery = {
+      command: value.command,
+      connectionScope: value.connectionScope ? { ...value.connectionScope } : null,
+    };
+    if (nativeCommandListeners.size === 0) {
+      pendingNativeCommands.splice(0, pendingNativeCommands.length, delivery);
+      return;
+    }
+    nativeCommandListeners.forEach(listener => listener(delivery));
+  });
 
   const bridge: DesktopBridge = {
     app: {
       getMetadata: () => invoke(ipc, IPC_CHANNELS.appMetadata),
       refreshActiveWork: () => invoke(ipc, IPC_CHANNELS.activeWorkRefresh),
+      quit: () => invoke(ipc, IPC_CHANNELS.appQuit),
       onDeepLink: (listener) => {
         const consumerWasAbsent = deepLinkListeners.size === 0;
         deepLinkListeners.add(listener);
@@ -104,6 +137,11 @@ export const createDesktopBridge = (
         }
         pendingDeepLinks.splice(0).forEach(delivery => { void consume(delivery).catch(() => undefined); });
         return () => deepLinkListeners.delete(listener);
+      },
+      onNativeCommand: listener => {
+        nativeCommandListeners.add(listener);
+        pendingNativeCommands.splice(0).forEach(command => listener(command));
+        return () => nativeCommandListeners.delete(listener);
       },
     },
     auth: {
@@ -178,6 +216,10 @@ export const createDesktopBridge = (
       test: scope => invoke(ipc, IPC_CHANNELS.notificationsTest, scope),
       publish: (scope, transition) => invoke(ipc, IPC_CHANNELS.notificationsPublish, scope, transition),
       clear: scope => invoke(ipc, IPC_CHANNELS.notificationsClear, scope),
+      onSettingsChanged: listener => {
+        notificationSettingsListeners.add(listener);
+        return () => notificationSettingsListeners.delete(listener);
+      },
       onNavigate: listener => {
         notificationNavigationListeners.add(listener);
         return () => notificationNavigationListeners.delete(listener);

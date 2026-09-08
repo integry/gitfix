@@ -1227,6 +1227,14 @@ export class DesktopCredentialService {
       && active.connectClaim.isCurrent();
   }
 
+  /** A secret-free snapshot used to bind delayed native navigation to one connection. */
+  activeConnectionScope(): DesktopConnectionScope | null {
+    const active = this.#active;
+    return this.hasActiveRendererBinding() && active
+      ? { profileId: active.profileId, transportScope: active.transportScope }
+      : null;
+  }
+
   /** Secret-free scope check for main-process features fed by the authenticated renderer stream. */
   isActiveConnectionScope(value: { profileId: string; transportScope: string }): boolean {
     const active = this.#active;

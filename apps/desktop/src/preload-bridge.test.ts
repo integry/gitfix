@@ -50,11 +50,19 @@ describe('desktop preload bridge', () => {
     await native.publish(scope, event);
     await native.clear(scope);
     const paths: string[] = [];
+    const changedScopes: unknown[] = [];
+    const unsubscribeChanges = native.onSettingsChanged(value => changedScopes.push(value));
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, scope);
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, { ...scope, unexpected: true });
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, { ...scope, transportScope: 'short' });
+    unsubscribeChanges();
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, scope);
     const unsubscribe = native.onNavigate(path => paths.push(path));
     ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, '/tasks/task-1');
     ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, 'https://attacker.example');
     ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, '/settings');
     unsubscribe();
+    assert.deepEqual(changedScopes, [scope]);
     assert.deepEqual(paths, ['/tasks/task-1']);
     assert.deepEqual(ipc.invocations, [
       { channel: IPC_CHANNELS.notificationsGet, args: [scope] },
@@ -65,9 +73,31 @@ describe('desktop preload bridge', () => {
     ]);
   });
 
+  it('buffers only fixed native commands and never exposes arbitrary renderer navigation', () => {
+    const ipc = new FakeIpc();
+    const bridge = createDesktopBridge(ipc);
+    const connectionScope = { profileId: 'profile-1', transportScope: 'abcdefghijklmnopqrstuv' };
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'tasks', connectionScope });
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'https://attacker.example', connectionScope });
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'tasks' });
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'plans', connectionScope });
+    const commands: unknown[] = [];
+    const unsubscribe = bridge.app.onNativeCommand(delivery => commands.push(delivery));
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'notification-settings', connectionScope });
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'quit', connectionScope: null });
+    unsubscribe();
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'inbox', connectionScope });
+    assert.deepEqual(commands, [
+      { command: 'plans', connectionScope },
+      { command: 'notification-settings', connectionScope },
+      { command: 'quit', connectionScope: null },
+    ]);
+  });
+
   it('maps profile and main-process authentication operations to fixed channels', async () => {
     const ipc = new FakeIpc();
     const bridge = createDesktopBridge(ipc);
+    await bridge.app.quit();
     await bridge.app.refreshActiveWork();
     await bridge.auth.logout('http://localhost:4000');
     await bridge.profiles.save({ label: 'Local', apiBaseUrl: 'http://localhost:4000' });
@@ -82,6 +112,7 @@ describe('desktop preload bridge', () => {
     await bridge.discovery.rediscover('profile-1');
     await bridge.lifecycle.start();
     assert.deepEqual(ipc.invocations, [
+      { channel: IPC_CHANNELS.appQuit, args: [] },
       { channel: IPC_CHANNELS.activeWorkRefresh, args: [] },
       { channel: IPC_CHANNELS.authLogout, args: ['http://localhost:4000'] },
       {

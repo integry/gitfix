@@ -43,6 +43,10 @@ import {
 import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
 import { NativeNotificationService } from './native-notifications';
+import {
+  createDesktopNativeCommandDispatcher,
+  type DesktopNativeCommandDispatcher,
+} from './native-commands';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
 import { openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
 import {
@@ -212,6 +216,7 @@ let nativeCompletionStarted = false;
 let nativeProfiles: ProfileStore | null = null;
 let logger: DesktopLogger | null = null;
 let shutdownStarted = false;
+let desktopNativeCommands: DesktopNativeCommandDispatcher | null = null;
 const desktopWindowIcon = loadDesktopWindowIcon({
   platform: process.platform,
   isPackaged: app.isPackaged,
@@ -1275,13 +1280,16 @@ const createMainWindow = async (
   });
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
   window.webContents.on('render-process-gone', (_event, details) => {
+    desktopNativeCommands?.rendererUnavailable();
     log('error', 'desktop.renderer.gone', { reason: details.reason, exitCode: details.exitCode });
   });
   window.webContents.on('did-finish-load', () => {
     deepLinkDelivery.didFinishLoad(window);
+    desktopNativeCommands?.rendererReady(window);
   });
   window.webContents.on('did-start-navigation', details => {
     if (details.isMainFrame && !details.isSameDocument) {
+      desktopNativeCommands?.rendererUnavailable();
       deepLinkDelivery.didStartMainFrameNavigation(window);
     }
   });
@@ -1289,6 +1297,7 @@ const createMainWindow = async (
     deepLinkDelivery.didCommitMainFrameNavigation(window);
   });
   window.on('closed', () => {
+    desktopNativeCommands?.rendererUnavailable();
     deepLinkDelivery.clearWindow(window);
     if (mainWindow === window) {
       mainWindow = null;
@@ -1461,7 +1470,6 @@ if (!hasSingleInstanceLock) {
 
   registerProtocolClient();
   void app.whenReady().then(async () => {
-    configureApplicationMenu(Menu, app.isPackaged);
     logger = createDesktopLogger(
       join(app.getPath('logs'), 'desktop.jsonl'),
       () => packagedSmokeEvidence?.write('desktop.log.write_failed'),
@@ -1689,7 +1697,32 @@ if (!hasSingleInstanceLock) {
         mainWindow.webContents.send(IPC_CHANNELS.notificationNavigate, path);
       },
       log: (level, event) => log(level, event),
+      onSettingsChanged: scope => {
+        const commands = desktopNativeCommands;
+        commands?.refresh();
+        if (scope && commands && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.notificationsChanged, scope);
+        }
+      },
     });
+    desktopNativeCommands = createDesktopNativeCommandDispatcher({
+      channel: IPC_CHANNELS.nativeCommand,
+      getWindow: () => mainWindow,
+      restoreWindow: restoreMainWindow,
+      activeConnectionScope: () => credentials.activeConnectionScope(),
+      activeNotificationScope: () => notifications.activeScope(),
+      notificationState: () => {
+        const settings = notifications.activeSettings();
+        return {
+          available: settings?.capability.supported === true,
+          enabled: settings?.preferences.enabled === true,
+        };
+      },
+      setNativeNotificationsEnabled: (scope, enabled) => notifications.setActiveEnabled(scope, enabled),
+      quit: () => app.quit(),
+      log: (level, event) => log(level, event),
+    });
+    const applicationMenu = configureApplicationMenu(Menu, desktopNativeCommands, process.platform);
     nativeProfiles = profiles;
     const trayArtworkPath = resolveDesktopTrayIconPath({
       isPackaged: app.isPackaged,
@@ -1710,8 +1743,7 @@ if (!hasSingleInstanceLock) {
         try { return app.setBadgeCount(count); } catch { return false; }
       },
       fetchActiveWork: signal => credentials.fetchActiveWork(signal),
-      openWindow: restoreMainWindow,
-      quit: () => app.quit(),
+      commands: desktopNativeCommands,
       log: (level, event, fields) => log(level, event, fields),
     });
     const setupHost = process.platform === 'linux'
@@ -1763,8 +1795,14 @@ if (!hasSingleInstanceLock) {
       },
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinkDelivery.acknowledgeSender(event.sender, acknowledgement),
-      onActiveWorkConnectionAvailable: () => desktopTray.connectionAvailable(),
-      onActiveWorkConnectionUnavailable: reason => desktopTray.connectionUnavailable(reason),
+      onActiveWorkConnectionAvailable: () => {
+        desktopTray.connectionAvailable();
+        desktopNativeCommands?.connectionAvailable();
+      },
+      onActiveWorkConnectionUnavailable: reason => {
+        desktopTray.connectionUnavailable(reason);
+        desktopNativeCommands?.connectionUnavailable();
+      },
       onActiveWorkRefresh: () => desktopTray.refresh(),
       ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {
         onRendererActiveProfileChanged: (origin: string | null) => {
@@ -1800,6 +1838,13 @@ if (!hasSingleInstanceLock) {
       lifecycle: shutdownLifecycle,
       deepLinks: deepLinkDelivery,
       tray: desktopTray,
+      nativeActions: {
+        close: () => {
+          applicationMenu.close();
+          desktopNativeCommands?.close();
+          desktopNativeCommands = null;
+        },
+      },
       setup,
       ipc: registeredIpc,
       profiles,

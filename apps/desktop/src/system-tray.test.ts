@@ -23,10 +23,11 @@ class FakeTray {
   tooltip = '';
   title = '';
   menu: Menu | null = null;
-  click: (() => void) | null = null;
+  listeners = new Map<string, () => void>();
+  popups = 0;
 
   on(event: string, listener: () => void): this {
-    if (event === 'click') this.click = listener;
+    this.listeners.set(event, listener);
     return this;
   }
 
@@ -35,7 +36,18 @@ class FakeTray {
   setContextMenu(value: Menu | null): void { this.menu = value; }
   isDestroyed(): boolean { return this.destroyed; }
   destroy(): void { this.destroyed = true; }
+  popUpContextMenu(): void { this.popups += 1; }
 }
+
+const commandFixture = (dispatch: (command: string) => void = () => undefined) => ({
+  dispatch,
+  getState: () => ({
+    authenticated: true,
+    nativeNotificationsAvailable: true,
+    nativeNotificationsEnabled: false,
+  }),
+  subscribe: () => () => undefined,
+});
 
 describe('desktop system tray', () => {
   it('validates active-only totals and formats bounded badge overflow', () => {
@@ -73,8 +85,10 @@ describe('desktop system tray', () => {
       buildMenu: template => { menuTemplate = template; return {} as Menu; },
       setBadgeCount: count => { badges.push(count); return true; },
       fetchActiveWork: async () => ({ status: 'response', response: next }),
-      openWindow: () => { opens += 1; },
-      quit: () => { quits += 1; },
+      commands: commandFixture(command => {
+        if (command === 'open') opens += 1;
+        if (command === 'quit') quits += 1;
+      }),
       log: () => undefined,
       debounceMs: 0,
       minimumRefreshIntervalMs: 0,
@@ -103,8 +117,13 @@ describe('desktop system tray', () => {
     assert.ok(menuTemplate.some(item => item.label === 'Open goals (not active): 5'));
     assert.equal(badges.at(-1), 98);
 
-    fakeTray.click?.();
-    assert.equal(opens, 1);
+    fakeTray.listeners.get('click')?.();
+    assert.equal(fakeTray.popups, 1, 'primary activation opens the actionable menu');
+    assert.ok(fakeTray.menu, 'the installed context menu supplies right-click activation');
+    assert.equal(fakeTray.listeners.has('double-click'), false, 'macOS leaves double activation to native menu behavior');
+    const openItem = menuTemplate.find(item => item.label === 'Open ProPR');
+    (openItem?.click as (() => void) | undefined)?.();
+    assert.equal(opens, 1, 'Open ProPR remains an explicit action');
     const quitItem = menuTemplate.find(item => item.label === 'Quit ProPR');
     (quitItem?.click as (() => void) | undefined)?.();
     assert.equal(quits, 1);
@@ -139,8 +158,7 @@ describe('desktop system tray', () => {
         fetches += 1;
         return { status: 'disconnected' };
       },
-      openWindow: () => undefined,
-      quit: () => undefined,
+      commands: commandFixture(),
       log: (level) => {
         if (level === 'info' && failInitialization) {
           failInitialization = false;
@@ -183,6 +201,27 @@ describe('desktop system tray', () => {
     assert.equal(fetches, 2);
   });
 
+  it('opens once on a Linux double activation without dispatching from the primary click', () => {
+    const fakeTray = new FakeTray();
+    const dispatched: string[] = [];
+    const controller = createDesktopTrayController({
+      platform: 'linux',
+      icon: {} as NativeImage,
+      createTray: () => fakeTray as unknown as Tray,
+      buildMenu: () => ({} as Menu),
+      setBadgeCount: () => false,
+      fetchActiveWork: async () => ({ status: 'disconnected' }),
+      commands: commandFixture(command => dispatched.push(command)),
+      log: () => undefined,
+    });
+    controller.start();
+    fakeTray.listeners.get('click')?.();
+    assert.deepEqual(dispatched, []);
+    fakeTray.listeners.get('double-click')?.();
+    assert.deepEqual(dispatched, ['open']);
+    controller.close();
+  });
+
   it('drops scoped stale responses and marks network failures unavailable instead of zero', async () => {
     const fakeTray = new FakeTray();
     let resolveFetch!: (value: { status: 'response'; response: Response }) => void;
@@ -199,8 +238,7 @@ describe('desktop system tray', () => {
         if (request === 1) return pending;
         throw new Error('offline');
       },
-      openWindow: () => undefined,
-      quit: () => undefined,
+      commands: commandFixture(),
       log: () => undefined,
       debounceMs: 0,
       minimumRefreshIntervalMs: 0,
@@ -231,8 +269,7 @@ describe('desktop system tray', () => {
       buildMenu: () => ({} as Menu),
       setBadgeCount: () => false,
       fetchActiveWork: async () => ({ status: 'disconnected' }),
-      openWindow: () => undefined,
-      quit: () => undefined,
+      commands: commandFixture(),
       log: () => undefined,
     });
     controller.start();
