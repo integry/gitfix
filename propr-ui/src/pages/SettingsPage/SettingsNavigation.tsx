@@ -68,8 +68,8 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-shrink-0 border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
-        <div className="relative max-w-xl">
+      <div className="flex-shrink-0 bg-white pt-3">
+        <div className="relative mx-4 max-w-xl sm:mx-6">
           <label htmlFor="settings-search" className="sr-only">Search settings</label>
           <Search
             aria-hidden="true"
@@ -95,8 +95,8 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
           )}
         </div>
 
-        <div className="mt-3 overflow-x-auto">
-          <div className="flex min-w-max gap-1" role="tablist" aria-label="Settings categories">
+        <div className="mt-3 overflow-x-auto border-b border-slate-200 px-4 sm:px-6">
+          <div className="flex min-w-max gap-6" role="tablist" aria-label="Settings categories">
             {SETTINGS_CATEGORIES.map(category => {
               const sectionCount = sections.filter(section => section.category === category.id).length;
               const selected = activeCategory === category.id;
@@ -112,14 +112,14 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
                     setActiveCategory(category.id);
                     setQuery('');
                   }}
-                  className={`rounded-md px-3 py-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 ${
-                    selected && !normalizedQuery
-                      ? 'bg-gray-900 text-white'
-                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                  className={`inline-flex items-center border-b-2 pb-2 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 ${
+                    selected
+                      ? 'border-teal-600 font-semibold text-teal-700'
+                      : 'border-transparent font-medium text-slate-500 hover:text-slate-900'
                   }`}
                 >
                   {category.label}
-                  <span className={`ml-1.5 text-[10px] ${selected && !normalizedQuery ? 'text-gray-300' : 'text-gray-400'}`}>
+                  <span className="ml-2 rounded bg-slate-100 px-1.5 text-[10px] text-slate-500">
                     {sectionCount}
                   </span>
                 </button>
@@ -135,8 +135,8 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-gray-50 px-4 py-5 sm:px-6">
-        <div className="mx-auto max-w-5xl">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-5 sm:px-6">
+        <div className="max-w-5xl">
           {normalizedQuery && (
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
@@ -170,13 +170,13 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
                   <p className="mt-0.5 text-xs text-gray-500">{category.description}</p>
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-8">
                   {categorySections.map(section => (
                     <div
                       key={section.id}
                       hidden={normalizedQuery ? !matchedSectionIds.has(section.id) : false}
                       data-settings-section={section.id}
-                      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6"
+                      className="[&_input]:max-w-md [&_select]:max-w-md [&_textarea]:max-w-md"
                     >
                       <fieldset disabled={isReadOnly} className={isReadOnly ? 'opacity-70' : ''}>
                         {section.content}

@@ -34,9 +34,15 @@ const sections: SettingsNavigationSection[] = [
 
 describe('SettingsNavigation', () => {
   test('organizes settings into category tabs', () => {
-    render(<SettingsNavigation sections={sections} />);
+    const { container } = render(<SettingsNavigation sections={sections} />);
 
-    expect(screen.getByRole('tab', { name: /AI & Models/ })).toHaveAttribute('aria-selected', 'true');
+    const modelsTab = screen.getByRole('tab', { name: /AI & Models/ });
+    expect(modelsTab).toHaveAttribute('aria-selected', 'true');
+    expect(modelsTab).toHaveClass('border-teal-600', 'text-teal-700');
+    expect(modelsTab).not.toHaveClass('bg-gray-900', 'rounded-md');
+    expect(modelsTab.querySelector('span')).toHaveClass('bg-slate-100', 'text-slate-500');
+    expect(container.querySelector('[data-settings-section="model-selection"]')).toHaveClass('[&_select]:max-w-md');
+    expect(container.querySelector('[data-settings-section="model-selection"]')).not.toHaveClass('rounded-lg', 'border', 'shadow-sm');
     expect(screen.getByText('Model controls')).toBeVisible();
     expect(screen.getByText('Merge controls')).not.toBeVisible();
 
