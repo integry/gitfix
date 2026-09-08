@@ -7,8 +7,36 @@ export type MergeOutcome = 'clean' | 'conflicts' | 'failed';
 
 export interface MergeResult {
     outcome: MergeOutcome;
+    baseCommit?: string;
     conflictedFiles?: string[];
     error?: string;
+}
+
+/**
+ * Ensures a requested base commit is reachable from the worktree's HEAD.
+ */
+export async function assertCommitIsAncestor(
+    worktreePath: string,
+    ancestorCommit: string,
+): Promise<void> {
+    const git: SimpleGit = createHooklessGit(worktreePath);
+
+    try {
+        // simple-git's raw task can treat `merge-base --is-ancestor` exit 1 as
+        // an empty successful result because Git writes no stderr. Compare the
+        // actual merge base instead so a non-ancestor cannot be missed.
+        const mergeBase = (await git.raw(['merge-base', ancestorCommit, 'HEAD'])).trim();
+        if (mergeBase !== ancestorCommit) {
+            throw new Error(`merge base was ${mergeBase || 'not found'}`);
+        }
+    } catch (error) {
+        logger.error({
+            worktreePath,
+            ancestorCommit,
+            error: (error as Error).message,
+        }, 'Requested base commit is not incorporated into HEAD');
+        throw new Error(`Requested base commit ${ancestorCommit} is not incorporated into HEAD`);
+    }
 }
 
 /**
@@ -25,6 +53,14 @@ export async function mergeBaseIntoBranch(
         // Fetch the latest base branch
         logger.info({ worktreePath, baseBranch }, 'Fetching latest base branch for merge');
         await git.raw(['fetch', 'origin', `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`, '--prune']);
+        const baseCommit = (await git.raw([
+            'rev-parse',
+            '--verify',
+            `refs/remotes/origin/${baseBranch}^{commit}`,
+        ])).trim();
+        if (!baseCommit) {
+            throw new Error(`Failed to resolve fetched base branch origin/${baseBranch}`);
+        }
 
         // Configure merge author
         try {
@@ -59,6 +95,7 @@ export async function mergeBaseIntoBranch(
 
             return {
                 outcome: 'conflicts',
+                baseCommit,
                 conflictedFiles
             };
         }
@@ -82,7 +119,7 @@ export async function mergeBaseIntoBranch(
         }
 
         logger.info({ worktreePath, baseBranch }, 'Merge completed cleanly');
-        return { outcome: 'clean' };
+        return { outcome: 'clean', baseCommit };
     } catch (error) {
         const errorMessage = (error as Error).message || 'Unknown error';
         logger.error({ worktreePath, baseBranch, error: errorMessage }, 'Failed to execute merge operation');

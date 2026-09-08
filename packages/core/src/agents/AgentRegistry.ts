@@ -56,8 +56,9 @@ export class AgentRegistry {
     /**
      * Reloads configuration from configManager and instantiates agents.
      * This is deliberately read-only with respect to Docker images. Request and
-     * task paths may refresh the registry, but image preparation belongs to the
-     * worker's startup/configuration lifecycle.
+     * task paths may explicitly refresh the registry without starting Docker
+     * work; first-use initialization and missing-image recovery use the
+     * preparation path below so execution cannot remain permanently degraded.
      */
     refresh(): Promise<void> {
         return this.requestRefresh(false);
@@ -65,8 +66,10 @@ export class AgentRegistry {
 
     /**
      * Prepares missing base and runtime-package images, then refreshes the
-     * registry. The main worker calls this at startup and when agent version
-     * configuration changes; ordinary registry consumers must use refresh().
+     * registry. The main worker calls this eagerly at startup and when agent
+     * version configuration changes; execution processes also use it on first
+     * initialization and missing-image recovery. Ordinary configuration reloads
+     * use refresh().
      */
     prepareImagesAndRefresh(): Promise<void> {
         return this.requestRefresh(true);
@@ -300,11 +303,17 @@ export class AgentRegistry {
      * When a runtime package state change is detected on an already-initialized
      * registry, the inspect-only refresh runs in the background. The dedicated
      * runtime build worker prepares changed package images before publishing the
-     * new state, so request-serving paths never start Docker builds themselves.
+     * new state. First-use initialization and missing-image recovery are the
+     * bounded exceptions that can prepare an image from an execution process.
      */
     async ensureInitialized(): Promise<void> {
         if (!this.initialized) {
-            await this.refresh();
+            // The main worker prepares images eagerly, but planning and other
+            // lightweight analysis also execute in API/analysis processes. A
+            // process may start before the worker has prepared the exact tag (or
+            // run against a different Docker daemon), so first use must be able
+            // to make its own execution runtime ready.
+            await this.prepareImagesAndRefresh();
             return;
         }
 
@@ -319,13 +328,13 @@ export class AgentRegistry {
             return;
         }
 
-        // If an image disappears after initialization, synchronously reload the
-        // inspect-only registry state so execution never reaches Docker with a
-        // missing local tag. Rebuilding remains the startup/config owner's job.
+        // If an image disappears after initialization, synchronously restore it
+        // before returning an agent. An inspect-only refresh would rediscover
+        // the same missing tag forever and leave every execution path degraded.
         if (!(await this.registeredAgentImagesAvailable())) {
             if (!this.pendingBackgroundRefresh) {
-                logger.warn('Refreshing agent registry because a registered agent image is no longer available locally');
-                this.pendingBackgroundRefresh = this.refresh()
+                logger.warn('Preparing agent registry because a registered agent image is no longer available locally');
+                this.pendingBackgroundRefresh = this.prepareImagesAndRefresh()
                     .finally(() => {
                         this.pendingBackgroundRefresh = null;
                     });
@@ -411,9 +420,10 @@ export class AgentRegistry {
     }
 
     /**
-     * A consumer can initialize while the worker is still preparing the image.
-     * Poll the local image state with one shared timer so it becomes ready after
-     * startup completes; refresh() is inspect-only and cannot launch a build.
+     * A consumer can initialize while the worker is still preparing the image,
+     * or it can use a Docker daemon that is not shared with that worker. Retry
+     * through the preparation path so recovery does not depend on another
+     * process eventually making the exact tag appear.
      */
     private scheduleUnifiedAgentImageRetry(): void {
         if (this.unifiedAgentImageRetryTimer) return;
@@ -421,7 +431,7 @@ export class AgentRegistry {
             this.unifiedAgentImageRetryTimer = null;
             if (!this.initialized || !this.unavailableUnifiedAgentImage || this.pendingBackgroundRefresh) return;
 
-            const refresh = this.refresh();
+            const refresh = this.prepareImagesAndRefresh();
             this.pendingBackgroundRefresh = refresh;
             void refresh
                 .catch(error => {

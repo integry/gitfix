@@ -150,6 +150,20 @@ function resolveCommitMessage(commitMessage: string | CommitMessageObject, issue
     return `fix(ai): Resolve issue #${issueNumber} - ${shortTitle}\n\nImplemented by ProPR AI. Full conversation log in PR comment.`;
 }
 
+function assertNoUnmergedEntries(status: StatusResult): void {
+    if (status.conflicted.length > 0) {
+        throw new Error(`Cannot commit with unresolved index entries: ${status.conflicted.join(', ')}`);
+    }
+}
+
+async function getPendingMergeHead(git: SimpleGit): Promise<string | null> {
+    try {
+        return (await git.raw(['rev-parse', '--verify', 'MERGE_HEAD'])).trim() || null;
+    } catch {
+        return null;
+    }
+}
+
 export async function commitChanges(worktreePath: string, commitMessage: string | CommitMessageObject, author: Author | null, options: CommitOptions = {}): Promise<CommitResult | null> {
     const { issueNumber, issueTitle, allowEmpty = false } = options;
     try {
@@ -165,13 +179,24 @@ export async function commitChanges(worktreePath: string, commitMessage: string 
     try {
         await configureGitAuthor(git, author, worktreePath, issueNumber);
 
+        // A merge conflict is only resolved once its index entries have been
+        // explicitly staged. Do not let staging below silently turn an
+        // unresolved index into a commit candidate.
+        assertNoUnmergedEntries(await git.status());
+
         await stageCommitFiles(git, options);
         const status = await git.status();
         const stagedFiles = status.files.filter((file: FileStatusResult) => file.index !== ' ' && file.index !== '?');
 
         logGitStatus(status, worktreePath, issueNumber);
+        assertNoUnmergedEntries(status);
 
-        if (stagedFiles.length === 0 && !allowEmpty) {
+        // A resolved merge can legitimately have the same tree as HEAD. Git
+        // still needs a commit in that case to record MERGE_HEAD as the second
+        // parent and preserve the requested base in branch ancestry.
+        const pendingMergeHead = await getPendingMergeHead(git);
+
+        if (stagedFiles.length === 0 && !allowEmpty && !pendingMergeHead) {
             logger.info({ worktreePath }, 'No changes to commit');
             return null;
         }
@@ -180,8 +205,9 @@ export async function commitChanges(worktreePath: string, commitMessage: string 
             worktreePath,
             issueNumber,
             totalFiles: stagedFiles.length,
-            files: stagedFiles.map((f: FileStatusResult) => ({ path: f.path, index: f.index, working_dir: f.working_dir }))
-        }, 'Files to be committed');
+            files: stagedFiles.map((f: FileStatusResult) => ({ path: f.path, index: f.index, working_dir: f.working_dir })),
+            pendingMergeHead,
+        }, pendingMergeHead && stagedFiles.length === 0 ? 'Finalizing pending merge with no tree changes' : 'Files to be committed');
 
         const finalCommitMessage = resolveCommitMessage(commitMessage, issueNumber, issueTitle);
 
