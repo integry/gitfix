@@ -282,7 +282,7 @@ const AdminSettingsPage: React.FC = () => {
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Anchored Header */}
-      <div className="flex-shrink-0 border-b border-gray-200 px-6 py-4">
+      <div className="flex-shrink-0 px-6 py-4">
         <h2 className="text-gray-900 text-xl font-semibold">Settings</h2>
         {isDemoMode && (
           <p className="mt-1 text-xs text-amber-700">

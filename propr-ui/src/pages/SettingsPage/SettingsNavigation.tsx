@@ -68,35 +68,9 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-shrink-0 bg-white pt-3">
-        <div className="relative mx-4 max-w-xl sm:ml-auto sm:mr-6">
-          <label htmlFor="settings-search" className="sr-only">Search settings</label>
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
-          />
-          <input
-            id="settings-search"
-            type="search"
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Search settings..."
-            className="h-9 w-full rounded-md border border-gray-300 bg-gray-50 pl-9 pr-9 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery('')}
-              aria-label="Clear settings search"
-              className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700"
-            >
-              <X aria-hidden="true" className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-
-        <div className="mt-3 w-full border-b border-slate-200">
-          <div className="overflow-x-auto px-4 sm:px-6">
+      <div className="flex-shrink-0 bg-white">
+        <div className="flex w-full items-end gap-3 border-b border-slate-200 px-4 sm:gap-6 sm:px-6">
+          <div className="min-w-0 flex-1 overflow-x-auto">
             <div className="flex min-w-max gap-6" role="tablist" aria-label="Settings categories">
               {SETTINGS_CATEGORIES.map(category => {
                 const sectionCount = sections.filter(section => section.category === category.id).length;
@@ -127,6 +101,32 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
                 );
               })}
             </div>
+          </div>
+
+          <div className="relative mb-2 ml-auto w-32 flex-shrink-0 sm:w-64">
+            <label htmlFor="settings-search" className="sr-only">Search settings</label>
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+            />
+            <input
+              id="settings-search"
+              type="search"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="Search settings..."
+              className="h-9 w-full rounded-md border border-gray-300 bg-gray-50 pl-9 pr-9 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                aria-label="Clear settings search"
+                className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700"
+              >
+                <X aria-hidden="true" className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
