@@ -27,6 +27,7 @@ const capability = {
 const goal: goalsApi.Goal = {
   id: 'goal-1', owner: 'owner', repository: 'acme/web', title: 'Launch Customer Analytics Dashboard', objective: 'Ship the dashboard',
   launchStrategy: 'orchestrate', initialPrompt: '/goal Ship the dashboard\n\nLaunch strategy — Agent orchestrates through ProPR',
+  attachments: [],
   baseBranch: null, branchName: 'goal/dashboard', worktreePath: '/tmp/worktree',
   agent: { id: 'agent-1', alias: 'codex', type: 'codex' }, requestedModel: 'gpt-5.6-sol', effectiveModel: 'gpt-5.6-sol',
   maxParallelTasks: 3, ultrafix: true, desiredState: 'running', resultState: null,
@@ -144,6 +145,27 @@ describe('GoalsPage', () => {
     })));
   });
 
+  it('starts a goal with selected files and supports pasted images in the objective', async () => {
+    vi.mocked(goalsApi.createGoal).mockResolvedValue({ goal });
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /><Route path="/goals/:goalId" element={<div>Goal detail</div>} /></Routes></MemoryRouter>);
+    await screen.findByRole('option', { name: 'Codex' });
+    const objective = screen.getByLabelText('Objective');
+    fireEvent.change(objective, { target: { value: 'Implement the attached design' } });
+    const textFile = new File(['expected layout'], 'requirements.txt', { type: 'text/plain' });
+    fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [textFile] } });
+    expect(await screen.findByText('requirements.txt')).toBeInTheDocument();
+
+    const pastedImage = new File(['image'], 'clipboard.png', { type: 'image/png' });
+    fireEvent.paste(objective, { clipboardData: { items: [{ type: 'image/png', getAsFile: () => pastedImage }] } });
+    expect(await screen.findByText(/pasted-image-/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start goal' }));
+
+    await waitFor(() => expect(goalsApi.createGoal).toHaveBeenCalledWith(
+      expect.objectContaining({ objective: 'Implement the attached design' }),
+      expect.arrayContaining([textFile, expect.objectContaining({ type: 'image/png' })]),
+    ));
+  });
+
   it('hides unsupported runtime diagnostics when at least one agent supports goals', async () => {
     vi.mocked(goalsApi.getGoalCapabilities).mockResolvedValue({ agents: [
       capability,
@@ -212,6 +234,24 @@ describe('GoalsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: "What's done?" }));
     await waitFor(() => expect(goalsApi.sendGoalInput).toHaveBeenCalledWith('goal-1', { canned: 'done' }));
     expect(goalsApi.pauseGoal).not.toHaveBeenCalled();
+  });
+
+  it('sends files and pasted images with a running goal correction', async () => {
+    render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    const correction = await screen.findByLabelText('Correction or follow-up');
+    fireEvent.change(correction, { target: { value: 'Use these references.' } });
+    const selectedFile = new File(['details'], 'details.md', { type: 'text/markdown' });
+    fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [selectedFile] } });
+    expect(await screen.findByText('details.md')).toBeInTheDocument();
+    const pastedImage = new File(['image'], 'clipboard.png', { type: 'image/png' });
+    fireEvent.paste(correction, { clipboardData: { items: [{ type: 'image/png', getAsFile: () => pastedImage }] } });
+    expect(await screen.findByText(/pasted-image-/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(goalsApi.sendGoalInput).toHaveBeenCalledWith(
+      'goal-1',
+      { message: 'Use these references.' },
+      expect.arrayContaining([selectedFile, expect.objectContaining({ type: 'image/png' })]),
+    ));
   });
 
   it('shows human-readable goal output by default and lets the user switch to raw terminal output', async () => {

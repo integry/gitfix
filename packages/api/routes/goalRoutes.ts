@@ -21,10 +21,22 @@ import {
   type GoalJobData,
   type GoalLaunchStrategy,
   type Agent,
+  type MulterFile,
 } from '@propr/core';
 import type { RedisClientType } from 'redis';
 import { stopTaskExecution, type StopTaskExecutionResult } from './dockerRoutes.js';
 import { serializeGoal, type GoalProjectionRow as GoalRow } from '../services/goalProjection.js';
+import {
+  appendGoalAttachments,
+  deleteGoalAttachmentDirectory,
+  deleteGoalAttachments,
+  getGoalAttachmentContent,
+  goalUploadIdentity,
+  parseGoalAttachments,
+  processGoalUploads,
+  removeTemporaryGoalUploads,
+  type GoalAttachment,
+} from '../services/goalAttachmentService.js';
 
 interface GoalRoutesDeps {
   db: Knex;
@@ -33,6 +45,9 @@ interface GoalRoutesDeps {
   getCapabilities?: (options?: { force?: boolean }) => Promise<GoalCapability[]>;
   generateTitle?: typeof generateGoalTitle;
   stopExecution?: (taskId: string, options: Parameters<typeof stopTaskExecution>[1]) => Promise<StopTaskExecutionResult>;
+  processAttachments?: typeof processGoalUploads;
+  uploadIdentity?: typeof goalUploadIdentity;
+  removeTemporaryUploads?: typeof removeTemporaryGoalUploads;
 }
 
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -155,7 +170,10 @@ function validateCreateCheckpointInterval(body: Record<string, unknown>): string
   return null;
 }
 
-function buildCreateIdentity(body: Record<string, unknown>): { operation: string; payloadHash: string } {
+function buildCreateIdentity(
+  body: Record<string, unknown>,
+  attachmentIdentity: readonly Record<string, unknown>[] = [],
+): { operation: string; payloadHash: string } {
   const operation = 'goal.create';
   const payloadHash = mutationHash(operation, {
     repository: body.repository, objective: body.objective, launchStrategy: body.launchStrategy,
@@ -164,6 +182,7 @@ function buildCreateIdentity(body: Record<string, unknown>): { operation: string
     checkpointIntervalMinutes: body.launchStrategy === 'direct'
       ? body.checkpointIntervalMinutes ?? DEFAULT_GOAL_CHECKPOINT_INTERVAL_MINUTES
       : null,
+    ...(attachmentIdentity.length > 0 ? { attachments: attachmentIdentity } : {}),
   });
   return { operation, payloadHash };
 }
@@ -222,6 +241,22 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     return registry.getGoalCapabilities(options);
   });
   const stop = deps.stopExecution ?? stopTaskExecution;
+  const storeAttachments = deps.processAttachments ?? processGoalUploads;
+  const identifyUploads = deps.uploadIdentity ?? goalUploadIdentity;
+  const cleanupTemporaryUploads = deps.removeTemporaryUploads ?? removeTemporaryGoalUploads;
+
+  const uploadedFiles = (req: Request): MulterFile[] => Array.isArray(req.files)
+    ? req.files as MulterFile[]
+    : [];
+
+  const requestBody = (req: Request): Record<string, unknown> => {
+    if (typeof req.body?.payload !== 'string') return (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(req.body.payload);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch { /* handled below */ }
+    throw new Error('payload must be valid JSON');
+  };
 
   /** Protect existing task/log surfaces when their authoritative task belongs to a goal. */
   const requireGoalTaskOwnership = async (req: Request, res: Response, next: () => void) => {
@@ -278,15 +313,20 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     if (row) res.json({ goal: await serializeGoal(deps.db, deps.redisClient, row) });
   };
 
-  const create = async (req: Request, res: Response) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
+  // eslint-disable-next-line complexity -- creation coordinates idempotency, capability checks, durable files, and queue publication
+  const createGoal = async (req: Request, res: Response, files: MulterFile[]) => {
+    let body: Record<string, unknown>;
+    try { body = requestBody(req); } catch (error) {
+      return void res.status(400).json({ error: (error as Error).message });
+    }
     const validationError = validateCreateBody(body);
     if (validationError) return void res.status(400).json({ error: validationError });
     const ownerId = currentOwnerId(req);
     if (!ownerId) return void res.status(401).json({ error: 'Authentication required' });
     const createKey = requiredIdempotencyKey(req, res);
     if (!createKey) return;
-    const { operation: createOperation, payloadHash: createPayloadHash } = buildCreateIdentity(body);
+    const attachmentIdentity = await identifyUploads(files);
+    const { operation: createOperation, payloadHash: createPayloadHash } = buildCreateIdentity(body, attachmentIdentity);
     let existing: GoalRow | null;
     try {
       existing = await findExistingGoalCreation({
@@ -299,14 +339,14 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     if (existing) return void res.json({ goal: await serializeGoal(deps.db, deps.redisClient, existing) });
 
     const launchStrategy = body.launchStrategy as GoalLaunchStrategy;
-    const initialPrompt = buildNativeGoalCommand({
+    const baseInitialPrompt = buildNativeGoalCommand({
       objective: body.objective as string,
       launchStrategy,
       maxParallelTasks: body.maxParallelTasks as number | null | undefined,
       ultrafix: body.ultrafix === true,
       checkpointIntervalMinutes: body.checkpointIntervalMinutes as number | null | undefined,
     });
-    const selection = await resolveCreationAgent(body, getCapabilities, initialPrompt);
+    const selection = await resolveCreationAgent(body, getCapabilities, baseInitialPrompt);
     if ('error' in selection) return void res.status(selection.status).json({ error: selection.error });
     const { agent } = selection;
 
@@ -328,6 +368,13 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
       taskId,
       correlationId: goalId,
     });
+    let attachments: GoalAttachment[] = [];
+    let attachmentsPersisted = false;
+    try {
+      attachments = await storeAttachments(files, goalId);
+      const initialPrompt = appendGoalAttachments(baseInitialPrompt, attachments);
+      const promptError = agent.config.type === 'codex' ? codexGoalPromptValidationError(initialPrompt) : null;
+      if (promptError) return void res.status(400).json({ error: promptError });
     const row = {
       goal_id: goalId,
       owner_id: ownerId,
@@ -337,6 +384,7 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
       objective: body.objective as string,
       launch_strategy: launchStrategy,
       initial_prompt: initialPrompt,
+      attachments: JSON.stringify(attachments),
       base_branch: body.baseBranch || null,
       agent_id: agent.config.id,
       agent_alias: agent.config.alias,
@@ -361,6 +409,7 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     };
     try {
       await deps.db('goals').insert(row);
+      attachmentsPersisted = true;
     } catch (error) {
       const raced = await deps.db<GoalRow>('goals').where({
         owner_id: ownerId,
@@ -388,6 +437,25 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     }
     const inserted = await deps.db('goals').where({ goal_id: goalId }).first() as GoalRow;
     res.status(201).json({ goal: await serializeGoal(deps.db, deps.redisClient, inserted) });
+    } finally {
+      if (!attachmentsPersisted) await deleteGoalAttachments(attachments);
+    }
+  };
+
+  const create = async (req: Request, res: Response) => {
+    const files = uploadedFiles(req);
+    try {
+      await createGoal(req, res, files);
+    } catch (error) {
+      logger.warn({ error: (error as Error).message }, 'Could not create goal with attachments');
+      if (!res.headersSent) {
+        const message = (error as Error).message || 'Could not process goal attachments';
+        const status = /not supported|unsupported|outside|invalid|file/i.test(message) ? 400 : 500;
+        res.status(status).json({ error: message });
+      }
+    } finally {
+      await cleanupTemporaryUploads(files);
+    }
   };
 
   const pause = async (req: Request, res: Response) => {
@@ -437,28 +505,41 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     res.json({ goal: await serializeGoal(deps.db, deps.redisClient, updated!) });
   };
 
-  async function addGoalInput(
-    row: GoalRow,
-    key: string,
-    message: string,
-    kind: 'input' | 'resume',
-  ): Promise<'inserted' | 'pending' | 'settled'> {
+  async function addGoalInput(options: {
+    row: GoalRow;
+    key: string;
+    message: string;
+    kind: 'input' | 'resume';
+    payloadHash?: string;
+    attachments?: GoalAttachment[];
+  }): Promise<'inserted' | 'pending' | 'settled'> {
+    const { row, key, message, kind } = options;
     const operation = `goal.${kind}`;
-    const payloadHash = mutationHash(operation, { goalId: row.goal_id, message });
+    const payloadHash = options.payloadHash ?? mutationHash(operation, { goalId: row.goal_id, message });
     const existing = await existingMutation(deps.db, row, key, operation, payloadHash);
     if (existing) return existing.state === 'pending' ? 'pending' : 'settled';
     try {
-      await deps.db('goal_inputs').insert({
-        input_id: randomUUID(),
-        goal_id: row.goal_id,
-        owner_id: row.owner_id,
-        idempotency_key: key,
-        operation,
-        payload_hash: payloadHash,
-        kind,
-        message,
-        state: 'pending',
-        created_at: deps.db.fn.now(),
+      await deps.db.transaction(async trx => {
+        await trx('goal_inputs').insert({
+          input_id: randomUUID(),
+          goal_id: row.goal_id,
+          owner_id: row.owner_id,
+          idempotency_key: key,
+          operation,
+          payload_hash: payloadHash,
+          kind,
+          message,
+          state: 'pending',
+          created_at: trx.fn.now(),
+        });
+        if (options.attachments?.length) {
+          const current = await trx('goals').where({ goal_id: row.goal_id, owner_id: row.owner_id }).first('attachments');
+          const attachments = [...parseGoalAttachments(current?.attachments), ...options.attachments];
+          await trx('goals').where({ goal_id: row.goal_id, owner_id: row.owner_id }).update({
+            attachments: JSON.stringify(attachments),
+            updated_at: trx.fn.now(),
+          });
+        }
       });
     } catch (error) {
       if (!await existingMutation(deps.db, row, key, operation, payloadHash)) throw error;
@@ -524,7 +605,7 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
       if (nativeCodexResume) {
         await recordControlMutation(deps.db, row, idempotencyKey, resumeOperation, resumePayloadHash);
       } else {
-        await addGoalInput(row, idempotencyKey, resumeMessage, 'resume');
+        await addGoalInput({ row, key: idempotencyKey, message: resumeMessage, kind: 'resume' });
       }
     }
     await deps.db('goals').where({
@@ -644,6 +725,9 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
       await trx('task_history').where({ task_id: row.current_task_id }).delete();
       await trx('tasks').where({ task_id: row.current_task_id }).delete();
     });
+    await deleteGoalAttachmentDirectory(row.goal_id).catch(error => {
+      logger.warn({ goalId: row.goal_id, error: (error as Error).message }, 'Could not remove deleted goal attachments');
+    });
     res.status(204).send();
   };
 
@@ -699,25 +783,54 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
   };
 
   // eslint-disable-next-line complexity -- input delivery branches by persisted lifecycle and provider resume capability
-  const input = async (req: Request, res: Response) => {
+  const addInput = async (req: Request, res: Response, files: MulterFile[]) => {
     const row = await findOwnedGoal(deps.db, req, res);
     if (!row) return;
     const key = requiredIdempotencyKey(req, res);
     if (!key) return;
     if (row.result_state || row.desired_state === 'cancelled') return void res.status(409).json({ error: 'Goal is terminal' });
-    const canned = req.body?.canned as keyof typeof cannedInputs | undefined;
-    const message = canned ? cannedInputs[canned] : req.body?.message;
+    let body: Record<string, unknown>;
+    try { body = requestBody(req); } catch (error) {
+      return void res.status(400).json({ error: (error as Error).message });
+    }
+    const canned = body.canned as keyof typeof cannedInputs | undefined;
+    const message = canned ? cannedInputs[canned] : body.message;
     if (typeof message !== 'string' || !message.trim() || message.length > 65_536) return void res.status(400).json({ error: 'A valid message or canned status request is required' });
+    const operation = 'goal.input';
+    const attachmentIdentity = await identifyUploads(files);
+    const payloadHash = mutationHash(operation, {
+      goalId: row.goal_id,
+      message: message.trim(),
+      ...(attachmentIdentity.length > 0 ? { attachments: attachmentIdentity } : {}),
+    });
     let inputDisposition: 'inserted' | 'pending' | 'settled';
+    let attachments: GoalAttachment[] = [];
     try {
-      inputDisposition = await addGoalInput(row, key, message.trim(), 'input');
+      const existing = await existingMutation(deps.db, row, key, operation, payloadHash);
+      if (existing) {
+        inputDisposition = existing.state === 'pending' ? 'pending' : 'settled';
+      } else {
+        attachments = await storeAttachments(files, row.goal_id);
+        const deliveredMessage = appendGoalAttachments(message.trim(), attachments);
+        if (deliveredMessage.length > 65_536) {
+          await deleteGoalAttachments(attachments);
+          attachments = [];
+          return void res.status(400).json({ error: 'Message and attachment references are too long' });
+        }
+        inputDisposition = await addGoalInput({
+          row, key, message: deliveredMessage, kind: 'input', payloadHash, attachments,
+        });
+        if (inputDisposition !== 'inserted') await deleteGoalAttachments(attachments);
+      }
     } catch (error) {
+      await deleteGoalAttachments(attachments);
       if (error instanceof IdempotencyConflictError) return void res.status(409).json({ error: error.message });
       throw error;
     }
     if (inputDisposition === 'settled'
       || (inputDisposition === 'pending' && row.desired_state === 'running' && !row.claimed_at)) {
-      return void res.json({ goal: await serializeGoal(deps.db, deps.redisClient, row) });
+      const current = await deps.db<GoalRow>('goals').where({ goal_id: row.goal_id, owner_id: row.owner_id }).first();
+      return void res.json({ goal: await serializeGoal(deps.db, deps.redisClient, current!) });
     }
     if (row.desired_state === 'paused') {
       await deps.db('goals').where({
@@ -799,8 +912,41 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     res.json({ goal: await serializeGoal(deps.db, deps.redisClient, updated!) });
   };
 
+  const input = async (req: Request, res: Response) => {
+    const files = uploadedFiles(req);
+    try {
+      await addInput(req, res, files);
+    } catch (error) {
+      logger.warn({ error: (error as Error).message }, 'Could not send goal input with attachments');
+      if (!res.headersSent) {
+        const message = (error as Error).message || 'Could not process goal attachments';
+        const status = /not supported|unsupported|outside|invalid|file/i.test(message) ? 400 : 500;
+        res.status(status).json({ error: message });
+      }
+    } finally {
+      await cleanupTemporaryUploads(files);
+    }
+  };
+
+  const attachment = async (req: Request, res: Response) => {
+    const row = await findOwnedGoal(deps.db, req, res);
+    if (!row) return;
+    const attachmentId = Array.isArray(req.params.attachmentId) ? req.params.attachmentId[0] : req.params.attachmentId;
+    const item = parseGoalAttachments(row.attachments).find(candidate => candidate.id === attachmentId);
+    if (!item) return void res.status(404).json({ error: 'Attachment not found' });
+    try {
+      const content = await getGoalAttachmentContent(item);
+      res.setHeader('Content-Type', item.mimeType);
+      res.setHeader('Content-Disposition', `inline; filename=${JSON.stringify(item.originalName)}`);
+      res.send(content);
+    } catch (error) {
+      logger.warn({ goalId: row.goal_id, attachmentId, error: (error as Error).message }, 'Could not read goal attachment');
+      res.status(404).json({ error: 'Attachment not found' });
+    }
+  };
+
   return {
-    capabilities, list, get, create, pause, resume, cancel, remove, requestModel, input,
+    capabilities, list, get, create, pause, resume, cancel, remove, requestModel, input, attachment,
     requireGoalTaskOwnership,
   };
 }

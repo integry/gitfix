@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- goal list and split-pane console intentionally share this route-level surface */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -10,6 +11,7 @@ import type { InstanceCatalogRepository } from '../api/proprTypes';
 import {
   cancelGoal, createGoal, deleteGoal, getGoal, getGoalCapabilities, listGoals, pauseGoal,
   requestGoalModel, resumeGoal, sendGoalInput,
+  getGoalAttachmentUrl,
   type Goal, type GoalCapability, type GoalLaunchStrategy,
 } from '../api/goals';
 import { useTaskLiveData } from '../components/TaskDetails/useTaskLiveData';
@@ -22,10 +24,27 @@ import { ProviderLogo } from '../components/ui/ProviderLogo';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { formatAgentLabel } from '../utils/agentStatus';
 import { getModelDisplayName } from '../utils/modelDisplay';
+import { GoalAttachmentInput } from '../components/Goals/GoalAttachmentInput';
+import { clipboardImageFiles } from '../components/Goals/goalAttachmentUtils';
+import { resizeImage } from '../components/TaskPlanner/imageUtils';
 
 const buttonClass = 'inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50';
 const checkpointIntervalOptions = [5, 10, 15, 30, 60, 120];
 const goalFormSettingsStorageKey = 'propr.goalFormSettings';
+const maxGoalAttachmentsPerPrompt = 10;
+
+async function addGoalFiles(
+  current: File[],
+  incoming: File[],
+  setFiles: React.Dispatch<React.SetStateAction<File[]>>,
+  setError: React.Dispatch<React.SetStateAction<string | null>>,
+) {
+  if (current.length + incoming.length > maxGoalAttachmentsPerPrompt) {
+    setError(`Attach up to ${maxGoalAttachmentsPerPrompt} files to each prompt.`);
+    return;
+  }
+  setFiles([...current, ...await Promise.all(incoming.map(resizeImage))]);
+}
 
 interface GoalFormSettings {
   repository: string;
@@ -144,6 +163,7 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
   const [agentId, setAgentId] = useState(previousSettings.agentId);
   const [model, setModel] = useState(previousSettings.model);
   const [objective, setObjective] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
   const [launchStrategy, setLaunchStrategy] = useState<GoalLaunchStrategy>(previousSettings.launchStrategy);
   const [parallelism, setParallelism] = useState(previousSettings.maxParallelTasks?.toString() || '');
   const [ultrafix, setUltrafix] = useState(previousSettings.ultrafix);
@@ -199,12 +219,13 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await createGoal({
+      const createBody = {
         repository, agentId, model, objective, launchStrategy,
         ...(parallelism ? { maxParallelTasks: Number(parallelism) } : {}),
         ...(launchStrategy === 'direct' ? { checkpointIntervalMinutes: checkpointInterval } : {}),
         ultrafix,
-      });
+      };
+      const result = files.length > 0 ? await createGoal(createBody, files) : await createGoal(createBody);
       saveGoalFormSettings({
         repository,
         agentId,
@@ -277,9 +298,15 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
         </div>
         <p className="mt-2 text-xs text-slate-500">Guidance for the agent, not a timer. ProPR commits only when the agent declares a coherent checkpoint ready.</p>
       </div>}
-      <label className="mt-4 block text-sm font-medium text-slate-700">Objective
-        <textarea aria-label="Objective" value={objective} onChange={event => setObjective(event.target.value)} rows={5} className="mt-1 w-full rounded-md border border-slate-300 p-2" required />
-      </label>
+      <div className="mt-4 text-sm font-medium text-slate-700">Objective
+        <textarea aria-label="Objective" value={objective} onChange={event => setObjective(event.target.value)} onPaste={event => {
+          const pasted = clipboardImageFiles(event);
+          if (!pasted.length) return;
+          event.preventDefault();
+          void addGoalFiles(files, pasted, setFiles, setError);
+        }} rows={5} className="mt-1 w-full rounded-md border border-slate-300 p-2" required />
+        <GoalAttachmentInput files={files} onChange={setFiles} onError={setError} disabled={submitting} />
+      </div>
       <label className="mt-3 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={ultrafix} onChange={event => setUltrafix(event.target.checked)} /> Ask the coding agent to use Ultrafix</label>
       <button type="submit" disabled={submitting || !repository || !agentId || !model || !objective.trim() || !selectedAgent?.goalCapable} className={`${buttonClass} mt-4 bg-primary-600 text-white hover:bg-primary-700`}>{submitting ? 'Starting…' : 'Start goal'}</button>
     </form>
@@ -323,6 +350,7 @@ function GoalDetails({ goalId }: { goalId: string }) {
   const navigate = useNavigate();
   const [goal, setGoal] = useState<Goal | null>(null);
   const [message, setMessage] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -345,11 +373,12 @@ function GoalDetails({ goalId }: { goalId: string }) {
   }, [goalId, models.length]);
   useEffect(() => { refresh(); const timer = window.setInterval(refresh, 5_000); return () => window.clearInterval(timer); }, [refresh]);
   const act = async (operation: () => Promise<{ goal: Goal }>) => { setBusy(true); setError(null); try { setGoal((await operation()).goal); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
-  const continueWith = async (body: { message?: string; canned?: 'done' | 'left' }) => {
+  const continueWith = async (body: { message?: string; canned?: 'done' | 'left' }, attachments: File[] = []) => {
     if (!goal) return;
     setBusy(true); setError(null);
     try {
-      setGoal((await sendGoalInput(goal.id, body)).goal); setMessage('');
+      const result = attachments.length > 0 ? await sendGoalInput(goal.id, body, attachments) : await sendGoalInput(goal.id, body);
+      setGoal(result.goal); setMessage(''); setFiles([]);
     } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
   const remove = async () => {
@@ -420,6 +449,15 @@ function GoalDetails({ goalId }: { goalId: string }) {
             <summary className="cursor-pointer font-semibold text-slate-800">Goal description</summary>
             <p className="mt-3 whitespace-pre-wrap break-words leading-6 text-slate-600">{goal.objective}</p>
           </details>
+          {(goal.attachments || []).length > 0 && <div className="border-b border-slate-200 py-4 text-sm">
+            <h3 className="font-semibold text-slate-800">Files shared with this goal</h3>
+            <div className="mt-3 flex flex-wrap gap-2">{(goal.attachments || []).map(attachment => <a key={attachment.id} href={getGoalAttachmentUrl(goal.id, attachment.id)} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-700 hover:border-primary-300 hover:text-primary-700">
+              {attachment.type === 'image'
+                ? <img src={getGoalAttachmentUrl(goal.id, attachment.id)} alt="" className="h-9 w-9 rounded object-cover" />
+                : <FileText className="h-4 w-4 text-slate-400" />}
+              <span className="max-w-52 truncate" title={attachment.originalName}>{attachment.originalName}</span>
+            </a>)}</div>
+          </div>}
           <details className="group border-b border-slate-200 py-4 text-sm">
             <summary className="cursor-pointer font-semibold text-slate-800">Initial provider prompt</summary>
             <pre className="mt-3 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-600">{goal.initialPrompt}</pre>
@@ -490,8 +528,14 @@ function GoalDetails({ goalId }: { goalId: string }) {
           </div>
           <div className="bg-white p-2 shadow-md ring-1 ring-slate-200/70">
             <h2 id="correction-heading" className="sr-only">Send a correction</h2>
-            <textarea aria-label="Correction or follow-up" value={message} onChange={event => setMessage(event.target.value)} rows={3} className="w-full resize-none border-0 p-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0" placeholder="Send a correction to the same coding-agent session…" />
-            <div className="flex justify-end"><button disabled={busy || !message.trim()} onClick={() => continueWith({ message })} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}><Send className="h-4 w-4" />Send</button></div>
+            <textarea aria-label="Correction or follow-up" value={message} onChange={event => setMessage(event.target.value)} onPaste={event => {
+              const pasted = clipboardImageFiles(event);
+              if (!pasted.length) return;
+              event.preventDefault();
+              void addGoalFiles(files, pasted, setFiles, setError);
+            }} rows={3} className="w-full resize-none border-0 p-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0" placeholder="Send a correction to the same coding-agent session…" />
+            <GoalAttachmentInput files={files} onChange={setFiles} onError={setError} disabled={busy} compact />
+            <div className="mt-2 flex justify-end"><button disabled={busy || !message.trim()} onClick={() => continueWith({ message }, files)} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}><Send className="h-4 w-4" />Send</button></div>
           </div>
         </section> : <p className="mt-auto pt-10 text-sm text-slate-500">This goal no longer accepts corrections.</p>}
       </aside>

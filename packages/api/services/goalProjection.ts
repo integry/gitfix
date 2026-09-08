@@ -7,6 +7,7 @@ import {
   type GoalLaunchStrategy,
 } from '@propr/core';
 import { projectTaskLiveDetails } from '../routes/liveDetailsRoutes.js';
+import { parseGoalAttachments, publicGoalAttachments } from './goalAttachmentService.js';
 
 export interface GoalProjectionRow {
   goal_id: string;
@@ -17,6 +18,7 @@ export interface GoalProjectionRow {
   objective: string;
   launch_strategy: GoalLaunchStrategy;
   initial_prompt: string;
+  attachments: string | unknown[] | null;
   base_branch: string | null;
   branch_name: string | null;
   worktree_path: string | null;
@@ -155,6 +157,7 @@ export async function serializeGoal(
     objective: row.objective,
     launchStrategy: row.launch_strategy,
     initialPrompt: row.initial_prompt,
+    attachments: publicGoalAttachments(parseGoalAttachments(row.attachments)),
     baseBranch: row.base_branch,
     branchName: row.branch_name,
     worktreePath: row.worktree_path,

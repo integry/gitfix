@@ -23,6 +23,15 @@ export interface GoalCapability {
 
 export type GoalLaunchStrategy = 'direct' | 'orchestrate';
 
+export interface GoalAttachment {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  tokenEstimate: number;
+  type: 'image' | 'text';
+}
+
 export interface Goal {
   id: string;
   owner: string;
@@ -31,6 +40,7 @@ export interface Goal {
   objective: string;
   launchStrategy: GoalLaunchStrategy;
   initialPrompt: string;
+  attachments: GoalAttachment[];
   baseBranch: string | null;
   branchName: string | null;
   worktreePath: string | null;
@@ -91,7 +101,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const requestInit = {
     credentials: 'include' as const,
     ...init,
-    headers: init?.body ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
+    headers: init?.body && !(init.body instanceof FormData)
+      ? { 'Content-Type': 'application/json', ...init.headers }
+      : init?.headers,
   };
   const retryable = new Headers(requestInit.headers).has('Idempotency-Key');
   let lastError: unknown;
@@ -113,6 +125,13 @@ const idempotentMutation = (method: string, body?: unknown): RequestInit => ({
   headers: { 'Idempotency-Key': crypto.randomUUID() },
 });
 
+const multipartMutation = (payload: unknown, files: readonly File[]): RequestInit => {
+  const body = new FormData();
+  body.append('payload', JSON.stringify(payload));
+  files.forEach(file => body.append('files', file));
+  return { method: 'POST', body, headers: { 'Idempotency-Key': crypto.randomUUID() } };
+};
+
 export const getGoalCapabilities = async (recheck = false) =>
   request<{ agents: GoalCapability[] }>(`/api/goals/capabilities${recheck ? '?recheck=true' : ''}`);
 export const listGoals = async () => request<{ goals: Goal[] }>('/api/goals');
@@ -123,10 +142,11 @@ export const deleteGoal = async (id: string): Promise<void> => {
   });
   await handleApiResponse(response);
 };
-export const createGoal = async (body: { repository: string; objective: string; launchStrategy: GoalLaunchStrategy; agentId: string; model: string; baseBranch?: string; maxParallelTasks?: number; ultrafix?: boolean; checkpointIntervalMinutes?: number }) =>
-  request<{ goal: Goal }>('/api/goals', idempotentMutation('POST', body));
+export const createGoal = async (body: { repository: string; objective: string; launchStrategy: GoalLaunchStrategy; agentId: string; model: string; baseBranch?: string; maxParallelTasks?: number; ultrafix?: boolean; checkpointIntervalMinutes?: number }, files: readonly File[] = []) =>
+  request<{ goal: Goal }>('/api/goals', files.length > 0 ? multipartMutation(body, files) : idempotentMutation('POST', body));
 export const pauseGoal = async (id: string) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/pause`, idempotentMutation('POST'));
 export const resumeGoal = async (id: string) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/resume`, idempotentMutation('POST'));
 export const cancelGoal = async (id: string) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/cancel`, idempotentMutation('POST'));
 export const requestGoalModel = async (id: string, model: string) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/model`, idempotentMutation('PATCH', { model }));
-export const sendGoalInput = async (id: string, body: { message?: string; canned?: 'done' | 'left' }) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/input`, idempotentMutation('POST', body));
+export const sendGoalInput = async (id: string, body: { message?: string; canned?: 'done' | 'left' }, files: readonly File[] = []) => request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}/input`, files.length > 0 ? multipartMutation(body, files) : idempotentMutation('POST', body));
+export const getGoalAttachmentUrl = (goalId: string, attachmentId: string) => `${API_BASE_URL}/api/goals/${encodeURIComponent(goalId)}/attachments/${encodeURIComponent(attachmentId)}`;

@@ -8,6 +8,7 @@ import { up as hardenGoals } from '../../core/src/db/migrations/20260902010000_h
 import { up as addGoalCheckpoints } from '../../core/src/db/migrations/20260903000000_add_direct_goal_checkpoints.js';
 import { up as addGoalCheckpointDeclarations } from '../../core/src/db/migrations/20260906000000_add_goal_checkpoint_declarations.js';
 import { up as addGoalTitles } from '../../core/src/db/migrations/20260907000000_add_goal_titles.js';
+import { up as addGoalAttachments } from '../../core/src/db/migrations/20260908000000_add_goal_attachments.js';
 import { createGoalRoutes } from '../routes/goalRoutes.js';
 
 function request(userId: string, params: Record<string, string> = {}, body: unknown = {}): Request {
@@ -33,12 +34,14 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
     const stopped: string[] = [];
     const stopAttempts = new Map<string, number>();
     const capabilityRequests: Array<{ force?: boolean } | undefined> = [];
+    let attachmentProcessCount = 0;
     try {
         await createGoals(database);
         await hardenGoals(database);
         await addGoalCheckpoints(database);
         await addGoalCheckpointDeclarations(database);
         await addGoalTitles(database);
+        await addGoalAttachments(database);
         await database.schema.createTable('task_history', table => {
             table.increments('id');
             table.string('task_id');
@@ -133,6 +136,20 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
                 capabilityRequests.push(options);
                 return [];
             },
+            uploadIdentity: async files => files.map(file => ({ name: file.originalname, size: file.size })),
+            processAttachments: async (files, goalId) => {
+                attachmentProcessCount += files.length;
+                return files.map((file, index) => ({
+                    id: `attachment-${index + 1}`,
+                    originalName: file.originalname,
+                    storedPath: `/tmp/git-processor/goal-attachments/${goalId}/attachment-${index + 1}.webp`,
+                    mimeType: file.mimetype,
+                    size: file.size,
+                    tokenEstimate: 12,
+                    type: 'image' as const,
+                }));
+            },
+            removeTemporaryUploads: async () => undefined,
         });
 
         const listed = response();
@@ -269,6 +286,20 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         assert.equal(updated.current_task_id, 'goal-task-1');
         assert.equal(updated.worktree_path, '/worktrees/goal-1');
         assert.equal(updated.desired_state, 'running');
+
+        const attachmentInput = request('owner-2', { goalId: 'goal-8' }, { message: 'Match the attached reference.' });
+        attachmentInput.get = () => 'owner-attachment-input-1';
+        attachmentInput.files = [{ originalname: 'reference.png', mimetype: 'image/png', size: 128 }] as Express.Multer.File[];
+        const attachmentResponse = response();
+        await routes.input(attachmentInput, attachmentResponse.res);
+        assert.equal(attachmentResponse.state.status, 200);
+        const storedAttachmentInput = await database('goal_inputs').where({ goal_id: 'goal-8' }).first();
+        assert.match(storedAttachmentInput.message, /Match the attached reference/);
+        assert.match(storedAttachmentInput.message, /reference\.png/);
+        assert.match(storedAttachmentInput.message, /\/tmp\/git-processor\/goal-attachments\/goal-8/);
+        assert.equal(JSON.parse((await database('goals').where({ goal_id: 'goal-8' }).first()).attachments).length, 1);
+        await routes.input(attachmentInput, response().res);
+        assert.equal(attachmentProcessCount, 1);
 
         const runningClaudeInput = response();
         const runningInputRequest = request('owner-2', { goalId: 'goal-3' }, { message: 'Apply this at a safe boundary.' });
