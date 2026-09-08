@@ -257,6 +257,29 @@ describe('production desktop session security', () => {
         },
       });
       assert.deepEqual(await intercepted(
+        'https://avatars.githubusercontent.com/u/583231?v=4',
+        {
+          Accept: 'image/avif,image/webp',
+          Authorization: 'Bearer renderer-controlled',
+          Cookie: 'instance=must-not-cross',
+        },
+        mainRenderer.id,
+        'image',
+      ), {
+        requestHeaders: { Accept: 'image/avif,image/webp' },
+      });
+      for (const [url, resourceType] of [
+        ['https://avatars.githubusercontent.com/u/583231?v=4', 'xhr'],
+        ['https://evil.example.test/avatar.png', 'image'],
+        ['https://avatars.githubusercontent.com.evil.example.test/avatar.png', 'image'],
+        ['http://avatars.githubusercontent.com/u/583231?v=4', 'image'],
+      ] as const) {
+        assert.deepEqual(await intercepted(url, {
+          Authorization: 'Bearer renderer-controlled',
+          Cookie: 'instance=must-not-cross',
+        }, mainRenderer.id, resourceType), { cancel: true }, `${resourceType} ${url}`);
+      }
+      assert.deepEqual(await intercepted(
         `${ACTIVE_ORIGIN}/api/auth/user`, scopeHeaders, mainRenderer.id, 'xhr', mainFrame, true,
       ), { cancel: true });
       assert.equal(ownershipEvidence.at(-1)?.frameOmitted, true);
