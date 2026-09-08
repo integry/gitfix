@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useEffectEvent, useState } from 'react';
 import { navigateToUiPath } from '../config/runtimeMode';
 import type {
   DesktopNativeCommand,
@@ -94,19 +94,24 @@ export const useDesktopNativeCommands = ({
     setPendingCommand(null);
   }, [app, instanceChooserBlocked, onChooseInstances, onManageInstances, pendingCommand, state]);
 
-  useEffect(() => {
-    const handleKeyboard = (event: KeyboardEvent) => {
-      if (state.phase !== 'connected') return;
-      if (!app.onNativeCommand && (event.metaKey || event.ctrlKey)
+  // Effect Events expose only the latest committed render, and update before
+  // layout effects can dispatch a shortcut for that commit.
+  const handleKeyboard = useEffectEvent((event: KeyboardEvent) => {
+    if (state.phase !== 'connected') return;
+    if (!app.onNativeCommand && (event.metaKey || event.ctrlKey)
         && event.shiftKey && event.key.toLowerCase() === 'i') {
-        event.preventDefault();
-        if (confirmPlanStudioDiscard()) onManageInstances();
-      } else if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        void onReconnect(state.profile);
-      }
-    };
+      event.preventDefault();
+      if (confirmPlanStudioDiscard()) onManageInstances();
+    } else if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r') {
+      event.preventDefault();
+      void onReconnect(state.profile);
+    }
+  });
+
+  useEffect(() => {
     document.addEventListener('keydown', handleKeyboard);
     return () => document.removeEventListener('keydown', handleKeyboard);
-  }, [app.onNativeCommand, onManageInstances, onReconnect, state]);
+    // Effect Events must not be dependencies of the effect that invokes them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 };
