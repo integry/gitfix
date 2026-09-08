@@ -54,6 +54,18 @@ const assertTransparentCorners = async (bytes, size) => {
   ], [0, 0, 0, 0]);
 };
 
+const readPixel = async (bytes, x, y, background) => {
+  const pipeline = sharp(bytes);
+  if (background) pipeline.flatten({ background });
+  const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
+  const offset = (y * info.width + x) * info.channels;
+  return [...data.subarray(offset, offset + info.channels)];
+};
+
+const compositeStraightAlpha = (rgba, background) => rgba.slice(0, 3).map((channel, index) => Math.floor(
+  (channel * rgba[3] + background[index] * (255 - rgba[3])) / 255,
+));
+
 const buildAlternateValidIcns = async () => {
   const entries = await Promise.all([...icnsSizes].map(async ([type, size]) => {
     const png = await sharp({
@@ -129,6 +141,48 @@ describe('desktop native icon assets', () => {
     assert.equal(png.equals(generated.png), true);
     assert.equal(icns.equals(generated.icns), true);
     assert.equal(tray.equals(generated.tray), true);
+  });
+
+  it('generates identical bytes regardless of the caller SIMD setting', async () => {
+    const originalSimd = sharp.simd();
+    try {
+      sharp.simd(true);
+      const enabledCallerSetting = sharp.simd();
+      const generatedWithSimdEnabled = await buildDesktopIcons();
+      assert.equal(sharp.simd(), enabledCallerSetting);
+
+      sharp.simd(false);
+      const generatedWithSimdDisabled = await buildDesktopIcons();
+      assert.equal(sharp.simd(), false);
+
+      assert.equal(generatedWithSimdEnabled.png.equals(generatedWithSimdDisabled.png), true);
+      assert.equal(generatedWithSimdEnabled.icns.equals(generatedWithSimdDisabled.icns), true);
+      assert.equal(generatedWithSimdEnabled.tray.equals(generatedWithSimdDisabled.tray), true);
+    } finally {
+      sharp.simd(originalSimd);
+    }
+  });
+
+  it('preserves canonical straight-alpha edge color on light and dark previews', async () => {
+    const png = await readFile(new URL(DESKTOP_ICON_FILE, iconDirectory));
+    // Representative antialiased mark pixel. The old premultiplied:true path
+    // incorrectly expanded this straight-alpha RGB from [0, 102, 78] to
+    // [0, 255, 205] while leaving alpha at 97.
+    const sample = { x: 236, y: 187, rgba: [0, 102, 78, 97] };
+    assert.deepEqual(await readPixel(png, sample.x, sample.y), sample.rgba);
+
+    for (const { background, expected } of [
+      { background: [244, 244, 245], expected: [151, 189, 181] },
+      { background: [31, 35, 42], expected: [19, 60, 55] },
+    ]) {
+      const previewPixel = await readPixel(png, sample.x, sample.y, {
+        r: background[0],
+        g: background[1],
+        b: background[2],
+      });
+      assert.deepEqual(previewPixel, compositeStraightAlpha(sample.rgba, background));
+      assert.deepEqual(previewPixel, expected);
+    }
   });
 
   it('verifies packaged Linux window, launcher, and tray icon surfaces', async () => {

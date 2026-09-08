@@ -82,7 +82,8 @@ const renderTransparentIcon = async (artwork, size, artworkScale) => {
       input: resized,
       left: Math.floor((size - metadata.width) / 2),
       top: Math.floor((size - metadata.height) / 2),
-      premultiplied: true,
+      // PNG stores straight-alpha RGB. Sharp's default false value preserves
+      // those channels; premultiplied: true would unpremultiply them again.
     }])
     .png(pngOptions)
     .toBuffer();
@@ -95,7 +96,7 @@ const icnsEntry = (type, png) => {
   return Buffer.concat([header, png]);
 };
 
-export const buildDesktopIcons = async () => {
+const buildDesktopIconsWithScalarResize = async () => {
   const source = await readFile(sourcePath);
   if (sha256(source) !== CANONICAL_ARTWORK_SHA256) {
     throw new Error('Canonical transparent ProPR artwork checksum changed');
@@ -118,6 +119,20 @@ export const buildDesktopIcons = async () => {
     verifyTrayPngBytes(tray, 'generated desktop tray icon'),
   ]);
   return { png, icns, tray };
+};
+
+export const buildDesktopIcons = async () => {
+  // libvips' SIMD resize paths use different vector instructions on Intel
+  // (SSE) and ARM (NEON), which can round Lanczos samples differently. Keep
+  // generation on the scalar path so every supported architecture derives the
+  // same bytes, then restore the caller's process-wide Sharp setting.
+  const simdEnabled = sharp.simd();
+  sharp.simd(false);
+  try {
+    return await buildDesktopIconsWithScalarResize();
+  } finally {
+    sharp.simd(simdEnabled);
+  }
 };
 
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

@@ -9,9 +9,9 @@ export const TRAY_ICON_FILE = 'propr-tray.png';
 export const DESKTOP_ICON_SIZE = 512;
 export const TRAY_ICON_SIZE = 32;
 export const CANONICAL_ARTWORK_SHA256 = 'be93a4380feff56fb89f3ee911413fa21cfa6f2fbbbaa2c44c1293f799edc829';
-export const DESKTOP_ICON_SHA256 = '50b5149895b24afacb826cc122e6cb1fce85b326f1949f4b0fedb2361ff72e9b';
-export const MACOS_ICON_SHA256 = '3a4cc343bbaefc4722da18cedf1c84589dda1ca8830174f70bba50161c8dc2f4';
-export const TRAY_ICON_SHA256 = '22a38b30383f2c86df21449b09c247372417d849531cd08c0cd1583aabe496ee';
+export const DESKTOP_ICON_SHA256 = '2fa41fd8ec51bc665d5251aa0953f75f6917555f46997fb24700a2d27dc7dc19';
+export const MACOS_ICON_SHA256 = '32de388c73e8d1d90a54de8b42c8a9b22c0167e5c9a0099457024c71f0eb4a60';
+export const TRAY_ICON_SHA256 = '404cf1e5ff527710cfad84b0a38efc873f874a2f27f72f4a0dcb05f3698c7353';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const ICNS_SIZES = Object.freeze(new Map([
