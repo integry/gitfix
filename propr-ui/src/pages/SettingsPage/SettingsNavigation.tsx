@@ -69,7 +69,7 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex-shrink-0 bg-white pt-3">
-        <div className="relative mx-4 max-w-xl sm:mx-6">
+        <div className="relative mx-4 max-w-xl sm:ml-auto sm:mr-6">
           <label htmlFor="settings-search" className="sr-only">Search settings</label>
           <Search
             aria-hidden="true"
@@ -95,36 +95,38 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
           )}
         </div>
 
-        <div className="mt-3 overflow-x-auto border-b border-slate-200 px-4 sm:px-6">
-          <div className="flex min-w-max gap-6" role="tablist" aria-label="Settings categories">
-            {SETTINGS_CATEGORIES.map(category => {
-              const sectionCount = sections.filter(section => section.category === category.id).length;
-              const selected = activeCategory === category.id;
-              return (
-                <button
-                  key={category.id}
-                  id={`settings-tab-${category.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  aria-controls={`settings-panel-${category.id}`}
-                  onClick={() => {
-                    setActiveCategory(category.id);
-                    setQuery('');
-                  }}
-                  className={`inline-flex items-center border-b-2 pb-2 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 ${
-                    selected
-                      ? 'border-teal-600 font-semibold text-teal-700'
-                      : 'border-transparent font-medium text-slate-500 hover:text-slate-900'
-                  }`}
-                >
-                  {category.label}
-                  <span className="ml-2 rounded bg-slate-100 px-1.5 text-[10px] text-slate-500">
-                    {sectionCount}
-                  </span>
-                </button>
-              );
-            })}
+        <div className="mt-3 w-full border-b border-slate-200">
+          <div className="overflow-x-auto px-4 sm:px-6">
+            <div className="flex min-w-max gap-6" role="tablist" aria-label="Settings categories">
+              {SETTINGS_CATEGORIES.map(category => {
+                const sectionCount = sections.filter(section => section.category === category.id).length;
+                const selected = activeCategory === category.id;
+                return (
+                  <button
+                    key={category.id}
+                    id={`settings-tab-${category.id}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    aria-controls={`settings-panel-${category.id}`}
+                    onClick={() => {
+                      setActiveCategory(category.id);
+                      setQuery('');
+                    }}
+                    className={`inline-flex items-center border-b-2 pb-2 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 ${
+                      selected
+                        ? 'border-teal-600 font-semibold text-teal-700'
+                        : 'border-transparent font-medium text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    {category.label}
+                    <span className="ml-2 rounded bg-slate-100 px-1.5 text-[10px] text-slate-500">
+                      {sectionCount}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -176,7 +178,7 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
                       key={section.id}
                       hidden={normalizedQuery ? !matchedSectionIds.has(section.id) : false}
                       data-settings-section={section.id}
-                      className="[&_input]:max-w-md [&_select]:max-w-md [&_textarea]:max-w-md"
+                      className="[&_input]:max-w-md [&_select]:max-w-md [&_select]:border [&_select]:border-slate-300 [&_select]:bg-white [&_select]:shadow-sm [&_textarea]:max-w-md"
                     >
                       <fieldset disabled={isReadOnly} className={isReadOnly ? 'opacity-70' : ''}>
                         {section.content}

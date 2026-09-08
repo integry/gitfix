@@ -41,7 +41,15 @@ describe('SettingsNavigation', () => {
     expect(modelsTab).toHaveClass('border-teal-600', 'text-teal-700');
     expect(modelsTab).not.toHaveClass('bg-gray-900', 'rounded-md');
     expect(modelsTab.querySelector('span')).toHaveClass('bg-slate-100', 'text-slate-500');
-    expect(container.querySelector('[data-settings-section="model-selection"]')).toHaveClass('[&_select]:max-w-md');
+    expect(modelsTab.closest('.w-full')).toHaveClass('border-b', 'border-slate-200');
+    expect(screen.getByRole('searchbox', { name: 'Search settings' }).parentElement).toHaveClass('sm:ml-auto', 'sm:mr-6');
+    expect(container.querySelector('[data-settings-section="model-selection"]')).toHaveClass(
+      '[&_select]:max-w-md',
+      '[&_select]:border',
+      '[&_select]:border-slate-300',
+      '[&_select]:bg-white',
+      '[&_select]:shadow-sm'
+    );
     expect(container.querySelector('[data-settings-section="model-selection"]')).not.toHaveClass('rounded-lg', 'border', 'shadow-sm');
     expect(screen.getByText('Model controls')).toBeVisible();
     expect(screen.getByText('Merge controls')).not.toBeVisible();

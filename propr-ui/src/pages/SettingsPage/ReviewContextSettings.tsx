@@ -17,12 +17,15 @@ interface ReviewContextSettingsProps {
 const Row = ({ label, htmlFor, helperText, children }: {
   label: string;
   htmlFor: string;
-  helperText: string;
+  helperText?: string;
   children: React.ReactNode;
 }) => (
   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-2 md:gap-4 items-start">
     <label className="block text-xs font-medium text-gray-600 md:pt-1.5" htmlFor={htmlFor}>{label}</label>
-    <div>{children}<p className="mt-1 text-[11px] text-slate-500">{helperText}</p></div>
+    <div>
+      {children}
+      {helperText && <p className="mt-1 text-[11px] text-slate-500">{helperText}</p>}
+    </div>
   </div>
 );
 
@@ -35,18 +38,24 @@ const ReviewContextSettings: React.FC<ReviewContextSettingsProps> = ({
       <Row
         label="Related Code Context"
         htmlFor="pr_review_context_enabled"
-        helperText="Lets a read-only scout locate relevant unchanged callers, consumers, contracts, configuration, and tests before the review. Scout failure never blocks the review."
       >
-        <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+        <div className="flex items-start gap-2">
           <input
             id="pr_review_context_enabled"
             type="checkbox"
             checked={settings.pr_review_context_enabled}
             onChange={(event) => onEnabledChange(event.target.checked)}
-            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
           />
-          Gather related unchanged code
-        </label>
+          <div className="min-w-0">
+            <label htmlFor="pr_review_context_enabled" className="block text-sm text-gray-700">
+              Gather related unchanged code
+            </label>
+            <p className="mt-1 text-[11px] text-slate-500">
+              Lets a read-only scout locate relevant unchanged callers, consumers, contracts, configuration, and tests before the review. Scout failure never blocks the review.
+            </p>
+          </div>
+        </div>
       </Row>
 
       <Row
