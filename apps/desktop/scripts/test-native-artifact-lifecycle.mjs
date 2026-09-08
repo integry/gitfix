@@ -38,6 +38,7 @@ import {
   verifyLinuxLauncherIcon,
   verifyMacApplicationIcon,
   verifyPackagedLinuxIcon,
+  verifyPackagedTrayIcon,
 } from './desktop-icon-assets.mjs';
 
 const EXECUTABLE = 'propr-desktop';
@@ -820,6 +821,7 @@ const validateIdentity = async ({ target, kind, application }) => {
   }
   if (target.platform === 'linux') {
     await verifyPackagedLinuxIcon(application.applicationRoot);
+    await verifyPackagedTrayIcon(join(application.applicationRoot, 'resources'));
     if (kind !== 'zip') {
       await verifyLinuxLauncherIcon({ desktopFile: application.desktopFile, iconFile: application.iconFile });
     }
@@ -834,6 +836,7 @@ const validateIdentity = async ({ target, kind, application }) => {
     throw new Error('macOS application identity, version, or protocol declaration is invalid');
   }
   await verifyMacApplicationIcon({ applicationRoot: application.applicationRoot, readPlist });
+  await verifyPackagedTrayIcon(join(application.applicationRoot, 'Contents', 'Resources'));
 };
 
 const readFixedEvidenceEvents = async path => {

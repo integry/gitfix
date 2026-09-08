@@ -4,7 +4,9 @@ import type { NativeImage } from 'electron';
 import {
   DESKTOP_ICON_FILE,
   loadDesktopWindowIcon,
+  resolveDesktopTrayIconPath,
   resolveLinuxDesktopIconPath,
+  TRAY_ICON_FILE,
 } from './desktop-icon';
 
 describe('native desktop window icon', () => {
@@ -22,6 +24,19 @@ describe('native desktop window icon', () => {
       mainBundleDirectory: '/checkout/apps/desktop/.vite/build',
       resourcesPath: '/electron/resources',
     }), `/checkout/apps/desktop/assets/icons/${DESKTOP_ICON_FILE}`);
+  });
+
+  it('resolves the generated transparent tray asset for packaged and development execution', () => {
+    assert.equal(resolveDesktopTrayIconPath({
+      isPackaged: true,
+      mainBundleDirectory: '/ignored',
+      resourcesPath: '/opt/propr/resources',
+    }), `/opt/propr/resources/${TRAY_ICON_FILE}`);
+    assert.equal(resolveDesktopTrayIconPath({
+      isPackaged: false,
+      mainBundleDirectory: '/checkout/apps/desktop/.vite/build',
+      resourcesPath: '/ignored',
+    }), `/checkout/apps/desktop/assets/icons/${TRAY_ICON_FILE}`);
   });
 
   it('loads and validates the exact Linux NativeImage used by BrowserWindow', () => {

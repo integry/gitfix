@@ -5,20 +5,30 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
 import {
-  CANONICAL_ICON_SHA256,
-  CANONICAL_MACOS_ICON_SHA256,
+  CANONICAL_ARTWORK_SHA256,
   DESKTOP_ICON_FILE,
+  DESKTOP_ICON_SHA256,
   inspectIcnsBytes,
   MACOS_ICON_FILE,
+  MACOS_ICON_SHA256,
+  readIcnsPngEntries,
   sha256,
+  TRAY_ICON_FILE,
+  TRAY_ICON_SHA256,
   verifyDesktopPngBytes,
   verifyLinuxLauncherIcon,
   verifyMacApplicationIcon,
+  verifyMacIconBytes,
   verifyPackagedLinuxIcon,
+  verifyPackagedTrayIcon,
+  verifyTrayPngBytes,
 } from './desktop-icon-assets.mjs';
 import { buildDesktopIcons } from './generate-desktop-icons.mjs';
 
 const iconDirectory = new URL('../assets/icons/', import.meta.url);
+const canonicalArtwork = new URL('../../../media/logo-only-large.png', import.meta.url);
+const hostedPwaArtwork = new URL('../../../propr-ui/public/icons/pwa-512x512.png', import.meta.url);
+const hostedPwaSha256 = 'e66a28f489d5367e08b1b49b1b98b10dd0a29a4e424e38c0684be9513baa7726';
 const icnsSizes = Object.freeze(new Map([
   ['icp4', 16],
   ['icp5', 32],
@@ -28,6 +38,21 @@ const icnsSizes = Object.freeze(new Map([
   ['ic09', 512],
   ['ic10', 1024],
 ]));
+
+const assertTransparentCorners = async (bytes, size) => {
+  const metadata = await sharp(bytes).metadata();
+  assert.equal(metadata.width, size);
+  assert.equal(metadata.height, size);
+  assert.equal(metadata.channels, 4);
+  assert.equal(metadata.hasAlpha, true);
+  const { data, info } = await sharp(bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  assert.deepEqual([
+    data[3],
+    data[(info.width - 1) * 4 + 3],
+    data[((info.height - 1) * info.width) * 4 + 3],
+    data[(info.width * info.height - 1) * 4 + 3],
+  ], [0, 0, 0, 0]);
+};
 
 const buildAlternateValidIcns = async () => {
   const entries = await Promise.all([...icnsSizes].map(async ([type, size]) => {
@@ -51,46 +76,62 @@ const buildAlternateValidIcns = async () => {
 };
 
 describe('desktop native icon assets', () => {
-  it('wires the native assets into Forge, runtime BrowserWindow creation, and CI package checks', async () => {
-    const [forge, main, workflow] = await Promise.all([
+  it('wires transparent native and tray assets into Forge, runtime creation, and package checks', async () => {
+    const [forge, main, workflow, smoke] = await Promise.all([
       readFile(new URL('../forge.config.ts', import.meta.url), 'utf8'),
       readFile(new URL('../src/main.ts', import.meta.url), 'utf8'),
       readFile(new URL('../../../.github/workflows/desktop-release-guard.yml', import.meta.url), 'utf8'),
+      readFile(new URL('./smoke-packaged.mjs', import.meta.url), 'utf8'),
     ]);
     assert.match(forge, /process\.platform === 'darwin' \? \{ icon: desktopMacIcon \} : \{\}/);
     assert.equal(forge.match(/icon: desktopLinuxIcon/g)?.length, 2);
     assert.match(
       forge,
-      /extraResource: \[\s*desktopTrayArtwork,\s*\.\.\.\(process\.platform === 'linux' \? \[\s*desktopLinuxIcon,/,
+      /extraResource: \[\s*desktopTrayIcon,\s*\.\.\.\(process\.platform === 'linux' \? \[\s*desktopLinuxIcon,/,
     );
+    assert.doesNotMatch(forge, /pwa-512x512|logo-only-small/);
     assert.match(main, /loadDesktopWindowIcon/);
     assert.match(main, /desktopWindowIcon\?\.image/);
+    assert.match(main, /resolveDesktopTrayIconPath/);
+    assert.match(smoke, /verifyPackagedTrayIcon/);
     assert.equal(workflow.match(/icons:verify-packaged/g)?.length, 2);
   });
 
-  it('are reproducibly derived from the pinned canonical ProPR PWA mark', async () => {
+  it('reproducibly derives transparent assets from the pinned canonical logo-only artwork', async () => {
     const generated = await buildDesktopIcons();
-    const [png, icns] = await Promise.all([
+    const [source, pwa, png, icns, tray] = await Promise.all([
+      readFile(canonicalArtwork),
+      readFile(hostedPwaArtwork),
       readFile(new URL(DESKTOP_ICON_FILE, iconDirectory)),
       readFile(new URL(MACOS_ICON_FILE, iconDirectory)),
+      readFile(new URL(TRAY_ICON_FILE, iconDirectory)),
     ]);
-    assert.equal(sha256(png), CANONICAL_ICON_SHA256);
-    assert.equal(sha256(icns), CANONICAL_MACOS_ICON_SHA256);
-    assert.deepEqual(verifyDesktopPngBytes(png), { width: 512, height: 512 });
-    assert.deepEqual(inspectIcnsBytes(icns), {
-      icp4: 16,
-      icp5: 32,
-      icp6: 64,
-      ic07: 128,
-      ic08: 256,
-      ic09: 512,
-      ic10: 1024,
-    });
+    assert.equal(sha256(source), CANONICAL_ARTWORK_SHA256);
+    assert.equal(sha256(pwa), hostedPwaSha256);
+    assert.equal((await sharp(source).metadata()).hasAlpha, true);
+    assert.equal((await sharp(pwa).metadata()).hasAlpha, false);
+    assert.equal(sha256(png), DESKTOP_ICON_SHA256);
+    assert.equal(sha256(icns), MACOS_ICON_SHA256);
+    assert.equal(sha256(tray), TRAY_ICON_SHA256);
+    assert.equal(png.equals(pwa), false);
+
+    const desktopInspection = await verifyDesktopPngBytes(png);
+    assert.deepEqual(desktopInspection.cornerAlpha, [0, 0, 0, 0]);
+    assert.deepEqual(desktopInspection.padding, { left: 114, top: 64, right: 114, bottom: 64 });
+    const trayInspection = await verifyTrayPngBytes(tray);
+    assert.deepEqual(trayInspection.cornerAlpha, [0, 0, 0, 0]);
+    assert.deepEqual(trayInspection.padding, { left: 5, top: 2, right: 6, bottom: 2 });
+    assert.deepEqual(await verifyMacIconBytes(icns), Object.fromEntries(icnsSizes));
+    assert.deepEqual(inspectIcnsBytes(icns), Object.fromEntries(icnsSizes));
+    for (const [type, payload] of readIcnsPngEntries(icns)) {
+      await assertTransparentCorners(payload, icnsSizes.get(type));
+    }
     assert.equal(png.equals(generated.png), true);
     assert.equal(icns.equals(generated.icns), true);
+    assert.equal(tray.equals(generated.tray), true);
   });
 
-  it('verifies packaged Linux runtime and launcher icon surfaces', async () => {
+  it('verifies packaged Linux window, launcher, and tray icon surfaces', async () => {
     const root = await mkdtemp(join(tmpdir(), 'propr-icon-linux-'));
     try {
       const applicationRoot = join(root, 'usr', 'lib', 'propr-desktop');
@@ -98,10 +139,14 @@ describe('desktop native icon assets', () => {
       const applications = join(root, 'usr', 'share', 'applications');
       const pixmaps = join(root, 'usr', 'share', 'pixmaps');
       await Promise.all([mkdir(resources, { recursive: true }), mkdir(applications, { recursive: true }), mkdir(pixmaps, { recursive: true })]);
-      const canonical = await readFile(new URL(DESKTOP_ICON_FILE, iconDirectory));
+      const [desktopIcon, trayIcon] = await Promise.all([
+        readFile(new URL(DESKTOP_ICON_FILE, iconDirectory)),
+        readFile(new URL(TRAY_ICON_FILE, iconDirectory)),
+      ]);
       await Promise.all([
-        writeFile(join(resources, DESKTOP_ICON_FILE), canonical),
-        writeFile(join(pixmaps, DESKTOP_ICON_FILE), canonical),
+        writeFile(join(resources, DESKTOP_ICON_FILE), desktopIcon),
+        writeFile(join(resources, TRAY_ICON_FILE), trayIcon),
+        writeFile(join(pixmaps, DESKTOP_ICON_FILE), desktopIcon),
         writeFile(join(applications, 'propr-desktop.desktop'), [
           '[Desktop Entry]',
           'Name=ProPR Desktop',
@@ -111,6 +156,7 @@ describe('desktop native icon assets', () => {
         ].join('\n')),
       ]);
       assert.equal(await verifyPackagedLinuxIcon(applicationRoot), join(resources, DESKTOP_ICON_FILE));
+      assert.equal(await verifyPackagedTrayIcon(resources), join(resources, TRAY_ICON_FILE));
       await assert.doesNotReject(verifyLinuxLauncherIcon({
         desktopFile: join(applications, 'propr-desktop.desktop'),
         iconFile: join(pixmaps, DESKTOP_ICON_FILE),
@@ -120,13 +166,16 @@ describe('desktop native icon assets', () => {
     }
   });
 
-  it('follows Electron Packager macOS metadata and requires canonical ICNS bytes', async () => {
+  it('follows Electron Packager macOS metadata and requires transparent canonical ICNS bytes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'propr-icon-macos-'));
     try {
       const resources = join(root, 'ProPR.app', 'Contents', 'Resources');
       const emittedIconFile = 'electron.icns';
       await mkdir(resources, { recursive: true });
-      await writeFile(join(resources, emittedIconFile), await readFile(new URL(MACOS_ICON_FILE, iconDirectory)));
+      await Promise.all([
+        writeFile(join(resources, emittedIconFile), await readFile(new URL(MACOS_ICON_FILE, iconDirectory))),
+        writeFile(join(resources, TRAY_ICON_FILE), await readFile(new URL(TRAY_ICON_FILE, iconDirectory))),
+      ]);
       const path = await verifyMacApplicationIcon({
         applicationRoot: join(root, 'ProPR.app'),
         readPlist: async key => {
@@ -135,6 +184,7 @@ describe('desktop native icon assets', () => {
         },
       });
       assert.equal(path, join(resources, emittedIconFile));
+      assert.equal(await verifyPackagedTrayIcon(resources), join(resources, TRAY_ICON_FILE));
 
       const alternate = await buildAlternateValidIcns();
       assert.deepEqual(inspectIcnsBytes(alternate), Object.fromEntries(icnsSizes));
@@ -142,7 +192,7 @@ describe('desktop native icon assets', () => {
       await assert.rejects(verifyMacApplicationIcon({
         applicationRoot: join(root, 'ProPR.app'),
         readPlist: async () => emittedIconFile,
-      }), /does not match the canonical ProPR artwork/);
+      }), /does not match the generated transparent ProPR artwork/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
