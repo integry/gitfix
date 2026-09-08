@@ -523,7 +523,7 @@ test('queue authorization ignores identical and reassigned username snapshots', 
   assert.deepEqual(snapshot.waiting.map(queueJob => queueJob.id), ['owned-by-id']);
 });
 
-test('production loaders authorize queue jobs, constrain plans, and page notifications', async () => {
+test('production loaders authorize queue jobs, constrain plans, and cap notification pages', async () => {
   const queryTrace: Array<[string, unknown]> = [];
   const planRows = [
     {
@@ -598,7 +598,9 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
       return {
         notifications: [],
         unreadCount: 0,
-        nextCursor: options.cursor === null ? 'next-page' : null,
+        nextCursor: options.cursor === null
+          ? 'page-2'
+          : options.cursor === 'page-2' ? 'page-3' : 'page-beyond-limit',
       };
     },
   };
@@ -651,6 +653,7 @@ test('production loaders authorize queue jobs, constrain plans, and page notific
   ]);
   assert.deepEqual(notificationCalls, [
     { userId: 'owner-user', cursor: null, limit: 100 },
-    { userId: 'owner-user', cursor: 'next-page', limit: 100 },
+    { userId: 'owner-user', cursor: 'page-2', limit: 100 },
+    { userId: 'owner-user', cursor: 'page-3', limit: 100 },
   ]);
 });
