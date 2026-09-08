@@ -1,19 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { delimiter, dirname, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { describe, it } from 'node:test';
+import { prepareNativeElectronTest } from './electron-native-test-setup.mjs';
 
-const require = createRequire(import.meta.url);
-const electronExecutable = require('electron');
 const fixture = resolve(dirname(fileURLToPath(import.meta.url)), 'electron-menu-popup-probe.cjs');
-
-const executableOnPath = name => (process.env.PATH ?? '')
-  .split(delimiter)
-  .map(directory => resolve(directory, name))
-  .find(existsSync);
 
 const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   const child = spawn(command, args, {
@@ -50,19 +42,19 @@ describe('Electron native Menu popup semantics', () => {
   it('opens and closes the real native menu also installed on a Linux Tray', {
     timeout: 20_000,
   }, async context => {
-    if (process.platform !== 'linux') {
-      context.skip('The tray workaround is Linux-specific');
-      return;
-    }
-    const xvfbRun = !process.env.DISPLAY ? executableOnPath('xvfb-run') : undefined;
-    if (!process.env.DISPLAY && !xvfbRun) {
-      context.skip('Electron needs a real DISPLAY or xvfb-run for the native menu boundary');
+    const setup = prepareNativeElectronTest({
+      headlessReason: 'Electron needs a real DISPLAY or xvfb-run for the native menu boundary',
+      linuxOnly: true,
+      unsupportedPlatformReason: 'The tray workaround is Linux-specific',
+    });
+    if ('skipReason' in setup) {
+      context.skip(setup.skipReason);
       return;
     }
     const electronArguments = ['--no-sandbox', '--disable-gpu', fixture];
-    const report = xvfbRun
-      ? await runFixture(xvfbRun, ['--auto-servernum', electronExecutable, ...electronArguments])
-      : await runFixture(electronExecutable, electronArguments);
+    const report = setup.xvfbRun
+      ? await runFixture(setup.xvfbRun, ['--auto-servernum', setup.electronExecutable, ...electronArguments])
+      : await runFixture(setup.electronExecutable, electronArguments);
 
     assert.deepEqual(report, {
       menuWillShow: 1,
