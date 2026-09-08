@@ -43,15 +43,18 @@ new trust generation and confirm and pair again.
 
 ## Native tray and menu verification
 
-Use a real Linux desktop panel or the macOS menu bar; a headless/Xvfb run cannot prove shell-owned tray activation.
+Use a real Linux desktop panel or the macOS menu bar. The automated Xvfb boundary proves that Electron can create and
+close the native `Menu.popup()` used for Linux primary activation, but a bare Xvfb server has no tray manager and cannot
+prove shell-owned XEmbed or StatusNotifierItem activation.
 
-1. Start the desktop app without enabling notifications. Confirm startup does not request notification permission. In
-   **Settings → Desktop notifications**, the quiet defaults are **Enable on this device** (master delivery), **Task
-   started**, and **Task completed** off; **Task failed** and **Needs attention** are selected but remain inactive until
-   master delivery is enabled.
-2. Before connecting, open the tray menu with both primary click and right-click. Confirm **Open ProPR**,
-   **Switch / Manage Instances…**, and **Quit ProPR** work, while account actions and the notification toggle are disabled.
-   On Linux, double-click the tray icon and confirm exactly one window is focused.
+1. Start the desktop app without enabling notifications. Confirm startup does not request notification permission or
+   change **Settings → Desktop notifications**. The quiet defaults are **Enable on this device** (master delivery),
+   **Task started**, and **Task completed** off; **Task failed** and **Needs attention** are selected but remain inactive
+   until master delivery is enabled.
+2. Before connecting, open the tray menu once with primary click, dismiss it with Escape, then open it once with
+   right-click. Confirm **Open ProPR**, **Switch / Manage Instances…**, and **Quit ProPR** work from both activation paths,
+   while account actions and the notification toggle are disabled. On Linux, double-click the tray icon and confirm
+   exactly one window is focused.
 3. Connect and sign in. Confirm **New Plan**, **Tasks**, **Plans**, **Inbox**, **Switch / Manage Instances…**,
    **Notification Settings…**, and **Pause/Resume Native Notifications** appear in both the tray and application menus.
    Task and plan counts must open their matching destinations; unavailable counts must say unavailable rather than zero.
@@ -66,6 +69,22 @@ Use a real Linux desktop panel or the macOS menu bar; a headless/Xvfb run cannot
 7. Open **Switch / Manage Instances…**, switch through the existing manager, and confirm the next command targets only the
    new instance. Sign out or disconnect and confirm stale counts disappear and account actions disable. Quit and confirm
    the tray is removed and no accelerator acts during shutdown.
+
+For the Linux/XFCE XEmbed acceptance, log into a real XFCE X11 session and ensure the panel's **Notification Area** plugin
+is enabled before launching the exact packaged `propr-desktop` executable under test as the desktop user. Do not run it
+with `sudo`. Hover the 22×22 ProPR icon and verify its Active work tooltip, then perform the primary/Escape/right sequence
+from step 2 with a physical pointer. Repeat it after minimizing the 640×402 main window. Selecting **Open ProPR** must
+restore and focus that same window; selecting **Notification Settings…** must route within that window. If the icon or
+right-click menu is absent, run `xfce4-panel --restart` in that disposable acceptance session (or log out and back in),
+confirm the Notification Area plugin reacquires the tray selection, and repeat before classifying an application failure.
+
+Electron 44 has two distinct Linux paths here. ProPR's primary handler must call `Menu.popup()` because Linux
+`TrayIcon` does not implement `Tray.popUpContextMenu()`. Right activation never reaches a JavaScript `right-click` event:
+the GTK/XEmbed fallback connects `GtkStatusIcon`'s `popup_menu` signal directly to the menu installed by
+`setContextMenu()`. Consequently, a working tooltip plus a working primary menu but no right menu after the panel restart
+is shell-boundary evidence to report with the XFCE version, panel plugin list, and physical-pointer result; there is no
+second application event that can safely synthesize the right popup. Bare Xvfb and XTest-only results are insufficient to
+override that real-shell result.
 
 ## Guided Linux setup
 

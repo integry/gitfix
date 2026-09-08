@@ -1,19 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { delimiter, dirname, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { describe, it } from 'node:test';
+import { prepareNativeElectronTest } from './electron-native-test-setup.mjs';
 
-const require = createRequire(import.meta.url);
-const electronExecutable = require('electron');
 const fixture = resolve(dirname(fileURLToPath(import.meta.url)), 'electron-frame-semantics-probe.cjs');
-
-const executableOnPath = name => (process.env.PATH ?? '')
-  .split(delimiter)
-  .map(directory => resolve(directory, process.platform === 'win32' ? `${name}.exe` : name))
-  .find(existsSync);
 
 const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   const child = spawn(command, args, {
@@ -51,20 +43,18 @@ describe('Electron BrowserWindow lifecycle semantics', () => {
   it('keeps initial frame identity stable and invalidates the window getter after destruction', {
     timeout: 25_000,
   }, async context => {
-    const xvfbRun = process.platform === 'linux' && !process.env.DISPLAY
-      ? executableOnPath('xvfb-run')
-      : undefined;
-    if (process.platform === 'linux' && !process.env.DISPLAY && !xvfbRun) {
-      context.skip('Electron needs DISPLAY or xvfb-run on Linux');
+    const setup = prepareNativeElectronTest();
+    if ('skipReason' in setup) {
+      context.skip(setup.skipReason);
       return;
     }
     const electronArguments = [
       ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : []),
       fixture,
     ];
-    const report = xvfbRun
-      ? await runFixture(xvfbRun, ['--auto-servernum', electronExecutable, ...electronArguments])
-      : await runFixture(electronExecutable, electronArguments);
+    const report = setup.xvfbRun
+      ? await runFixture(setup.xvfbRun, ['--auto-servernum', setup.electronExecutable, ...electronArguments])
+      : await runFixture(setup.electronExecutable, electronArguments);
 
     assert.deepEqual(report, {
       navigationStarted: {

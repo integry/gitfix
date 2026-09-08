@@ -19,6 +19,7 @@ interface DesktopTrayOptions {
   icon: NativeImage;
   createTray(icon: NativeImage): Tray;
   buildMenu(template: MenuItemConstructorOptions[]): Menu;
+  popupMenu(menu: Menu): void;
   setBadgeCount(count: number): boolean;
   fetchActiveWork(signal: AbortSignal): Promise<DesktopActiveWorkFetchResult>;
   commands: Pick<DesktopNativeCommandDispatcher, 'dispatch' | 'getState' | 'subscribe'>;
@@ -259,11 +260,15 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
       try {
         tray = options.createTray(options.icon);
         tray.on('click', () => {
-          if (tray && !tray.isDestroyed() && contextMenu) tray.popUpContextMenu(contextMenu);
+          if (!tray || tray.isDestroyed() || !contextMenu) return;
+          if (options.platform === 'linux') {
+            // Electron's Linux TrayIcon does not implement popUpContextMenu();
+            // Menu.popup() uses the supported native popup path instead.
+            options.popupMenu(contextMenu);
+          } else {
+            tray.popUpContextMenu(contextMenu);
+          }
         });
-        if (options.platform === 'linux') {
-          tray.on('double-click', () => options.commands.dispatch('open'));
-        }
         unsubscribeCommands = options.commands.subscribe(render);
         render();
         pollTimer = setInterval(() => scheduleRefresh(0), pollIntervalMs);

@@ -1739,6 +1739,10 @@ if (!hasSingleInstanceLock) {
       icon: trayIcon,
       createTray: icon => new Tray(icon),
       buildMenu: template => Menu.buildFromTemplate(template),
+      popupMenu: menu => {
+        const window = mainWindow;
+        menu.popup(window && !window.isDestroyed() ? { window } : undefined);
+      },
       setBadgeCount: count => {
         try { return app.setBadgeCount(count); } catch { return false; }
       },

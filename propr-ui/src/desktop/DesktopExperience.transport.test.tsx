@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
+import { DesktopInstanceSelector } from './DesktopInstanceSelector';
 import { DESKTOP_ACCESS_INVALID_EVENT, type DesktopAdapters, type DesktopConnectionResult, type DesktopProfile } from './types';
 
 const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
@@ -257,10 +258,15 @@ describe('DesktopExperience transport and fencing', () => {
     }));
     const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id, probe);
     adapters.connection.deactivate = vi.fn();
-    render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
+    render(
+      <DesktopExperience adapters={adapters}>
+        <div>Connected app</div>
+        <DesktopInstanceSelector />
+      </DesktopExperience>
+    );
 
     expect(await screen.findByText('Connected app')).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Connected: This computer' }));
     fireEvent.click((await screen.findByText('Team server')).closest('button')!);
     await waitFor(() => expect(probe).toHaveBeenCalledWith(remoteProfile));
     expect(await screen.findByText('Connected app')).toBeInTheDocument();

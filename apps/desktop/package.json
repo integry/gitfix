@@ -22,7 +22,7 @@
     "pretypecheck": "npm run prepare:renderer",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run prepare:renderer",
-    "test": "tsx --test src/**/*.test.ts scripts/*.test.mjs",
+    "test": "node scripts/electron-native-test-preflight.mjs && tsx --test src/**/*.test.ts scripts/*.test.mjs",
     "icons:generate": "node scripts/generate-desktop-icons.mjs",
     "icons:check": "node scripts/generate-desktop-icons.mjs --check",
     "icons:verify-packaged": "node scripts/verify-packaged-desktop-icon.mjs",
