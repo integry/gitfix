@@ -23,6 +23,15 @@ const ICNS_SIZES = Object.freeze(new Map([
   ['ic09', 512],
   ['ic10', 1024],
 ]));
+const ICNS_PIXEL_SHA256 = Object.freeze({
+  icp4: '8befdd6c22b4baa95199ea8b3645030952d3cce695501dcd9b12de767ea75a89',
+  icp5: 'a6b7ab21c6d279794f3259467da0108cf7de1909798efd8e30221ebb1f3367fe',
+  icp6: 'b283f14671fa6a51c4c1e9378319c8f2cea32a0bc47c75161b69a906f24a0252',
+  ic07: '9ea03adec62985c6a849a3655ccf18dbf39390128b70aa614a59b12ee029962b',
+  ic08: '0ff104d9d3f6cf7bca2437bbc0dfce54d40bab7d94f443089c9947d3d9e01df2',
+  ic09: 'b5b9d69eb6c34350826698d955a04cefecb7dc95401587682803c5076bce64da',
+  ic10: '1aca9d70c815ffa9225a352356e6150384dc04effe41fb528dcc05ab58d51156',
+});
 
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -129,6 +138,15 @@ export const inspectIcnsBytes = bytes => {
   return Object.freeze(Object.fromEntries(ICNS_SIZES));
 };
 
+export const inspectIcnsPixelHashes = async bytes => {
+  inspectIcnsBytes(bytes);
+  const entries = readIcnsPngEntries(bytes);
+  return Object.freeze(Object.fromEntries(await Promise.all([...ICNS_SIZES].map(async ([type]) => {
+    const pixels = await sharp(entries.get(type)).ensureAlpha().raw().toBuffer();
+    return [type, sha256(pixels)];
+  }))));
+};
+
 export const verifyMacIconBytes = async (bytes, label = 'macOS desktop icon') => {
   const sizes = inspectIcnsBytes(bytes);
   if (sha256(bytes) !== MACOS_ICON_SHA256) {
@@ -140,6 +158,12 @@ export const verifyMacIconBytes = async (bytes, label = 'macOS desktop icon') =>
     size,
     minimumPadding: Math.max(1, Math.floor(size / 8) - 1),
   })));
+  const pixelHashes = await inspectIcnsPixelHashes(bytes);
+  for (const [type, expected] of Object.entries(ICNS_PIXEL_SHA256)) {
+    if (pixelHashes[type] !== expected) {
+      throw new Error(`${label} ${type} decoded pixels do not match the generated transparent ProPR artwork`);
+    }
+  }
   return sizes;
 };
 

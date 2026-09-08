@@ -9,6 +9,7 @@ import {
   DESKTOP_ICON_FILE,
   DESKTOP_ICON_SHA256,
   inspectIcnsBytes,
+  inspectIcnsPixelHashes,
   MACOS_ICON_FILE,
   MACOS_ICON_SHA256,
   readIcnsPngEntries,
@@ -38,6 +39,15 @@ const icnsSizes = Object.freeze(new Map([
   ['ic09', 512],
   ['ic10', 1024],
 ]));
+const icnsPixelHashes = Object.freeze({
+  icp4: '8befdd6c22b4baa95199ea8b3645030952d3cce695501dcd9b12de767ea75a89',
+  icp5: 'a6b7ab21c6d279794f3259467da0108cf7de1909798efd8e30221ebb1f3367fe',
+  icp6: 'b283f14671fa6a51c4c1e9378319c8f2cea32a0bc47c75161b69a906f24a0252',
+  ic07: '9ea03adec62985c6a849a3655ccf18dbf39390128b70aa614a59b12ee029962b',
+  ic08: '0ff104d9d3f6cf7bca2437bbc0dfce54d40bab7d94f443089c9947d3d9e01df2',
+  ic09: 'b5b9d69eb6c34350826698d955a04cefecb7dc95401587682803c5076bce64da',
+  ic10: '1aca9d70c815ffa9225a352356e6150384dc04effe41fb528dcc05ab58d51156',
+});
 
 const assertTransparentCorners = async (bytes, size) => {
   const metadata = await sharp(bytes).metadata();
@@ -135,8 +145,12 @@ describe('desktop native icon assets', () => {
     assert.deepEqual(trayInspection.padding, { left: 5, top: 2, right: 6, bottom: 2 });
     assert.deepEqual(await verifyMacIconBytes(icns), Object.fromEntries(icnsSizes));
     assert.deepEqual(inspectIcnsBytes(icns), Object.fromEntries(icnsSizes));
+    assert.deepEqual(await inspectIcnsPixelHashes(icns), icnsPixelHashes);
+    assert.deepEqual(await inspectIcnsPixelHashes(generated.icns), icnsPixelHashes);
+    const generatedEntries = readIcnsPngEntries(generated.icns);
     for (const [type, payload] of readIcnsPngEntries(icns)) {
       await assertTransparentCorners(payload, icnsSizes.get(type));
+      assert.equal(payload.equals(generatedEntries.get(type)), true);
     }
     assert.equal(png.equals(generated.png), true);
     assert.equal(icns.equals(generated.icns), true);
