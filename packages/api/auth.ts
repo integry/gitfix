@@ -6,6 +6,7 @@ import { RedisStore } from 'connect-redis';
 import { createClient } from 'redis';
 import { randomBytes } from 'node:crypto';
 import type { Express, Request, Response, NextFunction, RequestHandler } from 'express';
+import { issueOAuthGrantRevision } from '@propr/core';
 import { validateSessionSecret } from '@propr/shared';
 import { validateGitHubToken } from './authBearer.js';
 import { desktopAuthService, INSTANCE_TOKEN_PREFIX } from './desktopAuthService.js';
@@ -157,12 +158,12 @@ export function createConnectCallbackHandler(
 
 async function completeAuthenticatedSessionWithPreviewCredential(req: Request, res: Response): Promise<void> {
     if (req.user && isUserWhitelisted(req.user.username)) {
+        const grantRevision = issueOAuthGrantRevision();
         try {
-            // Publish the singleton owner credential first. A concurrent
-            // desktop/session reader can then copy this login into the
-            // per-user row; it can never copy the previous rotating grant over
-            // the newer login while these two stores converge.
-            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user);
+            // Both stores receive the same revision. If this optional write
+            // fails, the durable capture below is still newer than any prior
+            // singleton credential and remains authoritative.
+            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user, grantRevision);
             if (captured) console.log(`[visual-preview] Captured OAuth upload credential for administrator ${req.user.username}`);
         } catch (error) {
             // Preview uploads are optional; a storage or encryption issue must not
@@ -170,7 +171,7 @@ async function completeAuthenticatedSessionWithPreviewCredential(req: Request, r
             console.warn('[visual-preview] Could not capture OAuth upload credential during login:', (error as Error).message);
         }
         try {
-            const captured = await githubUserGrantService.capture(req.user);
+            const captured = await githubUserGrantService.capture(req.user, grantRevision);
             if (captured) console.log(`Captured server-side GitHub grant for ${req.user.username}`);
         } catch (error) {
             // Browser sessions remain usable even if durable desktop metadata

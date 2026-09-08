@@ -4,6 +4,7 @@ import knex, { type Knex } from 'knex';
 import { closeConnection } from '@propr/core';
 import { up as createGitHubUserGrants } from '../../core/src/db/migrations/20260908000000_create_github_user_grants.js';
 import { up as createVisualPreviewOAuthCredentials } from '../../core/src/db/migrations/20260903000000_create_visual_preview_oauth_credentials.js';
+import { up as addGitHubOAuthGrantRevision } from '../../core/src/db/migrations/20260908010000_add_github_oauth_grant_revision.js';
 import { VisualPreviewOAuthCredentialService } from '../../core/src/services/visualPreviewOAuthCredentialService.js';
 import type { GitHubUser } from '../authTypes.js';
 import { GitHubUserGrantService } from '../githubUserGrantService.js';
@@ -19,6 +20,7 @@ beforeEach(async () => {
   database = knex({ client: 'better-sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
   await createGitHubUserGrants(database);
   await createVisualPreviewOAuthCredentials(database);
+  await addGitHubOAuthGrantRevision(database);
 });
 
 afterEach(async () => database.destroy());
@@ -104,6 +106,47 @@ test('scheduler-first rotation is adopted by desktop without reusing its stale r
 
   assert.equal(resolved.status === 'active' && resolved.accessToken, 'gho_scheduler-first-access');
   assert.deepEqual(seenRefreshTokens, ['ghr_old-refresh']);
+});
+
+test('new durable login remains authoritative when shared capture leaves an older active grant', async () => {
+  let refreshRequests = 0;
+  const environment = {
+    SESSION_SECRET: 'test-secret',
+    GH_OAUTH_CLIENT_ID: 'client-id',
+    GH_OAUTH_CLIENT_SECRET: 'client-secret',
+  };
+  const shared = new VisualPreviewOAuthCredentialService(database, environment, (async () => {
+    refreshRequests += 1;
+    return Response.json({
+      access_token: 'gho_rotated-stale-shared-access',
+      refresh_token: 'ghr_rotated-stale-shared-refresh',
+      expires_in: 28_800,
+    });
+  }) as typeof fetch);
+  await shared.replace({
+    githubUserId: desktopUser.id,
+    githubUsername: desktopUser.username,
+    source: 'github',
+    accessToken: 'gho_stale-shared-access',
+    refreshToken: 'ghr_stale-shared-refresh',
+    accessTokenExpiresAt: Date.now() - 1,
+    grantRevision: 100,
+  });
+  const durable = new GitHubUserGrantService(database, environment, fetch, shared);
+  await durable.capture({
+    ...desktopUser,
+    accessToken: 'gho_new-login-access',
+    refreshToken: 'ghr_new-login-refresh',
+    tokenExpiresAt: Date.now() + 28_800_000,
+    oauthSource: 'github',
+  }, 200);
+
+  const resolved = await durable.resolve(desktopUser.id);
+
+  assert.equal(resolved.status, 'active');
+  assert.equal(resolved.status === 'active' && resolved.accessToken, 'gho_new-login-access');
+  assert.equal((await shared.getForOwner(desktopUser.id))?.accessToken, 'gho_stale-shared-access');
+  assert.equal(refreshRequests, 0);
 });
 
 test('stale desktop refresh failure adopts a concurrent login instead of marking reauthorization', async () => {

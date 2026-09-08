@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- session refresh behavior and persistence regressions share one harness */
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
 import { closeConnection } from '@propr/core';
@@ -9,6 +10,7 @@ import { GitHubUserGrantService } from '../githubUserGrantService.js';
 import { VisualPreviewOAuthCredentialService } from '../../core/src/services/visualPreviewOAuthCredentialService.js';
 import { up as createGitHubUserGrants } from '../../core/src/db/migrations/20260908000000_create_github_user_grants.js';
 import { up as createVisualPreviewOAuthCredentials } from '../../core/src/db/migrations/20260903000000_create_visual_preview_oauth_credentials.js';
+import { up as addGitHubOAuthGrantRevision } from '../../core/src/db/migrations/20260908010000_add_github_oauth_grant_revision.js';
 import { configureDemoMode, resetConfiguredDemoMode } from '../demoMode.js';
 import { handleAuthError } from '../routes/githubRoutes.js';
 import type { GitHubUser } from '../authTypes.js';
@@ -303,6 +305,7 @@ test('browser session adopts a desktop-first rotation without refreshing the rot
   const database = knex({ client: 'better-sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
   await createGitHubUserGrants(database);
   await createVisualPreviewOAuthCredentials(database);
+  await addGitHubOAuthGrantRevision(database);
   let refreshRequests = 0;
   const fetchImpl = (async () => {
     refreshRequests += 1;
@@ -393,4 +396,75 @@ test('browser stale refresh rejection adopts a concurrently refreshed durable gr
   assert.equal(req.user?.githubAuthInvalid, undefined);
   assert.equal(req.logoutCalls, 0);
   assert.ok(resolutions >= 2);
+});
+
+test('browser preserves a successful rotation when durable grant persistence is unavailable', async () => {
+  const req = createRequest(createUser({
+    accessToken: 'ghu_pre-rotation',
+    refreshToken: 'ghr_pre-rotation',
+    oauthSource: 'github',
+  }));
+  let resolveCalls = 0;
+  const userGrantService = {
+    resolve: async () => {
+      resolveCalls += 1;
+      return resolveCalls <= 2
+        ? { status: 'missing' as const }
+        : {
+            status: 'active' as const,
+            accessToken: 'ghu_pre-rotation',
+            refreshToken: 'ghr_pre-rotation',
+          };
+    },
+    updateIfOwner: async () => { throw new Error('database write unavailable'); },
+  };
+  globalThis.fetch = async () => Response.json({
+    access_token: 'ghu_successfully-rotated',
+    refresh_token: 'ghr_successfully-rotated',
+    expires_in: 3600,
+  });
+
+  const result = await refreshGitHubTokenWithResult(req, true, {
+    userGrantService,
+    visualPreviewService: { refreshAndGetForOwner: async () => null },
+  });
+
+  assert.equal(result.status, 'refreshed');
+  assert.equal(req.user?.accessToken, 'ghu_successfully-rotated');
+  assert.equal(req.user?.refreshToken, 'ghr_successfully-rotated');
+  assert.equal(req.saveCalls, 1);
+  assert.equal(resolveCalls, 2);
+});
+
+test('browser saves a successful rotation when the post-CAS verification read fails', async () => {
+  const req = createRequest(createUser({
+    accessToken: 'ghu_pre-rotation-read-failure',
+    refreshToken: 'ghr_pre-rotation-read-failure',
+    oauthSource: 'github',
+  }));
+  let resolveCalls = 0;
+  const userGrantService = {
+    resolve: async () => {
+      resolveCalls += 1;
+      if (resolveCalls <= 2) return { status: 'missing' as const };
+      throw new Error('database read unavailable');
+    },
+    updateIfOwner: async () => false,
+  };
+  globalThis.fetch = async () => Response.json({
+    access_token: 'ghu_rotated-before-read-failure',
+    refresh_token: 'ghr_rotated-before-read-failure',
+    expires_in: 3600,
+  });
+
+  const result = await refreshGitHubTokenWithResult(req, true, {
+    userGrantService,
+    visualPreviewService: { refreshAndGetForOwner: async () => null },
+  });
+
+  assert.equal(result.status, 'refreshed');
+  assert.equal(req.user?.accessToken, 'ghu_rotated-before-read-failure');
+  assert.equal(req.user?.refreshToken, 'ghr_rotated-before-read-failure');
+  assert.equal(req.saveCalls, 1);
+  assert.equal(resolveCalls, 3);
 });

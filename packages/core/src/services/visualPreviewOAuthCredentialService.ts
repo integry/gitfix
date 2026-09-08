@@ -14,6 +14,7 @@ const TOKEN_REFRESH_TIMEOUT_MS = 20_000;
 const REFRESH_LEASE_MS = TOKEN_REFRESH_TIMEOUT_MS + 5_000;
 const REFRESH_LEASE_POLL_MS = 100;
 const ENCRYPTION_CONTEXT = 'propr:visual-preview-oauth:v1';
+const GRANT_REVISION_PRECISION = 1_000;
 // GitHub CLI's attachment uploader accepts OAuth App and personal-access
 // tokens. It deliberately rejects both GitHub App user (`ghu_`) and
 // installation (`ghs_`) tokens before making an upload request.
@@ -33,6 +34,7 @@ export interface VisualPreviewOAuthCredentialInput {
   refreshToken?: string;
   accessTokenExpiresAt?: number;
   refreshTokenExpiresAt?: number;
+  grantRevision?: number;
 }
 
 export interface VisualPreviewOAuthCredentialStatus {
@@ -52,6 +54,7 @@ export interface VisualPreviewOAuthCredentialGrant {
   refreshToken?: string;
   accessTokenExpiresAt?: number;
   refreshTokenExpiresAt?: number;
+  grantRevision?: number;
 }
 
 interface CredentialRow {
@@ -68,6 +71,7 @@ interface CredentialRow {
   refresh_lease_until_ms: number | string | null;
   refresh_lease_owner: string | null;
   last_refreshed_at: string | null;
+  grant_revision: number | string;
   created_at: string;
   updated_at: string;
 }
@@ -115,6 +119,19 @@ function optionalTimestamp(value: number | string | null): number | undefined {
   if (value === null) return undefined;
   const timestamp = Number(value);
   return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+let lastIssuedGrantRevision = 0;
+
+export function issueOAuthGrantRevision(current?: number | string | null): number {
+  const currentRevision = current === undefined || current === null ? 0 : Number(current);
+  const nextRevision = Math.max(
+    Date.now() * GRANT_REVISION_PRECISION,
+    lastIssuedGrantRevision + 1,
+    Number.isSafeInteger(currentRevision) ? currentRevision + 1 : 0,
+  );
+  lastIssuedGrantRevision = nextRevision;
+  return nextRevision;
 }
 
 function encryptionSecret(environment: NodeJS.ProcessEnv): string | undefined {
@@ -258,6 +275,7 @@ export class VisualPreviewOAuthCredentialService {
         : null,
       access_token_expires_at_ms: input.accessTokenExpiresAt ?? null,
       refresh_token_expires_at_ms: input.refreshTokenExpiresAt ?? null,
+      grant_revision: input.grantRevision ?? issueOAuthGrantRevision(),
       status: 'active' as const,
       last_error_code: null,
       refresh_lease_until_ms: null,
@@ -427,6 +445,7 @@ export class VisualPreviewOAuthCredentialService {
           refresh_lease_until_ms: null,
           refresh_lease_owner: null,
           last_refreshed_at: this.database.fn.now(),
+          grant_revision: issueOAuthGrantRevision(row.grant_revision),
           updated_at: this.database.fn.now(),
         });
       return refreshed === 1 ? 'refreshed' : this.statusAfterConcurrentCredentialChange();
@@ -458,6 +477,17 @@ export class VisualPreviewOAuthCredentialService {
     const row = await this.credentialQuery().first();
     if (!row || row.github_user_id !== githubUserId) return null;
     if (row.status !== 'active') return { status: 'reauth_required' };
+    return this.grantFromRow(row);
+  }
+
+  async getForOwner(githubUserId: string): Promise<VisualPreviewOAuthCredentialGrant | null> {
+    const row = await this.credentialQuery().first();
+    if (!row || row.github_user_id !== githubUserId || row.source === 'static_token') return null;
+    if (row.status !== 'active') return { status: 'reauth_required' };
+    return this.grantFromRow(row);
+  }
+
+  private grantFromRow(row: CredentialRow): VisualPreviewOAuthCredentialGrant {
     return {
       status: 'active',
       accessToken: decryptToken(row.access_token_encrypted, this.environment),
@@ -466,6 +496,7 @@ export class VisualPreviewOAuthCredentialService {
         : undefined,
       accessTokenExpiresAt: optionalTimestamp(row.access_token_expires_at_ms),
       refreshTokenExpiresAt: optionalTimestamp(row.refresh_token_expires_at_ms),
+      grantRevision: optionalTimestamp(row.grant_revision),
     };
   }
 

@@ -1,7 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import type { Knex } from 'knex';
-import { db } from '@propr/core';
-import type { VisualPreviewOAuthCredentialGrant } from '@propr/core';
+import { db, issueOAuthGrantRevision, type VisualPreviewOAuthCredentialGrant } from '@propr/core';
 import type { GitHubUser } from './authTypes.js';
 import { visualPreviewOAuthCredentialService } from './services/visualPreviewOAuth.js';
 
@@ -20,6 +19,7 @@ interface GrantRow {
   refresh_token_expires_at_ms: number | string | null;
   status: 'active' | 'reauth_required';
   last_error_code: string | null;
+  grant_revision: number | string;
   created_at: string;
   updated_at: string;
 }
@@ -45,6 +45,7 @@ export type GitHubUserGrantResolution =
   | { status: 'temporarily_unavailable' };
 
 interface SharedOAuthGrantService {
+  getForOwner?(githubUserId: string): Promise<VisualPreviewOAuthCredentialGrant | null>;
   refreshAndGetForOwner(
     githubUserId: string,
     force?: boolean,
@@ -103,7 +104,7 @@ export class GitHubUserGrantService {
     private readonly sharedOAuthGrant?: SharedOAuthGrantService,
   ) {}
 
-  async capture(user: GitHubUser): Promise<boolean> {
+  async capture(user: GitHubUser, grantRevision = issueOAuthGrantRevision()): Promise<boolean> {
     if (!user.accessToken || !user.oauthSource) return false;
     if (!await this.database.schema.hasTable('github_user_grants')) return false;
     const accessToken = assertUserToken(user.accessToken);
@@ -119,6 +120,7 @@ export class GitHubUserGrantService {
       refresh_token_expires_at_ms: user.refreshTokenExpiresAt ?? null,
       status: 'active' as const,
       last_error_code: null,
+      grant_revision: grantRevision,
       updated_at: this.database.fn.now(),
     };
     await this.database('github_user_grants')
@@ -240,7 +242,11 @@ export class GitHubUserGrantService {
     return query;
   }
 
-  private async storeIfCurrent(row: GrantRow, user: GitHubUser): Promise<boolean> {
+  private async storeIfCurrent(
+    row: GrantRow,
+    user: GitHubUser,
+    grantRevision = issueOAuthGrantRevision(row.grant_revision),
+  ): Promise<boolean> {
     const accessToken = assertUserToken(user.accessToken || '');
     const values = {
       github_username: user.username,
@@ -253,6 +259,7 @@ export class GitHubUserGrantService {
       refresh_token_expires_at_ms: user.refreshTokenExpiresAt ?? null,
       status: 'active' as const,
       last_error_code: null,
+      grant_revision: grantRevision,
       updated_at: this.database.fn.now(),
     };
     return Number(await this.currentRowQuery(row).update(values)) === 1;
@@ -299,26 +306,28 @@ export class GitHubUserGrantService {
   ): Promise<GitHubUserGrantResolution | null> {
     if (!this.sharedOAuthGrant) return null;
     try {
+      const currentResolution = await this.resolutionFromRow(row);
+      if (this.sharedOAuthGrant.getForOwner) {
+        const currentShared = await this.sharedOAuthGrant.getForOwner(row.github_user_id);
+        if (this.shouldIgnoreSharedGrant(row, currentResolution, currentShared)) return null;
+      }
       const shared = await this.sharedOAuthGrant.refreshAndGetForOwner(row.github_user_id, forceRefresh);
       if (!shared) return null;
       if (shared.status === 'reauth_required') {
-        // The browser login captures the durable user grant before updating the
-        // singleton preview credential. During that short window, a stale
-        // preview row must not invalidate the newer per-user grant.
+        // Preview persistence is optional during login. A stale invalid row
+        // must not invalidate a newer per-user grant.
         return null;
       }
       if (!shared.accessToken) return { status: 'temporarily_unavailable' };
-      const currentResolution = await this.resolutionFromRow(row);
       if (
         row.status === 'active'
         && currentResolution.status === 'active'
-        && currentResolution.accessToken === shared.accessToken
-        && currentResolution.refreshToken === shared.refreshToken
-        && currentResolution.tokenExpiresAt === shared.accessTokenExpiresAt
-        && currentResolution.refreshTokenExpiresAt === shared.refreshTokenExpiresAt
+        && this.grantsMatch(currentResolution, shared)
       ) {
         return currentResolution;
       }
+      const sharedRevision = Number(shared.grantRevision);
+      if (!this.isSharedGrantNewer(row, shared)) return null;
       const stored = await this.storeIfCurrent(row, {
         id: row.github_user_id,
         login: row.github_username,
@@ -331,7 +340,7 @@ export class GitHubUserGrantService {
         refreshToken: shared.refreshToken,
         tokenExpiresAt: shared.accessTokenExpiresAt,
         refreshTokenExpiresAt: shared.refreshTokenExpiresAt,
-      });
+      }, sharedRevision);
       return stored
         ? {
             status: 'active',
@@ -348,6 +357,33 @@ export class GitHubUserGrantService {
         ? null
         : { status: 'temporarily_unavailable' };
     }
+  }
+
+  private grantsMatch(
+    durable: Extract<GitHubUserGrantResolution, { status: 'active' }>,
+    shared: VisualPreviewOAuthCredentialGrant,
+  ): boolean {
+    return durable.accessToken === shared.accessToken
+      && durable.refreshToken === shared.refreshToken
+      && durable.tokenExpiresAt === shared.accessTokenExpiresAt
+      && durable.refreshTokenExpiresAt === shared.refreshTokenExpiresAt;
+  }
+
+  private shouldIgnoreSharedGrant(
+    row: GrantRow,
+    durable: GitHubUserGrantResolution,
+    shared: VisualPreviewOAuthCredentialGrant | null,
+  ): boolean {
+    if (durable.status !== 'active' || shared?.status !== 'active' || !shared.accessToken) return false;
+    return !this.grantsMatch(durable, shared) && !this.isSharedGrantNewer(row, shared);
+  }
+
+  private isSharedGrantNewer(row: GrantRow, shared: VisualPreviewOAuthCredentialGrant): boolean {
+    const durableRevision = Number(row.grant_revision);
+    const sharedRevision = Number(shared.grantRevision);
+    return Number.isSafeInteger(sharedRevision)
+      && Number.isSafeInteger(durableRevision)
+      && sharedRevision > durableRevision;
   }
 
   private async requestRefresh(source: GrantRow['source'], refreshToken: string): Promise<RefreshResponse> {

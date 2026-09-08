@@ -3,6 +3,7 @@ import { after, afterEach, beforeEach, test } from 'node:test';
 import knex, { type Knex } from 'knex';
 import { db as defaultDatabase } from '../src/db/connection.js';
 import { up as createVisualPreviewOAuthCredentials } from '../src/db/migrations/20260903000000_create_visual_preview_oauth_credentials.js';
+import { up as addGitHubOAuthGrantRevision } from '../src/db/migrations/20260908010000_add_github_oauth_grant_revision.js';
 import {
   VisualPreviewCredentialError,
   VisualPreviewOAuthCredentialService,
@@ -13,6 +14,7 @@ let database: Knex;
 beforeEach(async () => {
   database = knex({ client: 'better-sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
   await createVisualPreviewOAuthCredentials(database);
+  await addGitHubOAuthGrantRevision(database);
 });
 
 afterEach(async () => database.destroy());

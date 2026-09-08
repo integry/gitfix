@@ -114,13 +114,45 @@ async function updateStoredUserGrant(
     req: Request,
     service: Pick<GitHubUserGrantService, 'updateIfOwner'> = githubUserGrantService,
     expected?: { accessToken?: string; refreshToken?: string },
-): Promise<boolean> {
-    if (!req.user) return false;
+): Promise<'updated' | 'not-updated' | 'unavailable'> {
+    if (!req.user) return 'not-updated';
     try {
-        return await service.updateIfOwner(req.user, expected);
+        return await service.updateIfOwner(req.user, expected) ? 'updated' : 'not-updated';
     } catch (error) {
         console.warn('Could not update the stored GitHub user grant:', (error as Error).message);
-        return false;
+        return 'unavailable';
+    }
+}
+
+async function adoptStoredGrantAfterConflict(
+    req: Request,
+    expected: { accessToken?: string; refreshToken?: string },
+    service: Pick<GitHubUserGrantService, 'resolve'>,
+): Promise<GitHubTokenRefreshResult | null> {
+    const user = req.user;
+    if (!user) return null;
+    try {
+        const stored = await service.resolve(user.id, false);
+        // A CAS miss only proves a concurrent credential change after a read
+        // observes a different access token. The unchanged pre-rotation row is
+        // never allowed to replace GitHub's successfully issued token.
+        if (stored.status !== 'active' || stored.accessToken === expected.accessToken) return null;
+        user.accessToken = stored.accessToken;
+        user.refreshToken = stored.refreshToken;
+        user.tokenExpiresAt = stored.tokenExpiresAt;
+        user.refreshTokenExpiresAt = stored.refreshTokenExpiresAt;
+        delete user.githubAuthInvalid;
+        await saveSession(req, `Adopted concurrently refreshed GitHub token for user ${user.username}`);
+        return {
+            status: 'refreshed',
+            accessToken: stored.accessToken,
+            refreshToken: stored.refreshToken,
+            tokenExpiresAt: stored.tokenExpiresAt,
+            refreshTokenExpiresAt: stored.refreshTokenExpiresAt,
+        };
+    } catch (error) {
+        console.warn('Could not verify a concurrent stored GitHub grant update:', (error as Error).message);
+        return null;
     }
 }
 
@@ -324,10 +356,11 @@ async function performGitHubTokenRefresh(
             user.refreshTokenExpiresAt = Date.now() + (data.refresh_token_expires_in * 1000);
         }
 
-        const stored = await updateStoredUserGrant(req, dependencies.userGrantService, refreshInput);
-        if (!stored) {
-            const adopted = await synchronizeFromStoredGrant(req, false, dependencies.userGrantService);
-            if (adopted?.accessToken) return { ...adopted, status: 'refreshed' };
+        const persistence = await updateStoredUserGrant(req, dependencies.userGrantService, refreshInput);
+        if (persistence === 'not-updated') {
+            const adopted = await adoptStoredGrantAfterConflict(req, refreshInput, dependencies.userGrantService);
+            if (adopted) return adopted;
+            console.warn('Stored GitHub user grant was not updated and no concurrent rotation could be confirmed');
         }
         await saveSession(req, `Successfully refreshed GitHub token for user ${user.username}`);
         if (supportsVisualPreviewUploads) {
