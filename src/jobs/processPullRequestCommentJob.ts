@@ -52,7 +52,7 @@ import {
     releasePRProcessingLock,
     startPRProcessingLockHeartbeat,
 } from './prProcessingLock.js';
-import { createPRCommentTaskStateIfMissing, evaluatePRCommentPreExecutionRecovery, schedulePRCommentRecovery } from './prCommentCollisionRecovery.js';
+import { createPRCommentTaskStateIfMissing, evaluatePRCommentPreExecutionRecovery, handlePRCommentLockContention } from './prCommentCollisionRecovery.js';
 
 const redisClient = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
@@ -405,11 +405,10 @@ export async function processPullRequestCommentJob(job: Job<CommentJobData>): Pr
 
     const lockAcquired = await acquirePRLock({ lockKey, lockToken, correlatedLogger });
     if (!lockAcquired) {
-        const replacementTaskId = await schedulePRCommentRecovery({
+        return handlePRCommentLockContention({
             job, taskId, stateManager, redisClient, pickedUpComments: context.pickedUpComments,
-            delay: 10000, reason: 'pr_locked_by_other_job', correlatedLogger,
+            correlatedLogger,
         });
-        return { status: 'rescheduled', reason: 'pr_locked_by_other_job', replacementTaskId };
     }
 
     const recovery = await evaluatePRCommentPreExecutionRecovery({

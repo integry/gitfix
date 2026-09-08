@@ -24,9 +24,12 @@ export interface PRCommentContainerCollision {
 export function isContainerCollisionCancellation(state: TaskStateData | null): boolean {
     if (state?.state !== TaskStates.CANCELLED) return false;
     const cancellation = state.history.findLast(entry => entry.state === TaskStates.CANCELLED);
-    return cancellation?.reason.includes('agent_container_already_running') === true
-        || cancellation?.metadata?.recoveryReason === 'agent_container_already_running'
-        || state.lastError?.message.includes('agent_container_already_running') === true;
+    if (cancellation) {
+        return cancellation.reason.includes('agent_container_already_running')
+            || cancellation.metadata?.recoveryReason === 'agent_container_already_running';
+    }
+    // Legacy task records may predate cancellation history metadata.
+    return state.lastError?.message.includes('agent_container_already_running') === true;
 }
 
 /** Fail-closed collision check for the current task and any recovery ancestor. */
@@ -64,6 +67,7 @@ interface ScheduleRecoveryParams {
     reason: string;
     correlatedLogger: Logger;
     containerCollisionTaskId?: string;
+    containerCollisionTaskIds?: string[];
 }
 
 async function recordRecoveryLink(
@@ -77,7 +81,8 @@ async function recordRecoveryLink(
         recoveryReason: reason,
     };
     try {
-        if (!await stateManager.getTaskState(replacementTaskId)) {
+        let replacementState = await stateManager.getTaskState(replacementTaskId);
+        if (!replacementState) {
             await stateManager.createTaskState(replacementTaskId, {
                 number: job.data.pullRequestNumber,
                 repoOwner: job.data.repoOwner,
@@ -86,18 +91,15 @@ async function recordRecoveryLink(
                 comments: job.data.comments,
                 modelName: job.data.llm ?? undefined,
             }, job.data.correlationId);
+            replacementState = await stateManager.getTaskState(replacementTaskId);
         }
-        await stateManager.updateTaskState(replacementTaskId, TaskStates.PENDING, {
-            reason: `Recovery scheduled: ${reason}`,
-            historyMetadata,
-        });
+        if (replacementState) {
+            await stateManager.updateHistoryMetadata(replacementTaskId, replacementState.state, historyMetadata);
+        }
 
         const originalState = await stateManager.getTaskState(taskId);
         if (originalState) {
-            await stateManager.updateTaskState(taskId, originalState.state, {
-                reason: `Replacement recovery task ${replacementTaskId} scheduled: ${reason}`,
-                historyMetadata,
-            });
+            await stateManager.updateHistoryMetadata(taskId, originalState.state, historyMetadata);
         }
     } catch (error) {
         correlatedLogger.warn({ taskId, replacementTaskId, error: (error as Error).message }, 'Failed to link PR comment recovery task state');
@@ -116,10 +118,15 @@ export async function schedulePRCommentRecovery(
         redisClient,
     });
 
+    const recoveryData = { ...job.data };
+    delete recoveryData.prProcessingLockToken;
     const recoveryJob = await issueQueue.add(job.name, {
-        ...job.data,
+        ...recoveryData,
         ...(params.containerCollisionTaskId
             ? { containerCollisionTaskId: params.containerCollisionTaskId }
+            : {}),
+        ...(params.containerCollisionTaskIds
+            ? { containerCollisionTaskIds: params.containerCollisionTaskIds }
             : {}),
     }, { delay });
     const replacementTaskId = recoveryJob?.id ? String(recoveryJob.id) : undefined;
@@ -143,9 +150,52 @@ export interface PreExecutionRecoveryDecision {
     result?: { status: string; reason: string; replacementTaskId?: string };
 }
 
+type CancellationRecoveryParams = Omit<PreExecutionRecoveryParams, 'releaseLock'> & {
+    releaseLock?: () => Promise<unknown>;
+};
+
+/** Preserve a latest explicit user cancellation before any replacement is queued. */
+export async function evaluatePRCommentCancellation(
+    params: CancellationRecoveryParams,
+): Promise<PreExecutionRecoveryDecision> {
+    const { job, taskId, stateManager, redisClient, pickedUpComments, correlatedLogger } = params;
+    const preexistingState = await stateManager.getTaskState(taskId);
+    if (preexistingState?.state !== TaskStates.CANCELLED
+        || isContainerCollisionCancellation(preexistingState)) {
+        return { preexistingState };
+    }
+
+    try {
+        await restorePendingComments(pickedUpComments, {
+            repoOwner: job.data.repoOwner,
+            repoName: job.data.repoName,
+            pullRequestNumber: job.data.pullRequestNumber,
+            redisClient,
+        });
+    } finally {
+        await params.releaseLock?.();
+    }
+    correlatedLogger.info({ taskId }, 'Task was already cancelled; preserving terminal state and not starting a recovery agent');
+    return { preexistingState, result: { status: 'cancelled', reason: 'task_already_cancelled' } };
+}
+
+/** Resolve cancellation ownership before replacing a lock-contending job. */
+export async function handlePRCommentLockContention(
+    params: CancellationRecoveryParams,
+): Promise<{ status: string; reason: string; replacementTaskId?: string }> {
+    const cancellationDecision = await evaluatePRCommentCancellation(params);
+    if (cancellationDecision.result) return cancellationDecision.result;
+    const replacementTaskId = await schedulePRCommentRecovery({
+        ...params,
+        delay: 10000,
+        reason: 'pr_locked_by_other_job',
+    });
+    return { status: 'rescheduled', reason: 'pr_locked_by_other_job', replacementTaskId };
+}
+
 async function scheduleRecoveryAndRelease(
     params: PreExecutionRecoveryParams,
-    options: { delay: number; reason: string; containerCollisionTaskId?: string },
+    options: { delay: number; reason: string; containerCollisionTaskId?: string; containerCollisionTaskIds?: string[] },
 ): Promise<string | undefined> {
     try {
         return await schedulePRCommentRecovery({ ...params, ...options });
@@ -158,26 +208,17 @@ async function scheduleRecoveryAndRelease(
 export async function evaluatePRCommentPreExecutionRecovery(
     params: PreExecutionRecoveryParams,
 ): Promise<PreExecutionRecoveryDecision> {
-    const { job, taskId, stateManager, redisClient, pickedUpComments, correlatedLogger } = params;
-    const preexistingState = await stateManager.getTaskState(taskId);
+    const { job, taskId, correlatedLogger } = params;
+    const cancellationDecision = await evaluatePRCommentCancellation(params);
+    const { preexistingState } = cancellationDecision;
+    if (cancellationDecision.result) return cancellationDecision;
     const collisionCancellation = isContainerCollisionCancellation(preexistingState);
-    if (preexistingState?.state === TaskStates.CANCELLED && !collisionCancellation) {
-        try {
-            await restorePendingComments(pickedUpComments, {
-                repoOwner: job.data.repoOwner,
-                repoName: job.data.repoName,
-                pullRequestNumber: job.data.pullRequestNumber,
-                redisClient,
-            });
-        } finally {
-            await params.releaseLock();
-        }
-        correlatedLogger.info({ taskId }, 'Task was already cancelled; preserving terminal state and not starting a recovery agent');
-        return { preexistingState, result: { status: 'cancelled', reason: 'task_already_cancelled' } };
-    }
 
-    const collisionRootTaskId = job.data.containerCollisionTaskId ?? taskId;
-    const collision = await inspectPRCommentContainerCollision([taskId, collisionRootTaskId]);
+    const collisionAncestorTaskIds = [...new Set([
+        ...(job.data.containerCollisionTaskIds ?? []),
+        ...(job.data.containerCollisionTaskId ? [job.data.containerCollisionTaskId] : []),
+    ])];
+    const collision = await inspectPRCommentContainerCollision([taskId, ...collisionAncestorTaskIds]);
     if (collision) {
         correlatedLogger.warn({
             taskId,
@@ -190,7 +231,8 @@ export async function evaluatePRCommentPreExecutionRecovery(
         const replacementTaskId = await scheduleRecoveryAndRelease(params, {
             delay: 60000,
             reason: 'agent_container_already_running',
-            containerCollisionTaskId: collisionRootTaskId,
+            containerCollisionTaskId: job.data.containerCollisionTaskId ?? collision.taskId,
+            containerCollisionTaskIds: [...new Set([...collisionAncestorTaskIds, collision.taskId])],
         });
         return { preexistingState, result: { status: 'rescheduled', reason: 'agent_container_already_running', replacementTaskId } };
     }
