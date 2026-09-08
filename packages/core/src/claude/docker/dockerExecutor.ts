@@ -44,6 +44,11 @@ export interface ExecutionResult {
     timeoutMs?: number;
 }
 export interface RunningTaskContainer { id: string; name: string; }
+export type TaskContainerLiveness = 'running' | 'stopped' | 'not_found' | 'unavailable';
+export interface TaskContainerInspection {
+    liveness: TaskContainerLiveness;
+    container: RunningTaskContainer | null;
+}
 export type LegacyTaskContainerLiveness = 'running' | 'not_found' | 'unavailable';
 
 export interface DockerCommandOptions {
@@ -116,6 +121,54 @@ export async function findTaskContainer(taskId: string, attemptGenerationOrExecu
 
 /** Backward-compatible name; lookup now uses exact task labels, not name suffixes. */
 export const findRunningDockerContainerForTask = findTaskContainer;
+
+const LIVE_CONTAINER_STATES = new Set(['running', 'paused', 'restarting']);
+const STOPPED_CONTAINER_STATES = new Set(['created', 'exited', 'dead']);
+
+/**
+ * Inspects exact task-labelled containers without treating preserved stopped
+ * containers as evidence that an agent is still executing. Unknown Docker
+ * states and daemon failures remain unavailable so callers can fail closed.
+ */
+export async function inspectTaskContainerLivenessForTask(
+    taskId: string,
+    executor: typeof executeDockerCommand = executeDockerCommand,
+): Promise<TaskContainerInspection> {
+    try {
+        const result = await executor('docker', [
+            'ps', '-a',
+            '--filter', `label=propr.task.id=${taskId}`,
+            '--format', '{{.ID}}\t{{.Names}}\t{{.State}}',
+        ], { timeout: 10000 });
+        if (result.exitCode !== 0) {
+            logger.warn({ taskId, stderr: result.stderr }, 'Failed to inspect Docker container liveness for task');
+            return { liveness: 'unavailable', container: null };
+        }
+
+        let stoppedContainer: RunningTaskContainer | null = null;
+        for (const line of result.stdout.split('\n').map(value => value.trim()).filter(Boolean)) {
+            const [id, name, rawState, ...unexpected] = line.split('\t');
+            const container = id && name ? { id, name } : null;
+            const state = rawState?.trim().toLowerCase();
+            if (!container || unexpected.length > 0 || !state) {
+                logger.warn({ taskId, output: line }, 'Docker returned an unknown task container record');
+                return { liveness: 'unavailable', container };
+            }
+            if (LIVE_CONTAINER_STATES.has(state)) return { liveness: 'running', container };
+            if (!STOPPED_CONTAINER_STATES.has(state)) {
+                logger.warn({ taskId, containerId: id, state }, 'Docker returned an unknown task container state');
+                return { liveness: 'unavailable', container };
+            }
+            stoppedContainer ??= container;
+        }
+        return stoppedContainer
+            ? { liveness: 'stopped', container: stoppedContainer }
+            : { liveness: 'not_found', container: null };
+    } catch (error) {
+        logger.warn({ taskId, error: (error as Error).message }, 'Failed to inspect Docker container liveness for task');
+        return { liveness: 'unavailable', container: null };
+    }
+}
 
 /**
  * Checks for a possibly-live pre-label container by the legacy task suffix.

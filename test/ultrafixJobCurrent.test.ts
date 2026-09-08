@@ -34,7 +34,7 @@ await mock.module('../src/jobs/ultrafixContinuationMeta.js', {
 });
 
 const { isUltrafixJobCurrent, restorePendingCommentsIfUltrafixJobSuperseded } = await import('../src/jobs/ultrafixJobHelpers.js');
-const { pickUpPendingCommentsWithClaim } = await import('../src/jobs/prPendingComments.js');
+const { pickUpPendingCommentsWithClaim, restorePendingComments } = await import('../src/jobs/prPendingComments.js');
 
 function makeJob(workEpoch?: number): Job<CommentJobData> {
     return {
@@ -143,6 +143,31 @@ describe('Ultrafix queued-work epoch guard', () => {
         );
         assert.strictEqual(lists.has(pendingKey), false);
         assert.strictEqual(mockIssueQueueAdd.mock.callCount(), 1, 'restored comments get a durable follow-up job');
+    });
+
+    test('restoring a deferred claim is idempotent and keeps it ahead of newer comments', async () => {
+        const pendingKey = 'pending-pr-comments:acme:web:42';
+        const older = { id: 700, body: 'older claimed follow-up', author: 'alice', type: 'issue' as const };
+        const newer = { id: 701, body: 'newer pending follow-up', author: 'bob', type: 'issue' as const };
+        const lists = new Map<string, string[]>([[pendingKey, [JSON.stringify(newer)]]]);
+        const redis = {
+            async lrange(key: string) { return [...(lists.get(key) ?? [])]; },
+            async lpush(key: string, ...values: string[]) {
+                const list = lists.get(key) ?? [];
+                for (const value of values) list.unshift(value);
+                lists.set(key, list);
+                return list.length;
+            },
+            async expire() { return 1; },
+        };
+
+        await restorePendingComments([older, older], { ...params, redisClient: redis as never });
+        await restorePendingComments([older], { ...params, redisClient: redis as never });
+
+        assert.deepStrictEqual(
+            (lists.get(pendingKey) ?? []).map(value => JSON.parse(value).id),
+            [700, 701],
+        );
     });
 
     test('does not let pending model overrides erase stale automatic provenance', async () => {

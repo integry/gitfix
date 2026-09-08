@@ -280,7 +280,7 @@ describe('DesktopExperience profile management', () => {
 
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
     vi.clearAllMocks();
-    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Connected: This computer' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Edit This computer' }));
     fireEvent.change(screen.getByLabelText('Instance URL'), { target: { value: 'https://unavailable.example.com/' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
