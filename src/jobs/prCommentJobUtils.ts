@@ -170,6 +170,8 @@ export interface JobErrorOptions {
     startingWorkComment: { data: { id: number } } | null;
     claudeResult: ClaudeCodeResponse | null; correlationId: string;
     correlatedLogger: Logger; stateManager: WorkerStateManager; taskId: string;
+    /** Complete in-memory claim to persist in a delayed retry payload. */
+    retryComments?: UnprocessedComment[];
 }
 
 export class UsageLimitError extends Error {
@@ -225,7 +227,10 @@ async function handleUsageLimitError(error: UsageLimitError, job: Job<CommentJob
         }
     }
 
-    await issueQueue.add(job.name, job.data, { jobId: requeueJobId, delay: Math.max(0, delay) });
+    const retryData = options.retryComments
+        ? { ...job.data, comments: options.retryComments }
+        : job.data;
+    await issueQueue.add(job.name, retryData, { jobId: requeueJobId, delay: Math.max(0, delay) });
 }
 
 async function handleUserCancellation(options: JobErrorOptions, errorMessage: string): Promise<void> {

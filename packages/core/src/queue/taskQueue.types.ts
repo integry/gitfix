@@ -73,6 +73,8 @@ export interface CommentJobData {
     reasoningLevel?: ReasoningLevel;
     /** Internal lease token persisted across BullMQ redelivery and rescheduling. */
     prProcessingLockToken?: string;
+    /** Original task whose live container a recovery job must wait for. */
+    containerCollisionTaskId?: string;
 }
 
 export interface UnprocessedComment {
