@@ -63,6 +63,10 @@ describe('Linux tray menu popup', () => {
     const positions: Array<[number, number]> = [];
     let shows = 0;
     let destroys = 0;
+    const pendingDestructions: Array<() => void> = [];
+    const flushHostDestructions = () => {
+      for (const destroy of pendingDestructions.splice(0)) destroy();
+    };
     const hosts: BaseWindow[] = [];
     const createHost = (options: BrowserWindowConstructorOptions): BaseWindow => {
       hostOptions.push(options);
@@ -93,6 +97,7 @@ describe('Linux tray menu popup', () => {
       } as unknown as typeof import('electron').screen,
       createHost,
       environment: {},
+      scheduleHostDestroy: callback => { pendingDestructions.push(callback); },
     });
     const emptyGeometry = {
       bounds: { x: 0, y: 0, width: 0, height: 0 },
@@ -113,7 +118,9 @@ describe('Linux tray menu popup', () => {
     assert.equal(popupOptions?.sourceType, 'mouse');
 
     popupOptions?.callback?.();
-    assert.equal(destroys, 1, 'native menu dismissal destroys its transient owner');
+    assert.equal(destroys, 0, 'the native callback must not destroy its owner while the menu runner unwinds');
+    flushHostDestructions();
+    assert.equal(destroys, 1, 'the transient owner is destroyed on the next event-loop turn');
 
     cursor = { x: -250, y: 8 };
     popup.popup(menu, emptyGeometry);
@@ -125,11 +132,14 @@ describe('Linux tray menu popup', () => {
     popup.popup(menu, emptyGeometry);
     assert.equal(closeCalls, 1, 'activation while open toggles the native popup closed');
     popupOptions?.callback?.();
+    flushHostDestructions();
     assert.equal(destroys, 2);
 
     popup.popup(menu, emptyGeometry);
     popup.close();
     assert.equal(closeCalls, 2, 'shutdown closes the active native menu first');
+    assert.equal(destroys, 2, 'shutdown also defers owner destruction past closePopup');
+    flushHostDestructions();
     assert.equal(destroys, 3);
     popupOptions?.callback?.();
     assert.equal(destroys, 3, 'a late close callback cannot touch the destroyed host');
@@ -141,6 +151,7 @@ describe('Linux tray menu popup', () => {
     let positions = 0;
     let shows = 0;
     let destroys = 0;
+    let scheduledDestroy: (() => void) | undefined;
     const host = {
       isDestroyed: () => false,
       setPosition: () => { positions += 1; },
@@ -157,6 +168,7 @@ describe('Linux tray menu popup', () => {
         return host;
       },
       environment: { XDG_SESSION_TYPE: 'wayland' },
+      scheduleHostDestroy: callback => { scheduledDestroy = callback; },
     });
     const menu = {
       popup: (options: PopupOptions) => { popupOptions = options; },
@@ -178,6 +190,8 @@ describe('Linux tray menu popup', () => {
     assert.equal(popupOptions?.sourceType, 'mouse');
 
     popupOptions?.callback?.();
+    assert.equal(destroys, 0, 'Wayland also keeps the native owner alive through callback unwind');
+    scheduledDestroy?.();
     assert.equal(destroys, 1, 'native menu dismissal still destroys its transient owner');
   });
 });

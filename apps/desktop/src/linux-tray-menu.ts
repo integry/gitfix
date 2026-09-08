@@ -24,6 +24,7 @@ interface LinuxTrayMenuPopupOptions {
   screen: LinuxTrayMenuScreen;
   createHost(options: BrowserWindowConstructorOptions): BaseWindow;
   environment?: LinuxSessionEnvironment;
+  scheduleHostDestroy?(callback: () => void): void;
 }
 
 export interface LinuxTrayMenuPopup {
@@ -127,12 +128,26 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
   let openMenu: Menu | null = null;
   let closed = false;
   const canPositionHost = !isWaylandSession(options.environment ?? process.env);
+  const pendingHostDestruction = new Set<BaseWindow>();
+  const scheduleHostDestroy = options.scheduleHostDestroy ?? setImmediate;
+
+  const destroyHostAfterNativeMenuClose = (popupHost: BaseWindow): void => {
+    if (pendingHostDestruction.has(popupHost)) return;
+    pendingHostDestruction.add(popupHost);
+    // Electron invokes Menu.popup's callback while the native Views menu
+    // runner is still unwinding owner references. Destroying its BaseWindow in
+    // that callback can invalidate those references and crash the process.
+    scheduleHostDestroy(() => {
+      pendingHostDestruction.delete(popupHost);
+      if (!popupHost.isDestroyed()) popupHost.destroy();
+    });
+  };
 
   const releaseHost = (menu: Menu, popupHost: BaseWindow): void => {
     if (openMenu !== menu || host !== popupHost) return;
     openMenu = null;
     host = null;
-    if (!popupHost.isDestroyed()) popupHost.destroy();
+    destroyHostAfterNativeMenuClose(popupHost);
   };
 
   return {
@@ -200,10 +215,14 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
     close() {
       if (closed) return;
       closed = true;
-      if (openMenu) openMenu.closePopup(host && !host.isDestroyed() ? host : undefined);
+      const closingMenu = openMenu;
+      const closingHost = host;
+      if (closingMenu) {
+        closingMenu.closePopup(closingHost && !closingHost.isDestroyed() ? closingHost : undefined);
+      }
       openMenu = null;
-      if (host && !host.isDestroyed()) host.destroy();
       host = null;
+      if (closingHost) destroyHostAfterNativeMenuClose(closingHost);
     },
   };
 };

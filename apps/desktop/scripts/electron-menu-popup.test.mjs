@@ -38,8 +38,8 @@ const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   });
 });
 
-describe('Electron native Menu popup semantics', () => {
-  it('opens and closes the real native menu also installed on a Linux Tray', {
+describe('Electron Linux tray menu popup', () => {
+  it('opens and closes createLinuxTrayMenuPopup owners through the native menu runner', {
     timeout: 20_000,
   }, async context => {
     const setup = prepareNativeElectronTest({
@@ -57,9 +57,11 @@ describe('Electron native Menu popup semantics', () => {
       : await runFixture(setup.electronExecutable, electronArguments);
 
     assert.deepEqual(report, {
-      menuWillShow: 1,
-      menuWillClose: 1,
-      popupCallback: 1,
+      menuWillShow: 2,
+      menuWillClose: 2,
+      ownersCreated: 2,
+      ownersMapped: 2,
+      ownersDestroyed: 2,
     });
   });
 });
