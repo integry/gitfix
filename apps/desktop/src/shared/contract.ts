@@ -41,6 +41,7 @@ export const IPC_CHANNELS = Object.freeze({
   notificationsTest: 'desktop:notifications-test',
   notificationsPublish: 'desktop:notifications-publish',
   notificationsClear: 'desktop:notifications-clear',
+  notificationsChanged: 'desktop:notifications-changed',
   notificationNavigate: 'desktop:notification-navigate',
   nativeCommand: 'desktop:native-command',
 } as const);
@@ -172,6 +173,20 @@ export interface DesktopNotificationScope extends DesktopConnectionScope {
   /** Authenticated instance user. Preferences remain local to this device. */
   userId: string;
 }
+
+const DESKTOP_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const DESKTOP_TRANSPORT_SCOPE_PATTERN = /^[A-Za-z0-9_-]{22}$/;
+const DESKTOP_USER_ID_PATTERN = /^[^\x00-\x20\x7f]{1,128}$/;
+
+export const isDesktopNotificationScope = (value: unknown): value is DesktopNotificationScope => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const scope = value as Record<string, unknown>;
+  return Object.keys(scope).length === 3
+    && typeof scope.profileId === 'string' && DESKTOP_PROFILE_ID_PATTERN.test(scope.profileId)
+    && typeof scope.transportScope === 'string'
+    && DESKTOP_TRANSPORT_SCOPE_PATTERN.test(scope.transportScope)
+    && typeof scope.userId === 'string' && DESKTOP_USER_ID_PATTERN.test(scope.userId);
+};
 
 export interface DesktopNotificationPreferences {
   enabled: boolean;
@@ -374,6 +389,7 @@ export interface DesktopBridge {
     test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }>;
     publish(scope: DesktopNotificationScope, transition: DesktopTaskTransition): Promise<{ accepted: boolean }>;
     clear(scope: DesktopNotificationScope): Promise<void>;
+    onSettingsChanged(listener: (scope: DesktopNotificationScope) => void): () => void;
     onNavigate(listener: (path: string) => void): () => void;
   };
   /** @internal Present only in an authorized packaged Connect acceptance process. */

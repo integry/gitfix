@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BellRing, Loader2 } from 'lucide-react';
 import type {
   DesktopNotificationPreferences,
+  DesktopNotificationScope,
   DesktopNotificationSettings,
 } from '../../../../apps/desktop/src/shared/contract';
 import { useCurrentUser } from '../../contexts/AuthContext';
@@ -36,6 +37,13 @@ const Toggle: React.FC<{
   </label>
 );
 
+const sameScope = (
+  left: DesktopNotificationScope,
+  right: DesktopNotificationScope,
+): boolean => left.profileId === right.profileId
+  && left.transportScope === right.transportScope
+  && left.userId === right.userId;
+
 // Capability, enrollment, loading, and unsupported states share one compact settings surface.
 const DesktopNotificationSettingsSection: React.FC = () => {
   const desktop = useDesktop();
@@ -51,6 +59,7 @@ const DesktopNotificationSettingsSection: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
   const scopeGeneration = useRef(0);
+  const loadGeneration = useRef(0);
   const currentScope = useRef(scope);
   currentScope.current = scope;
 
@@ -62,14 +71,27 @@ const DesktopNotificationSettingsSection: React.FC = () => {
     setError(null);
     setTestResult(null);
     if (!notifications || !scope) return;
-    void notifications.bridge.get(scope).then(value => {
-      if (current && scopeGeneration.current === generation) setSettings(value);
-    }).catch(loadError => {
-      if (current && scopeGeneration.current === generation) {
-        setError((loadError as Error).message || 'Desktop notification settings could not be loaded.');
-      }
+    const load = (): void => {
+      const request = ++loadGeneration.current;
+      setError(null);
+      void notifications.bridge.get(scope).then(value => {
+        if (current && scopeGeneration.current === generation
+          && loadGeneration.current === request) setSettings(value);
+      }).catch(loadError => {
+        if (current && scopeGeneration.current === generation
+          && loadGeneration.current === request) {
+          setError((loadError as Error).message || 'Desktop notification settings could not be loaded.');
+        }
+      });
+    };
+    load();
+    const unsubscribe = notifications.bridge.onSettingsChanged(changedScope => {
+      if (sameScope(scope, changedScope)) load();
     });
-    return () => { current = false; };
+    return () => {
+      current = false;
+      unsubscribe();
+    };
   }, [notifications, scope]);
 
   if (!notifications || !scope) return null;

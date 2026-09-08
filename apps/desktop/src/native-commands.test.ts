@@ -4,6 +4,12 @@ import { createDesktopNativeCommandDispatcher } from './native-commands';
 
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>(settle => { resolve = settle; });
+  return { promise, resolve };
+};
+
 describe('desktop native command dispatcher', () => {
   it('restores a hidden window, gates auth actions, and delivers only fixed renderer commands when ready', () => {
     const sent: string[] = [];
@@ -102,5 +108,40 @@ describe('desktop native command dispatcher', () => {
     assert.equal(quits, 1);
     assert.equal(updates, 1);
     unsubscribe();
+  });
+
+  it('serializes rapid notification toggles against the latest persisted state', async () => {
+    let enabled = true;
+    const writes: boolean[] = [];
+    const first = deferred();
+    const second = deferred();
+    const gates = [first, second];
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => ({ profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' }),
+      notificationState: () => ({ available: true, enabled }),
+      setNativeNotificationsEnabled: async value => {
+        const gate = gates[writes.length];
+        writes.push(value);
+        await gate.promise;
+        enabled = value;
+      },
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+
+    dispatcher.dispatch('toggle-native-notifications');
+    dispatcher.dispatch('toggle-native-notifications');
+    await tick();
+    assert.deepEqual(writes, [false]);
+
+    first.resolve();
+    await tick();
+    assert.deepEqual(writes, [false, true]);
+    second.resolve();
+    await tick();
+    assert.equal(enabled, true);
   });
 });

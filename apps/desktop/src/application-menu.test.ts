@@ -62,6 +62,7 @@ describe('desktop application menu', () => {
     let all = items(value.template());
     assert.ok(all.some(item => item.role === 'about'));
     assert.ok(all.some(item => item.role === 'services'));
+    assert.ok(all.some(item => item.role === 'close'));
     assert.equal(all.find(item => item.label === 'Quit ProPR')?.accelerator, 'CmdOrCtrl+Q');
     assert.equal(all.find(item => item.label === 'New Plan')?.enabled, false);
     assert.equal(all.find(item => item.label === 'Resume Native Notifications')?.enabled, false);

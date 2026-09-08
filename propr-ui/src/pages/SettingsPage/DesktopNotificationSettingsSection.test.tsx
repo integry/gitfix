@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   test: vi.fn(),
   publish: vi.fn(),
   clear: vi.fn(),
+  settingsListeners: new Set<(scope: {
+    profileId: string; transportScope: string; userId: string;
+  }) => void>(),
+  onSettingsChanged: vi.fn(),
   onNavigate: vi.fn(() => () => undefined),
   supported: true,
   userId: 'user-1',
@@ -42,6 +46,11 @@ vi.mock('../../desktop/DesktopContext', () => ({
 describe('Desktop notification settings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.settingsListeners.clear();
+    mocks.onSettingsChanged.mockImplementation(listener => {
+      mocks.settingsListeners.add(listener);
+      return () => { mocks.settingsListeners.delete(listener); };
+    });
     mocks.supported = true;
     mocks.userId = 'user-1';
     mocks.desktop = {
@@ -86,6 +95,33 @@ describe('Desktop notification settings', () => {
     await waitFor(() => expect(testButton).toBeEnabled());
     fireEvent.click(testButton);
     expect(await screen.findByText(/operating system decides whether a banner/)).toBeInTheDocument();
+  });
+
+  test('refetches only matching native settings changes and unsubscribes on teardown', async () => {
+    const view = render(<DesktopNotificationSettingsSection />);
+    const enabled = await screen.findByRole('checkbox', {
+      name: 'Enable desktop notifications on this device',
+    });
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      mocks.settingsListeners.forEach(listener => listener({
+        profileId: 'another-profile', transportScope: 'abcdefghijklmnopqrstuv', userId: 'user-1',
+      }));
+    });
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+
+    mocks.get.mockResolvedValue(settings({ enabled: true, taskCompleted: true }));
+    act(() => {
+      mocks.settingsListeners.forEach(listener => listener({
+        profileId: 'profile-1', transportScope: 'abcdefghijklmnopqrstuv', userId: 'user-1',
+      }));
+    });
+    await waitFor(() => expect(enabled).toBeChecked());
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+
+    view.unmount();
+    expect(mocks.settingsListeners.size).toBe(0);
   });
 
   test('explains the deferred Windows capability without enrollment controls', async () => {

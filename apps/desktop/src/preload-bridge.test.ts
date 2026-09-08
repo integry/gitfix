@@ -50,11 +50,19 @@ describe('desktop preload bridge', () => {
     await native.publish(scope, event);
     await native.clear(scope);
     const paths: string[] = [];
+    const changedScopes: unknown[] = [];
+    const unsubscribeChanges = native.onSettingsChanged(value => changedScopes.push(value));
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, scope);
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, { ...scope, unexpected: true });
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, { ...scope, transportScope: 'short' });
+    unsubscribeChanges();
+    ipc.listeners.get(IPC_CHANNELS.notificationsChanged)?.({}, scope);
     const unsubscribe = native.onNavigate(path => paths.push(path));
     ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, '/tasks/task-1');
     ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, 'https://attacker.example');
     ipc.listeners.get(IPC_CHANNELS.notificationNavigate)?.({}, '/settings');
     unsubscribe();
+    assert.deepEqual(changedScopes, [scope]);
     assert.deepEqual(paths, ['/tasks/task-1']);
     assert.deepEqual(ipc.invocations, [
       { channel: IPC_CHANNELS.notificationsGet, args: [scope] },

@@ -92,7 +92,10 @@ export const createApplicationMenuTemplate = (
       viewMenu,
       {
         label: 'Window',
-        submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }],
+        submenu: [
+          { role: 'close' }, { role: 'minimize' }, { role: 'zoom' },
+          { type: 'separator' }, { role: 'front' },
+        ],
       },
     ];
   }

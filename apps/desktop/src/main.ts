@@ -1697,7 +1697,13 @@ if (!hasSingleInstanceLock) {
         mainWindow.webContents.send(IPC_CHANNELS.notificationNavigate, path);
       },
       log: (level, event) => log(level, event),
-      onSettingsChanged: () => desktopNativeCommands?.refresh(),
+      onSettingsChanged: scope => {
+        const commands = desktopNativeCommands;
+        commands?.refresh();
+        if (scope && commands && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.notificationsChanged, scope);
+        }
+      },
     });
     desktopNativeCommands = createDesktopNativeCommandDispatcher({
       channel: IPC_CHANNELS.nativeCommand,

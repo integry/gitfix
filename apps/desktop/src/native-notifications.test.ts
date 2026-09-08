@@ -50,7 +50,7 @@ const fixture = async (overrides: {
   platform?: NodeJS.Platform;
   supported?: boolean;
   beforePersist?: () => Promise<void>;
-  onSettingsChanged?: () => void;
+  onSettingsChanged?: (changedScope?: DesktopNotificationScope) => void;
 } = {}) => {
   const directory = await mkdtemp(join(tmpdir(), 'propr-native-notifications-'));
   const shown: ShownNotification[] = [];
@@ -117,20 +117,23 @@ test('uses quiet defaults and persists account/instance/device preferences', asy
 });
 
 test('keeps the active native toggle synchronized with renderer settings', async () => {
-  let changes = 0;
-  const item = await fixture({ onSettingsChanged: () => { changes += 1; } });
+  const changes: Array<DesktopNotificationScope | undefined> = [];
+  const item = await fixture({ onSettingsChanged: changedScope => { changes.push(changedScope); } });
   try {
     assert.equal(item.service.activeSettings(), null);
     await item.service.get(scope);
     assert.equal(item.service.activeSettings()?.preferences.enabled, false);
+    await item.service.update(scope, { taskCompleted: true });
+    assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
     await item.service.setActiveEnabled(true);
     assert.equal(item.service.activeSettings()?.preferences.enabled, true);
-    await item.service.update(scope, { enabled: false, taskCompleted: true });
+    assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
+    await item.service.setActiveEnabled(false);
     assert.equal(item.service.activeSettings()?.preferences.enabled, false);
     assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
     item.service.clear(scope);
     assert.equal(item.service.activeSettings(), null);
-    assert.equal(changes, 4);
+    assert.deepEqual(changes, [undefined, scope, scope, scope, scope]);
   } finally {
     item.service.close();
     await item.cleanup();

@@ -57,6 +57,7 @@ export const createDesktopNativeCommandDispatcher = (
   let connectionAvailable = false;
   let readyWindow: CommandWindow | null = null;
   let pending: { command: DesktopNativeCommand; connection: string | null } | null = null;
+  let notificationToggleTail: Promise<void> = Promise.resolve();
 
   const state = (): DesktopNativeCommandState => {
     const authenticated = connectionAvailable && options.activeConnectionScope() !== null;
@@ -95,7 +96,11 @@ export const createDesktopNativeCommandDispatcher = (
       if (command === 'toggle-native-notifications') {
         const current = state();
         if (!current.nativeNotificationsAvailable) return;
-        void options.setNativeNotificationsEnabled(!current.nativeNotificationsEnabled)
+        notificationToggleTail = notificationToggleTail.then(async () => {
+          const latest = state();
+          if (!latest.nativeNotificationsAvailable) return;
+          await options.setNativeNotificationsEnabled(!latest.nativeNotificationsEnabled);
+        })
           .catch(() => options.log?.('warn', 'desktop.native_command.notifications_update_failed'))
           .finally(notify);
         return;
