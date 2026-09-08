@@ -11,7 +11,7 @@ process.env.PROPR_DEMO_MODE = 'true';
 
 const { parseCodexOutputToConversationResult } = await import('../routes/liveDetailsCodexParser.js');
 const { parseExecutionDetailsRows } = await import('../routes/liveDetailsExecutionParser.js');
-const { createLiveDetailsRoutes } = await import('../routes/liveDetailsRoutes.js');
+const { createLiveDetailsRoutes, parseStoredOutputContent } = await import('../routes/liveDetailsRoutes.js');
 
 after(async () => {
   const { db } = await import('@propr/core');
@@ -115,6 +115,40 @@ test('Codex database lifecycle fallback has exact canonical event parity', () =>
   );
   assert.equal(fallback.events.some(event => JSON.stringify(event).includes('thread.started')), false);
   assert.equal(fallback.events.some(event => JSON.stringify(event).includes('item.completed')), false);
+});
+
+test('stored Codex App Server output renders semantic events instead of JSON-RPC envelopes', () => {
+  const emittedAtMs = Date.parse(timestamp(0));
+  const output = [
+    { id: 1, result: { capabilities: {} } },
+    { method: 'item/started', params: { item: { id: 'reasoning', type: 'reasoning', summary: [], content: [] } }, emittedAtMs },
+    { method: 'item/completed', params: { item: { id: 'reasoning', type: 'reasoning', summary: ['Inspecting the parser'], content: [] } }, emittedAtMs: emittedAtMs + 1_000 },
+    { method: 'item/started', params: { item: { id: 'command', type: 'commandExecution', command: 'npm test' } }, emittedAtMs: emittedAtMs + 2_000 },
+    { method: 'item/completed', params: { item: { id: 'command', type: 'commandExecution', command: 'npm test', aggregatedOutput: 'passed', exitCode: 0 } }, emittedAtMs: emittedAtMs + 3_000 },
+    { method: 'turn/plan/updated', params: { plan: [{ step: 'Verify the fix', status: 'inProgress' }] }, emittedAtMs: emittedAtMs + 4_000 },
+    { method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 20, outputTokens: 5 } } }, emittedAtMs: emittedAtMs + 5_000 },
+  ].map(event => JSON.stringify(event)).join('\n');
+
+  const stored = parseStoredOutputContent(output);
+
+  assert.equal(stored.format, 'codex');
+  assert.deepEqual(stored.parsed, {
+    events: [
+      { type: 'thought', content: 'Inspecting the parser', timestamp: timestamp(1) },
+      { type: 'tool_use', toolName: 'Bash', input: { command: 'npm test' }, timestamp: timestamp(3) },
+      { type: 'tool_result', result: 'passed', isError: false, timestamp: timestamp(3) },
+    ],
+    todos: [{ id: 'plan-0', content: 'Verify the fix', status: 'in_progress' }],
+    currentTask: 'Verify the fix',
+    tokenUsage: {
+      input_tokens: 20,
+      output_tokens: 5,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    },
+  });
+  assert.equal(JSON.stringify(stored.parsed).includes('item/'), false);
+  assert.equal(JSON.stringify(stored.parsed).includes('emittedAtMs'), false);
 });
 
 test('Codex command lifecycle pairs starts and completions and recovers an unmatched completion', () => {

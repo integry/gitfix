@@ -2,6 +2,7 @@ import { isOpenCodeJsonlEvent, parseAntigravityJsonl } from '@propr/core';
 
 interface StoredExecutionOutputLine {
   type?: string;
+  method?: string;
   role?: string;
   message?: { parts?: unknown[] } | unknown;
   response?: unknown;
@@ -162,7 +163,22 @@ function hasOpenCodeAssistantPartsShape(parsed: StoredExecutionOutputLine): bool
 }
 
 function isCodexStoredOutputLine(parsed: StoredExecutionOutputLine): boolean {
-  return Boolean((parsed.type && CODEX_STORED_OUTPUT_TYPES.has(parsed.type)) || parsed.item !== undefined);
+  return Boolean(
+    (parsed.type && CODEX_STORED_OUTPUT_TYPES.has(parsed.type))
+    || parsed.item !== undefined
+    || isCodexAppServerNotification(parsed.method)
+  );
+}
+
+function isCodexAppServerNotification(method: string | undefined): boolean {
+  return Boolean(method && [
+    'error',
+    'warning',
+    'item/',
+    'model/',
+    'thread/',
+    'turn/',
+  ].some(prefix => method === prefix || method.startsWith(prefix)));
 }
 
 function isClaudeStoredOutputLine(parsed: StoredExecutionOutputLine): boolean {

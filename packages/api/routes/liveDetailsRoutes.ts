@@ -331,8 +331,38 @@ export function parseStoredOutputContent(output: string): ParsedStoredOutput {
   return { parsed: null, rawFallback, format };
 }
 function parseStoredOutputWithFormat(output: string, format: StoredOutputFormat, rawFallback: ConversationResult | null): ParsedStoredOutput {
+  if (format === 'codex' && hasCodexAppServerNotification(output)) {
+    const appServerOutput = parseRedisOutput(output.split('\n').filter(line => line.trim()));
+    return {
+      parsed: {
+        events: appServerOutput.events as unknown as Array<Record<string, unknown>>,
+        todos: appServerOutput.todos,
+        currentTask: appServerOutput.currentTask,
+        tokenUsage: appServerOutput.tokenUsage,
+      },
+      rawFallback,
+      format,
+    };
+  }
   const parsed = parseStoredOutputForFormat(output, format);
   return { parsed: isConversationResultEmpty(parsed) ? null : parsed, rawFallback, format };
+}
+function hasCodexAppServerNotification(output: string): boolean {
+  return output.split('\n').some(line => {
+    try {
+      const method = (JSON.parse(line) as { method?: unknown }).method;
+      return typeof method === 'string' && [
+        'error',
+        'warning',
+        'item/',
+        'model/',
+        'thread/',
+        'turn/',
+      ].some(prefix => method === prefix || method.startsWith(prefix));
+    } catch {
+      return false;
+    }
+  });
 }
 function parseStoredOutputForFormat(output: string, format: StoredOutputFormat): ConversationResult | null {
   if (format === 'claude') return parseClaudeOutputToConversationResult(output);

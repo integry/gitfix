@@ -85,6 +85,7 @@ interface CodexItem {
 interface CodexAppServerEvent {
   id?: number;
   method?: string;
+  emittedAtMs?: number;
   error?: { message?: string };
   params?: {
     item?: Record<string, unknown>;
@@ -753,7 +754,7 @@ function isAntigravityStreamEvent(
 function parseLine(line: string, state: ParseState): void {
   try {
     const event = JSON.parse(line);
-    const rawTimestamp = event.created_at || event.timestamp;
+    const rawTimestamp = event.created_at || event.timestamp || event.emittedAtMs;
     const timestamp = typeof rawTimestamp === 'number'
       ? normalizeOpenCodeTimestamp(rawTimestamp)
       : rawTimestamp || getNextSyntheticTimestamp(state);
