@@ -155,7 +155,16 @@ export class VoiceBriefingService {
       ...queueCandidates,
     ];
     const components = buildCandidateComponents(rawCandidates);
+    const queueCandidateSet = new Set(queueCandidates);
     const allCandidates = selectComponentRepresentatives(components);
+    const runningCandidates = selectComponentRepresentatives(
+      components,
+      candidate => queueCandidateSet.has(candidate) && candidate.workClass === 'running',
+    );
+    const queuedCandidates = selectComponentRepresentatives(
+      components,
+      candidate => queueCandidateSet.has(candidate) && candidate.workClass === 'queued',
+    );
     const attentionCandidates = selectComponentRepresentatives(
       components,
       candidate => candidate.requiresAttention,
@@ -167,11 +176,9 @@ export class VoiceBriefingService {
         candidate => candidate.workClass === scope,
       )).slice(0, VOICE_BRIEFING_DETAIL_LIMIT);
     const items = assignReferences(scopedCandidates);
-    const running = queueEntries.filter(entry => entry.state === 'active').length;
-    const queued = queueEntries.length - running;
     const counts = {
-      running,
-      queued,
+      running: runningCandidates.length,
+      queued: queuedCandidates.length,
       attention: attentionCandidates.length,
       plans: planCandidates.length,
       total: allCandidates.length,

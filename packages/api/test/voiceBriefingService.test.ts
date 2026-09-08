@@ -405,6 +405,46 @@ test('running scope retains an active task that also has an attention notificati
   ]);
 });
 
+test('deduplicates queued jobs sharing a pull request identity in aggregate counts', async () => {
+  const queue: VoiceBriefingQueueSnapshot = {
+    active: [],
+    waiting: [
+      {
+        ...job('comment-job-1', 'First comment', '2026-09-07T01:20:00.000Z', {
+          repoOwner: 'integry',
+          repoName: 'propr',
+          pullRequestNumber: 42,
+        }),
+        name: 'processPullRequestComment',
+      },
+      {
+        ...job('comment-job-2', 'Second comment', '2026-09-07T01:19:00.000Z', {
+          repoOwner: 'integry',
+          repoName: 'propr',
+          pullRequestNumber: 42,
+        }),
+        name: 'processPullRequestComment',
+      },
+    ],
+    delayed: [],
+  };
+  const service = new VoiceBriefingService({
+    loaders: loaders({ queue }),
+    now: () => NOW,
+  });
+
+  const briefing = await service.getBriefing('authenticated-user');
+
+  assert.deepEqual(briefing.counts, {
+    running: 0,
+    queued: 1,
+    attention: 0,
+    plans: 0,
+    total: 1,
+  });
+  assert.deepEqual(briefing.items.map(item => item.id), ['comment-job-1']);
+});
+
 test('deduplicates task and pull request notifications joined by a later queue alias', async () => {
   const queue: VoiceBriefingQueueSnapshot = {
     active: [],
