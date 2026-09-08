@@ -2,6 +2,7 @@ import { join, resolve } from 'node:path';
 import type { NativeImage } from 'electron';
 
 export const DESKTOP_ICON_FILE = 'propr-desktop.png';
+export const TRAY_ICON_FILE = 'propr-tray.png';
 export const DESKTOP_ICON_SIZE = 512;
 
 interface NativeImageFactory {
@@ -25,6 +26,18 @@ export const resolveLinuxDesktopIconPath = ({
 }): string => isPackaged
   ? join(resourcesPath, DESKTOP_ICON_FILE)
   : resolve(mainBundleDirectory, '../../assets/icons', DESKTOP_ICON_FILE);
+
+export const resolveDesktopTrayIconPath = ({
+  isPackaged,
+  mainBundleDirectory,
+  resourcesPath,
+}: {
+  isPackaged: boolean;
+  mainBundleDirectory: string;
+  resourcesPath: string;
+}): string => isPackaged
+  ? join(resourcesPath, TRAY_ICON_FILE)
+  : resolve(mainBundleDirectory, '../../assets/icons', TRAY_ICON_FILE);
 
 export const loadDesktopWindowIcon = ({
   platform,

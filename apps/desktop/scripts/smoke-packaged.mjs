@@ -33,6 +33,7 @@ import {
   createSmokeChildEnvironment,
   removePrivateSmokeProfile,
 } from './packaged-smoke-support.mjs';
+import { verifyPackagedTrayIcon } from './desktop-icon-assets.mjs';
 
 const MAIN_PROCESS_ERROR_MARKERS = [
   'desktop.main_process.uncaught_exception',
@@ -65,12 +66,7 @@ if (process.platform === 'linux' || process.platform === 'darwin') {
   const resourcesPath = process.platform === 'darwin'
     ? resolve('out', `propr-desktop-darwin-${process.arch}`, 'propr-desktop.app', 'Contents', 'Resources')
     : resolve('out', `propr-desktop-linux-${process.arch}`, 'resources');
-  const trayArtwork = await readFile(join(resourcesPath, 'logo-only-small.png'));
-  const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  if (trayArtwork.byteLength < 24 || !trayArtwork.subarray(0, pngSignature.length).equals(pngSignature)
-    || trayArtwork.readUInt32BE(16) < 18 || trayArtwork.readUInt32BE(20) < 18) {
-    throw new Error('Packaged desktop tray artwork is missing or invalid');
-  }
+  await verifyPackagedTrayIcon(resourcesPath);
 }
 
 const expectedFuses = new Map([

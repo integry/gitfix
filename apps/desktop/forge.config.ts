@@ -26,11 +26,11 @@ const DESKTOP_EXECUTABLE_NAME = 'propr-desktop';
 const desktopIconDirectory = fileURLToPath(new URL('./assets/icons', import.meta.url));
 const desktopLinuxIcon = resolve(desktopIconDirectory, 'propr-desktop.png');
 const desktopMacIcon = resolve(desktopIconDirectory, 'propr-desktop.icns');
+const desktopTrayIcon = resolve(desktopIconDirectory, 'propr-tray.png');
 
 const connectNativePrebuilds = fileURLToPath(new URL('../../packages/cli/native/prebuilds', import.meta.url));
 const connectOrchestrator = fileURLToPath(new URL('../../packages/cli/dist/orchestrator', import.meta.url));
 const setupAssets = fileURLToPath(new URL('../../packages/cli/dist/assets', import.meta.url));
-const desktopTrayArtwork = fileURLToPath(new URL('../../media/logo-only-small.png', import.meta.url));
 const configuredRuntimeManifest = process.env.PROPR_DESKTOP_RUNTIME_MANIFEST?.trim();
 if (process.env.PROPR_DESKTOP_PRODUCTION_RELEASE === '1' && !configuredRuntimeManifest) {
   throw new Error('Production desktop releases require an aligned published runtime manifest');
@@ -120,7 +120,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: { unpack: '**/.vite/native/prebuilds/**' },
     extraResource: [
-      desktopTrayArtwork,
+      desktopTrayIcon,
       ...(process.platform === 'linux' ? [
         desktopLinuxIcon,
         resolve(connectOrchestrator, 'orchestrator.mjs'),

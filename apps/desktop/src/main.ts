@@ -28,7 +28,7 @@ import { registerPackagedAcceptanceZoomIpc } from './acceptance-zoom';
 import { DeepLinkDelivery, deepLinkAcknowledgementTimeoutMs } from './deep-link-delivery';
 import { handleDeepLinkDeliveryFailure } from './deep-link-failure-policy';
 import { clearDesktopInstanceCookies } from './desktop-session';
-import { loadDesktopWindowIcon } from './desktop-icon';
+import { loadDesktopWindowIcon, resolveDesktopTrayIconPath } from './desktop-icon';
 import {
   DesktopCredentialService,
   type DesktopCurrentUserProxyEvidence,
@@ -1691,9 +1691,11 @@ if (!hasSingleInstanceLock) {
       log: (level, event) => log(level, event),
     });
     nativeProfiles = profiles;
-    const trayArtworkPath = app.isPackaged
-      ? join(process.resourcesPath, 'logo-only-small.png')
-      : join(app.getAppPath(), '..', '..', 'media', 'logo-only-small.png');
+    const trayArtworkPath = resolveDesktopTrayIconPath({
+      isPackaged: app.isPackaged,
+      mainBundleDirectory: __dirname,
+      resourcesPath: process.resourcesPath,
+    });
     const trayArtwork = nativeImage.createFromPath(trayArtworkPath);
     const trayIcon = trayArtwork.isEmpty()
       ? trayArtwork

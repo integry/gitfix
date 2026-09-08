@@ -1,7 +1,11 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { verifyMacApplicationIcon, verifyPackagedLinuxIcon } from './desktop-icon-assets.mjs';
+import {
+  verifyMacApplicationIcon,
+  verifyPackagedLinuxIcon,
+  verifyPackagedTrayIcon,
+} from './desktop-icon-assets.mjs';
 
 const execFile = promisify(execFileCallback);
 const [platform, suppliedApplicationRoot] = process.argv.slice(2);
@@ -12,6 +16,7 @@ const applicationRoot = resolve(suppliedApplicationRoot);
 
 if (platform === 'linux') {
   await verifyPackagedLinuxIcon(applicationRoot);
+  await verifyPackagedTrayIcon(resolve(applicationRoot, 'resources'));
 } else {
   const plist = resolve(applicationRoot, 'Contents', 'Info.plist');
   const readPlist = async key => {
@@ -19,5 +24,6 @@ if (platform === 'linux') {
     return stdout.trim();
   };
   await verifyMacApplicationIcon({ applicationRoot, readPlist });
+  await verifyPackagedTrayIcon(resolve(applicationRoot, 'Contents', 'Resources'));
 }
 console.log(`Packaged ${platform} desktop icon passed native metadata and asset verification.`);
