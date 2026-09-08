@@ -136,8 +136,8 @@ function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['c
       ? 'bg-red-100 text-red-800'
       : 'bg-amber-100 text-amber-800';
   const paths = (label: string, values: string[] | null) => values && <div>
-    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-    <dd className="mt-1 flex flex-wrap gap-1.5">{values.map(value => <code key={value} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">{value}</code>)}</dd>
+    <dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{label}</dt>
+    <dd className="mt-1 flex flex-wrap gap-1.5">{values.map(value => <code key={value} className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[12px] text-slate-700">{value}</code>)}</dd>
   </div>;
   return <section aria-label="Latest checkpoint declaration" className="mt-3 border-t border-blue-200 pt-3 text-slate-800">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -145,8 +145,8 @@ function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['c
       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${badgeClass}`}>{latest.state}</span>
     </div>
     <dl className="mt-3 grid gap-3 sm:grid-cols-2">
-      <div><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Commit message</dt><dd className="mt-1 break-words font-medium">{latest.message || 'Not provided'}</dd></div>
-      {latest.summary && <div><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Summary</dt><dd className="mt-1 break-words">{latest.summary}</dd></div>}
+      <div><dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Commit message</dt><dd className="mt-1 break-words font-medium">{latest.message || 'Not provided'}</dd></div>
+      {latest.summary && <div><dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Summary</dt><dd className="mt-1 break-words">{latest.summary}</dd></div>}
       {paths('Included paths', latest.include)}
       {paths('Excluded paths', latest.exclude)}
     </dl>
@@ -400,37 +400,39 @@ function GoalDetails({ goalId }: { goalId: string }) {
   const strategyLabel = goal.launchStrategy === 'direct' ? 'Direct' : 'ProPR orchestrated';
   const currentModel = getModelDisplayName(goal.effectiveModel || goal.requestedModel);
   return <div className="min-h-full bg-white text-slate-900">
-    <header className="border-b border-slate-200 px-4 py-4 sm:px-6 lg:px-8">
+    <header className="w-full border-b border-slate-200 px-4 py-3 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
         <div className="flex items-center justify-between gap-4">
           <Link to="/goals" className="text-sm font-medium text-slate-600 transition hover:text-primary-700">← All goals</Link>
           <GoalState goal={goal} />
         </div>
-        <h1 className="mt-4 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{goal.title}</h1>
-        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-700">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Strategy</span>
-          <span className="font-medium">{strategyLabel}</span>
-          <span aria-hidden="true" className="text-slate-300">•</span>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Model</span>
-          <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs font-semibold text-slate-700">{currentModel}</code>
-          <span aria-hidden="true" className="text-slate-300">•</span>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Elapsed</span>
-          <span className="font-mono text-xs font-semibold text-slate-700">{duration(goal.elapsedMs)}</span>
-          <span aria-hidden="true" className="hidden text-slate-300 sm:inline">•</span>
-          <span className="text-xs text-slate-500">{goal.repository} · {goal.agent.alias}</span>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-4">
-          {goal.desiredState === 'running' && mutable && <button disabled={busy} onClick={() => act(() => pauseGoal(goal.id))} className={`${buttonClass} border border-amber-300 text-amber-800 hover:bg-amber-50`}><CirclePause className="h-4 w-4" />Pause</button>}
-          {goal.desiredState === 'paused' && mutable && <button disabled={busy} onClick={() => act(() => resumeGoal(goal.id))} className={`${buttonClass} border border-green-300 text-green-800 hover:bg-green-50`}><CirclePlay className="h-4 w-4" />{goal.pausePending ? 'Resume after safe boundary' : 'Resume'}</button>}
-          {mutable && <button disabled={busy} onClick={() => act(() => cancelGoal(goal.id))} className={`${buttonClass} border border-red-300 text-red-700 hover:bg-red-50`}><CircleStop className="h-4 w-4" />Cancel</button>}
-          {goal.finalPr && <a href={goal.finalPr.url} target="_blank" rel="noreferrer" className={`${buttonClass} bg-primary-600 text-white shadow-sm hover:bg-primary-700`}><GitPullRequest className="h-4 w-4" />{goal.launchStrategy === 'direct' ? 'Open draft PR' : 'Review final PR'} <ExternalLink className="h-3.5 w-3.5" /></a>}
-          <details className="group relative">
-            <summary aria-label="More goal actions" className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md border border-slate-300 text-slate-600 transition hover:bg-slate-50 [&::-webkit-details-marker]:hidden"><MoreHorizontal className="h-4 w-4" /></summary>
-            <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg">
-              <Link to={`/tasks/${goal.taskId}`} className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Open task history</Link>
-              <button disabled={busy} onClick={remove} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4" />Delete goal</button>
-            </div>
-          </details>
+        <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{goal.title}</h1>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-700">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Strategy</span>
+            <span className="font-medium">{strategyLabel}</span>
+            <span aria-hidden="true" className="text-slate-300">•</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Model</span>
+            <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs font-semibold text-slate-700">{currentModel}</code>
+            <span aria-hidden="true" className="text-slate-300">•</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Elapsed</span>
+            <span className="font-mono text-xs font-semibold text-slate-700">{duration(goal.elapsedMs)}</span>
+            <span aria-hidden="true" className="hidden text-slate-300 sm:inline">•</span>
+            <span className="text-xs text-slate-500">{goal.repository} · {goal.agent.alias}</span>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {goal.desiredState === 'running' && mutable && <button disabled={busy} onClick={() => act(() => pauseGoal(goal.id))} className={`${buttonClass} border border-amber-300 text-amber-800 hover:bg-amber-50`}><CirclePause className="h-4 w-4" />Pause</button>}
+            {goal.desiredState === 'paused' && mutable && <button disabled={busy} onClick={() => act(() => resumeGoal(goal.id))} className={`${buttonClass} border border-green-300 text-green-800 hover:bg-green-50`}><CirclePlay className="h-4 w-4" />{goal.pausePending ? 'Resume after safe boundary' : 'Resume'}</button>}
+            {mutable && <button disabled={busy} onClick={() => act(() => cancelGoal(goal.id))} className={`${buttonClass} border border-red-300 text-red-700 hover:bg-red-50`}><CircleStop className="h-4 w-4" />Cancel</button>}
+            {goal.finalPr && <a href={goal.finalPr.url} target="_blank" rel="noreferrer" className={`${buttonClass} bg-primary-600 text-white shadow-sm hover:bg-primary-700`}><GitPullRequest className="h-4 w-4" />{goal.launchStrategy === 'direct' ? 'Open draft PR' : 'Review final PR'} <ExternalLink className="h-3.5 w-3.5" /></a>}
+            <details className="group relative">
+              <summary aria-label="More goal actions" className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md border border-slate-300 text-slate-600 transition hover:bg-slate-50 [&::-webkit-details-marker]:hidden"><MoreHorizontal className="h-4 w-4" /></summary>
+              <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+                <Link to={`/tasks/${goal.taskId}`} className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Open task history</Link>
+                <button disabled={busy} onClick={remove} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4" />Delete goal</button>
+              </div>
+            </details>
+          </div>
         </div>
       </div>
     </header>
@@ -464,7 +466,7 @@ function GoalDetails({ goalId }: { goalId: string }) {
           </details>
         </section>
 
-        {goal.checkpoint && <section className="my-6 bg-blue-50 p-4 text-sm text-blue-950">
+        {goal.checkpoint && <section className="mb-6 mt-3 bg-blue-50 p-4 text-sm text-blue-950">
           <div className="flex items-start gap-3">
             <CircleDot className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
             <div className="min-w-0">
@@ -478,12 +480,11 @@ function GoalDetails({ goalId }: { goalId: string }) {
 
         {goal.artifacts.length > 0 && <div className="my-5 flex flex-wrap gap-2 text-xs text-slate-600">{goal.artifacts.map((artifact, index) => { const item = artifact as { type?: string; number?: number; url?: string }; return item.url ? <a key={item.url} href={item.url} target="_blank" rel="noreferrer" className="rounded bg-slate-100 px-2 py-1 hover:underline">{item.type === 'pull_request' ? 'PR' : 'Issue'} #{item.number}</a> : <span key={index} />; })}</div>}
 
-        <section aria-labelledby="live-progress-heading" className="mt-8">
+        <section aria-labelledby="live-progress-heading" className="mt-6">
           <div className="flex items-center gap-2">
-            <h2 id="live-progress-heading" className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Live progress</h2>
+            <h2 id="live-progress-heading" className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Execution queue</h2>
             {mutable && goal.desiredState === 'running' && <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" /></span>}
           </div>
-          <p className="mt-2 text-lg font-semibold text-slate-900">Native todos</p>
           {live.todos.length ? <div className="[&>div]:border-t-0 [&>div]:pt-3 [&>div>h4]:hidden"><TodoList liveDetails={live} history={[{ state: goal.taskState }]} /></div> : <p className="mt-3 text-sm text-slate-500">No provider todos yet.</p>}
         </section>
 
@@ -522,7 +523,7 @@ function GoalDetails({ goalId }: { goalId: string }) {
         </section>}
 
         {mutable ? <section aria-labelledby="correction-heading" className="sticky bottom-0 mt-auto pt-10">
-          <div className="mb-2 flex items-center justify-end gap-2">
+          <div className="mb-2 flex flex-col items-end gap-1">
             <label htmlFor="goal-continuation-model" className="text-xs text-slate-500">Model for next continuation</label>
             <select id="goal-continuation-model" value={goal.requestedModel} onChange={event => act(() => requestGoalModel(goal.id, event.target.value))} className="max-w-48 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 shadow-sm">{models.map(item => <option key={item} value={item}>{getModelDisplayName(item)}</option>)}</select>
           </div>
