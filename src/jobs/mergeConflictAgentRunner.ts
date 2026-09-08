@@ -3,7 +3,9 @@ import type { Redis } from 'ioredis';
 import {
     AgentRegistry,
     TaskStates,
+    assertCommitIsAncestor,
     commitChanges,
+    createHooklessGit,
     createLogFiles,
     db,
     getAuthenticatedOctokit,
@@ -114,6 +116,7 @@ export async function handleMergeWithAgent(options: {
     worktreeInfo: WorktreeInfo;
     branchName: string;
     baseBranch: string;
+    baseCommit: string;
     pullRequestNumber: number;
     repoUrl: string;
     repoOwner: string;
@@ -127,7 +130,7 @@ export async function handleMergeWithAgent(options: {
     correlatedLogger: Logger;
     redisClient: Redis;
 }): Promise<JobResult> {
-    const { conflictedFiles, worktreeInfo, branchName, baseBranch, pullRequestNumber, repoUrl,
+    const { conflictedFiles, worktreeInfo, branchName, baseBranch, baseCommit, pullRequestNumber, repoUrl,
         repoOwner, repoName, githubToken, octokit, startingCommentId,
         stateManager, taskId, correlationId, correlatedLogger, redisClient } = options;
 
@@ -171,15 +174,19 @@ export async function handleMergeWithAgent(options: {
     }
 
     await verifyNoConflictMarkers(worktreeInfo, pullRequestNumber, correlatedLogger);
+    // The agent is intentionally not allowed to own Git operations. Stage its
+    // resolution here so commitChanges can require an already-resolved index.
+    await createHooklessGit(worktreeInfo.worktreePath).add('.');
     const commitMessage = buildMergeConflictCommitMessage({
         baseBranch, headBranch: branchName, pullRequestNumber, conflictedFiles,
         model: claudeResult.model || resolvedModel, wasCleanMerge,
     });
     const commitResult = await commitChanges(worktreeInfo.worktreePath, commitMessage, AI_COMMIT_AUTHOR, { issueNumber: pullRequestNumber, issueTitle: wasCleanMerge ? 'Verify clean merge' : 'Resolve merge conflicts' });
-    await pushBranch(worktreeInfo.worktreePath, branchName, { repoUrl, authToken: githubToken.token });
 
     const { simpleGit } = await import('simple-git');
     const finalCommitHash = commitResult?.commitHash || (await simpleGit({ baseDir: worktreeInfo.worktreePath }).revparse(['HEAD'])).trim();
+    await assertCommitIsAncestor(worktreeInfo.worktreePath, baseCommit);
+    await pushBranch(worktreeInfo.worktreePath, branchName, { repoUrl, authToken: githubToken.token });
     const taskUrl = `${process.env.WEB_UI_URL || process.env.FRONTEND_URL || 'https://gitfix.dev'}/tasks/${taskId}`;
     const comment = buildMergeConflictComment({
         wasCleanMerge,

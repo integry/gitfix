@@ -3,7 +3,7 @@
  *
  * Requires: PROPR_E2E_API_URL, PROPR_E2E_REPO (+ PROPR_E2E_TOKEN or `gh auth token`)
  * Optional: PROPR_E2E_SKIP_SLOW=1, PROPR_E2E_NO_CLEANUP=1,
- * PROPR_E2E_MODEL_TASK_TIMEOUT_MS=1200000
+ * PROPR_E2E_MODEL_TASK_TIMEOUT_MS=1800000
  */
 
 import { describe, it, before, after } from "node:test";

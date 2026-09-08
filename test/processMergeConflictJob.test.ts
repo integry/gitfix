@@ -107,10 +107,17 @@ await mock.module('../packages/core/src/utils/logger.js', {
 });
 
 // Track merge result to control flow
-let mockMergeResult = { outcome: 'clean' as const };
+let mockMergeResult: {
+    outcome: 'clean' | 'conflicts' | 'failed';
+    baseCommit?: string;
+    conflictedFiles?: string[];
+    error?: string;
+} = { outcome: 'clean', baseCommit: 'base-sha-456' };
 const mockMergeBaseIntoBranch = mock.fn(async () => mockMergeResult);
 const mockCommitChanges = mock.fn(async () => ({ commitHash: 'abc1234567890', commitMessage: 'test commit' }));
 const mockPushBranch = mock.fn(async () => {});
+const mockAssertCommitIsAncestor = mock.fn(async () => {});
+const mockStageChanges = mock.fn(async () => {});
 const mockEnsureRepoCloned = mock.fn(async () => '/tmp/repos/test');
 const mockCreateWorktreeFromExistingBranch = mock.fn(async () => ({ worktreePath: '/tmp/worktrees/test', branchName: 'feature-branch' }));
 const mockCleanupWorktree = mock.fn(async () => {});
@@ -167,7 +174,9 @@ await mock.module('@propr/core', {
         createWorktreeFromExistingBranch: mockCreateWorktreeFromExistingBranch,
         getRepoUrl: mockGetRepoUrl,
         commitChanges: mockCommitChanges,
+        createHooklessGit: mock.fn(() => ({ add: mockStageChanges })),
         pushBranch: mockPushBranch,
+        assertCommitIsAncestor: mockAssertCommitIsAncestor,
         mergeBaseIntoBranch: mockMergeBaseIntoBranch,
         ensureGitRepository: mockEnsureGitRepository,
         createLogFiles: mock.fn(async () => {}),
@@ -254,6 +263,8 @@ function resetAllMocks() {
     mockMergeBaseIntoBranch.mock.resetCalls();
     mockCommitChanges.mock.resetCalls();
     mockPushBranch.mock.resetCalls();
+    mockAssertCommitIsAncestor.mock.resetCalls();
+    mockStageChanges.mock.resetCalls();
     mockAgent.executeTask.mock.resetCalls();
     mockConfiguredAgent.executeTask.mock.resetCalls();
     mockCleanupWorktree.mock.resetCalls();
@@ -265,7 +276,7 @@ describe('processMergeConflictJob', () => {
     beforeEach(() => {
         resetAllMocks();
         // Default: clean merge
-        mockMergeResult = { outcome: 'clean' as const };
+        mockMergeResult = { outcome: 'clean', baseCommit: 'base-sha-456' };
         mockMergeBaseIntoBranch.mock.mockImplementation(async () => mockMergeResult);
         mockStateManager.getTaskState.mock.mockImplementation(async () => null);
         mockOctokit.request.mock.mockImplementation(async () => ({ data: { id: 100, html_url: 'https://github.com/test' } }));
@@ -283,6 +294,8 @@ describe('processMergeConflictJob', () => {
 
         // Verify commit and push were called
         assert.strictEqual(mockCommitChanges.mock.callCount(), 1);
+        assert.strictEqual(mockAssertCommitIsAncestor.mock.callCount(), 1);
+        assert.strictEqual(mockAssertCommitIsAncestor.mock.calls[0].arguments[1], 'base-sha-456');
         assert.strictEqual(mockPushBranch.mock.callCount(), 1);
 
         // Verify starting comment was posted and then updated
@@ -308,7 +321,7 @@ describe('processMergeConflictJob', () => {
     });
 
     test('conflict merge: invokes agent and pushes resolved conflicts', async () => {
-        mockMergeResult = { outcome: 'conflicts' as never, conflictedFiles: ['src/index.ts', 'src/app.ts'] } as never;
+        mockMergeResult = { outcome: 'conflicts', baseCommit: 'base-sha-456', conflictedFiles: ['src/index.ts', 'src/app.ts'] };
         mockMergeBaseIntoBranch.mock.mockImplementation(async () => mockMergeResult);
 
         const job = createMockJob();
@@ -342,8 +355,32 @@ describe('processMergeConflictJob', () => {
         assert.ok(body.includes('Resolved merge conflicts'));
     });
 
+    test('does not push or report success when the fetched base is not incorporated', async () => {
+        mockAssertCommitIsAncestor.mock.mockImplementationOnce(async () => {
+            throw new Error('Requested base commit base-sha-456 is not incorporated into HEAD');
+        });
+
+        await assert.rejects(
+            async () => processMergeConflictJob(createMockJob()),
+            /base-sha-456 is not incorporated into HEAD/
+        );
+
+        assert.strictEqual(mockPushBranch.mock.callCount(), 0);
+        const completedCalls = mockStateManager.updateTaskState.mock.calls.filter(
+            (c: { arguments: [string, string] }) => c.arguments[1] === 'completed'
+        );
+        assert.strictEqual(completedCalls.length, 0);
+
+        const successComment = mockOctokit.request.mock.calls.find(
+            (c: { arguments: [string, Record<string, unknown>] }) =>
+                c.arguments[0] === 'PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}' &&
+                (c.arguments[1].body as string).includes('Auto-merged')
+        );
+        assert.strictEqual(successComment, undefined);
+    });
+
     test('conflict merge: preserves title metadata in completion history', async () => {
-        mockMergeResult = { outcome: 'conflicts' as never, conflictedFiles: ['src/index.ts'] } as never;
+        mockMergeResult = { outcome: 'conflicts', baseCommit: 'base-sha-456', conflictedFiles: ['src/index.ts'] };
         mockMergeBaseIntoBranch.mock.mockImplementation(async () => mockMergeResult);
         mockStateManager.getTaskState.mock.mockImplementation(async () => ({
             issueRef: {
@@ -381,7 +418,7 @@ describe('processMergeConflictJob', () => {
 
     test('records the model from configured default agent in initial task state', async () => {
         mockSettings = { default_agent_alias: 'codex' };
-        mockMergeResult = { outcome: 'conflicts' as never, conflictedFiles: ['src/index.ts'] } as never;
+        mockMergeResult = { outcome: 'conflicts', baseCommit: 'base-sha-456', conflictedFiles: ['src/index.ts'] };
         mockMergeBaseIntoBranch.mock.mockImplementation(async () => mockMergeResult);
 
         await processMergeConflictJob(createMockJob());
@@ -392,7 +429,7 @@ describe('processMergeConflictJob', () => {
     });
 
     test('failed merge: reports error and sets FAILED state', async () => {
-        mockMergeResult = { outcome: 'failed' as never, error: 'fatal: not a git repository' } as never;
+        mockMergeResult = { outcome: 'failed', error: 'fatal: not a git repository' };
         mockMergeBaseIntoBranch.mock.mockImplementation(async () => mockMergeResult);
 
         const job = createMockJob();
@@ -426,7 +463,7 @@ describe('processMergeConflictJob', () => {
     });
 
     test('agent failure: keeps stderr/log details out of public errors', async () => {
-        mockMergeResult = { outcome: 'conflicts' as never, conflictedFiles: ['.propr/setup.sh'] } as never;
+        mockMergeResult = { outcome: 'conflicts', baseCommit: 'base-sha-456', conflictedFiles: ['.propr/setup.sh'] };
         mockMergeBaseIntoBranch.mock.mockImplementation(async () => mockMergeResult);
         mockAgent.executeTask.mock.mockImplementationOnce(async () => ({
             ...mockAgentResult,
@@ -502,7 +539,7 @@ describe('processMergeConflictJob', () => {
     });
 
     test('failed merge: marks cleanup as unsuccessful', async () => {
-        mockMergeResult = { outcome: 'failed' as never, error: 'fatal: merge failed' } as never;
+        mockMergeResult = { outcome: 'failed', error: 'fatal: merge failed' };
         mockMergeBaseIntoBranch.mock.mockImplementation(async () => mockMergeResult);
 
         await assert.rejects(async () => processMergeConflictJob(createMockJob()));
