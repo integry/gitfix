@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- lifecycle projection regressions share one database fixture */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, test } from 'node:test';
 import type { Knex } from 'knex';
