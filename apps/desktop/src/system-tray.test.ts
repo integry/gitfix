@@ -23,10 +23,10 @@ class FakeTray {
   tooltip = '';
   title = '';
   menu: Menu | null = null;
-  listeners = new Map<string, () => void>();
+  listeners = new Map<string, (...args: unknown[]) => void>();
   popups = 0;
 
-  on(event: string, listener: () => void): this {
+  on(event: string, listener: (...args: unknown[]) => void): this {
     this.listeners.set(event, listener);
     return this;
   }
@@ -207,26 +207,33 @@ describe('desktop system tray', () => {
     const fakeTray = new FakeTray();
     const dispatched: string[] = [];
     let popupMenu: Menu | null = null;
+    let popupActivation: { bounds: unknown; position: unknown } | null = null;
+    let popupCloses = 0;
     const menu = {} as Menu;
     const controller = createDesktopTrayController({
       platform: 'linux',
       icon: {} as NativeImage,
       createTray: () => fakeTray as unknown as Tray,
       buildMenu: () => menu,
-      popupMenu: value => { popupMenu = value; },
+      popupMenu: (value, activation) => { popupMenu = value; popupActivation = activation; },
+      closePopupMenu: () => { popupCloses += 1; },
       setBadgeCount: () => false,
       fetchActiveWork: async () => ({ status: 'disconnected' }),
       commands: commandFixture(command => dispatched.push(command)),
       log: () => undefined,
     });
     controller.start();
-    fakeTray.listeners.get('click')?.();
+    const bounds = { x: -44, y: 2, width: 22, height: 22 };
+    const position = { x: -33, y: 13 };
+    fakeTray.listeners.get('click')?.({}, bounds, position);
     assert.equal(popupMenu, menu, 'Linux primary activation uses Menu.popup instead of Tray.popUpContextMenu');
+    assert.deepEqual(popupActivation, { bounds, position }, 'the popup receives the physical activation geometry');
     assert.equal(fakeTray.popups, 0, 'the unsupported Linux Tray popup method is not called');
     assert.deepEqual(dispatched, []);
     assert.equal(fakeTray.menu, menu, 'setContextMenu remains installed for native right activation');
     assert.equal(fakeTray.listeners.has('double-click'), false, 'Linux does not expose a Tray double-click event');
     controller.close();
+    assert.equal(popupCloses, 1, 'tray shutdown also tears down the popup owner');
   });
 
   it('drops scoped stale responses and marks network failures unavailable instead of zero', async () => {
