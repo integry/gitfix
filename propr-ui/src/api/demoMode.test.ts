@@ -231,6 +231,27 @@ describe('demo mode API helpers', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it('surfaces GitHub reauthorization guidance without treating the desktop credential as invalid', async () => {
+    const invalidate = vi.fn(async () => ({ invalidated: true }));
+    setDesktopConnectionScope({
+      bridge: { connection: { invalidate } } as never,
+      profileId: 'profile-a',
+      transportScope: 'GGGGGGGGGGGGGGGGGGGGGG',
+    });
+    const response = new Response(JSON.stringify({
+      code: 'GITHUB_REAUTH_REQUIRED',
+      message: 'GitHub authorization has expired. Sign in again in a browser, then retry from desktop.',
+    }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    await expect(handleApiResponse(response)).rejects.toThrow(
+      'GitHub authorization has expired. Sign in again in a browser, then retry from desktop.'
+    );
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
   it('converts demo read-only 405 responses into a clear error', async () => {
     const response = new Response(JSON.stringify({
       code: DEMO_MODE_READ_ONLY_CODE,

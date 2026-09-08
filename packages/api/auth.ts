@@ -6,6 +6,7 @@ import { RedisStore } from 'connect-redis';
 import { createClient } from 'redis';
 import { randomBytes } from 'node:crypto';
 import type { Express, Request, Response, NextFunction, RequestHandler } from 'express';
+import { issueOAuthGrantRevision } from '@propr/core';
 import { validateSessionSecret } from '@propr/shared';
 import { validateGitHubToken } from './authBearer.js';
 import { desktopAuthService, INSTANCE_TOKEN_PREFIX } from './desktopAuthService.js';
@@ -35,6 +36,7 @@ import {
     type InstanceAuthorization,
 } from './authorization.js';
 import { captureVisualPreviewCredentialFromAdminLogin } from './services/visualPreviewOAuth.js';
+import { githubUserGrantService } from './githubUserGrantService.js';
 import './authTypes.js';
 
 export { refreshGitHubTokenIfNeeded } from './authGithubTokens.js';
@@ -156,13 +158,26 @@ export function createConnectCallbackHandler(
 
 async function completeAuthenticatedSessionWithPreviewCredential(req: Request, res: Response): Promise<void> {
     if (req.user && isUserWhitelisted(req.user.username)) {
+        const grantRevision = issueOAuthGrantRevision();
         try {
-            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user);
+            // Both stores receive the same revision. If this optional write
+            // fails, the durable capture below is still newer than any prior
+            // singleton credential and remains authoritative.
+            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user, grantRevision);
             if (captured) console.log(`[visual-preview] Captured OAuth upload credential for administrator ${req.user.username}`);
         } catch (error) {
             // Preview uploads are optional; a storage or encryption issue must not
             // prevent an otherwise valid administrator from logging in.
             console.warn('[visual-preview] Could not capture OAuth upload credential during login:', (error as Error).message);
+        }
+        try {
+            const captured = await githubUserGrantService.capture(req.user, grantRevision);
+            if (captured) console.log(`Captured server-side GitHub grant for ${req.user.username}`);
+        } catch (error) {
+            // Browser sessions remain usable even if durable desktop metadata
+            // authorization cannot be stored. Desktop callers receive bounded
+            // reauthorization guidance from the metadata routes.
+            console.warn('Could not capture GitHub user grant during login:', (error as Error).message);
         }
     }
     completeAuthenticatedSession(req, res);

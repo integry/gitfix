@@ -21,16 +21,27 @@ import {
 import type { Granularity } from '@propr/core';
 import type { OwnershipResult } from '../types.js';
 import { getRepoAuthToken } from '../auth.js';
+import { verifyPlannerRepositoryAccess } from '../repositoryAuthorization.js';
 import {
   claimDraftPreparation,
   isDraftOperationActive,
   releaseDraftPreparation
 } from '../operationGuard.js';
+import {
+  handleGitHubRepositoryAccessError,
+  resolveGitHubMetadataToken,
+  verifyGitHubRepositoryAccess,
+} from '../../../githubMetadataAuth.js';
 
 interface PreviewContextDeps {
   verifyOwnership: (draftId: string, userId: string, fields: string[]) => Promise<OwnershipResult>;
   validateInput: (body: Record<string, unknown>) => { valid: boolean; error?: string };
   db?: Knex;
+  resolveMetadataToken?: typeof resolveGitHubMetadataToken;
+  verifyRepositoryAccess?: typeof verifyGitHubRepositoryAccess;
+  resolveRepoAuthToken?: typeof getRepoAuthToken;
+  cloneRepository?: typeof ensureRepoCloned;
+  generatePreview?: typeof generateContextPreview;
 }
 
 interface BuildUpdatedConfigOptions {
@@ -98,6 +109,11 @@ function sendPreviewError(res: Response, error: unknown): void {
 }
 
 export function createPreviewContextHandler(deps: PreviewContextDeps) {
+  const resolveMetadataToken = deps.resolveMetadataToken ?? resolveGitHubMetadataToken;
+  const verifyRepositoryAccess = deps.verifyRepositoryAccess ?? verifyGitHubRepositoryAccess;
+  const resolveRepoAuthToken = deps.resolveRepoAuthToken ?? getRepoAuthToken;
+  const cloneRepository = deps.cloneRepository ?? ensureRepoCloned;
+  const generatePreview = deps.generatePreview ?? generateContextPreview;
   return async function previewContext(req: Request, res: Response): Promise<void> {
     const validation = deps.validateInput(req.body);
     if (!validation.valid) { res.status(400).json({ error: validation.error }); return; }
@@ -125,11 +141,19 @@ export function createPreviewContextHandler(deps: PreviewContextDeps) {
       const [owner, repoName] = (draft.repository as string).split('/');
       if (!owner || !repoName) { res.status(400).json({ error: 'Invalid repository format' }); return; }
 
-      const accessToken = req.user?.accessToken;
-      if (!accessToken) { res.status(401).json({ error: 'GitHub access token not available' }); return; }
+      const accessToken = await resolveMetadataToken(req);
+      const effectiveContextRepositories = await verifyPlannerRepositoryAccess(
+        {
+          repository: draft.repository as string,
+          context_config: draft.context_config,
+        },
+        contextRepositories,
+        accessToken,
+        verifyRepositoryAccess,
+      );
 
-      const authToken = await getRepoAuthToken(accessToken);
-      const worktreePath = await ensureRepoCloned({ repoUrl: `https://github.com/${owner}/${repoName}.git`, owner, repoName, authToken });
+      const authToken = await resolveRepoAuthToken(accessToken);
+      const worktreePath = await cloneRepository({ repoUrl: `https://github.com/${owner}/${repoName}.git`, owner, repoName, authToken });
 
       // Load settings to get the configured context model for semantic scoring and generation model for limits
       const settings = await loadSettings();
@@ -148,7 +172,7 @@ export function createPreviewContextHandler(deps: PreviewContextDeps) {
         });
       }
 
-      const backgroundPreview = generateContextPreview({ draftId, prompt, baseBranch, granularity: (granularity || 'balanced') as Granularity, contextLevel, compress, files, worktreePath, correlationId, contextModel, generationModel, contextRepositories, githubToken: authToken, excludedFiles, previewRequestId })
+      const backgroundPreview = generatePreview({ draftId, prompt, baseBranch, granularity: (granularity || 'balanced') as Granularity, contextLevel, compress, files, worktreePath, correlationId, contextModel, generationModel, contextRepositories: effectiveContextRepositories, githubToken: authToken, excludedFiles, previewRequestId })
         .then(async (result) => {
           const eventPublisher = getEventPublisher();
           const draftWithTrace = deps.db ? await deps.db('task_drafts').where({ draft_id: draftId }).select('generation_trace', 'context_config').first() : null;
@@ -202,6 +226,7 @@ export function createPreviewContextHandler(deps: PreviewContextDeps) {
 
       res.status(202).json({ pending: true, draftId, previewRequestId });
     } catch (error) {
+      if (await handleGitHubRepositoryAccessError(req, res, error)) return;
       console.error('Preview context error:', error);
       sendPreviewError(res, error);
     } finally {

@@ -3,6 +3,7 @@ import { after, afterEach, beforeEach, test } from 'node:test';
 import knex, { type Knex } from 'knex';
 import { db as defaultDatabase } from '../src/db/connection.js';
 import { up as createVisualPreviewOAuthCredentials } from '../src/db/migrations/20260903000000_create_visual_preview_oauth_credentials.js';
+import { up as addGitHubOAuthGrantRevision } from '../src/db/migrations/20260908010000_add_github_oauth_grant_revision.js';
 import {
   VisualPreviewCredentialError,
   VisualPreviewOAuthCredentialService,
@@ -13,6 +14,7 @@ let database: Knex;
 beforeEach(async () => {
   database = knex({ client: 'better-sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
   await createVisualPreviewOAuthCredentials(database);
+  await addGitHubOAuthGrantRevision(database);
 });
 
 afterEach(async () => database.destroy());
@@ -155,4 +157,55 @@ test('serializes refreshes across service instances sharing SQLite', async () =>
   await Promise.all([first.refreshIfNeeded(), second.refreshIfNeeded()]);
   assert.equal(refreshRequests, 1);
   assert.equal(await second.resolveUploadToken(), 'gho_once-access');
+});
+
+test('a stale scheduler refresh failure cannot invalidate a concurrent new login', async () => {
+  let releaseRefresh!: () => void;
+  const refreshStarted = new Promise<void>(resolve => { releaseRefresh = resolve; });
+  let answerRefresh!: () => void;
+  const refreshAnswer = new Promise<void>(resolve => { answerRefresh = resolve; });
+  const service = createService((async () => {
+    releaseRefresh();
+    await refreshAnswer;
+    return Response.json({ error: 'bad_refresh_token' });
+  }) as typeof fetch);
+  await service.replace({
+    githubUserId: '1',
+    githubUsername: 'admin',
+    source: 'github',
+    accessToken: 'gho_old-access',
+    refreshToken: 'ghr_old-refresh',
+    accessTokenExpiresAt: Date.now() - 1,
+  });
+
+  const staleRefresh = service.refreshIfNeeded();
+  await refreshStarted;
+  await service.captureFromLogin({
+    githubUserId: '1',
+    githubUsername: 'admin',
+    source: 'github',
+    accessToken: 'gho_new-login-access',
+    refreshToken: 'ghr_new-login-refresh',
+    accessTokenExpiresAt: Date.now() + 28_800_000,
+  });
+  answerRefresh();
+
+  assert.equal(await staleRefresh, 'not-needed');
+  assert.equal(await service.resolveUploadToken(), 'gho_new-login-access');
+  assert.equal((await service.getStatus()).status, 'active');
+});
+
+test('owner-scoped refresh never returns another administrators credential', async () => {
+  const service = createService();
+  await service.replace({
+    githubUserId: '1',
+    githubUsername: 'first-admin',
+    source: 'github',
+    accessToken: 'gho_first-admin',
+    refreshToken: 'ghr_first-admin',
+    accessTokenExpiresAt: Date.now() + 28_800_000,
+  });
+
+  assert.equal(await service.refreshAndGetForOwner('2'), null);
+  assert.equal((await service.refreshAndGetForOwner('1'))?.accessToken, 'gho_first-admin');
 });
