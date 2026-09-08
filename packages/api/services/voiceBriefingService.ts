@@ -18,7 +18,6 @@ import {
 
 export const VOICE_BRIEFING_DETAIL_LIMIT = VOICE_BRIEFING_MAX_ITEMS;
 const NOTIFICATION_PAGE_SIZE = 100;
-const NOTIFICATION_PAGE_LIMIT = 3;
 const INCLUDED_PLAN_STATUSES = [
   'generating',
   'refining',
@@ -220,14 +219,12 @@ async function loadAllAuthorizedNotifications(
   const notifications: Notification[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
-  let pagesLoaded = 0;
 
   do {
     const response: NotificationListResponse = await service.listNotifications(userId, {
       cursor,
       limit: NOTIFICATION_PAGE_SIZE,
     });
-    pagesLoaded += 1;
     notifications.push(...response.notifications.filter(notification =>
       notification.severity === 'warning' || notification.severity === 'error',
     ));
@@ -238,7 +235,7 @@ async function loadAllAuthorizedNotifications(
       }
       seenCursors.add(cursor);
     }
-  } while (cursor !== null && pagesLoaded < NOTIFICATION_PAGE_LIMIT);
+  } while (cursor !== null);
 
   return notifications;
 }

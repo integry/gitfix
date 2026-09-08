@@ -523,7 +523,7 @@ test('queue authorization ignores identical and reassigned username snapshots', 
   assert.deepEqual(snapshot.waiting.map(queueJob => queueJob.id), ['owned-by-id']);
 });
 
-test('production loaders authorize queue jobs, constrain plans, and cap notification pages', async () => {
+test('production loaders authorize queue jobs, constrain plans, and load every notification page', async () => {
   const queryTrace: Array<[string, unknown]> = [];
   const planRows = [
     {
@@ -588,6 +588,13 @@ test('production loaders authorize queue jobs, constrain plans, and cap notifica
     },
   };
   const notificationCalls: Array<{ userId: string; cursor: string | null; limit?: number }> = [];
+  const pageFourWarning = notification({
+    id: 'page-four-warning',
+    severity: 'warning',
+    title: 'Late notification needs attention',
+    target: { type: 'system_failure', component: 'notification-worker' },
+    occurredAt: NOW,
+  });
   const notificationService = {
     async listNotifications(userId: string, options: { cursor?: string | null; limit?: number }) {
       notificationCalls.push({
@@ -596,11 +603,13 @@ test('production loaders authorize queue jobs, constrain plans, and cap notifica
         limit: options.limit,
       });
       return {
-        notifications: [],
+        notifications: options.cursor === 'page-4' ? [pageFourWarning] : [],
         unreadCount: 0,
         nextCursor: options.cursor === null
           ? 'page-2'
-          : options.cursor === 'page-2' ? 'page-3' : 'page-beyond-limit',
+          : options.cursor === 'page-2'
+            ? 'page-3'
+            : options.cursor === 'page-3' ? 'page-4' : null,
       };
     },
   };
@@ -620,16 +629,21 @@ test('production loaders authorize queue jobs, constrain plans, and cap notifica
   assert.deepEqual(snapshot.waiting.map(queueJob => queueJob.id), ['owned-comment']);
   assert.deepEqual(snapshot.delayed, []);
   const briefing = await new VoiceBriefingService({
-    loaders: loaders({ queue: snapshot, plans: [...loadedPlans] }),
+    loaders: loaders({
+      queue: snapshot,
+      plans: [...loadedPlans],
+      notifications: [...loadedNotifications],
+    }),
     now: () => NOW,
   }).getBriefing('owner-user');
   assert.deepEqual(briefing.counts, {
     running: 1,
     queued: 1,
-    attention: 1,
+    attention: 2,
     plans: 2,
-    total: 4,
+    total: 5,
   });
+  assert.ok(briefing.items.some(item => item.id === 'page-four-warning'));
   const serialized = JSON.stringify(briefing);
   for (const foreignValue of [
     'foreign-active',
@@ -644,7 +658,7 @@ test('production loaders authorize queue jobs, constrain plans, and cap notifica
   }
   assert.deepEqual(queueStates, [['active'], ['waiting'], ['delayed']]);
   assert.deepEqual(loadedPlans, planRows);
-  assert.deepEqual(loadedNotifications, []);
+  assert.deepEqual(loadedNotifications, [pageFourWarning]);
   assert.deepEqual(queryTrace, [
     ['table', 'task_drafts'],
     ['select', ['draft_id', 'repository', 'status', 'updated_at']],
@@ -655,5 +669,6 @@ test('production loaders authorize queue jobs, constrain plans, and cap notifica
     { userId: 'owner-user', cursor: null, limit: 100 },
     { userId: 'owner-user', cursor: 'page-2', limit: 100 },
     { userId: 'owner-user', cursor: 'page-3', limit: 100 },
+    { userId: 'owner-user', cursor: 'page-4', limit: 100 },
   ]);
 });
