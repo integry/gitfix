@@ -299,10 +299,9 @@ describe('DesktopExperience profile management', () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('Profile storage is locked.'))
       .mockResolvedValueOnce(undefined);
-    render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
 
-    expect(await screen.findByText('Connected app')).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Connected: This computer' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Team server' }));
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Retryable edit' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
