@@ -83,6 +83,7 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => { creates += 1; return fakeTray as unknown as Tray; },
       buildMenu: template => { menuTemplate = template; return {} as Menu; },
+      popupMenu: () => undefined,
       setBadgeCount: count => { badges.push(count); return true; },
       fetchActiveWork: async () => ({ status: 'response', response: next }),
       commands: commandFixture(command => {
@@ -153,6 +154,7 @@ describe('desktop system tray', () => {
         return created as unknown as Tray;
       },
       buildMenu: () => ({} as Menu),
+      popupMenu: () => undefined,
       setBadgeCount: () => false,
       fetchActiveWork: async () => {
         fetches += 1;
@@ -201,14 +203,17 @@ describe('desktop system tray', () => {
     assert.equal(fetches, 2);
   });
 
-  it('opens once on a Linux double activation without dispatching from the primary click', () => {
+  it('uses the supported native popup path for Linux primary activation', () => {
     const fakeTray = new FakeTray();
     const dispatched: string[] = [];
+    let popupMenu: Menu | null = null;
+    const menu = {} as Menu;
     const controller = createDesktopTrayController({
       platform: 'linux',
       icon: {} as NativeImage,
       createTray: () => fakeTray as unknown as Tray,
-      buildMenu: () => ({} as Menu),
+      buildMenu: () => menu,
+      popupMenu: value => { popupMenu = value; },
       setBadgeCount: () => false,
       fetchActiveWork: async () => ({ status: 'disconnected' }),
       commands: commandFixture(command => dispatched.push(command)),
@@ -216,9 +221,11 @@ describe('desktop system tray', () => {
     });
     controller.start();
     fakeTray.listeners.get('click')?.();
+    assert.equal(popupMenu, menu, 'Linux primary activation uses Menu.popup instead of Tray.popUpContextMenu');
+    assert.equal(fakeTray.popups, 0, 'the unsupported Linux Tray popup method is not called');
     assert.deepEqual(dispatched, []);
-    fakeTray.listeners.get('double-click')?.();
-    assert.deepEqual(dispatched, ['open']);
+    assert.equal(fakeTray.menu, menu, 'setContextMenu remains installed for native right activation');
+    assert.equal(fakeTray.listeners.has('double-click'), false, 'Linux does not expose a Tray double-click event');
     controller.close();
   });
 
@@ -232,6 +239,7 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => fakeTray as unknown as Tray,
       buildMenu: () => ({} as Menu),
+      popupMenu: () => undefined,
       setBadgeCount: () => false,
       fetchActiveWork: async () => {
         request += 1;
@@ -267,6 +275,7 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => { created = true; return {} as Tray; },
       buildMenu: () => ({} as Menu),
+      popupMenu: () => undefined,
       setBadgeCount: () => false,
       fetchActiveWork: async () => ({ status: 'disconnected' }),
       commands: commandFixture(),
