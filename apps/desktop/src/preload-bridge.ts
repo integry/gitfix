@@ -8,7 +8,7 @@ import type {
 } from './shared/contract';
 import {
   IPC_CHANNELS,
-  isDesktopNativeCommand,
+  isDesktopNativeCommandDelivery,
   isDesktopNotificationScope,
   isDesktopPairingOperationId,
 } from './shared/contract';
@@ -63,8 +63,10 @@ export const createDesktopBridge = (
   const notificationSettingsListeners = new Set<(value: DesktopNotificationScope) => void>();
   const notificationNavigationListeners = new Set<(path: string) => void>();
   const pairingProgressListeners = new Set<(value: DesktopPairingProgress) => void>();
-  const nativeCommandListeners = new Set<(value: import('./shared/contract').DesktopNativeCommand) => void>();
-  const pendingNativeCommands: import('./shared/contract').DesktopNativeCommand[] = [];
+  const nativeCommandListeners = new Set<(
+    value: import('./shared/contract').DesktopNativeCommandDelivery,
+  ) => void>();
+  const pendingNativeCommands: import('./shared/contract').DesktopNativeCommandDelivery[] = [];
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
@@ -110,12 +112,16 @@ export const createDesktopBridge = (
     pairingProgressListeners.forEach(listener => listener(safeProgress));
   });
   ipc.on(IPC_CHANNELS.nativeCommand, (_event, value) => {
-    if (!isDesktopNativeCommand(value)) return;
+    if (!isDesktopNativeCommandDelivery(value)) return;
+    const delivery = {
+      command: value.command,
+      connectionScope: value.connectionScope ? { ...value.connectionScope } : null,
+    };
     if (nativeCommandListeners.size === 0) {
-      pendingNativeCommands.splice(0, pendingNativeCommands.length, value);
+      pendingNativeCommands.splice(0, pendingNativeCommands.length, delivery);
       return;
     }
-    nativeCommandListeners.forEach(listener => listener(value));
+    nativeCommandListeners.forEach(listener => listener(delivery));
   });
 
   const bridge: DesktopBridge = {

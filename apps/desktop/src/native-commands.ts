@@ -1,4 +1,9 @@
-import type { DesktopConnectionScope, DesktopNativeCommand } from './shared/contract';
+import type {
+  DesktopConnectionScope,
+  DesktopNativeCommand,
+  DesktopNativeCommandDelivery,
+  DesktopNotificationScope,
+} from './shared/contract';
 
 export type DesktopMainCommand = DesktopNativeCommand | 'open' | 'toggle-native-notifications';
 
@@ -10,7 +15,7 @@ export interface DesktopNativeCommandState {
 
 interface CommandWindow {
   isDestroyed(): boolean;
-  webContents: { send(channel: string, value: DesktopNativeCommand): void };
+  webContents: { send(channel: string, value: DesktopNativeCommandDelivery): void };
 }
 
 interface DesktopNativeCommandDispatcherOptions {
@@ -18,8 +23,9 @@ interface DesktopNativeCommandDispatcherOptions {
   getWindow(): CommandWindow | null;
   restoreWindow(): void;
   activeConnectionScope(): DesktopConnectionScope | null;
+  activeNotificationScope(): DesktopNotificationScope | null;
   notificationState(): { available: boolean; enabled: boolean };
-  setNativeNotificationsEnabled(enabled: boolean): Promise<void>;
+  setNativeNotificationsEnabled(scope: DesktopNotificationScope, enabled: boolean): Promise<void>;
   quit(): void;
   log?(level: 'warn', event: string): void;
 }
@@ -40,8 +46,18 @@ const AUTHENTICATED_COMMANDS = new Set<DesktopNativeCommand>([
   'new-plan', 'tasks', 'plans', 'inbox', 'notification-settings',
 ]);
 
-const scopeKey = (scope: DesktopConnectionScope | null): string | null =>
-  scope ? `${scope.profileId}\0${scope.transportScope}` : null;
+const sameConnectionScope = (
+  left: DesktopConnectionScope | null,
+  right: DesktopConnectionScope | null,
+): boolean => left === null || right === null
+  ? left === right
+  : left.profileId === right.profileId && left.transportScope === right.transportScope;
+
+const sameNotificationScope = (
+  left: DesktopNotificationScope | null,
+  right: DesktopNotificationScope | null,
+): boolean => sameConnectionScope(left, right)
+  && (left === null || right === null || left.userId === right.userId);
 
 /**
  * The single native action boundary. It accepts only a closed command union,
@@ -56,7 +72,7 @@ export const createDesktopNativeCommandDispatcher = (
   let closed = false;
   let connectionAvailable = false;
   let readyWindow: CommandWindow | null = null;
-  let pending: { command: DesktopNativeCommand; connection: string | null } | null = null;
+  let pending: DesktopNativeCommandDelivery | null = null;
   let notificationToggleTail: Promise<void> = Promise.resolve();
   let connectionGeneration = 0;
 
@@ -72,15 +88,19 @@ export const createDesktopNativeCommandDispatcher = (
 
   const notify = (): void => listeners.forEach(listener => listener());
 
-  const deliver = (command: DesktopNativeCommand, connection: string | null): void => {
+  const deliver = (command: DesktopNativeCommand, connectionScope: DesktopConnectionScope | null): void => {
     const window = readyWindow && !readyWindow.isDestroyed() ? readyWindow : options.getWindow();
     if (!ready || !window || window.isDestroyed()) {
-      pending = { command, connection };
+      pending = { command, connectionScope };
       return;
     }
     if (AUTHENTICATED_COMMANDS.has(command)
-      && (!state().authenticated || connection !== scopeKey(options.activeConnectionScope()))) return;
-    window.webContents.send(options.channel, command);
+      && (!state().authenticated
+        || !sameConnectionScope(connectionScope, options.activeConnectionScope()))) return;
+    window.webContents.send(options.channel, {
+      command,
+      connectionScope: connectionScope ? { ...connectionScope } : null,
+    });
   };
 
   return {
@@ -93,21 +113,26 @@ export const createDesktopNativeCommandDispatcher = (
       if (command === 'toggle-native-notifications') {
         const current = state();
         if (!current.nativeNotificationsAvailable) return;
-        const connection = scopeKey(options.activeConnectionScope());
+        const notificationScope = options.activeNotificationScope();
+        if (!notificationScope) return;
         const generation = connectionGeneration;
         notificationToggleTail = notificationToggleTail.then(async () => {
           if (closed || generation !== connectionGeneration
-            || connection !== scopeKey(options.activeConnectionScope())) return;
+            || !sameNotificationScope(notificationScope, options.activeNotificationScope())) return;
           const latest = state();
           if (!latest.nativeNotificationsAvailable) return;
-          await options.setNativeNotificationsEnabled(!latest.nativeNotificationsEnabled);
+          await options.setNativeNotificationsEnabled(
+            notificationScope,
+            !latest.nativeNotificationsEnabled,
+          );
         })
           .catch(() => options.log?.('warn', 'desktop.native_command.notifications_update_failed'))
           .finally(() => { if (!closed) notify(); });
         return;
       }
 
-      const connection = scopeKey(options.activeConnectionScope());
+      const activeConnection = options.activeConnectionScope();
+      const connection = activeConnection ? { ...activeConnection } : null;
       if (AUTHENTICATED_COMMANDS.has(command) && !state().authenticated) return;
       options.restoreWindow();
       deliver(command, connection);
@@ -119,7 +144,7 @@ export const createDesktopNativeCommandDispatcher = (
       readyWindow = window ?? options.getWindow();
       const queued = pending;
       pending = null;
-      if (queued) deliver(queued.command, queued.connection);
+      if (queued) deliver(queued.command, queued.connectionScope);
     },
     rendererUnavailable() {
       ready = false;

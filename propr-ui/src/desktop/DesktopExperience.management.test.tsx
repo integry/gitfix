@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
 import { DesktopInstanceSelector } from './DesktopInstanceSelector';
+import type { DesktopNativeCommandDelivery } from '../../../apps/desktop/src/shared/contract';
 import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
 
 const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
@@ -23,6 +24,21 @@ const remoteProfile: DesktopProfile = {
   baseUrl: 'https://propr.example.com',
   kind: 'remote',
 };
+
+const localConnectionScope = {
+  profileId: localProfile.id,
+  transportScope: 'abcdefghijklmnopqrstuv',
+};
+
+const remoteConnectionScope = {
+  profileId: remoteProfile.id,
+  transportScope: 'zyxwvutsrqponmlkjihgfe',
+};
+
+const nativeDelivery = (
+  command: DesktopNativeCommandDelivery['command'],
+  connectionScope = localConnectionScope,
+): DesktopNativeCommandDelivery => ({ command, connectionScope });
 
 const connectedApp = <><DesktopInstanceSelector /><div>Connected app</div></>;
 const deferred = <T,>() => {
@@ -78,7 +94,7 @@ describe('DesktopExperience profile management', () => {
   });
 
   it('uses the native manage command to open the validated instance lifecycle surface', async () => {
-    let nativeCommand: ((command: 'manage-instances') => void) | undefined;
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
     const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
     adapters.app.onNativeCommand = listener => {
       nativeCommand = listener as typeof nativeCommand;
@@ -86,15 +102,19 @@ describe('DesktopExperience profile management', () => {
     };
     render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
-    act(() => nativeCommand?.('manage-instances'));
+    act(() => nativeCommand?.(nativeDelivery('manage-instances')));
     fireEvent.click(await screen.findByRole('button', { name: /Team serverRemote instance/i }));
     expect(await screen.findByRole('button', { name: 'Connected: Team server' })).toBeInTheDocument();
     expect(adapters.connection.probe).toHaveBeenLastCalledWith(remoteProfile);
   });
 
   it('asks before native navigation can leave a plan composer', async () => {
-    let nativeCommand: ((command: 'tasks') => void) | undefined;
-    const adapters = adaptersFor([localProfile], localProfile.id);
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
+    const adapters = adaptersFor(
+      [localProfile],
+      localProfile.id,
+      async () => ({ status: 'ready', version: '0.8.15', ...localConnectionScope }),
+    );
     adapters.app.onNativeCommand = listener => {
       nativeCommand = listener as typeof nativeCommand;
       return () => { nativeCommand = undefined; };
@@ -103,14 +123,41 @@ describe('DesktopExperience profile management', () => {
     vi.mocked(window.confirm).mockReturnValueOnce(false);
     render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
-    act(() => nativeCommand?.('tasks'));
+    act(() => nativeCommand?.(nativeDelivery('tasks')));
     expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
     expect(window.location.hash).toBe('#/studio/draft-1');
     window.location.hash = '#/';
   });
 
+  it('drops native navigation received during an instance transition when the connection changes', async () => {
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
+    const remoteProbe = deferred<DesktopConnectionResult>();
+    const probe = vi.fn()
+      .mockResolvedValueOnce({ status: 'ready', version: '0.8.15', ...localConnectionScope })
+      .mockReturnValueOnce(remoteProbe.promise);
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id, probe);
+    adapters.app.onNativeCommand = listener => {
+      nativeCommand = listener;
+      return () => { nativeCommand = undefined; };
+    };
+    window.location.hash = '#/';
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
+    expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
+
+    act(() => nativeCommand?.(nativeDelivery('manage-instances')));
+    fireEvent.click(await screen.findByRole('button', { name: /Team serverRemote instance/i }));
+    expect(await screen.findByText('Connecting to Team server')).toBeInTheDocument();
+    act(() => nativeCommand?.(nativeDelivery('tasks')));
+    await act(async () => remoteProbe.resolve({
+      status: 'ready', version: '0.8.15', ...remoteConnectionScope,
+    }));
+
+    expect(await screen.findByRole('button', { name: 'Connected: Team server' })).toBeInTheDocument();
+    expect(window.location.hash).toBe('#/');
+  });
+
   it('keeps composer work when native instance management is declined', async () => {
-    let nativeCommand: ((command: 'manage-instances') => void) | undefined;
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
     const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
     adapters.app.onNativeCommand = listener => {
       nativeCommand = listener as typeof nativeCommand;
@@ -125,7 +172,7 @@ describe('DesktopExperience profile management', () => {
     );
     expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
 
-    act(() => nativeCommand?.('manage-instances'));
+    act(() => nativeCommand?.(nativeDelivery('manage-instances')));
 
     expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
     expect(screen.queryByRole('dialog', { name: 'Manage instances' })).not.toBeInTheDocument();
@@ -135,7 +182,7 @@ describe('DesktopExperience profile management', () => {
   });
 
   it('keeps composer work when native quit is declined', async () => {
-    let nativeCommand: ((command: 'quit') => void) | undefined;
+    let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
     const adapters = adaptersFor([localProfile], localProfile.id);
     const quit = vi.fn(async () => undefined);
     adapters.app.onNativeCommand = listener => {
@@ -152,13 +199,13 @@ describe('DesktopExperience profile management', () => {
     );
     expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
 
-    act(() => nativeCommand?.('quit'));
+    act(() => nativeCommand?.(nativeDelivery('quit')));
 
     expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
     expect(quit).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
 
-    act(() => nativeCommand?.('quit'));
+    act(() => nativeCommand?.(nativeDelivery('quit')));
     expect(quit).toHaveBeenCalledTimes(1);
     window.location.hash = '#/';
   });

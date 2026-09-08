@@ -138,7 +138,7 @@ export interface DesktopAdapters {
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
     onNativeCommand?(listener: (
-      command: import('../../../apps/desktop/src/shared/contract').DesktopNativeCommand,
+      delivery: import('../../../apps/desktop/src/shared/contract').DesktopNativeCommandDelivery,
     ) => void): () => void;
     quit?(): Promise<void>;
   };

@@ -125,15 +125,34 @@ test('keeps the active native toggle synchronized with renderer settings', async
     assert.equal(item.service.activeSettings()?.preferences.enabled, false);
     await item.service.update(scope, { taskCompleted: true });
     assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
-    await item.service.setActiveEnabled(true);
+    await item.service.setActiveEnabled(scope, true);
     assert.equal(item.service.activeSettings()?.preferences.enabled, true);
     assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
-    await item.service.setActiveEnabled(false);
+    await item.service.setActiveEnabled(scope, false);
     assert.equal(item.service.activeSettings()?.preferences.enabled, false);
     assert.equal(item.service.activeSettings()?.preferences.taskCompleted, true);
     item.service.clear(scope);
     assert.equal(item.service.activeSettings(), null);
     assert.deepEqual(changes, [undefined, scope, scope, scope, scope]);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
+test('rejects a native toggle captured for another user on the same connection', async () => {
+  const item = await fixture();
+  const replacementScope = { ...scope, userId: 'user-b' };
+  try {
+    await item.service.get(scope);
+    item.setUser(replacementScope.userId);
+    await item.service.get(replacementScope);
+
+    await assert.rejects(
+      item.service.setActiveEnabled(scope, true),
+      /No active notification account/,
+    );
+    assert.equal(item.service.activeSettings()?.preferences.enabled, false);
   } finally {
     item.service.close();
     await item.cleanup();

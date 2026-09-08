@@ -234,6 +234,14 @@ export class NativeNotificationService {
     scope: DesktopNotificationScope,
     update: Partial<DesktopNotificationPreferences>,
   ): Promise<DesktopNotificationSettings> {
+    return this.#update(scope, update, false);
+  }
+
+  async #update(
+    scope: DesktopNotificationScope,
+    update: Partial<DesktopNotificationPreferences>,
+    requireCurrentScope: boolean,
+  ): Promise<DesktopNotificationSettings> {
     this.#requireActiveScope(scope);
     if (!update || typeof update !== 'object' || Array.isArray(update)
       || Object.keys(update).length === 0
@@ -243,10 +251,13 @@ export class NativeNotificationService {
     }
     this.#activateScope(scope);
     await this.#load();
+    if (requireCurrentScope && !this.#isCurrentScope(scope)) {
+      throw new Error('No active notification account');
+    }
     const key = scopeStorageKey(scope);
     if (update.enabled === false) this.#clearDeliveries(scope);
     else this.#removeDisabledPending(scope, update);
-    const settings = await this.#queueUpdate(scope, key, update);
+    const settings = await this.#queueUpdate(scope, key, update, requireCurrentScope);
     this.#options.onSettingsChanged?.(scope);
     return settings;
   }
@@ -256,10 +267,14 @@ export class NativeNotificationService {
     return scope && this.#loaded && this.#isCurrentScope(scope) ? this.#settings(scope) : null;
   }
 
-  async setActiveEnabled(enabled: boolean): Promise<void> {
+  activeScope(): DesktopNotificationScope | null {
     const scope = this.#accountScope;
-    if (!scope || !this.#isCurrentScope(scope)) throw new Error('No active notification account');
-    await this.update(scope, { enabled });
+    return scope && this.#isCurrentScope(scope) ? { ...scope } : null;
+  }
+
+  async setActiveEnabled(scope: DesktopNotificationScope, enabled: boolean): Promise<void> {
+    if (!this.#isCurrentScope(scope)) throw new Error('No active notification account');
+    await this.#update(scope, { enabled }, true);
   }
 
   async test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }> {
@@ -485,8 +500,12 @@ export class NativeNotificationService {
     scope: DesktopNotificationScope,
     key: string,
     update: Partial<DesktopNotificationPreferences>,
+    requireCurrentScope: boolean,
   ): Promise<DesktopNotificationSettings> {
     const operation = this.#writeTail.then(async () => {
+      if (requireCurrentScope && !this.#isCurrentScope(scope)) {
+        throw new Error('No active notification account');
+      }
       const current = this.#state.accounts[key];
       if (!current && Object.keys(this.#state.accounts).length >= MAX_STORED_ACCOUNTS) {
         throw new Error('Desktop notification preference account limit reached');

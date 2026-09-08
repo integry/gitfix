@@ -62,6 +62,11 @@ export type DesktopNativeCommand = typeof DESKTOP_NATIVE_COMMANDS[number];
 export const isDesktopNativeCommand = (value: unknown): value is DesktopNativeCommand =>
   typeof value === 'string' && (DESKTOP_NATIVE_COMMANDS as readonly string[]).includes(value);
 
+export interface DesktopNativeCommandDelivery {
+  command: DesktopNativeCommand;
+  connectionScope: DesktopConnectionScope | null;
+}
+
 export interface DesktopDeepLinkDelivery {
   deliveryId: number;
   url: string;
@@ -179,6 +184,25 @@ export interface DesktopNotificationScope extends DesktopConnectionScope {
 const DESKTOP_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const DESKTOP_TRANSPORT_SCOPE_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const DESKTOP_USER_ID_PATTERN = /^[^\x00-\x20\x7f]{1,128}$/;
+
+const isDesktopConnectionScope = (value: unknown): value is DesktopConnectionScope => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const scope = value as Record<string, unknown>;
+  return Object.keys(scope).length === 2
+    && typeof scope.profileId === 'string' && DESKTOP_PROFILE_ID_PATTERN.test(scope.profileId)
+    && typeof scope.transportScope === 'string'
+    && DESKTOP_TRANSPORT_SCOPE_PATTERN.test(scope.transportScope);
+};
+
+export const isDesktopNativeCommandDelivery = (
+  value: unknown,
+): value is DesktopNativeCommandDelivery => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const delivery = value as Record<string, unknown>;
+  return Object.keys(delivery).length === 2
+    && isDesktopNativeCommand(delivery.command)
+    && (delivery.connectionScope === null || isDesktopConnectionScope(delivery.connectionScope));
+};
 
 export const isDesktopNotificationScope = (value: unknown): value is DesktopNotificationScope => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -334,7 +358,7 @@ export interface DesktopBridge {
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
-    onNativeCommand(listener: (command: DesktopNativeCommand) => void): () => void;
+    onNativeCommand(listener: (delivery: DesktopNativeCommandDelivery) => void): () => void;
   };
   auth: {
     logout(apiBaseUrl: string): Promise<void>;

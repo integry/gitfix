@@ -76,17 +76,22 @@ describe('desktop preload bridge', () => {
   it('buffers only fixed native commands and never exposes arbitrary renderer navigation', () => {
     const ipc = new FakeIpc();
     const bridge = createDesktopBridge(ipc);
-    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'tasks');
-    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'https://attacker.example');
+    const connectionScope = { profileId: 'profile-1', transportScope: 'abcdefghijklmnopqrstuv' };
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'tasks', connectionScope });
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'https://attacker.example', connectionScope });
     ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'tasks' });
-    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'plans');
-    const commands: string[] = [];
-    const unsubscribe = bridge.app.onNativeCommand(command => commands.push(command));
-    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'notification-settings');
-    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'quit');
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'plans', connectionScope });
+    const commands: unknown[] = [];
+    const unsubscribe = bridge.app.onNativeCommand(delivery => commands.push(delivery));
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'notification-settings', connectionScope });
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'quit', connectionScope: null });
     unsubscribe();
-    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'inbox');
-    assert.deepEqual(commands, ['plans', 'notification-settings', 'quit']);
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'inbox', connectionScope });
+    assert.deepEqual(commands, [
+      { command: 'plans', connectionScope },
+      { command: 'notification-settings', connectionScope },
+      { command: 'quit', connectionScope: null },
+    ]);
   });
 
   it('maps profile and main-process authentication operations to fixed channels', async () => {

@@ -1710,6 +1710,7 @@ if (!hasSingleInstanceLock) {
       getWindow: () => mainWindow,
       restoreWindow: restoreMainWindow,
       activeConnectionScope: () => credentials.activeConnectionScope(),
+      activeNotificationScope: () => notifications.activeScope(),
       notificationState: () => {
         const settings = notifications.activeSettings();
         return {
@@ -1717,7 +1718,7 @@ if (!hasSingleInstanceLock) {
           enabled: settings?.preferences.enabled === true,
         };
       },
-      setNativeNotificationsEnabled: enabled => notifications.setActiveEnabled(enabled),
+      setNativeNotificationsEnabled: (scope, enabled) => notifications.setActiveEnabled(scope, enabled),
       quit: () => app.quit(),
       log: (level, event) => log(level, event),
     });

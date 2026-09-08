@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { navigateToUiPath } from '../config/runtimeMode';
-import type { DesktopNativeCommand } from '../../../apps/desktop/src/shared/contract';
+import type {
+  DesktopNativeCommand,
+  DesktopNativeCommandDelivery,
+} from '../../../apps/desktop/src/shared/contract';
 import type { ExperienceState } from './desktopExperienceState';
 import type { DesktopAdapters, DesktopProfile } from './types';
 
@@ -30,6 +33,14 @@ const confirmPlanStudioDiscard = (): boolean => {
     || window.confirm('Leave this plan? Any unsaved changes will be lost.');
 };
 
+const matchesConnectedScope = (
+  connectionScope: DesktopNativeCommandDelivery['connectionScope'],
+  state: Extract<ExperienceState, { phase: 'connected' }>,
+): boolean => Boolean(connectionScope
+  && state.profile.id === connectionScope.profileId
+  && state.result.profileId === connectionScope.profileId
+  && state.result.transportScope === connectionScope.transportScope);
+
 export const useDesktopNativeCommands = ({
   app,
   state,
@@ -38,18 +49,19 @@ export const useDesktopNativeCommands = ({
   onChooseInstances,
   onReconnect,
 }: DesktopNativeCommandOptions): void => {
-  const [pendingCommand, setPendingCommand] = useState<DesktopNativeCommand | null>(null);
+  const [pendingCommand, setPendingCommand] = useState<DesktopNativeCommandDelivery | null>(null);
 
   useEffect(() => app.onNativeCommand?.(setPendingCommand), [app]);
 
   useEffect(() => {
     if (!pendingCommand) return;
-    if (pendingCommand === 'quit') {
+    const { command, connectionScope } = pendingCommand;
+    if (command === 'quit') {
       if (confirmPlanStudioDiscard()) void app.quit?.().catch(() => undefined);
       setPendingCommand(null);
       return;
     }
-    if (pendingCommand === 'manage-instances') {
+    if (command === 'manage-instances') {
       if (state.phase === 'loading' || state.phase === 'connecting' || state.phase === 'authenticating') return;
       if (!confirmPlanStudioDiscard()) {
         setPendingCommand(null);
@@ -64,7 +76,11 @@ export const useDesktopNativeCommands = ({
       return;
     }
     if (state.phase !== 'connected') return;
-    const target = commandPaths[pendingCommand];
+    if (!matchesConnectedScope(connectionScope, state)) {
+      setPendingCommand(null);
+      return;
+    }
+    const target = commandPaths[command];
     const current = new URL(
       window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash || '/',
       'https://desktop.propr.invalid',
@@ -76,7 +92,7 @@ export const useDesktopNativeCommands = ({
     }
     if (current !== target) navigateToUiPath(target);
     setPendingCommand(null);
-  }, [app, instanceChooserBlocked, onChooseInstances, onManageInstances, pendingCommand, state.phase]);
+  }, [app, instanceChooserBlocked, onChooseInstances, onManageInstances, pendingCommand, state]);
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
