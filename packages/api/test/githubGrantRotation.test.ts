@@ -50,6 +50,7 @@ test('desktop-first rotation updates the shared scheduler grant and durable user
     tokenExpiresAt: Date.now() - 1,
     oauthSource: 'github' as const,
   };
+  const loginRevision = 100;
   await shared.replace({
     githubUserId: login.id,
     githubUsername: login.username,
@@ -57,8 +58,9 @@ test('desktop-first rotation updates the shared scheduler grant and durable user
     accessToken: login.accessToken,
     refreshToken: login.refreshToken,
     accessTokenExpiresAt: login.tokenExpiresAt,
+    grantRevision: loginRevision,
   });
-  await durable.capture(login);
+  await durable.capture(login, loginRevision);
 
   const resolved = await durable.resolve(login.id);
 
@@ -91,6 +93,7 @@ test('scheduler-first rotation is adopted by desktop without reusing its stale r
     tokenExpiresAt: Date.now() - 1,
     oauthSource: 'github' as const,
   };
+  const loginRevision = 100;
   await shared.replace({
     githubUserId: login.id,
     githubUsername: login.username,
@@ -98,8 +101,9 @@ test('scheduler-first rotation is adopted by desktop without reusing its stale r
     accessToken: login.accessToken,
     refreshToken: login.refreshToken,
     accessTokenExpiresAt: login.tokenExpiresAt,
+    grantRevision: loginRevision,
   });
-  await durable.capture(login);
+  await durable.capture(login, loginRevision);
 
   assert.equal(await shared.refreshIfNeeded(), 'refreshed');
   const resolved = await durable.resolve(login.id);
@@ -108,7 +112,7 @@ test('scheduler-first rotation is adopted by desktop without reusing its stale r
   assert.deepEqual(seenRefreshTokens, ['ghr_old-refresh']);
 });
 
-test('new durable login remains authoritative when shared capture leaves an older active grant', async () => {
+test('scheduler refresh cannot promote an older shared login over a newer durable login', async () => {
   let refreshRequests = 0;
   const environment = {
     SESSION_SECRET: 'test-secret',
@@ -141,12 +145,18 @@ test('new durable login remains authoritative when shared capture leaves an olde
     oauthSource: 'github',
   }, 200);
 
-  const resolved = await durable.resolve(desktopUser.id);
+  const beforeScheduler = await durable.resolve(desktopUser.id);
+  assert.equal(beforeScheduler.status === 'active' && beforeScheduler.accessToken, 'gho_new-login-access');
 
-  assert.equal(resolved.status, 'active');
-  assert.equal(resolved.status === 'active' && resolved.accessToken, 'gho_new-login-access');
-  assert.equal((await shared.getForOwner(desktopUser.id))?.accessToken, 'gho_stale-shared-access');
-  assert.equal(refreshRequests, 0);
+  assert.equal(await shared.refreshIfNeeded(), 'refreshed');
+  const refreshedSharedRow = await database('visual_preview_oauth_credentials').first();
+  assert.ok(Number(refreshedSharedRow.grant_revision) > 200);
+  assert.equal(Number(refreshedSharedRow.login_revision), 100);
+  const afterScheduler = await durable.resolve(desktopUser.id);
+
+  assert.equal(afterScheduler.status === 'active' && afterScheduler.accessToken, 'gho_new-login-access');
+  assert.equal((await shared.getForOwner(desktopUser.id))?.accessToken, 'gho_rotated-stale-shared-access');
+  assert.equal(refreshRequests, 1);
 });
 
 test('stale desktop refresh failure adopts a concurrent login instead of marking reauthorization', async () => {

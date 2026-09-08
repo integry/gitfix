@@ -35,6 +35,7 @@ export interface VisualPreviewOAuthCredentialInput {
   accessTokenExpiresAt?: number;
   refreshTokenExpiresAt?: number;
   grantRevision?: number;
+  loginRevision?: number;
 }
 
 export interface VisualPreviewOAuthCredentialStatus {
@@ -55,6 +56,7 @@ export interface VisualPreviewOAuthCredentialGrant {
   accessTokenExpiresAt?: number;
   refreshTokenExpiresAt?: number;
   grantRevision?: number;
+  loginRevision?: number;
 }
 
 interface CredentialRow {
@@ -72,6 +74,7 @@ interface CredentialRow {
   refresh_lease_owner: string | null;
   last_refreshed_at: string | null;
   grant_revision: number | string;
+  login_revision: number | string;
   created_at: string;
   updated_at: string;
 }
@@ -258,12 +261,13 @@ export class VisualPreviewOAuthCredentialService {
     assertSupportedToken(input.accessToken);
     const existing = await this.credentialQuery().first();
     if (!existing || existing.github_user_id !== input.githubUserId) return false;
-    await this.store(input);
+    await this.store(input, optionalTimestamp(existing.login_revision));
     return true;
   }
 
-  private async store(input: VisualPreviewOAuthCredentialInput): Promise<void> {
+  private async store(input: VisualPreviewOAuthCredentialInput, loginRevision?: number): Promise<void> {
     const now = this.database.fn.now();
+    const grantRevision = input.grantRevision ?? issueOAuthGrantRevision();
     const values = {
       id: CREDENTIAL_ID,
       github_user_id: input.githubUserId,
@@ -275,7 +279,8 @@ export class VisualPreviewOAuthCredentialService {
         : null,
       access_token_expires_at_ms: input.accessTokenExpiresAt ?? null,
       refresh_token_expires_at_ms: input.refreshTokenExpiresAt ?? null,
-      grant_revision: input.grantRevision ?? issueOAuthGrantRevision(),
+      grant_revision: grantRevision,
+      login_revision: loginRevision ?? input.loginRevision ?? grantRevision,
       status: 'active' as const,
       last_error_code: null,
       refresh_lease_until_ms: null,
@@ -497,6 +502,7 @@ export class VisualPreviewOAuthCredentialService {
       accessTokenExpiresAt: optionalTimestamp(row.access_token_expires_at_ms),
       refreshTokenExpiresAt: optionalTimestamp(row.refresh_token_expires_at_ms),
       grantRevision: optionalTimestamp(row.grant_revision),
+      loginRevision: optionalTimestamp(row.login_revision),
     };
   }
 

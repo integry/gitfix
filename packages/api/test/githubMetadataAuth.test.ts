@@ -4,6 +4,7 @@ import type { Request, Response } from 'express';
 import knex, { type Knex } from 'knex';
 import { closeConnection } from '@propr/core';
 import { up as createGitHubUserGrants } from '../../core/src/db/migrations/20260908000000_create_github_user_grants.js';
+import { up as addGitHubOAuthGrantRevision } from '../../core/src/db/migrations/20260908010000_add_github_oauth_grant_revision.js';
 import { GitHubUserGrantService } from '../githubUserGrantService.js';
 import {
   GitHubMetadataAuthorizationError,
@@ -59,6 +60,7 @@ function browserRequest(body: Record<string, unknown> = {}): Request & { saveCal
 beforeEach(async () => {
   database = knex({ client: 'better-sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
   await createGitHubUserGrants(database);
+  await addGitHubOAuthGrantRevision(database);
 });
 
 afterEach(async () => {

@@ -331,6 +331,7 @@ test('browser session adopts a desktop-first rotation without refreshing the rot
     }),
     tokenExpiresAt: Date.now() - 1,
   };
+  const loginRevision = 100;
   await shared.replace({
     githubUserId: oldGrant.id,
     githubUsername: oldGrant.username,
@@ -338,8 +339,9 @@ test('browser session adopts a desktop-first rotation without refreshing the rot
     accessToken: oldGrant.accessToken!,
     refreshToken: oldGrant.refreshToken,
     accessTokenExpiresAt: oldGrant.tokenExpiresAt,
+    grantRevision: loginRevision,
   });
-  await durable.capture(oldGrant);
+  await durable.capture(oldGrant, loginRevision);
 
   try {
     assert.equal((await durable.resolve(oldGrant.id)).status, 'active');

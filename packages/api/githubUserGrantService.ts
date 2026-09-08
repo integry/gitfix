@@ -20,6 +20,7 @@ interface GrantRow {
   status: 'active' | 'reauth_required';
   last_error_code: string | null;
   grant_revision: number | string;
+  login_revision: number | string;
   created_at: string;
   updated_at: string;
 }
@@ -121,6 +122,7 @@ export class GitHubUserGrantService {
       status: 'active' as const,
       last_error_code: null,
       grant_revision: grantRevision,
+      login_revision: grantRevision,
       updated_at: this.database.fn.now(),
     };
     await this.database('github_user_grants')
@@ -246,6 +248,7 @@ export class GitHubUserGrantService {
     row: GrantRow,
     user: GitHubUser,
     grantRevision = issueOAuthGrantRevision(row.grant_revision),
+    loginRevision = Number(row.login_revision),
   ): Promise<boolean> {
     const accessToken = assertUserToken(user.accessToken || '');
     const values = {
@@ -260,6 +263,7 @@ export class GitHubUserGrantService {
       status: 'active' as const,
       last_error_code: null,
       grant_revision: grantRevision,
+      login_revision: loginRevision,
       updated_at: this.database.fn.now(),
     };
     return Number(await this.currentRowQuery(row).update(values)) === 1;
@@ -340,7 +344,7 @@ export class GitHubUserGrantService {
         refreshToken: shared.refreshToken,
         tokenExpiresAt: shared.accessTokenExpiresAt,
         refreshTokenExpiresAt: shared.refreshTokenExpiresAt,
-      }, sharedRevision);
+      }, sharedRevision, Number(shared.loginRevision));
       return stored
         ? {
             status: 'active',
@@ -381,9 +385,14 @@ export class GitHubUserGrantService {
   private isSharedGrantNewer(row: GrantRow, shared: VisualPreviewOAuthCredentialGrant): boolean {
     const durableRevision = Number(row.grant_revision);
     const sharedRevision = Number(shared.grantRevision);
-    return Number.isSafeInteger(sharedRevision)
-      && Number.isSafeInteger(durableRevision)
-      && sharedRevision > durableRevision;
+    const durableLoginRevision = Number(row.login_revision);
+    const sharedLoginRevision = Number(shared.loginRevision);
+    if (![
+      durableRevision, sharedRevision, durableLoginRevision, sharedLoginRevision,
+    ].every(Number.isSafeInteger)) return false;
+    return sharedLoginRevision === durableLoginRevision
+      ? sharedRevision > durableRevision
+      : sharedLoginRevision > durableLoginRevision;
   }
 
   private async requestRefresh(source: GrantRow['source'], refreshToken: string): Promise<RefreshResponse> {
