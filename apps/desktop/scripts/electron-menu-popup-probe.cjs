@@ -37,6 +37,8 @@ app.whenReady().then(() => {
   let menuWillShow = 0;
   let menuWillClose = 0;
   let trayActivations = 0;
+  let nativeTrayActivations = 0;
+  let syntheticTrayActivations = 0;
   let opensAfterActivationDispatch = 0;
   let persistentDismissals = 0;
   let activationDispatchReturned = true;
@@ -86,6 +88,8 @@ app.whenReady().then(() => {
               menuWillShow,
               menuWillClose,
               trayActivations,
+              nativeTrayActivations,
+              syntheticTrayActivations,
               opensAfterActivationDispatch,
               persistentDismissals,
               ownersCreated,
@@ -101,7 +105,11 @@ app.whenReady().then(() => {
       });
       return menu;
     },
-    popupMenu: (popupMenu, activation) => popup.popup(popupMenu, activation),
+    popupMenu: (popupMenu, activation) => {
+      if (activation.source === 'native') nativeTrayActivations += 1;
+      else syntheticTrayActivations += 1;
+      popup.popup(popupMenu, activation);
+    },
     closePopupMenu: () => popup.close(),
     setBadgeCount: () => false,
     fetchActiveWork: async () => ({ status: 'disconnected' }),

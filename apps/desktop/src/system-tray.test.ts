@@ -207,7 +207,7 @@ describe('desktop system tray', () => {
     const fakeTray = new FakeTray();
     const dispatched: string[] = [];
     let popupMenu: Menu | null = null;
-    let popupActivation: { bounds: unknown; position: unknown } | null = null;
+    const popupActivations: Array<{ bounds: unknown; position: unknown; source: unknown }> = [];
     let popupCloses = 0;
     const menu = {} as Menu;
     const controller = createDesktopTrayController({
@@ -215,7 +215,7 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => fakeTray as unknown as Tray,
       buildMenu: () => menu,
-      popupMenu: (value, activation) => { popupMenu = value; popupActivation = activation; },
+      popupMenu: (value, activation) => { popupMenu = value; popupActivations.push(activation); },
       closePopupMenu: () => { popupCloses += 1; },
       setBadgeCount: () => false,
       fetchActiveWork: async () => ({ status: 'disconnected' }),
@@ -227,7 +227,17 @@ describe('desktop system tray', () => {
     const position = { x: -33, y: 13 };
     fakeTray.listeners.get('click')?.({}, bounds, position);
     assert.equal(popupMenu, menu, 'Linux primary activation uses Menu.popup instead of Tray.popUpContextMenu');
-    assert.deepEqual(popupActivation, { bounds, position }, 'the popup receives the physical activation geometry');
+    assert.deepEqual(popupActivations[0], { bounds, position, source: 'synthetic' },
+      'a direct EventEmitter click is identified as synthetic evidence');
+    fakeTray.listeners.get('click')?.({
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      triggeredByAccelerator: true,
+    }, bounds, position);
+    assert.deepEqual(popupActivations[1], { bounds, position, source: 'native' },
+      'Electron event metadata identifies the real Linux activation path');
     assert.equal(fakeTray.popups, 0, 'the unsupported Linux Tray popup method is not called');
     assert.deepEqual(dispatched, []);
     assert.equal(fakeTray.menu, menu, 'setContextMenu remains installed for native right activation');
