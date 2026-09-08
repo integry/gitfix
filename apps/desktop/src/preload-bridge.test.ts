@@ -65,6 +65,21 @@ describe('desktop preload bridge', () => {
     ]);
   });
 
+  it('buffers only fixed native commands and never exposes arbitrary renderer navigation', () => {
+    const ipc = new FakeIpc();
+    const bridge = createDesktopBridge(ipc);
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'tasks');
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'https://attacker.example');
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, { command: 'tasks' });
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'plans');
+    const commands: string[] = [];
+    const unsubscribe = bridge.app.onNativeCommand(command => commands.push(command));
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'notification-settings');
+    unsubscribe();
+    ipc.listeners.get(IPC_CHANNELS.nativeCommand)?.({}, 'inbox');
+    assert.deepEqual(commands, ['plans', 'notification-settings']);
+  });
+
   it('maps profile and main-process authentication operations to fixed channels', async () => {
     const ipc = new FakeIpc();
     const bridge = createDesktopBridge(ipc);

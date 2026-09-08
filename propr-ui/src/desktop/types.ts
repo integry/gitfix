@@ -137,6 +137,9 @@ export interface DesktopAdapters {
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
+    onNativeCommand?(listener: (
+      command: import('../../../apps/desktop/src/shared/contract').DesktopNativeCommand,
+    ) => void): () => void;
   };
   profiles: DesktopProfileAdapter;
   discovery: DesktopDiscoveryAdapter;

@@ -42,7 +42,22 @@ export const IPC_CHANNELS = Object.freeze({
   notificationsPublish: 'desktop:notifications-publish',
   notificationsClear: 'desktop:notifications-clear',
   notificationNavigate: 'desktop:notification-navigate',
+  nativeCommand: 'desktop:native-command',
 } as const);
+
+export const DESKTOP_NATIVE_COMMANDS = Object.freeze([
+  'new-plan',
+  'tasks',
+  'plans',
+  'inbox',
+  'manage-instances',
+  'notification-settings',
+] as const);
+
+export type DesktopNativeCommand = typeof DESKTOP_NATIVE_COMMANDS[number];
+
+export const isDesktopNativeCommand = (value: unknown): value is DesktopNativeCommand =>
+  typeof value === 'string' && (DESKTOP_NATIVE_COMMANDS as readonly string[]).includes(value);
 
 export interface DesktopDeepLinkDelivery {
   deliveryId: number;
@@ -300,6 +315,7 @@ export interface DesktopBridge {
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
+    onNativeCommand(listener: (command: DesktopNativeCommand) => void): () => void;
   };
   auth: {
     logout(apiBaseUrl: string): Promise<void>;

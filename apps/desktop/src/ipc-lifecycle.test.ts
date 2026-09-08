@@ -1126,6 +1126,7 @@ describe('desktop IPC shutdown gate', () => {
           whenIdle: async () => { order.push('deep-links-drain'); },
         },
         tray: { close: () => { order.push('tray-close'); } },
+        nativeActions: { close: () => { order.push('native-actions-close'); } },
         ipc: {
           close: () => { order.push('ipc-close'); registered.close(); },
           awaitIdle: () => { order.push('ipc-drain'); return registered.awaitIdle(); },
@@ -1157,6 +1158,8 @@ describe('desktop IPC shutdown gate', () => {
 
       assert.equal(handlers.size, 0);
       assert.equal(order.indexOf('deep-links-close') > order.indexOf('shutdown-started'), true);
+      assert.equal(order.indexOf('native-actions-close') > order.indexOf('deep-links-close'), true);
+      assert.equal(order.indexOf('native-actions-close') < order.indexOf('tray-close'), true);
       assert.equal(order.indexOf('tray-close') > order.indexOf('deep-links-close'), true);
       assert.equal(order.indexOf('tray-close') < order.indexOf('ipc-close'), true);
       assert.equal(order.indexOf('deep-links-close') < order.indexOf('ipc-close'), true);

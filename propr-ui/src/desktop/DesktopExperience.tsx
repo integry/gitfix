@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { parseProprConnectEndpoint } from '@propr/shared';
 import { LoaderCircle } from 'lucide-react';
 import { setApiBaseUrl } from '../api/apiClient';
+import { navigateToUiPath } from '../config/runtimeMode';
 import * as runtimeConfig from '../config/runtimeConfig';
 import type { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopConnectedExperience } from './DesktopConnectedExperience';
@@ -20,6 +21,7 @@ import {
   type PackagedAcceptanceSetupSurface,
 } from './packagedAcceptanceLocalSetupSurface';
 import './desktop.css';
+import type { DesktopNativeCommand } from '../../../apps/desktop/src/shared/contract';
 
 interface DesktopExperienceProps {
   adapters: DesktopAdapters;
@@ -36,6 +38,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   const [busy, setBusy] = useState(false);
   const [acceptanceSetup, setAcceptanceSetup] = useState<PackagedAcceptanceSetupSurface | null>(null);
   const [localSetupOpen, setLocalSetupOpen] = useState(false);
+  const [pendingNativeCommand, setPendingNativeCommand] = useState<DesktopNativeCommand | null>(null);
   const connectionAttempt = useRef(0);
   const { recordPresentation: connectCandidatePresented, waitForPresentation } = useConnectCandidatePresentation();
   const activeProfileId = useRef<string | null>(null);
@@ -83,6 +86,46 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     setEditing(null);
   }, [cancelDiscovery, clearConnectCandidate]);
   const { dialogRef: managerRef, openModal: openManager } = useDesktopModal(managerOpen, setManagerOpen, closeManager);
+
+  useEffect(() => adapters.app.onNativeCommand?.(setPendingNativeCommand), [adapters.app]);
+
+  useEffect(() => {
+    if (!pendingNativeCommand) return;
+    if (pendingNativeCommand === 'manage-instances') {
+      if (state.phase === 'loading' || state.phase === 'connecting' || state.phase === 'authenticating') return;
+      if (state.phase === 'connected') openManager();
+      else {
+        if (localSetupOpen || acceptanceSetup) return;
+        cancelDiscovery();
+        clearConnectCandidate();
+        setEditing(null);
+        setOperationError(null);
+        setState({ phase: 'choose' });
+      }
+      setPendingNativeCommand(null);
+      return;
+    }
+    if (state.phase !== 'connected') return;
+    const paths: Record<Exclude<DesktopNativeCommand, 'manage-instances'>, string> = {
+      'new-plan': '/studio/new',
+      tasks: '/tasks',
+      plans: '/plans',
+      inbox: '/inbox',
+      'notification-settings': '/settings',
+    };
+    const target = paths[pendingNativeCommand];
+    const current = new URL(
+      window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash || '/',
+      'https://desktop.propr.invalid',
+    ).pathname;
+    if (current !== target && current.startsWith('/studio/')
+      && !window.confirm('Leave this plan? Any unsaved changes will be lost.')) {
+      setPendingNativeCommand(null);
+      return;
+    }
+    if (current !== target) navigateToUiPath(target);
+    setPendingNativeCommand(null);
+  }, [acceptanceSetup, cancelDiscovery, clearConnectCandidate, localSetupOpen, openManager, pendingNativeCommand, state.phase]);
   const reportAcceptanceStage = useCallback(async (
     stage: Parameters<NonNullable<DesktopAdapters['acceptance']>['reportJourneyStage']>[0],
   ): Promise<void> => {

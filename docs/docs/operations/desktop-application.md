@@ -37,6 +37,29 @@ or re-pair profiles. Non-secret profile metadata survives relaunch. Offline prof
 or expired profile requires browser pairing again. If a managed tunnel origin or public identity changes, treat it as a
 new trust generation and confirm and pair again.
 
+## Native tray and menu verification
+
+Use a real Linux desktop panel or the macOS menu bar; a headless/Xvfb run cannot prove shell-owned tray activation.
+
+1. Start the desktop app without enabling notifications. Confirm startup does not request notification permission or
+   change **Settings → Desktop notifications**.
+2. Before connecting, open the tray menu with both primary click and right-click. Confirm **Open ProPR**,
+   **Switch / Manage Instances…**, and **Quit ProPR** work, while account actions and the notification toggle are disabled.
+   On Linux, double-click the tray icon and confirm exactly one window is focused.
+3. Connect and sign in. Confirm **New Plan**, **Tasks**, **Plans**, **Inbox**, **Switch / Manage Instances…**,
+   **Notification Settings…**, and **Pause/Resume Native Notifications** appear in both the tray and application menus.
+   Task and plan counts must open their matching destinations; unavailable counts must say unavailable rather than zero.
+4. Minimize and then hide the window. Invoke each destination from the tray and application menu and confirm the window is
+   restored and focused. In a plan composer, confirm leaving through a native command asks before navigating.
+5. Verify `CmdOrCtrl+N`, `CmdOrCtrl+1`, `CmdOrCtrl+2`, `CmdOrCtrl+3`, `CmdOrCtrl+Shift+I`, `CmdOrCtrl+,`, and
+   `CmdOrCtrl+Shift+N`. On macOS also confirm About, Services, Hide, Window, and standard Edit roles remain native.
+6. Pause native notifications and confirm the item becomes checked and reads **Pause Native Notifications** only while
+   delivery is enabled; resume and confirm the inverse. Make the same change in Settings and reopen both menus to confirm
+   they agree. Per-event choices must remain unchanged.
+7. Open **Switch / Manage Instances…**, switch through the existing manager, and confirm the next command targets only the
+   new instance. Sign out or disconnect and confirm stale counts disappear and account actions disable. Quit and confirm
+   the tray is removed and no accelerator acts during shutdown.
+
 ## Guided Linux setup
 
 The Linux wizard uses an app-owned private runtime directory and the same setup engine as the CLI. Before starting, make

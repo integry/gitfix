@@ -55,6 +55,7 @@ export const bridgeFixture = () => {
       }),
       refreshActiveWork: async () => undefined,
       onDeepLink,
+      onNativeCommand: () => () => undefined,
     },
     auth: { logout: async () => undefined },
     external: { open: async () => undefined },

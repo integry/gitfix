@@ -1,5 +1,6 @@
 import type { Menu, MenuItemConstructorOptions, NativeImage, Tray } from 'electron';
 import type { DesktopActiveWorkFetchResult } from './credential-service';
+import type { DesktopNativeCommandDispatcher } from './native-commands';
 
 const MAX_RESPONSE_BYTES = 4_096;
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
@@ -20,8 +21,7 @@ interface DesktopTrayOptions {
   buildMenu(template: MenuItemConstructorOptions[]): Menu;
   setBadgeCount(count: number): boolean;
   fetchActiveWork(signal: AbortSignal): Promise<DesktopActiveWorkFetchResult>;
-  openWindow(): void;
-  quit(): void;
+  commands: Pick<DesktopNativeCommandDispatcher, 'dispatch' | 'getState' | 'subscribe'>;
   log(level: 'info' | 'warn', event: string, fields?: Record<string, unknown>): void;
   pollIntervalMs?: number;
   debounceMs?: number;
@@ -128,6 +128,8 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
   let requestInFlight = false;
   let refreshAfterFlight = false;
   let lastRefreshStartedAt = 0;
+  let unsubscribeCommands: (() => void) | undefined;
+  let contextMenu: Menu | null = null;
 
   const render = (): void => {
     if (!tray || tray.isDestroyed()) return;
@@ -140,33 +142,62 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
       );
       if (options.platform === 'darwin') tray.setTitle(formatTrayCount(counts.total));
       options.setBadgeCount(counts.total);
+      const commandState = options.commands.getState();
       template = [
-        { label: 'Open ProPR', click: options.openWindow },
+        { label: 'Open ProPR', click: () => options.commands.dispatch('open') },
+        { label: 'New Plan', enabled: commandState.authenticated, click: () => options.commands.dispatch('new-plan') },
         { type: 'separator' },
-        { label: `Active work total: ${exact(counts.total)}`, enabled: false },
-        { label: `Tasks: ${exact(counts.tasks)}`, enabled: false },
-        { label: `Plans: ${exact(counts.plans)}`, enabled: false },
+        { label: `Tasks: ${exact(counts.tasks)}`, enabled: commandState.authenticated, click: () => options.commands.dispatch('tasks') },
+        { label: `Plans: ${exact(counts.plans)}`, enabled: commandState.authenticated, click: () => options.commands.dispatch('plans') },
+        { label: 'Inbox', enabled: commandState.authenticated, click: () => options.commands.dispatch('inbox') },
         { label: 'Goals: Unsupported (no executing state)', enabled: false },
         { label: `Open goals (not active): ${exact(counts.openGoals)}`, enabled: false },
-        { label: 'Running tasks + active plans; open goals excluded', enabled: false },
         { type: 'separator' },
-        { label: 'Quit ProPR', click: options.quit },
+        { label: 'Switch / Manage Instances…', click: () => options.commands.dispatch('manage-instances') },
+        { label: 'Notification Settings…', enabled: commandState.authenticated, click: () => options.commands.dispatch('notification-settings') },
+        {
+          label: commandState.nativeNotificationsEnabled
+            ? 'Pause Native Notifications' : 'Resume Native Notifications',
+          type: 'checkbox',
+          checked: commandState.nativeNotificationsEnabled,
+          enabled: commandState.nativeNotificationsAvailable,
+          click: () => options.commands.dispatch('toggle-native-notifications'),
+        },
+        { type: 'separator' },
+        { label: 'Quit ProPR', click: () => options.commands.dispatch('quit') },
       ];
     } else {
       const detail = state.status === 'checking' ? 'Checking active work…' : state.detail;
       tray.setToolTip(`ProPR — Active work unavailable — ${detail}`);
       if (options.platform === 'darwin') tray.setTitle('');
       options.setBadgeCount(0);
+      const commandState = options.commands.getState();
       template = [
-        { label: 'Open ProPR', click: options.openWindow },
+        { label: 'Open ProPR', click: () => options.commands.dispatch('open') },
+        { label: 'New Plan', enabled: commandState.authenticated, click: () => options.commands.dispatch('new-plan') },
+        { label: 'Tasks', enabled: commandState.authenticated, click: () => options.commands.dispatch('tasks') },
+        { label: 'Plans', enabled: commandState.authenticated, click: () => options.commands.dispatch('plans') },
+        { label: 'Inbox', enabled: commandState.authenticated, click: () => options.commands.dispatch('inbox') },
         { type: 'separator' },
         { label: 'Active work: Unavailable', enabled: false },
         { label: detail, enabled: false },
         { type: 'separator' },
-        { label: 'Quit ProPR', click: options.quit },
+        { label: 'Switch / Manage Instances…', click: () => options.commands.dispatch('manage-instances') },
+        { label: 'Notification Settings…', enabled: commandState.authenticated, click: () => options.commands.dispatch('notification-settings') },
+        {
+          label: commandState.nativeNotificationsEnabled
+            ? 'Pause Native Notifications' : 'Resume Native Notifications',
+          type: 'checkbox',
+          checked: commandState.nativeNotificationsEnabled,
+          enabled: commandState.nativeNotificationsAvailable,
+          click: () => options.commands.dispatch('toggle-native-notifications'),
+        },
+        { type: 'separator' },
+        { label: 'Quit ProPR', click: () => options.commands.dispatch('quit') },
       ];
     }
-    tray.setContextMenu(options.buildMenu(template));
+    contextMenu = options.buildMenu(template);
+    tray.setContextMenu(contextMenu);
   };
 
   const updateUnavailable = (detail: string): void => {
@@ -227,7 +258,13 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
       if (!supported || closed || tray) return;
       try {
         tray = options.createTray(options.icon);
-        tray.on('click', options.openWindow);
+        tray.on('click', () => {
+          if (tray && !tray.isDestroyed() && contextMenu) tray.popUpContextMenu(contextMenu);
+        });
+        if (options.platform === 'linux') {
+          tray.on('double-click', () => options.commands.dispatch('open'));
+        }
+        unsubscribeCommands = options.commands.subscribe(render);
         render();
         pollTimer = setInterval(() => scheduleRefresh(0), pollIntervalMs);
         pollTimer.unref();
@@ -239,6 +276,8 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
           try { tray.destroy(); } catch { /* Initialization already failed; allow a clean retry. */ }
         }
         tray = null;
+        unsubscribeCommands?.();
+        unsubscribeCommands = undefined;
         options.log('warn', 'desktop.tray.unavailable', { platform: options.platform });
       }
     },
@@ -276,6 +315,9 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
       options.setBadgeCount(0);
       if (tray && !tray.isDestroyed()) tray.destroy();
       tray = null;
+      contextMenu = null;
+      unsubscribeCommands?.();
+      unsubscribeCommands = undefined;
       options.log('info', 'desktop.tray.closed');
     },
   };

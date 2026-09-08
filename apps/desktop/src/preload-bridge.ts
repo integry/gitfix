@@ -5,7 +5,7 @@ import type {
   DesktopDeepLinkDelivery,
   DesktopPairingProgress,
 } from './shared/contract';
-import { IPC_CHANNELS, isDesktopPairingOperationId } from './shared/contract';
+import { IPC_CHANNELS, isDesktopNativeCommand, isDesktopPairingOperationId } from './shared/contract';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -56,6 +56,8 @@ export const createDesktopBridge = (
   const setupProgressListeners = new Set<(value: Awaited<ReturnType<DesktopBridge['localSetup']['status']>>) => void>();
   const notificationNavigationListeners = new Set<(path: string) => void>();
   const pairingProgressListeners = new Set<(value: DesktopPairingProgress) => void>();
+  const nativeCommandListeners = new Set<(value: import('./shared/contract').DesktopNativeCommand) => void>();
+  const pendingNativeCommands: import('./shared/contract').DesktopNativeCommand[] = [];
   ipc.on(IPC_CHANNELS.deepLink, (_event, value) => {
     if (!isDelivery(value)) return;
     if (deepLinkListeners.size === 0) {
@@ -91,6 +93,14 @@ export const createDesktopBridge = (
     };
     pairingProgressListeners.forEach(listener => listener(safeProgress));
   });
+  ipc.on(IPC_CHANNELS.nativeCommand, (_event, value) => {
+    if (!isDesktopNativeCommand(value)) return;
+    if (nativeCommandListeners.size === 0) {
+      pendingNativeCommands.splice(0, pendingNativeCommands.length, value);
+      return;
+    }
+    nativeCommandListeners.forEach(listener => listener(value));
+  });
 
   const bridge: DesktopBridge = {
     app: {
@@ -104,6 +114,11 @@ export const createDesktopBridge = (
         }
         pendingDeepLinks.splice(0).forEach(delivery => { void consume(delivery).catch(() => undefined); });
         return () => deepLinkListeners.delete(listener);
+      },
+      onNativeCommand: listener => {
+        nativeCommandListeners.add(listener);
+        pendingNativeCommands.splice(0).forEach(command => listener(command));
+        return () => nativeCommandListeners.delete(listener);
       },
     },
     auth: {

@@ -59,6 +59,7 @@ export interface NativeNotificationServiceOptions {
   batchDelayMs?: number;
   beforePersist?(): Promise<void>;
   log?(level: 'warn' | 'error', event: string): void;
+  onSettingsChanged?(): void;
 }
 
 const PROFILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -233,7 +234,9 @@ export class NativeNotificationService {
     this.#requireActiveScope(scope);
     this.#activateScope(scope);
     await this.#load();
-    return this.#settings(scope);
+    const settings = this.#settings(scope);
+    this.#options.onSettingsChanged?.();
+    return settings;
   }
 
   async update(
@@ -252,7 +255,20 @@ export class NativeNotificationService {
     const key = scopeStorageKey(scope);
     if (update.enabled === false) this.#clearDeliveries(scope);
     else this.#removeDisabledPending(scope, update);
-    return this.#queueUpdate(scope, key, update);
+    const settings = await this.#queueUpdate(scope, key, update);
+    this.#options.onSettingsChanged?.();
+    return settings;
+  }
+
+  activeSettings(): DesktopNotificationSettings | null {
+    const scope = this.#accountScope;
+    return scope && this.#loaded && this.#isCurrentScope(scope) ? this.#settings(scope) : null;
+  }
+
+  async setActiveEnabled(enabled: boolean): Promise<void> {
+    const scope = this.#accountScope;
+    if (!scope || !this.#isCurrentScope(scope)) throw new Error('No active notification account');
+    await this.update(scope, { enabled });
   }
 
   async test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }> {
@@ -316,6 +332,7 @@ export class NativeNotificationService {
   clear(scope?: DesktopNotificationScope): void {
     this.#clearDeliveries(scope);
     if (!scope || (this.#accountScope && sameScope(this.#accountScope, scope))) this.#accountScope = null;
+    this.#options.onSettingsChanged?.();
   }
 
   #clearDeliveries(scope?: DesktopNotificationScope): void {
