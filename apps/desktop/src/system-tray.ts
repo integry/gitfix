@@ -1,4 +1,4 @@
-import type { KeyboardEvent, Menu, MenuItemConstructorOptions, NativeImage, Point, Rectangle, Tray } from 'electron';
+import type { Menu, MenuItemConstructorOptions, NativeImage, Point, Rectangle, Tray } from 'electron';
 import type { DesktopActiveWorkFetchResult } from './credential-service';
 import type { DesktopNativeCommandDispatcher } from './native-commands';
 
@@ -19,11 +19,7 @@ interface DesktopTrayOptions {
   icon: NativeImage;
   createTray(icon: NativeImage): Tray;
   buildMenu(template: MenuItemConstructorOptions[]): Menu;
-  popupMenu(menu: Menu, activation: {
-    bounds: Rectangle;
-    position: Point;
-    source: 'native' | 'synthetic';
-  }): void;
+  popupMenu(menu: Menu, activation: { bounds: Rectangle; position: Point }): void;
   closePopupMenu?(): void;
   setBadgeCount(count: number): boolean;
   fetchActiveWork(signal: AbortSignal): Promise<DesktopActiveWorkFetchResult>;
@@ -49,13 +45,6 @@ type TrayState =
 
 const isCount = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
-
-// Electron creates this property for native Tray activations even when the
-// Linux backend has no mouse-button flags. Direct EventEmitter emissions in
-// tests do not receive that native event conversion.
-const trayActivationSource = (event: KeyboardEvent | undefined): 'native' | 'synthetic' => (
-  typeof event?.triggeredByAccelerator === 'boolean' ? 'native' : 'synthetic'
-);
 
 export const parseActiveWorkSnapshot = (value: unknown): ActiveWorkCounts | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -271,12 +260,12 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
       if (!supported || closed || tray) return;
       try {
         tray = options.createTray(options.icon);
-        tray.on('click', (event, bounds, position) => {
+        tray.on('click', (_event, bounds, position) => {
           if (!tray || tray.isDestroyed() || !contextMenu) return;
           if (options.platform === 'linux') {
             // Electron's Linux TrayIcon does not implement popUpContextMenu();
             // Menu.popup() uses the supported native popup path instead.
-            options.popupMenu(contextMenu, { bounds, position, source: trayActivationSource(event) });
+            options.popupMenu(contextMenu, { bounds, position });
           } else {
             tray.popUpContextMenu(contextMenu);
           }

@@ -37,8 +37,6 @@ app.whenReady().then(() => {
   let menuWillShow = 0;
   let menuWillClose = 0;
   let trayActivations = 0;
-  let nativeTrayActivations = 0;
-  let syntheticTrayActivations = 0;
   let opensAfterActivationDispatch = 0;
   let persistentDismissals = 0;
   let activationDispatchReturned = true;
@@ -46,11 +44,26 @@ app.whenReady().then(() => {
   let tray;
   let menu;
   let controller;
+  const activationEvents = [
+    {},
+    {
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      triggeredByAccelerator: false,
+    },
+  ];
 
   const activateTray = () => {
     trayActivations += 1;
     activationDispatchReturned = false;
-    tray.emit('click', {}, { x: 0, y: 0, width: 0, height: 0 }, screen.getCursorScreenPoint());
+    tray.emit(
+      'click',
+      activationEvents[trayActivations - 1],
+      { x: 0, y: 0, width: 0, height: 0 },
+      screen.getCursorScreenPoint(),
+    );
     activationDispatchReturned = true;
   };
 
@@ -88,8 +101,6 @@ app.whenReady().then(() => {
               menuWillShow,
               menuWillClose,
               trayActivations,
-              nativeTrayActivations,
-              syntheticTrayActivations,
               opensAfterActivationDispatch,
               persistentDismissals,
               ownersCreated,
@@ -105,11 +116,7 @@ app.whenReady().then(() => {
       });
       return menu;
     },
-    popupMenu: (popupMenu, activation) => {
-      if (activation.source === 'native') nativeTrayActivations += 1;
-      else syntheticTrayActivations += 1;
-      popup.popup(popupMenu, activation);
-    },
+    popupMenu: (popupMenu, activation) => popup.popup(popupMenu, activation),
     closePopupMenu: () => popup.close(),
     setBadgeCount: () => false,
     fetchActiveWork: async () => ({ status: 'disconnected' }),

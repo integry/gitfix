@@ -207,7 +207,7 @@ describe('desktop system tray', () => {
     const fakeTray = new FakeTray();
     const dispatched: string[] = [];
     let popupMenu: Menu | null = null;
-    const popupActivations: Array<{ bounds: unknown; position: unknown; source: unknown }> = [];
+    const popupActivations: Array<{ bounds: unknown; position: unknown }> = [];
     let popupCloses = 0;
     const menu = {} as Menu;
     const controller = createDesktopTrayController({
@@ -225,19 +225,20 @@ describe('desktop system tray', () => {
     controller.start();
     const bounds = { x: -44, y: 2, width: 22, height: 22 };
     const position = { x: -33, y: 13 };
-    fakeTray.listeners.get('click')?.({}, bounds, position);
+    const activationEvents = [
+      {},
+      {
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        triggeredByAccelerator: false,
+      },
+    ];
+    for (const event of activationEvents) fakeTray.listeners.get('click')?.(event, bounds, position);
     assert.equal(popupMenu, menu, 'Linux primary activation uses Menu.popup instead of Tray.popUpContextMenu');
-    assert.deepEqual(popupActivations[0], { bounds, position, source: 'synthetic' },
-      'a direct EventEmitter click is identified as synthetic evidence');
-    fakeTray.listeners.get('click')?.({
-      altKey: false,
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: false,
-      triggeredByAccelerator: true,
-    }, bounds, position);
-    assert.deepEqual(popupActivations[1], { bounds, position, source: 'native' },
-      'Electron event metadata identifies the real Linux activation path');
+    assert.deepEqual(popupActivations, activationEvents.map(() => ({ bounds, position })),
+      'synthetic regression input and Electron-shaped input use the same production activation path');
     assert.equal(fakeTray.popups, 0, 'the unsupported Linux Tray popup method is not called');
     assert.deepEqual(dispatched, []);
     assert.equal(fakeTray.menu, menu, 'setContextMenu remains installed for native right activation');

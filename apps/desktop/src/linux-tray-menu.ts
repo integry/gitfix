@@ -10,7 +10,6 @@ import type {
 export interface LinuxTrayActivationGeometry {
   bounds: Rectangle;
   position: Point;
-  source: 'native' | 'synthetic';
 }
 
 type LinuxTrayMenuScreen = Pick<typeof import('electron').screen,
@@ -25,7 +24,7 @@ interface LinuxTrayMenuPopupOptions {
   screen: LinuxTrayMenuScreen;
   createHost(options: BrowserWindowConstructorOptions): BaseWindow;
   environment?: LinuxSessionEnvironment;
-  scheduleMenuOpen?(callback: () => void, delayMilliseconds: number): void;
+  scheduleMenuOpen?(callback: () => void): void;
   scheduleHostDestroy?(callback: () => void): void;
 }
 
@@ -64,13 +63,6 @@ const isWaylandSession = (environment: LinuxSessionEnvironment): boolean => (
   environment.XDG_SESSION_TYPE?.toLowerCase() === 'wayland'
   || Boolean(environment.WAYLAND_DISPLAY)
 );
-
-// XFCE's GtkStatusIcon activation can reach JavaScript before the native
-// primary-button sequence has completely unwound. The acceptance probe holds
-// button 1 for 150ms, so one setImmediate can still open the menu before the
-// release and let that release dismiss it. Keep enough distance from that
-// physical sequence without delaying synthetic/native-runner-only tests.
-const NATIVE_X11_ACTIVATION_SETTLE_MILLISECONDS = 250;
 
 /**
  * Resolve a screen-coordinate anchor at the panel's work-area edge. Electron's
@@ -139,10 +131,7 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
   let closed = false;
   const canPositionHost = !isWaylandSession(options.environment ?? process.env);
   const pendingHostDestruction = new Set<BaseWindow>();
-  const scheduleMenuOpen = options.scheduleMenuOpen ?? ((callback, delayMilliseconds) => {
-    if (delayMilliseconds > 0) setTimeout(callback, delayMilliseconds);
-    else setImmediate(callback);
-  });
+  const scheduleMenuOpen = options.scheduleMenuOpen ?? setImmediate;
   const scheduleHostDestroy = options.scheduleHostDestroy ?? setImmediate;
 
   const destroyHostAfterNativeMenuClose = (popupHost: BaseWindow): void => {
@@ -216,17 +205,17 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
       openingMenu = menu;
 
       // Menu.popup() is implemented by Electron's native Views menu runner on
-      // Linux. Giving it a mapped, menu-scoped owner lets it take and release
-      // the native input grab independently of a hidden/minimized main window.
-      popupHost.showInactive();
+      // Linux. Give it an active, menu-scoped owner before starting the runner:
+      // Views cancels a menu if its owner transitions to visible afterward.
+      // The transparent toolbar does not enter Linux task lists and is wholly
+      // independent of a hidden or minimized main window.
+      popupHost.show();
       // Reapply after mapping so X11 window-manager placement cannot move the
       // otherwise invisible owner away from its monitor-relative anchor.
       if (anchor) popupHost.setPosition(anchor.x, anchor.y, false);
-      // BrowserWindow mapping and the Linux Tray activation both complete
-      // asynchronously. In particular, a real XFCE/X11 activation can still
-      // have its primary-button release pending after one event-loop turn;
-      // opening before that release makes the native menu dismiss immediately.
-      // Synthetic EventEmitter activations have no physical release to await.
+      // Leave the native tray activation callback before starting the menu.
+      // This path is identical for physical and EventEmitter activations; it
+      // does not infer input provenance or depend on how long button 1 was held.
       scheduleMenuOpen(() => {
         if (closed || openingMenu !== menu || host !== popupHost || popupHost.isDestroyed()) return;
         if (anchor) popupHost.setPosition(anchor.x, anchor.y, false);
@@ -246,9 +235,7 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
           releaseHost(menu, popupHost);
           throw error;
         }
-      }, activation.source === 'native' && canPositionHost
-        ? NATIVE_X11_ACTIVATION_SETTLE_MILLISECONDS
-        : 0);
+      });
     },
     close() {
       if (closed) return;

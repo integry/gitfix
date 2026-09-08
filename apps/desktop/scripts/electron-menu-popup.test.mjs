@@ -68,7 +68,7 @@ const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
 });
 
 describe('Electron Linux tray menu popup', () => {
-  it('opens and dismisses production BrowserWindow owners through synthetic tray activation', {
+  it('opens and dismisses production BrowserWindow owners through Linux tray activation', {
     timeout: startupDeadlineMilliseconds + operationDeadlineMilliseconds + 5_000,
   }, async context => {
     const setup = prepareNativeElectronTest({
@@ -89,8 +89,6 @@ describe('Electron Linux tray menu popup', () => {
       menuWillShow: 2,
       menuWillClose: 2,
       trayActivations: 2,
-      nativeTrayActivations: 0,
-      syntheticTrayActivations: 2,
       opensAfterActivationDispatch: 2,
       persistentDismissals: 2,
       ownersCreated: 2,

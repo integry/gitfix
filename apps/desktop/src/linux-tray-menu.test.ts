@@ -63,7 +63,6 @@ describe('Linux tray menu popup', () => {
     const positions: Array<[number, number]> = [];
     let shows = 0;
     let destroys = 0;
-    const menuOpenDelays: number[] = [];
     const pendingMenuOpens: Array<() => void> = [];
     const pendingDestructions: Array<() => void> = [];
     const flushMenuOpens = () => {
@@ -79,7 +78,7 @@ describe('Linux tray menu popup', () => {
       const host = {
         isDestroyed: () => destroyed,
         setPosition: (x: number, y: number) => { positions.push([x, y]); },
-        showInactive: () => { shows += 1; },
+        show: () => { shows += 1; },
         destroy: () => { destroyed = true; destroys += 1; },
       } as unknown as BaseWindow;
       hosts.push(host);
@@ -102,16 +101,12 @@ describe('Linux tray menu popup', () => {
       } as unknown as typeof import('electron').screen,
       createHost,
       environment: {},
-      scheduleMenuOpen: (callback, delayMilliseconds) => {
-        menuOpenDelays.push(delayMilliseconds);
-        pendingMenuOpens.push(callback);
-      },
+      scheduleMenuOpen: callback => { pendingMenuOpens.push(callback); },
       scheduleHostDestroy: callback => { pendingDestructions.push(callback); },
     });
     const emptyGeometry = {
       bounds: { x: 0, y: 0, width: 0, height: 0 },
       position: { x: 0, y: 0 },
-      source: 'native' as const,
     };
 
     popup.popup(menu, emptyGeometry);
@@ -123,8 +118,7 @@ describe('Linux tray menu popup', () => {
     assert.equal(hostOptions[0]?.transparent, true);
     assert.equal(shows, 1);
     assert.deepEqual(positions, [[-84, 30]]);
-    assert.deepEqual(menuOpenDelays, [250], 'a native X11 activation waits past the physical button release');
-    assert.equal(popupCalls, 0, 'the native popup waits for tray activation and owner mapping to unwind');
+    assert.equal(popupCalls, 0, 'the native popup waits for tray activation dispatch to unwind');
     flushMenuOpens();
     assert.equal(popupCalls, 1);
     assert.equal(popupOptions?.window, hosts[0]);
@@ -173,7 +167,7 @@ describe('Linux tray menu popup', () => {
     const host = {
       isDestroyed: () => false,
       setPosition: () => { positions += 1; },
-      showInactive: () => { shows += 1; },
+      show: () => { shows += 1; },
       destroy: () => { destroys += 1; },
     } as unknown as BaseWindow;
     const popup = createLinuxTrayMenuPopup({
@@ -186,10 +180,7 @@ describe('Linux tray menu popup', () => {
         return host;
       },
       environment: { XDG_SESSION_TYPE: 'wayland' },
-      scheduleMenuOpen: (callback, delayMilliseconds) => {
-        assert.equal(delayMilliseconds, 0, 'Wayland does not use the XFCE/X11 release-settling delay');
-        scheduledMenuOpen = callback;
-      },
+      scheduleMenuOpen: callback => { scheduledMenuOpen = callback; },
       scheduleHostDestroy: callback => { scheduledDestroy = callback; },
     });
     const menu = {
@@ -200,7 +191,6 @@ describe('Linux tray menu popup', () => {
     popup.popup(menu, {
       bounds: { x: 10, y: 10, width: 20, height: 20 },
       position: { x: 15, y: 15 },
-      source: 'native',
     });
 
     assert.equal(hostOptions?.x, undefined);
@@ -229,7 +219,7 @@ describe('Linux tray menu popup', () => {
     const host = {
       isDestroyed: () => false,
       setPosition: () => {},
-      showInactive: () => {},
+      show: () => {},
       destroy: () => { destroys += 1; },
     } as unknown as BaseWindow;
     const popup = createLinuxTrayMenuPopup({
@@ -239,10 +229,7 @@ describe('Linux tray menu popup', () => {
       },
       createHost: () => host,
       environment: {},
-      scheduleMenuOpen: (callback, delayMilliseconds) => {
-        assert.equal(delayMilliseconds, 0, 'synthetic activation has no physical release to await');
-        scheduledMenuOpen = callback;
-      },
+      scheduleMenuOpen: callback => { scheduledMenuOpen = callback; },
       scheduleHostDestroy: callback => { scheduledDestroy = callback; },
     });
     const menu = {
@@ -253,7 +240,6 @@ describe('Linux tray menu popup', () => {
     popup.popup(menu, {
       bounds: { x: 0, y: 0, width: 0, height: 0 },
       position: { x: -84, y: 12 },
-      source: 'synthetic',
     });
     popup.close();
     scheduledMenuOpen?.();
