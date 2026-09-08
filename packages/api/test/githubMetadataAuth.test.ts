@@ -13,9 +13,11 @@ import {
 } from '../githubMetadataAuth.js';
 import { createGitHubRoutes } from '../routes/githubRoutes.js';
 import { createGetRepositoryInfoHandler } from '../routes/plannerHelpers/handlers/repositoryHandlers.js';
+import { createGenerateHandler } from '../routes/plannerActionHandlers.js';
 import type { GitHubUser } from '../authTypes.js';
 
 let database: Knex;
+const originalFetch = globalThis.fetch;
 
 const desktopUser: GitHubUser = {
   id: '123', login: 'developer', username: 'developer', displayName: 'Developer',
@@ -31,13 +33,41 @@ function responseRecorder() {
   return { response, record };
 }
 
+function browserRequest(body: Record<string, unknown> = {}): Request & { saveCalls: number } {
+  const request = {
+    user: {
+      ...desktopUser,
+      accessToken: 'revoked-browser-token',
+      refreshToken: 'browser-refresh-token',
+      tokenExpiresAt: Date.now() + 60 * 60_000,
+      oauthSource: 'github' as const,
+    },
+    authenticationMethod: 'session',
+    sessionID: `browser-session-${Math.random()}`,
+    body,
+    params: {},
+    query: {},
+    saveCalls: 0,
+    session: {
+      save(callback: (error?: Error) => void) {
+        request.saveCalls += 1;
+        callback();
+      },
+    },
+  };
+  return request as unknown as Request & { saveCalls: number };
+}
+
 beforeEach(async () => {
   database = knex({ client: 'better-sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
   await createGitHubUserGrants(database);
   await createVisualPreviewOAuthCredentials(database);
 });
 
-afterEach(async () => database.destroy());
+afterEach(async () => {
+  globalThis.fetch = originalFetch;
+  await database.destroy();
+});
 after(async () => closeConnection());
 
 test('resolves an encrypted matching user grant for a desktop bearer identity', async () => {
@@ -330,6 +360,83 @@ test('planner repository branch metadata uses the same resolved desktop authorit
     isPrivate: true,
     description: 'Acceptance fixture',
   });
+});
+
+test('planner metadata refreshes a browser token rejected before its recorded expiry', async () => {
+  globalThis.fetch = async () => Response.json({
+    access_token: 'refreshed-browser-token',
+    refresh_token: 'refreshed-browser-refresh-token',
+    expires_in: 3600,
+  });
+  const handler = createGetRepositoryInfoHandler({
+    verifyOwnership: async () => ({ authorized: true }),
+    createMetadataOctokit: () => ({
+      request: async () => {
+        throw Object.assign(new Error('Bad credentials'), { status: 401 });
+      },
+    } as never),
+  });
+  const request = browserRequest();
+  request.query = { repository: 'integry/propr' };
+  const recorder = responseRecorder();
+
+  await handler(request as never, recorder.response);
+
+  assert.equal(recorder.record.status, 401);
+  assert.deepEqual(recorder.record.body, {
+    error: 'Token refreshed',
+    code: 'TOKEN_REFRESHED',
+    message: 'Your GitHub token has been refreshed. Please retry your request.',
+  });
+  assert.equal(request.user?.accessToken, 'refreshed-browser-token');
+  assert.equal(request.saveCalls, 1);
+});
+
+test('planner authorization refreshes a browser token rejected before its recorded expiry', async () => {
+  await database.schema.createTable('task_drafts', table => {
+    table.text('draft_id').primary();
+    table.text('user_id').notNullable();
+    table.text('repository').notNullable();
+    table.text('context_config');
+    table.text('status');
+  });
+  await database('task_drafts').insert({
+    draft_id: 'browser-draft',
+    user_id: desktopUser.id,
+    repository: 'integry/propr',
+    context_config: JSON.stringify({}),
+    status: 'review',
+  });
+  globalThis.fetch = async () => Response.json({
+    access_token: 'refreshed-planner-token',
+    refresh_token: 'refreshed-planner-refresh-token',
+    expires_in: 3600,
+  });
+  let setupCalls = 0;
+  const handler = createGenerateHandler(database, {
+    hasRunningContainer: async () => false,
+    verifyRepositoryAccess: async () => {
+      throw Object.assign(new Error('Bad credentials'), { status: 401 });
+    },
+    setupRepository: async () => {
+      setupCalls += 1;
+      return { repository: 'integry/propr', authToken: 'unused', worktreePath: '/tmp/unused' };
+    },
+  });
+  const request = browserRequest({ draftId: 'browser-draft' });
+  const recorder = responseRecorder();
+
+  await handler(request, recorder.response);
+
+  assert.equal(recorder.record.status, 401);
+  assert.deepEqual(recorder.record.body, {
+    error: 'Token refreshed',
+    code: 'TOKEN_REFRESHED',
+    message: 'Your GitHub token has been refreshed. Please retry your request.',
+  });
+  assert.equal(request.user?.accessToken, 'refreshed-planner-token');
+  assert.equal(request.saveCalls, 1);
+  assert.equal(setupCalls, 0);
 });
 
 test('inaccessible private repository metadata remains denied', async () => {

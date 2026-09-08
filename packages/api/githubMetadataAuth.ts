@@ -83,7 +83,7 @@ export async function handleGitHubRepositoryAccessError(
     return true;
   }
   const status = (error as { status?: number })?.status;
-  if (status === 401 && req.authenticationMethod === 'instance_token') {
+  if (status === 401) {
     await refreshRejectedGitHubMetadataToken(req, res);
     return true;
   }

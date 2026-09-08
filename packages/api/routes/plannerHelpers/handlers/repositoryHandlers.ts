@@ -35,7 +35,7 @@ async function handleRepositoryMetadataError(req: Request, res: Response, error:
     sendGitHubMetadataAuthorizationError(error, res);
     return true;
   }
-  if (req.authenticationMethod === 'instance_token' && isGitHubAuthError(error)) {
+  if (isGitHubAuthError(error)) {
     await refreshRejectedGitHubMetadataToken(req, res);
     return true;
   }
