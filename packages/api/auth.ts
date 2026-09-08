@@ -35,6 +35,7 @@ import {
     type InstanceAuthorization,
 } from './authorization.js';
 import { captureVisualPreviewCredentialFromAdminLogin } from './services/visualPreviewOAuth.js';
+import { githubUserGrantService } from './githubUserGrantService.js';
 import './authTypes.js';
 
 export { refreshGitHubTokenIfNeeded } from './authGithubTokens.js';
@@ -156,6 +157,15 @@ export function createConnectCallbackHandler(
 
 async function completeAuthenticatedSessionWithPreviewCredential(req: Request, res: Response): Promise<void> {
     if (req.user && isUserWhitelisted(req.user.username)) {
+        try {
+            const captured = await githubUserGrantService.capture(req.user);
+            if (captured) console.log(`Captured server-side GitHub grant for ${req.user.username}`);
+        } catch (error) {
+            // Browser sessions remain usable even if durable desktop metadata
+            // authorization cannot be stored. Desktop callers receive bounded
+            // reauthorization guidance from the metadata routes.
+            console.warn('Could not capture GitHub user grant during login:', (error as Error).message);
+        }
         try {
             const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user);
             if (captured) console.log(`[visual-preview] Captured OAuth upload credential for administrator ${req.user.username}`);

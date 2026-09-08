@@ -4,6 +4,7 @@ import {
     updateVisualPreviewCredentialForCurrentOwner,
     visualPreviewOAuthCredentialService,
 } from './services/visualPreviewOAuth.js';
+import { githubUserGrantService } from './githubUserGrantService.js';
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_TIMEOUT_MS = 20_000;
@@ -98,6 +99,15 @@ async function saveSession(req: Request, successMessage: string): Promise<void> 
     });
 }
 
+async function updateStoredUserGrant(req: Request): Promise<void> {
+    if (!req.user) return;
+    try {
+        await githubUserGrantService.updateIfOwner(req.user);
+    } catch (error) {
+        console.warn('Could not update the stored GitHub user grant:', (error as Error).message);
+    }
+}
+
 function buildTokenRefreshRequest(user: NonNullable<Request['user']>): { endpoint: string; init: RequestInit } {
     if (user.oauthSource === 'connect') {
         const relayUrl = process.env.PROPR_GH_RELAY_URL?.trim().replace(/\/+$/, '');
@@ -159,6 +169,7 @@ async function performGitHubTokenRefresh(req: Request, force: boolean): Promise<
                 user.refreshTokenExpiresAt = sharedGrant.refreshTokenExpiresAt;
                 if (changed) {
                     await saveSession(req, `Synchronized refreshed GitHub token for user ${user.username}`);
+                    await updateStoredUserGrant(req);
                 }
                 return {
                     status: changed ? 'refreshed' : 'not-needed',
@@ -214,6 +225,7 @@ async function performGitHubTokenRefresh(req: Request, force: boolean): Promise<
         }
 
         await saveSession(req, `Successfully refreshed GitHub token for user ${user.username}`);
+        await updateStoredUserGrant(req);
         if (supportsVisualPreviewUploads) {
             try {
                 await updateVisualPreviewCredentialForCurrentOwner(user);

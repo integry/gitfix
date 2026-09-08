@@ -34,6 +34,11 @@ import {
   validateRefineInput,
   GenerateRequestBody
 } from './plannerHelpers/index.js';
+import {
+  handleGitHubRepositoryAccessError,
+  resolveGitHubMetadataToken,
+  verifyGitHubRepositoryAccess,
+} from '../githubMetadataAuth.js';
 
 function validateGenerateRequest(body: GenerateRequestBody): string | undefined {
   const { draftId, contextRepositories, excludedFiles } = body;
@@ -83,8 +88,8 @@ export function createGenerateHandler(db: Knex) {
       const [owner, repoName] = (draft.repository as string).split('/');
       if (!owner || !repoName) { res.status(400).json({ error: 'Invalid repository format' }); return; }
 
-      const accessToken = req.user!.accessToken;
-      if (!accessToken) { res.status(401).json({ error: 'GitHub access token not available' }); return; }
+      const accessToken = await resolveGitHubMetadataToken(req);
+      await verifyGitHubRepositoryAccess(draft.repository as string, accessToken);
 
       const { worktreePath, authToken } = await setupRepoContext({ repository: draft.repository as string }, accessToken);
 
@@ -102,6 +107,7 @@ export function createGenerateHandler(db: Knex) {
 
       void runBackgroundGeneration({ db, draftId, worktreePath, authToken, correlationId, runId: correlationId });
     } catch (error) {
+      if (await handleGitHubRepositoryAccessError(req, res, error)) return;
       console.error('Generate plan error:', error);
       if (generationClaimed && !res.headersSent) {
         try {
@@ -137,10 +143,11 @@ export function createRefineHandler(db: Knex) {
     const correlationId = generateCorrelationId();
     let refinementClaimed = false;
     let preparationClaimed = false;
+    let accessToken = '';
 
     try {
       // Verify ownership
-      const ownership = await verifyDraftOwnership(db, draftId, req.user!.id, ['user_id', 'status']);
+      const ownership = await verifyDraftOwnership(db, draftId, req.user!.id, ['user_id', 'status', 'repository']);
       if (!ownership.authorized) { res.status(ownership.status!).json({ error: ownership.error }); return; }
       preparationClaimed = claimDraftPreparation(draftId, 'plan-refinement');
       if (!preparationClaimed) {
@@ -152,6 +159,8 @@ export function createRefineHandler(db: Knex) {
         res.status(409).json({ error: 'Another operation is already running for this draft' });
         return;
       }
+      accessToken = await resolveGitHubMetadataToken(req);
+      await verifyGitHubRepositoryAccess(draft.repository as string, accessToken);
 
       // Calculate estimation early so we can store it before the LLM call starts
       // Fetch original context to include in the token estimate (this is the bulk of the prompt)
@@ -216,10 +225,11 @@ export function createRefineHandler(db: Knex) {
         instruction,
         generationModel,
         correlationId,
-        accessToken: req.user!.accessToken || '',
+        accessToken,
         runId: correlationId
       }).catch(error => console.error('[refine] Detached refinement failed', { draftId, error }));
     } catch (error) {
+      if (await handleGitHubRepositoryAccessError(req, res, error)) return;
       console.error('Refine plan error:', error);
       if (refinementClaimed && !res.headersSent) {
         try {

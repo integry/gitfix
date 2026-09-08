@@ -26,6 +26,11 @@ import {
   isDraftOperationActive,
   releaseDraftPreparation
 } from '../operationGuard.js';
+import {
+  handleGitHubRepositoryAccessError,
+  resolveGitHubMetadataToken,
+  verifyGitHubRepositoryAccess,
+} from '../../../githubMetadataAuth.js';
 
 interface PreviewContextDeps {
   verifyOwnership: (draftId: string, userId: string, fields: string[]) => Promise<OwnershipResult>;
@@ -125,8 +130,8 @@ export function createPreviewContextHandler(deps: PreviewContextDeps) {
       const [owner, repoName] = (draft.repository as string).split('/');
       if (!owner || !repoName) { res.status(400).json({ error: 'Invalid repository format' }); return; }
 
-      const accessToken = req.user?.accessToken;
-      if (!accessToken) { res.status(401).json({ error: 'GitHub access token not available' }); return; }
+      const accessToken = await resolveGitHubMetadataToken(req);
+      await verifyGitHubRepositoryAccess(draft.repository as string, accessToken);
 
       const authToken = await getRepoAuthToken(accessToken);
       const worktreePath = await ensureRepoCloned({ repoUrl: `https://github.com/${owner}/${repoName}.git`, owner, repoName, authToken });
@@ -202,6 +207,7 @@ export function createPreviewContextHandler(deps: PreviewContextDeps) {
 
       res.status(202).json({ pending: true, draftId, previewRequestId });
     } catch (error) {
+      if (await handleGitHubRepositoryAccessError(req, res, error)) return;
       console.error('Preview context error:', error);
       sendPreviewError(res, error);
     } finally {
