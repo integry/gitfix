@@ -158,6 +158,18 @@ export function createConnectCallbackHandler(
 async function completeAuthenticatedSessionWithPreviewCredential(req: Request, res: Response): Promise<void> {
     if (req.user && isUserWhitelisted(req.user.username)) {
         try {
+            // Publish the singleton owner credential first. A concurrent
+            // desktop/session reader can then copy this login into the
+            // per-user row; it can never copy the previous rotating grant over
+            // the newer login while these two stores converge.
+            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user);
+            if (captured) console.log(`[visual-preview] Captured OAuth upload credential for administrator ${req.user.username}`);
+        } catch (error) {
+            // Preview uploads are optional; a storage or encryption issue must not
+            // prevent an otherwise valid administrator from logging in.
+            console.warn('[visual-preview] Could not capture OAuth upload credential during login:', (error as Error).message);
+        }
+        try {
             const captured = await githubUserGrantService.capture(req.user);
             if (captured) console.log(`Captured server-side GitHub grant for ${req.user.username}`);
         } catch (error) {
@@ -165,14 +177,6 @@ async function completeAuthenticatedSessionWithPreviewCredential(req: Request, r
             // authorization cannot be stored. Desktop callers receive bounded
             // reauthorization guidance from the metadata routes.
             console.warn('Could not capture GitHub user grant during login:', (error as Error).message);
-        }
-        try {
-            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user);
-            if (captured) console.log(`[visual-preview] Captured OAuth upload credential for administrator ${req.user.username}`);
-        } catch (error) {
-            // Preview uploads are optional; a storage or encryption issue must not
-            // prevent an otherwise valid administrator from logging in.
-            console.warn('[visual-preview] Could not capture OAuth upload credential during login:', (error as Error).message);
         }
     }
     completeAuthenticatedSession(req, res);

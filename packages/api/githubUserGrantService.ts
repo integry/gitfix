@@ -1,7 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import type { Knex } from 'knex';
 import { db } from '@propr/core';
+import type { VisualPreviewOAuthCredentialGrant } from '@propr/core';
 import type { GitHubUser } from './authTypes.js';
+import { visualPreviewOAuthCredentialService } from './services/visualPreviewOAuth.js';
 
 const ENCRYPTION_CONTEXT = 'propr:github-user-grant:v1';
 const REFRESH_BUFFER_MS = 5 * 60_000;
@@ -31,10 +33,23 @@ interface RefreshResponse {
 }
 
 export type GitHubUserGrantResolution =
-  | { status: 'active'; accessToken: string }
+  | {
+      status: 'active';
+      accessToken: string;
+      refreshToken?: string;
+      tokenExpiresAt?: number;
+      refreshTokenExpiresAt?: number;
+    }
   | { status: 'missing' }
   | { status: 'reauth_required' }
   | { status: 'temporarily_unavailable' };
+
+interface SharedOAuthGrantService {
+  refreshAndGetForOwner(
+    githubUserId: string,
+    force?: boolean,
+  ): Promise<VisualPreviewOAuthCredentialGrant | null>;
+}
 
 function encryptionKey(environment: NodeJS.ProcessEnv): Buffer {
   const secret = environment.PROPR_CREDENTIAL_ENCRYPTION_KEY?.trim()
@@ -85,6 +100,7 @@ export class GitHubUserGrantService {
     private readonly database: Knex = db,
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly sharedOAuthGrant?: SharedOAuthGrantService,
   ) {}
 
   async capture(user: GitHubUser): Promise<boolean> {
@@ -112,28 +128,50 @@ export class GitHubUserGrantService {
     return true;
   }
 
-  async updateIfOwner(user: GitHubUser): Promise<boolean> {
+  async updateIfOwner(
+    user: GitHubUser,
+    expected?: { accessToken?: string; refreshToken?: string },
+  ): Promise<boolean> {
     if (!await this.database.schema.hasTable('github_user_grants')) return false;
     const existing = await this.database<GrantRow>('github_user_grants')
       .where({ github_user_id: user.id })
       .first();
     if (!existing) return false;
-    return this.capture(user);
+    if (expected) {
+      try {
+        const currentAccessToken = decryptToken(existing.access_token_encrypted, this.environment);
+        const currentRefreshToken = existing.refresh_token_encrypted
+          ? decryptToken(existing.refresh_token_encrypted, this.environment)
+          : undefined;
+        if (
+          currentAccessToken !== expected.accessToken
+          || currentRefreshToken !== expected.refreshToken
+        ) return false;
+      } catch {
+        return false;
+      }
+    }
+    return this.storeIfCurrent(existing, user);
   }
 
   async resolve(githubUserId: string, forceRefresh = false): Promise<GitHubUserGrantResolution> {
+    if (!await this.database.schema.hasTable('github_user_grants')) return { status: 'missing' };
     let row = await this.database<GrantRow>('github_user_grants')
       .where({ github_user_id: githubUserId })
       .first();
     if (!row) return { status: 'missing' };
+
+    const sharedResolution = await this.resolveSharedGrant(row, forceRefresh);
+    if (sharedResolution) return sharedResolution;
     if (row.status !== 'active') return { status: 'reauth_required' };
 
     const expiresAt = timestamp(row.access_token_expires_at_ms);
     const needsRefresh = forceRefresh || (expiresAt !== undefined && expiresAt - Date.now() < REFRESH_BUFFER_MS);
     if (needsRefresh) {
       if (!row.refresh_token_encrypted) {
-        await this.markReauthRequired(githubUserId, 'missing_refresh_token');
-        return { status: 'reauth_required' };
+        const marked = await this.markReauthRequiredIfCurrent(row, 'missing_refresh_token');
+        if (marked) return { status: 'reauth_required' };
+        return this.resolveCurrentRow(githubUserId);
       }
       const refreshed = await this.refreshOnce(row);
       if (refreshed !== 'refreshed') return { status: refreshed };
@@ -143,13 +181,7 @@ export class GitHubUserGrantService {
       if (!row || row.status !== 'active') return { status: 'reauth_required' };
     }
 
-    try {
-      return { status: 'active', accessToken: assertUserToken(decryptToken(row.access_token_encrypted, this.environment)) };
-    } catch (error) {
-      await this.markReauthRequired(githubUserId, 'decryption_failed');
-      console.error('Could not decrypt GitHub user grant:', error);
-      return { status: 'reauth_required' };
-    }
+    return this.resolutionFromRow(row);
   }
 
   private async refreshOnce(row: GrantRow): Promise<'refreshed' | 'reauth_required' | 'temporarily_unavailable'> {
@@ -166,14 +198,14 @@ export class GitHubUserGrantService {
       const response = await this.requestRefresh(row.source, refreshToken);
       if (response.error) {
         if (isUnrecoverableRefreshError(response.error)) {
-          await this.markReauthRequired(row.github_user_id, response.error);
-          return 'reauth_required';
+          const marked = await this.markReauthRequiredIfCurrent(row, response.error);
+          return marked ? 'reauth_required' : 'refreshed';
         }
         return 'temporarily_unavailable';
       }
       if (!response.access_token) return 'temporarily_unavailable';
       const now = Date.now();
-      await this.capture({
+      await this.storeIfCurrent(row, {
         id: row.github_user_id,
         login: row.github_username,
         username: row.github_username,
@@ -195,14 +227,127 @@ export class GitHubUserGrantService {
     }
   }
 
-  private async markReauthRequired(githubUserId: string, errorCode: string): Promise<void> {
-    await this.database<GrantRow>('github_user_grants')
-      .where({ github_user_id: githubUserId })
+  private currentRowQuery(row: GrantRow) {
+    let query = this.database<GrantRow>('github_user_grants')
+      .where({
+        github_user_id: row.github_user_id,
+        access_token_encrypted: row.access_token_encrypted,
+        status: row.status,
+      });
+    query = row.refresh_token_encrypted === null
+      ? query.whereNull('refresh_token_encrypted')
+      : query.andWhere({ refresh_token_encrypted: row.refresh_token_encrypted });
+    return query;
+  }
+
+  private async storeIfCurrent(row: GrantRow, user: GitHubUser): Promise<boolean> {
+    const accessToken = assertUserToken(user.accessToken || '');
+    const values = {
+      github_username: user.username,
+      source: user.oauthSource || row.source,
+      access_token_encrypted: encryptToken(accessToken, this.environment),
+      refresh_token_encrypted: user.refreshToken
+        ? encryptToken(user.refreshToken.trim(), this.environment)
+        : null,
+      access_token_expires_at_ms: user.tokenExpiresAt ?? null,
+      refresh_token_expires_at_ms: user.refreshTokenExpiresAt ?? null,
+      status: 'active' as const,
+      last_error_code: null,
+      updated_at: this.database.fn.now(),
+    };
+    return Number(await this.currentRowQuery(row).update(values)) === 1;
+  }
+
+  private async markReauthRequiredIfCurrent(row: GrantRow, errorCode: string): Promise<boolean> {
+    return Number(await this.currentRowQuery(row)
       .update({
         status: 'reauth_required',
         last_error_code: errorCode.slice(0, 64),
         updated_at: this.database.fn.now(),
+      })) === 1;
+  }
+
+  private async resolveCurrentRow(githubUserId: string): Promise<GitHubUserGrantResolution> {
+    const current = await this.database<GrantRow>('github_user_grants')
+      .where({ github_user_id: githubUserId })
+      .first();
+    if (!current || current.status !== 'active') return { status: 'reauth_required' };
+    return this.resolutionFromRow(current);
+  }
+
+  private async resolutionFromRow(row: GrantRow): Promise<GitHubUserGrantResolution> {
+    try {
+      return {
+        status: 'active',
+        accessToken: assertUserToken(decryptToken(row.access_token_encrypted, this.environment)),
+        refreshToken: row.refresh_token_encrypted
+          ? decryptToken(row.refresh_token_encrypted, this.environment)
+          : undefined,
+        tokenExpiresAt: timestamp(row.access_token_expires_at_ms),
+        refreshTokenExpiresAt: timestamp(row.refresh_token_expires_at_ms),
+      };
+    } catch (error) {
+      await this.markReauthRequiredIfCurrent(row, 'decryption_failed');
+      console.error('Could not decrypt GitHub user grant:', error);
+      return { status: 'reauth_required' };
+    }
+  }
+
+  private async resolveSharedGrant(
+    row: GrantRow,
+    forceRefresh: boolean,
+  ): Promise<GitHubUserGrantResolution | null> {
+    if (!this.sharedOAuthGrant) return null;
+    try {
+      const shared = await this.sharedOAuthGrant.refreshAndGetForOwner(row.github_user_id, forceRefresh);
+      if (!shared) return null;
+      if (shared.status === 'reauth_required') {
+        // The browser login captures the durable user grant before updating the
+        // singleton preview credential. During that short window, a stale
+        // preview row must not invalidate the newer per-user grant.
+        return null;
+      }
+      if (!shared.accessToken) return { status: 'temporarily_unavailable' };
+      const currentResolution = await this.resolutionFromRow(row);
+      if (
+        row.status === 'active'
+        && currentResolution.status === 'active'
+        && currentResolution.accessToken === shared.accessToken
+        && currentResolution.refreshToken === shared.refreshToken
+        && currentResolution.tokenExpiresAt === shared.accessTokenExpiresAt
+        && currentResolution.refreshTokenExpiresAt === shared.refreshTokenExpiresAt
+      ) {
+        return currentResolution;
+      }
+      const stored = await this.storeIfCurrent(row, {
+        id: row.github_user_id,
+        login: row.github_username,
+        username: row.github_username,
+        displayName: row.github_username,
+        email: null,
+        avatarUrl: null,
+        oauthSource: row.source,
+        accessToken: shared.accessToken,
+        refreshToken: shared.refreshToken,
+        tokenExpiresAt: shared.accessTokenExpiresAt,
+        refreshTokenExpiresAt: shared.refreshTokenExpiresAt,
       });
+      return stored
+        ? {
+            status: 'active',
+            accessToken: assertUserToken(shared.accessToken),
+            refreshToken: shared.refreshToken,
+            tokenExpiresAt: shared.accessTokenExpiresAt,
+            refreshTokenExpiresAt: shared.refreshTokenExpiresAt,
+          }
+        : this.resolveCurrentRow(row.github_user_id);
+    } catch (error) {
+      console.warn('Shared GitHub OAuth grant refresh failed:', (error as Error).message);
+      const expiresAt = timestamp(row.access_token_expires_at_ms);
+      return !forceRefresh && expiresAt !== undefined && expiresAt > Date.now()
+        ? null
+        : { status: 'temporarily_unavailable' };
+    }
   }
 
   private async requestRefresh(source: GrantRow['source'], refreshToken: string): Promise<RefreshResponse> {
@@ -235,4 +380,9 @@ export class GitHubUserGrantService {
   }
 }
 
-export const githubUserGrantService = new GitHubUserGrantService();
+export const githubUserGrantService = new GitHubUserGrantService(
+  db,
+  process.env,
+  fetch,
+  visualPreviewOAuthCredentialService,
+);
