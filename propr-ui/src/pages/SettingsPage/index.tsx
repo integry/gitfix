@@ -12,6 +12,7 @@ import { useDemoMode } from '../../contexts/DemoModeContext';
 import { useCurrentUser, userHasPermission } from '../../contexts/AuthContext';
 import NotificationSettingsSection from './NotificationSettingsSection';
 import VisualPreviewAuthSection from './VisualPreviewAuthSection';
+import SettingsNavigation, { type SettingsNavigationSection } from './SettingsNavigation';
 
 const AdminSettingsPage: React.FC = () => {
   const { isDemoMode } = useDemoMode();
@@ -63,6 +64,26 @@ const AdminSettingsPage: React.FC = () => {
     savePrLabelOnly
   } = useSettingsState();
 
+  const handleGeneralSettingChange = (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const settingName = event.target.name;
+    let value: string | number | boolean;
+    const numericFields = ['auto_followup_score_threshold', 'ultrafix_rating_goal', 'ultrafix_max_cycles', 'ultrafix_pause_seconds'];
+    if (numericFields.includes(settingName)) {
+      const raw = event.target.value;
+      // Only accept strings that are strictly integer digits (with optional leading minus)
+      // to avoid silent coercion of values like "1e6" or "2.5".
+      if (raw === '' || !/^-?\d+$/.test(raw)) return;
+      const parsed = Number(raw);
+      if (!Number.isSafeInteger(parsed)) return;
+      value = parsed;
+    } else if (settingName === 'auto_resolve_merge_conflicts') {
+      value = (event.target as HTMLInputElement).checked;
+    } else {
+      value = event.target.value;
+    }
+    setSettings(previous => ({ ...previous, [settingName]: value }));
+  };
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center bg-white text-gray-500">
@@ -70,6 +91,193 @@ const AdminSettingsPage: React.FC = () => {
       </div>
     );
   }
+
+  const settingsSections: SettingsNavigationSection[] = [
+    {
+      id: 'model-selection',
+      category: 'models',
+      searchText: 'model selection AI implementation agent reasoning level planning context analysis plan generation summarization fallback pull request PR review prompt review context token limit',
+      content: (
+        <AIModelSelectionSection
+          settings={{
+            analysis_model_fast: settings.analysis_model_fast,
+            planner_context_model: settings.planner_context_model,
+            planner_generation_model: settings.planner_generation_model,
+            default_agent_alias: settings.default_agent_alias,
+            model_reasoning_level: settings.model_reasoning_level,
+            pr_review_model: settings.pr_review_model,
+            pr_review_prompt: settings.pr_review_prompt,
+            pr_review_context_enabled: settings.pr_review_context_enabled,
+            pr_review_context_model: settings.pr_review_context_model,
+            pr_review_max_context_tokens: settings.pr_review_max_context_tokens
+          }}
+          summarizationSettings={summarizationSettings}
+          agents={agents}
+          catalogAgents={catalogAgents}
+          onSettingChange={handleModelSelectionChange}
+          onReviewPromptChange={(event) => setSettings(previous => ({ ...previous, pr_review_prompt: event.target.value }))}
+          onReviewPromptBlur={triggerSettingsSave}
+          onReviewContextEnabledChange={handleReviewContextEnabledChange}
+          onReviewMaxContextTokensChange={(value) => setSettings(previous => ({ ...previous, pr_review_max_context_tokens: value }))}
+          onReviewMaxContextTokensBlur={triggerSettingsSave}
+          onSummarizationModelChange={handleSummarizationModelChange}
+          onSummarizationFallbackModelChange={handleSummarizationFallbackModelChange}
+          onDefaultAgentChange={handleDefaultAgentChange}
+        />
+      )
+    },
+    {
+      id: 'knowledge-base',
+      category: 'models',
+      searchText: 'knowledge base repository codebase semantic search indexing summaries custom prompt reindex cooldown',
+      content: (
+        <KnowledgeBaseSection
+          settings={summarizationSettings}
+          onSettingsChange={handleSummarizationChange}
+          onReindexAll={handleReindexAll}
+          isReindexing={isReindexing}
+        />
+      )
+    },
+    {
+      id: 'general-configuration',
+      category: 'automation',
+      searchText: 'general configuration worker concurrency auto followup score threshold resolve merge conflicts ultrafix rating goal maximum cycles pause seconds',
+      content: (
+        <GeneralSettingsSection
+          settings={{
+            worker_concurrency: settings.worker_concurrency,
+            auto_followup_score_threshold: settings.auto_followup_score_threshold,
+            auto_resolve_merge_conflicts: settings.auto_resolve_merge_conflicts,
+            ultrafix_rating_goal: settings.ultrafix_rating_goal,
+            ultrafix_max_cycles: settings.ultrafix_max_cycles,
+            ultrafix_pause_seconds: settings.ultrafix_pause_seconds
+          }}
+          onSettingChange={handleGeneralSettingChange}
+          onBlur={triggerSettingsSave}
+        />
+      )
+    },
+    {
+      id: 'github-user-whitelist',
+      category: 'automation',
+      searchText: 'GitHub user whitelist allowed users issue comment processing access trigger actors',
+      content: (
+        <TagListSection
+          title="GitHub User Whitelist"
+          description="Only process issues/comments from these users."
+          items={whitelist}
+          newItem={newWhitelistItem}
+          onNewItemChange={setNewWhitelistItem}
+          onAddItem={addWhitelistItem}
+          onRemoveItem={removeWhitelistItem}
+          placeholder="e.g., octocat"
+          emptyMessage="Allowed for all users (Empty whitelist)."
+        />
+      )
+    },
+    {
+      id: 'primary-processing-labels',
+      category: 'automation',
+      searchText: 'primary processing labels issues auto processed state labels GitHub',
+      content: (
+        <TagListSection
+          title="Primary Processing Labels"
+          description="Issues with these labels will be auto-processed."
+          items={primaryLabels}
+          newItem={newPrimaryLabel}
+          onNewItemChange={setNewPrimaryLabel}
+          onAddItem={addPrimaryLabel}
+          onRemoveItem={removePrimaryLabel}
+          placeholder="e.g., AI"
+          emptyMessage="No labels configured."
+          helperText="State labels (-processing, -done) are generated automatically."
+        />
+      )
+    },
+    {
+      id: 'pr-label',
+      category: 'automation',
+      searchText: 'pull request PR label follow-up comments monitor GitHub',
+      content: (
+        <PrLabelSection
+          prLabel={prLabel}
+          onLabelChange={(event) => setPrLabel(event.target.value)}
+          onBlur={() => savePrLabelOnly(prLabel)}
+        />
+      )
+    },
+    {
+      id: 'follow-up-keywords',
+      category: 'automation',
+      searchText: 'follow-up keywords trigger processing comments phrases',
+      content: (
+        <TagListSection
+          title="Follow-up Keywords"
+          description="Triggers processing when found in comments."
+          items={keywords}
+          newItem={newKeyword}
+          onNewItemChange={setNewKeyword}
+          onAddItem={addKeyword}
+          onRemoveItem={removeKeyword}
+          placeholder="e.g., PROPR"
+          emptyMessage="No keywords configured."
+          showEmptyIcon={true}
+        />
+      )
+    },
+    {
+      id: 'follow-up-ignore-keywords',
+      category: 'automation',
+      searchText: 'PR pull request follow-up ignore keywords prevent loops comments phrases',
+      content: (
+        <TagListSection
+          title="PR Follow-up Ignore Keywords"
+          description="Ignore comments containing these phrases (prevents loops)."
+          items={ignoreKeywords}
+          newItem={newIgnoreKeyword}
+          onNewItemChange={setNewIgnoreKeyword}
+          onAddItem={addIgnoreKeyword}
+          onRemoveItem={removeIgnoreKeyword}
+          placeholder="e.g., Deployment In Progress"
+          emptyMessage="No ignore keywords configured."
+          showEmptyIcon={true}
+        />
+      )
+    },
+    {
+      id: 'agent-tank',
+      category: 'integrations',
+      searchText: 'LLM usage tracking Agent Tank daemon URL rate limit Claude Antigravity Codex CLI connection',
+      content: (
+        <AgentTankSection
+          settings={agentTankSettings}
+          onChange={handleAgentTankChange}
+          onBlur={triggerSettingsSave}
+          isAvailable={agentTankAvailable}
+          isCheckingStatus={agentTankCheckingStatus}
+        />
+      )
+    },
+    {
+      id: 'agent-runtime-packages',
+      category: 'integrations',
+      searchText: 'agent runtime packages dependencies install catalog container image environment build',
+      content: <AgentRuntimePackagesSection />
+    },
+    {
+      id: 'visual-preview-uploads',
+      category: 'integrations',
+      searchText: 'visual preview upload screenshots videos GitHub login personal access token PAT credential authentication connect',
+      content: <VisualPreviewAuthSection />
+    },
+    {
+      id: 'personal-notifications',
+      category: 'notifications',
+      searchText: 'personal notifications browser web push inbox badge quiet hours timezone plans tasks reviews pull requests indexing system failures',
+      content: <NotificationSettingsSection />
+    }
+  ];
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -83,165 +291,7 @@ const AdminSettingsPage: React.FC = () => {
         )}
       </div>
 
-      {/* Main Content Area - 2 Column Split */}
-      <fieldset
-        disabled={isDemoMode}
-        className={`flex-1 flex flex-col md:flex-row min-h-0 overflow-y-auto md:overflow-hidden ${isDemoMode ? 'opacity-70' : ''}`}
-      >
-        {/* Left Column - AI Engine Configuration */}
-        <div className="w-full md:w-1/2 md:overflow-y-auto border-b md:border-b-0 md:border-r border-gray-200 p-6">
-          <h3 className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-4">AI Engine Configuration</h3>
-
-          <div className="space-y-6">
-            <AIModelSelectionSection
-              settings={{
-                analysis_model_fast: settings.analysis_model_fast,
-                planner_context_model: settings.planner_context_model,
-                planner_generation_model: settings.planner_generation_model,
-                default_agent_alias: settings.default_agent_alias,
-                model_reasoning_level: settings.model_reasoning_level,
-                pr_review_model: settings.pr_review_model,
-                pr_review_prompt: settings.pr_review_prompt,
-                pr_review_context_enabled: settings.pr_review_context_enabled,
-                pr_review_context_model: settings.pr_review_context_model,
-                pr_review_max_context_tokens: settings.pr_review_max_context_tokens
-              }}
-              summarizationSettings={summarizationSettings}
-              agents={agents}
-              catalogAgents={catalogAgents}
-              onSettingChange={handleModelSelectionChange}
-              onReviewPromptChange={(e) => setSettings(prev => ({ ...prev, pr_review_prompt: e.target.value }))}
-              onReviewPromptBlur={triggerSettingsSave}
-              onReviewContextEnabledChange={handleReviewContextEnabledChange}
-              onReviewMaxContextTokensChange={(value) => setSettings(prev => ({ ...prev, pr_review_max_context_tokens: value }))}
-              onReviewMaxContextTokensBlur={triggerSettingsSave}
-              onSummarizationModelChange={handleSummarizationModelChange}
-              onSummarizationFallbackModelChange={handleSummarizationFallbackModelChange}
-              onDefaultAgentChange={handleDefaultAgentChange}
-            />
-
-            <KnowledgeBaseSection
-              settings={summarizationSettings}
-              onSettingsChange={handleSummarizationChange}
-              onReindexAll={handleReindexAll}
-              isReindexing={isReindexing}
-            />
-
-            <AgentTankSection
-              settings={agentTankSettings}
-              onChange={handleAgentTankChange}
-              onBlur={triggerSettingsSave}
-              isAvailable={agentTankAvailable}
-              isCheckingStatus={agentTankCheckingStatus}
-            />
-
-            <AgentRuntimePackagesSection />
-          </div>
-        </div>
-
-        {/* Right Column - Automation Rules */}
-        <div className="w-full md:w-1/2 md:overflow-y-auto p-6">
-          <h3 className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-4">Automation Rules</h3>
-
-          <div className="space-y-6">
-            <NotificationSettingsSection />
-
-            <VisualPreviewAuthSection />
-
-            <div className="border-t border-gray-200" />
-
-            <TagListSection
-              title="GitHub User Whitelist"
-              description="Only process issues/comments from these users."
-              items={whitelist}
-              newItem={newWhitelistItem}
-              onNewItemChange={setNewWhitelistItem}
-              onAddItem={addWhitelistItem}
-              onRemoveItem={removeWhitelistItem}
-              placeholder="e.g., octocat"
-              emptyMessage="Allowed for all users (Empty whitelist)."
-            />
-
-            <TagListSection
-              title="Primary Processing Labels"
-              description="Issues with these labels will be auto-processed."
-              items={primaryLabels}
-              newItem={newPrimaryLabel}
-              onNewItemChange={setNewPrimaryLabel}
-              onAddItem={addPrimaryLabel}
-              onRemoveItem={removePrimaryLabel}
-              placeholder="e.g., AI"
-              emptyMessage="No labels configured."
-              helperText="State labels (-processing, -done) are generated automatically."
-            />
-
-            <PrLabelSection
-              prLabel={prLabel}
-              onLabelChange={(e) => setPrLabel(e.target.value)}
-              onBlur={() => savePrLabelOnly(prLabel)}
-            />
-
-            <TagListSection
-              title="Follow-up Keywords"
-              description="Triggers processing when found in comments."
-              items={keywords}
-              newItem={newKeyword}
-              onNewItemChange={setNewKeyword}
-              onAddItem={addKeyword}
-              onRemoveItem={removeKeyword}
-              placeholder="e.g., PROPR"
-              emptyMessage="No keywords configured."
-              showEmptyIcon={true}
-            />
-
-            <TagListSection
-              title="PR Follow-up Ignore Keywords"
-              description="Ignore comments containing these phrases (prevents loops)."
-              items={ignoreKeywords}
-              newItem={newIgnoreKeyword}
-              onNewItemChange={setNewIgnoreKeyword}
-              onAddItem={addIgnoreKeyword}
-              onRemoveItem={removeIgnoreKeyword}
-              placeholder="e.g., Deployment In Progress"
-              emptyMessage="No ignore keywords configured."
-              showEmptyIcon={true}
-            />
-
-            {/* Horizontal divider */}
-            <div className="border-t border-gray-200 pt-6">
-              <GeneralSettingsSection
-                settings={{
-                  worker_concurrency: settings.worker_concurrency,
-                  auto_followup_score_threshold: settings.auto_followup_score_threshold,
-                  auto_resolve_merge_conflicts: settings.auto_resolve_merge_conflicts,
-                  ultrafix_rating_goal: settings.ultrafix_rating_goal,
-                  ultrafix_max_cycles: settings.ultrafix_max_cycles,
-                  ultrafix_pause_seconds: settings.ultrafix_pause_seconds
-                }}
-                onSettingChange={(e) => {
-                  let value: string | number | boolean;
-                  const numericFields = ['auto_followup_score_threshold', 'ultrafix_rating_goal', 'ultrafix_max_cycles', 'ultrafix_pause_seconds'];
-                  if (numericFields.includes(e.target.name)) {
-                    const raw = e.target.value;
-                    // Only accept strings that are strictly integer digits (with optional leading minus)
-                    // to avoid silent coercion of values like "1e6" or "2.5"
-                    if (raw === '' || !/^-?\d+$/.test(raw)) return;
-                    const parsed = Number(raw);
-                    if (!Number.isSafeInteger(parsed)) return;
-                    value = parsed;
-                  } else if (e.target.name === 'auto_resolve_merge_conflicts') {
-                    value = (e.target as HTMLInputElement).checked;
-                  } else {
-                    value = e.target.value;
-                  }
-                  setSettings(prev => ({ ...prev, [e.target.name]: value }));
-                }}
-                onBlur={triggerSettingsSave}
-              />
-            </div>
-          </div>
-        </div>
-      </fieldset>
+      <SettingsNavigation sections={settingsSections} isReadOnly={isDemoMode} />
 
       {/* Anchored Footer - Status Bar */}
       <div className="flex-shrink-0 border-t border-gray-200 px-6 py-3 bg-gray-50">
