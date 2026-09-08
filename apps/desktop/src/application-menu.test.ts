@@ -46,10 +46,15 @@ describe('desktop application menu', () => {
     const all = items(value.template());
     for (const [label, accelerator] of [
       ['New Plan', 'CmdOrCtrl+N'], ['Tasks', 'CmdOrCtrl+1'], ['Plans', 'CmdOrCtrl+2'],
-      ['Inbox', 'CmdOrCtrl+3'], ['Notification Settings…', 'CmdOrCtrl+,'],
+      ['Inbox', 'CmdOrCtrl+3'], ['Switch / Manage Instances…', 'CmdOrCtrl+Shift+I'],
+      ['Notification Settings…', 'CmdOrCtrl+,'],
     ]) {
       assert.equal(all.find(item => item.label === label)?.accelerator, accelerator);
     }
+    assert.deepEqual(
+      all.filter(item => item.accelerator === 'CmdOrCtrl+,').map(item => item.label),
+      ['Notification Settings…'],
+    );
     (all.find(item => item.label === 'Tasks')?.click as (() => void))();
     assert.deepEqual(value.dispatched, ['tasks']);
     assert.ok(all.some(item => item.role === 'copy'));

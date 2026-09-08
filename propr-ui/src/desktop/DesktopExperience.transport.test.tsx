@@ -124,7 +124,7 @@ describe('DesktopExperience transport and fencing', () => {
     expect(adapters.profiles.setActiveId).not.toHaveBeenCalled();
     expect(adapters.connection.publishActivation).toHaveBeenCalledTimes(1);
 
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click((await screen.findByText('Team server')).closest('button')!);
 
     expect(await screen.findByText(/could not save this connection/i)).toBeInTheDocument();
@@ -260,7 +260,7 @@ describe('DesktopExperience transport and fencing', () => {
     render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
 
     expect(await screen.findByText('Connected app')).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click((await screen.findByText('Team server')).closest('button')!);
     await waitFor(() => expect(probe).toHaveBeenCalledWith(remoteProfile));
     expect(await screen.findByText('Connected app')).toBeInTheDocument();

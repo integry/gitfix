@@ -269,7 +269,7 @@ describe('DesktopExperience', () => {
     renderConnectedExperience(adapters);
 
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     expect(await screen.findByRole('dialog', { name: 'Manage instances' })).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

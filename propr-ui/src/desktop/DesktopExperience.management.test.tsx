@@ -108,6 +108,38 @@ describe('DesktopExperience profile management', () => {
     expect(adapters.connection.probe).toHaveBeenLastCalledWith(remoteProfile);
   });
 
+  it('leaves native menu accelerators to native command delivery', async () => {
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    adapters.app.onNativeCommand = () => () => undefined;
+    render(<DesktopExperience adapters={adapters}>{connectedApp}</DesktopExperience>);
+    expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
+
+    expect(screen.queryByRole('dialog', { name: 'Manage instances' })).not.toBeInTheDocument();
+    expect(window.confirm).not.toHaveBeenCalled();
+  });
+
+  it('guards the instance-management fallback shortcut before leaving Plan Studio', async () => {
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id);
+    window.location.hash = '#/studio/draft-1';
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    render(
+      <DesktopExperience adapters={adapters}>
+        <textarea aria-label="Plan composer" defaultValue="Unsaved plan details" />
+      </DesktopExperience>,
+    );
+    expect(await screen.findByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
+
+    expect(window.confirm).toHaveBeenCalledWith('Leave this plan? Any unsaved changes will be lost.');
+    expect(screen.queryByRole('dialog', { name: 'Manage instances' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Plan composer')).toHaveValue('Unsaved plan details');
+    window.location.hash = '#/';
+  });
+
   it('asks before native navigation can leave a plan composer', async () => {
     let nativeCommand: ((delivery: DesktopNativeCommandDelivery) => void) | undefined;
     const adapters = adaptersFor(
@@ -216,7 +248,7 @@ describe('DesktopExperience profile management', () => {
 
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
     vi.clearAllMocks();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit This computer' }));
     fireEvent.change(screen.getByLabelText('Instance URL'), { target: { value: 'https://active.example.com/' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -228,7 +260,7 @@ describe('DesktopExperience profile management', () => {
     expect(apiMock.setApiBaseUrl).toHaveBeenLastCalledWith('https://active.example.com');
 
     vi.clearAllMocks();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Team server' }));
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Renamed team server' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -248,7 +280,7 @@ describe('DesktopExperience profile management', () => {
 
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
     vi.clearAllMocks();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit This computer' }));
     fireEvent.change(screen.getByLabelText('Instance URL'), { target: { value: 'https://unavailable.example.com/' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -270,7 +302,7 @@ describe('DesktopExperience profile management', () => {
     render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
 
     expect(await screen.findByText('Connected app')).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Team server' }));
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Retryable edit' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -374,7 +406,7 @@ describe('DesktopExperience profile management', () => {
     expect(await screen.findByRole('button', { name: 'Offline: This computer' })).toBeInTheDocument();
     fireEvent(window, new Event('online'));
     expect(await screen.findByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'I', ctrlKey: true, shiftKey: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit This computer' }));
     expect(screen.getByLabelText('Display name')).toHaveValue('This computer');
     expect(screen.queryByText('Opening ProPR…')).not.toBeInTheDocument();

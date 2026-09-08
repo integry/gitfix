@@ -97,9 +97,10 @@ export const useDesktopNativeCommands = ({
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
       if (state.phase !== 'connected') return;
-      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+      if (!app.onNativeCommand && (event.metaKey || event.ctrlKey)
+        && event.shiftKey && event.key.toLowerCase() === 'i') {
         event.preventDefault();
-        onManageInstances();
+        if (confirmPlanStudioDiscard()) onManageInstances();
       } else if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r') {
         event.preventDefault();
         void onReconnect(state.profile);
@@ -107,5 +108,5 @@ export const useDesktopNativeCommands = ({
     };
     document.addEventListener('keydown', handleKeyboard);
     return () => document.removeEventListener('keydown', handleKeyboard);
-  }, [onManageInstances, onReconnect, state]);
+  }, [app.onNativeCommand, onManageInstances, onReconnect, state]);
 };
