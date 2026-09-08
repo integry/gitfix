@@ -134,8 +134,16 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
             },
             getCapabilities: async options => {
                 capabilityRequests.push(options);
-                return [];
+                return options?.force ? [] : [{
+                    agentId: 'agent-1',
+                    agentAlias: 'agent-1',
+                    agentType: 'claude',
+                    goalCapable: true,
+                    lifecycle: null,
+                    controls: { liveInput: false, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true },
+                }];
             },
+            generateTitle: async () => 'Preview-enabled goal',
             uploadIdentity: async files => files.map(file => ({ name: file.originalname, size: file.size })),
             processAttachments: async (files, goalId) => {
                 attachmentProcessCount += files.length;
@@ -150,6 +158,25 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
                 }));
             },
             removeTemporaryUploads: async () => undefined,
+            loadVisualPreviewSettings: async () => ({
+                enabled: true,
+                types: ['image'],
+                instructions: 'Capture the completed dashboard.',
+            }),
+            getOctokit: async () => ({
+                request: async (endpoint: string) => endpoint.includes('/pulls/{pull_number}')
+                    ? { data: { body: [
+                        '<!-- propr-visual-preview -->',
+                        '## Visual preview',
+                        '',
+                        '### Dashboard',
+                        '',
+                        '![Dashboard](https://github.com/user-attachments/assets/preview-1)',
+                        '',
+                        'Current dashboard state.',
+                      ].join('\n') } }
+                    : { data: {} },
+            }) as never,
         });
 
         const listed = response();
@@ -164,6 +191,18 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         assert.equal(listedGoals[0].liveSummary.todos.length, 2);
         assert.equal(listedGoals[0].liveSummary.tokenUsage.input_tokens, 12);
         assert.equal((await database('goals').where({ goal_id: 'goal-1' }).first()).artifacts_checked_at, '2000-01-01T00:00:00.000Z');
+
+        await database('goals').where({ goal_id: 'goal-1' }).update({ final_pr_number: 42 });
+        const previews = response();
+        await routes.previews(request('owner-1', { goalId: 'goal-1' }), previews.res);
+        assert.deepEqual(previews.state.body, {
+            previews: [{
+                type: 'image',
+                title: 'Dashboard',
+                description: 'Current dashboard state.',
+                url: 'https://github.com/user-attachments/assets/preview-1',
+            }],
+        });
 
         const invalidStrategy = response();
         await routes.create(request('owner-1', {}, {
@@ -211,6 +250,21 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         await routes.create(oversizedCodexRequest, oversizedCodexPrompt.res);
         assert.equal(oversizedCodexPrompt.state.status, 400);
         assert.match((oversizedCodexPrompt.state.body as { error: string }).error, /Final Codex goal prompt/);
+
+        const previewGoalRequest = request('owner-1', {}, {
+            repository: 'acme/repo', objective: 'Ship the preview', agentId: 'agent-1', model: 'gpt-5.6',
+            launchStrategy: 'direct',
+        });
+        previewGoalRequest.get = () => 'preview-goal';
+        const previewGoal = response();
+        await routes.create(previewGoalRequest, previewGoal.res);
+        assert.equal(previewGoal.state.status, 201);
+        const previewGoalId = (previewGoal.state.body as { goal: { id: string } }).goal.id;
+        const storedPreviewPrompt = (await database('goals').where({ goal_id: previewGoalId }).first()).initial_prompt;
+        assert.match(storedPreviewPrompt, /VISUAL PREVIEW REQUIREMENT/);
+        assert.match(storedPreviewPrompt, /Capture the completed dashboard/);
+        assert.match(storedPreviewPrompt, /already-open draft PR at checkpoint boundaries/);
+        queued.length = 0;
 
         await database('goals').where({ goal_id: 'goal-1' }).update({
             create_idempotency_key: 'create-key-1',

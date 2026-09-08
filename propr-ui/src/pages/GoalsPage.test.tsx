@@ -7,6 +7,7 @@ import { getInstanceCatalog, getTaskLiveDetails } from '../api/proprApi';
 
 vi.mock('../api/goals', () => ({
   getGoalCapabilities: vi.fn(), listGoals: vi.fn(), getGoal: vi.fn(), createGoal: vi.fn(),
+  getGoalVisualPreviews: vi.fn(),
   pauseGoal: vi.fn(), resumeGoal: vi.fn(), cancelGoal: vi.fn(), deleteGoal: vi.fn(), requestGoalModel: vi.fn(), sendGoalInput: vi.fn(),
 }));
 vi.mock('../api/proprApi', () => ({ getInstanceCatalog: vi.fn(), getTaskLiveDetails: vi.fn() }));
@@ -52,6 +53,7 @@ describe('GoalsPage', () => {
     vi.mocked(getInstanceCatalog).mockResolvedValue({ agents: [], repositories: [{ name: 'acme/web', enabled: true }] });
     vi.mocked(goalsApi.listGoals).mockResolvedValue({ goals: [] });
     vi.mocked(goalsApi.getGoal).mockResolvedValue({ goal });
+    vi.mocked(goalsApi.getGoalVisualPreviews).mockResolvedValue({ previews: [] });
     vi.mocked(getTaskLiveDetails).mockResolvedValue({ events: [], todos: [{ id: 'todo-1', content: 'Implement API', status: 'in_progress' }], currentTask: 'Implement API', tokenUsage: { input_tokens: 10, output_tokens: 5 } });
     vi.mocked(goalsApi.pauseGoal).mockResolvedValue({ goal: { ...goal, desiredState: 'paused', pausedAt: new Date().toISOString() } });
     vi.mocked(goalsApi.sendGoalInput).mockResolvedValue({ goal });
@@ -234,6 +236,30 @@ describe('GoalsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: "What's done?" }));
     await waitFor(() => expect(goalsApi.sendGoalInput).toHaveBeenCalledWith('goal-1', { canned: 'done' }));
     expect(goalsApi.pauseGoal).not.toHaveBeenCalled();
+  });
+
+  it('shows visual preview evidence fetched from the open goal PR', async () => {
+    vi.mocked(goalsApi.getGoal).mockResolvedValue({
+      goal: { ...goal, finalPr: { number: 42, url: 'https://github.com/acme/web/pull/42' } },
+    });
+    vi.mocked(goalsApi.getGoalVisualPreviews).mockResolvedValue({
+      previews: [{
+        type: 'image',
+        title: 'Dashboard filters',
+        description: 'The current desktop implementation.',
+        url: 'https://github.com/user-attachments/assets/preview-1',
+      }],
+    });
+
+    render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Visual previews' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Dashboard filters' })).toHaveAttribute(
+      'src',
+      'https://github.com/user-attachments/assets/preview-1',
+    );
+    expect(screen.getByText('The current desktop implementation.')).toBeInTheDocument();
+    expect(goalsApi.getGoalVisualPreviews).toHaveBeenCalledWith('goal-1');
   });
 
   it('sends files and pasted images with a running goal correction', async () => {

@@ -1,3 +1,6 @@
+import type { VisualPreviewSettings } from './config/configManager.js';
+import { buildVisualPreviewPrompt } from './services/visualPreviewService.js';
+
 export type GoalDesiredState = 'running' | 'paused' | 'cancelled';
 export type GoalResultState = 'completed' | 'failed' | 'cancelled';
 export const GOAL_LAUNCH_STRATEGIES = ['direct', 'orchestrate'] as const;
@@ -36,6 +39,7 @@ export function buildNativeGoalCommand(options: {
     maxParallelTasks?: number | null;
     ultrafix?: boolean | null;
     checkpointIntervalMinutes?: number | null;
+    visualPreviewSettings?: VisualPreviewSettings;
 }): string {
     const parallelPolicy = options.maxParallelTasks == null
         ? 'Concurrency policy: No maximum parallel task count was selected. Decide and manage concurrency yourself; ProPR does not schedule a plan graph.'
@@ -62,7 +66,7 @@ export function buildNativeGoalCommand(options: {
             'ProPR validates the paths, stages only that scope, commits, pushes, records the SHA, and then acknowledges the checkpoint. Unlisted parallel work remains untouched. Continue only after that acknowledgment.',
         ]
         : [];
-    return [
+    const prompt = [
         `/goal ${options.objective}`,
         '',
         launchInstructions[options.launchStrategy],
@@ -72,6 +76,14 @@ export function buildNativeGoalCommand(options: {
         'Delivery requirements:',
         ...deliveryRequirements,
     ].join('\n');
+    const visualPreviewPrompt = options.visualPreviewSettings
+        ? buildVisualPreviewPrompt(options.visualPreviewSettings)
+        : '';
+    if (!visualPreviewPrompt) return prompt;
+    const timingPolicy = options.launchStrategy === 'direct'
+        ? 'Goal preview timing: Use your discretion about when coherent visual evidence is ready. Generate or refresh it before a checkpoint whenever an in-progress preview would be useful; ProPR publishes current preview files to the already-open draft PR at checkpoint boundaries.'
+        : 'Goal preview timing: Use your discretion about when coherent visual evidence is ready. ProPR publishes current preview files after the final goal PR is identified.';
+    return `${prompt}${visualPreviewPrompt}\n${timingPolicy}`;
 }
 
 export interface GoalCheckpointDeclaration {

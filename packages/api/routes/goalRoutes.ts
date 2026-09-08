@@ -16,7 +16,9 @@ import {
   getAuthenticatedOctokit,
   goalTitleFallback,
   goalJobId,
+  loadRepositoryVisualPreviewSettings,
   logger,
+  parsePublishedVisualPreviews,
   type GoalCapability,
   type GoalJobData,
   type GoalLaunchStrategy,
@@ -48,6 +50,8 @@ interface GoalRoutesDeps {
   processAttachments?: typeof processGoalUploads;
   uploadIdentity?: typeof goalUploadIdentity;
   removeTemporaryUploads?: typeof removeTemporaryGoalUploads;
+  loadVisualPreviewSettings?: typeof loadRepositoryVisualPreviewSettings;
+  getOctokit?: typeof getAuthenticatedOctokit;
 }
 
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -244,6 +248,8 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
   const storeAttachments = deps.processAttachments ?? processGoalUploads;
   const identifyUploads = deps.uploadIdentity ?? goalUploadIdentity;
   const cleanupTemporaryUploads = deps.removeTemporaryUploads ?? removeTemporaryGoalUploads;
+  const loadVisualPreviewSettings = deps.loadVisualPreviewSettings ?? loadRepositoryVisualPreviewSettings;
+  const getOctokit = deps.getOctokit ?? getAuthenticatedOctokit;
 
   const uploadedFiles = (req: Request): MulterFile[] => Array.isArray(req.files)
     ? req.files as MulterFile[]
@@ -313,6 +319,28 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     if (row) res.json({ goal: await serializeGoal(deps.db, deps.redisClient, row) });
   };
 
+  const previews = async (req: Request, res: Response) => {
+    const row = await findOwnedGoal(deps.db, req, res);
+    if (!row) return;
+    if (!row.final_pr_number) return void res.json({ previews: [] });
+    try {
+      const [owner, repo] = row.repository.split('/');
+      const octokit = await getOctokit();
+      const response = await octokit.request(
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+        { owner, repo, pull_number: row.final_pr_number },
+      ) as { data: { body?: string | null } };
+      res.json({ previews: parsePublishedVisualPreviews(response.data.body) });
+    } catch (error) {
+      logger.warn({
+        goalId: row.goal_id,
+        pullRequestNumber: row.final_pr_number,
+        error: (error as Error).message,
+      }, 'Could not fetch goal visual previews from GitHub');
+      res.json({ previews: [], unavailable: true });
+    }
+  };
+
   // eslint-disable-next-line complexity -- creation coordinates idempotency, capability checks, durable files, and queue publication
   const createGoal = async (req: Request, res: Response, files: MulterFile[]) => {
     let body: Record<string, unknown>;
@@ -345,6 +373,7 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
       maxParallelTasks: body.maxParallelTasks as number | null | undefined,
       ultrafix: body.ultrafix === true,
       checkpointIntervalMinutes: body.checkpointIntervalMinutes as number | null | undefined,
+      visualPreviewSettings: await loadVisualPreviewSettings(body.repository as string),
     });
     const selection = await resolveCreationAgent(body, getCapabilities, baseInitialPrompt);
     if ('error' in selection) return void res.status(selection.status).json({ error: selection.error });
@@ -352,7 +381,7 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
 
     const [repoOwner, repoName] = (body.repository as string).split('/');
     try {
-      const octokit = await getAuthenticatedOctokit();
+      const octokit = await getOctokit();
       await octokit.request('GET /repos/{owner}/{repo}', { owner: repoOwner, repo: repoName });
     } catch {
       return void res.status(403).json({ error: 'Repository is not accessible to this ProPR installation' });
@@ -946,7 +975,7 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
   };
 
   return {
-    capabilities, list, get, create, pause, resume, cancel, remove, requestModel, input, attachment,
+    capabilities, list, get, previews, create, pause, resume, cancel, remove, requestModel, input, attachment,
     requireGoalTaskOwnership,
   };
 }

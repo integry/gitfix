@@ -6,6 +6,7 @@ import {
     GOAL_CONTINUE_INPUT,
     TaskStates,
     buildGoalPolicyEnvironment,
+    cleanupPreparedVisualPreviewEvidence,
     createWorktreeForIssue,
     db,
     ensureGitRepository,
@@ -16,6 +17,8 @@ import {
     goalAttemptLabel,
     goalTitleFallback,
     logger,
+    loadRepositoryVisualPreviewSettings,
+    prepareVisualPreviewEvidence,
     recordLLMMetrics,
     runWithExecutionAbortSignal,
     type AgentExecutionResult,
@@ -36,7 +39,11 @@ import {
     type GoalRow,
 } from './goalAttemptState.js';
 import { enqueueNextGoalAttempt } from './goalAttemptScheduling.js';
-import { publishDirectGoalCheckpoint, rejectDirectGoalCheckpoint } from './goalCheckpointPublisher.js';
+import {
+    publishDirectGoalCheckpoint,
+    rejectDirectGoalCheckpoint,
+} from './goalCheckpointPublisher.js';
+import { publishGoalVisualPreviews } from './goalVisualPreviewPublisher.js';
 import { labelCompletedGoalPullRequest } from './goalPullRequestLabel.js';
 
 function isRecoverableInterruption(result: AgentExecutionResult): boolean {
@@ -201,6 +208,30 @@ async function recordGoalMetrics(goal: GoalRow, job: GoalJobData, result: AgentE
     }, { number: 0, repoOwner, repoName }, {
         jobType: 'issue', correlationId: goal.goal_id, taskId: goal.current_task_id,
     });
+}
+
+async function publishOrchestratedGoalVisualPreviews(
+    goal: GoalRow,
+    pullRequest: { number: number },
+    worktreePath: string,
+): Promise<void> {
+    let prepared: Awaited<ReturnType<typeof prepareVisualPreviewEvidence>> | undefined;
+    try {
+        prepared = await prepareVisualPreviewEvidence({
+            worktreePath,
+            settings: await loadRepositoryVisualPreviewSettings(goal.repository),
+            taskId: goal.goal_id,
+        });
+        const octokit = await getAuthenticatedOctokit();
+        await publishGoalVisualPreviews(
+            { ...goal, worktree_path: worktreePath },
+            pullRequest,
+            prepared,
+            octokit,
+        );
+    } finally {
+        await cleanupPreparedVisualPreviewEvidence(prepared);
+    }
 }
 
 interface PreparedGoalAttempt {
@@ -483,6 +514,9 @@ async function handleGoalResult(
     const boundaryStop = await operations.handleStopped(data, goal, boundary);
     if (boundaryStop) return boundaryStop;
     let artifacts = await operations.saveProviderResult(data, { ...goal, branch_name: worktree.branchName }, result);
+    if (goal.launch_strategy !== 'direct' && artifacts.finalPr) {
+        await operations.publishVisualPreviews(goal, artifacts.finalPr, worktree.worktreePath);
+    }
     const latest = await operations.fencedGoal(data);
     const stopped = await operations.handleStopped(data, goal, latest);
     if (stopped) return stopped;
@@ -531,6 +565,7 @@ interface GoalResultOperations {
     scheduleFurtherWork: typeof scheduleFurtherWork;
     publishCheckpoint: typeof publishDirectGoalCheckpoint;
     rejectCheckpoint: typeof rejectDirectGoalCheckpoint;
+    publishVisualPreviews: typeof publishOrchestratedGoalVisualPreviews;
     finalizeGoal: typeof finalizeGoal;
     labelPullRequest: typeof labelCompletedGoalPullRequest;
     markTaskReconciled: typeof markGoalTaskReconciled;
@@ -547,6 +582,7 @@ const defaultGoalResultOperations: GoalResultOperations = {
     scheduleFurtherWork,
     publishCheckpoint: publishDirectGoalCheckpoint,
     rejectCheckpoint: rejectDirectGoalCheckpoint,
+    publishVisualPreviews: publishOrchestratedGoalVisualPreviews,
     finalizeGoal,
     labelPullRequest: labelCompletedGoalPullRequest,
     markTaskReconciled: markGoalTaskReconciled,

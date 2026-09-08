@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
     AI_COMMIT_AUTHOR,
+    cleanupPreparedVisualPreviewEvidence,
     commitChanges,
     db,
     getAuthenticatedOctokit,
@@ -8,11 +9,14 @@ import {
     getModelShortName,
     goalTitleFallback,
     InvalidCheckpointScopeError,
+    loadRepositoryVisualPreviewSettings,
     parseGoalArtifacts,
+    prepareVisualPreviewEvidence,
     pushBranch,
     type GoalArtifact,
     type GoalJobData,
 } from '@propr/core';
+import { buildGoalPullRequestBody, publishGoalVisualPreviews } from './goalVisualPreviewPublisher.js';
 
 export type GoalCheckpointKind = 'bootstrap' | 'agent' | 'final';
 
@@ -133,15 +137,7 @@ async function createDraftPr(
     }
     const [owner, repo] = goal.repository.split('/');
     const title = buildGoalPullRequestTitle(goal);
-    const body = [
-        '## Goal implementation',
-        '',
-        'This draft PR is created and checkpointed by ProPR while the goal agent works.',
-        '',
-        `**Goal:** ${goal.objective}`,
-        `**Goal ID:** \`${goal.goal_id}\``,
-        `**Checkpoint interval:** ${goal.checkpoint_interval_minutes} minutes`,
-    ].join('\n');
+    const body = buildGoalPullRequestBody(goal);
     let lastError: unknown;
     for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
@@ -252,7 +248,13 @@ async function publishLocked(
     }
 
     const recordId = existingCheckpoint?.checkpoint_id ?? checkpointId;
+    let preparedVisualPreview: Awaited<ReturnType<typeof prepareVisualPreviewEvidence>> | undefined;
     try {
+        preparedVisualPreview = await prepareVisualPreviewEvidence({
+            worktreePath: goal.worktree_path,
+            settings: await loadRepositoryVisualPreviewSettings(goal.repository),
+            taskId: goal.goal_id,
+        });
         const commit = await commitChanges(
             goal.worktree_path,
             checkpointMessage(goal, request),
@@ -275,6 +277,7 @@ async function publishLocked(
         });
         const baseBranch = await resolveBaseBranch(octokit, goal);
         const pull = await createDraftPr(octokit, goal, baseBranch);
+        await publishGoalVisualPreviews(goal, pull, preparedVisualPreview, octokit);
         const artifacts = withFinalPrArtifact(goal, pull);
         const updated = await db('goals').where({
             goal_id: job.goalId,
@@ -317,6 +320,8 @@ async function publishLocked(
             return { commitSha: null, rejected: true, error: message };
         }
         throw error;
+    } finally {
+        await cleanupPreparedVisualPreviewEvidence(preparedVisualPreview);
     }
 }
 

@@ -9,10 +9,10 @@ import {
 import { getInstanceCatalog } from '../api/proprApi';
 import type { InstanceCatalogRepository } from '../api/proprTypes';
 import {
-  cancelGoal, createGoal, deleteGoal, getGoal, getGoalCapabilities, listGoals, pauseGoal,
+  cancelGoal, createGoal, deleteGoal, getGoal, getGoalCapabilities, getGoalVisualPreviews, listGoals, pauseGoal,
   requestGoalModel, resumeGoal, sendGoalInput,
   getGoalAttachmentUrl,
-  type Goal, type GoalCapability, type GoalLaunchStrategy,
+  type Goal, type GoalCapability, type GoalLaunchStrategy, type GoalVisualPreview,
 } from '../api/goals';
 import { useTaskLiveData } from '../components/TaskDetails/useTaskLiveData';
 import TodoList from '../components/TaskDetails/TodoList';
@@ -355,6 +355,7 @@ function GoalDetails({ goalId }: { goalId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<'readable' | 'terminal'>('readable');
+  const [visualPreviews, setVisualPreviews] = useState<GoalVisualPreview[]>([]);
   const { liveDetails: live } = useTaskLiveData(goal?.taskId);
   const goalHistory = useMemo(() => goal?.startedAt
     ? [{ state: 'CLAUDE_EXECUTION', timestamp: goal.startedAt }]
@@ -372,6 +373,19 @@ function GoalDetails({ goalId }: { goalId: string }) {
     } catch (err) { setError((err as Error).message); }
   }, [goalId, models.length]);
   useEffect(() => { refresh(); const timer = window.setInterval(refresh, 5_000); return () => window.clearInterval(timer); }, [refresh]);
+  useEffect(() => {
+    if (!goal?.finalPr?.number) {
+      setVisualPreviews([]);
+      return;
+    }
+    let active = true;
+    const refreshPreviews = () => getGoalVisualPreviews(goalId)
+      .then(data => { if (active && !data.unavailable) setVisualPreviews(data.previews); })
+      .catch(() => { /* Keep the last successfully fetched GitHub previews. */ });
+    void refreshPreviews();
+    const timer = window.setInterval(refreshPreviews, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [goal?.finalPr?.number, goalId]);
   const act = async (operation: () => Promise<{ goal: Goal }>) => { setBusy(true); setError(null); try { setGoal((await operation()).goal); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
   const continueWith = async (body: { message?: string; canned?: 'done' | 'left' }, attachments: File[] = []) => {
     if (!goal) return;
@@ -475,6 +489,27 @@ function GoalDetails({ goalId }: { goalId: string }) {
               {goal.checkpoint.error && !goal.checkpoint.latest?.error && <p className="mt-2 text-red-700">Checkpoint error: {goal.checkpoint.error}</p>}
               <CheckpointDeclaration checkpoint={goal.checkpoint} />
             </div>
+          </div>
+        </section>}
+
+        {visualPreviews.length > 0 && <section aria-labelledby="goal-visual-previews-heading" className="my-6 border-y border-slate-200 py-5">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 id="goal-visual-previews-heading" className="font-semibold text-slate-900">Visual previews</h2>
+              <p className="mt-0.5 text-xs text-slate-500">Current evidence published on the goal PR.</p>
+            </div>
+            <span className="text-xs text-slate-400">From GitHub</span>
+          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            {visualPreviews.map((preview, index) => <figure key={`${preview.url}-${index}`} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              {preview.type === 'image'
+                ? <img src={preview.url} alt={preview.title} loading="lazy" className="aspect-video w-full bg-white object-contain" />
+                : <video src={preview.url} aria-label={preview.title} controls preload="metadata" className="aspect-video w-full bg-slate-950 object-contain" />}
+              <figcaption className="border-t border-slate-200 px-3 py-2.5">
+                <p className="text-sm font-medium text-slate-800">{preview.title}</p>
+                {preview.description && <p className="mt-1 text-xs leading-5 text-slate-500">{preview.description}</p>}
+              </figcaption>
+            </figure>)}
           </div>
         </section>}
 

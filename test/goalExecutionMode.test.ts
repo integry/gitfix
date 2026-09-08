@@ -66,6 +66,23 @@ describe('native goal provider contract', () => {
     assert.match(prompt, /ProPR publishes and validates the final checkpoint/);
   });
 
+  test('adds repository visual preview policy and discretionary checkpoint timing to a goal prompt', () => {
+    const prompt = buildNativeGoalCommand({
+      objective: 'Ship the dashboard',
+      launchStrategy: 'direct',
+      visualPreviewSettings: {
+        enabled: true,
+        types: ['image'],
+        instructions: 'Capture desktop and mobile dashboard states.',
+      },
+    });
+
+    assert.match(prompt, /VISUAL PREVIEW REQUIREMENT/);
+    assert.match(prompt, /Capture desktop and mobile dashboard states/);
+    assert.match(prompt, /Use your discretion about when coherent visual evidence is ready/);
+    assert.match(prompt, /already-open draft PR at checkpoint boundaries/);
+  });
+
   test('parses and validates the agent checkpoint handoff', () => {
     const declaration = parseGoalCheckpointDeclaration([
       'Stable work is ready.',

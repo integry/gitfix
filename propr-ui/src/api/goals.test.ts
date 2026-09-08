@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createGoal, sendGoalInput } from './goals';
+import { createGoal, getGoalVisualPreviews, sendGoalInput } from './goals';
 
 describe('goal attachment API', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -32,5 +32,23 @@ describe('goal attachment API', () => {
     expect(init?.body).toBeInstanceOf(FormData);
     expect((init?.body as FormData).get('files')).toBe(file);
     expect(JSON.parse(String((init?.body as FormData).get('payload')))).toEqual({ message: 'Use this.' });
+  });
+
+  it('accepts only allowlisted GitHub attachment URLs for goal previews', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      previews: [
+        { type: 'image', title: 'Dashboard', url: 'https://github.com/user-attachments/assets/preview-1' },
+        { type: 'image', title: 'Tracker', url: 'https://example.com/tracker.png' },
+        { type: 'video', title: 'Injected', url: 'javascript:alert(1)' },
+      ],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(getGoalVisualPreviews('goal-1')).resolves.toEqual({
+      previews: [{
+        type: 'image',
+        title: 'Dashboard',
+        url: 'https://github.com/user-attachments/assets/preview-1',
+      }],
+    });
   });
 });

@@ -218,6 +218,9 @@ test('goal processing defers the PR label until successful terminal reconciliati
       loadGoal: async () => goal, fencedGoal: async () => goal, acknowledgeInput: async () => {},
       recordMetrics: async () => {}, handleStopped: async () => null,
       saveProviderResult: async () => ({ finalPr: { number: 42, url: 'https://github.com/acme/repo/pull/42' } }),
+      publishVisualPreviews: async (_goal: unknown, pullRequest: { number: number }) => {
+        events.push(`previews:${pullRequest.number}`);
+      },
       scheduleFurtherWork: async () => null,
       finalizeGoal: async () => { events.push('finalized'); return true; },
       labelPullRequest: async (repository: string, prNumber: number) => { events.push(`labeled:${repository}#${prNumber}`); },
@@ -232,7 +235,7 @@ test('goal processing defers the PR label until successful terminal reconciliati
   const outcome = await processGoalJob({ data } as never, dependencies as never);
 
   assert.deepEqual(outcome, { status: 'complete', goalId: 'goal-complete' });
-  assert.deepEqual(events, ['finalized', 'labeled:acme/repo#42', 'task-completed', 'reconciled']);
+  assert.deepEqual(events, ['previews:42', 'finalized', 'labeled:acme/repo#42', 'task-completed', 'reconciled']);
 });
 
 test('goal execution keeps initial prompt identity separate from FIFO continuation input', async () => {
