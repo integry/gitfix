@@ -92,6 +92,7 @@ describe('Linux tray menu popup', () => {
         getDisplayNearestPoint: () => topPanelDisplay,
       } as unknown as typeof import('electron').screen,
       createHost,
+      environment: {},
     });
     const emptyGeometry = {
       bounds: { x: 0, y: 0, width: 0, height: 0 },
@@ -132,5 +133,51 @@ describe('Linux tray menu popup', () => {
     assert.equal(destroys, 3);
     popupOptions?.callback?.();
     assert.equal(destroys, 3, 'a late close callback cannot touch the destroyed host');
+  });
+
+  it('uses the native cursor position instead of positioning the transient owner on Wayland', () => {
+    let hostOptions: BrowserWindowConstructorOptions | undefined;
+    let popupOptions: PopupOptions | undefined;
+    let positions = 0;
+    let shows = 0;
+    let destroys = 0;
+    const host = {
+      isDestroyed: () => false,
+      setPosition: () => { positions += 1; },
+      showInactive: () => { shows += 1; },
+      destroy: () => { destroys += 1; },
+    } as unknown as BaseWindow;
+    const popup = createLinuxTrayMenuPopup({
+      screen: {
+        getCursorScreenPoint: () => assert.fail('Wayland must not compute a global owner position'),
+        getDisplayNearestPoint: () => assert.fail('Wayland must not compute a global owner position'),
+      },
+      createHost: (options) => {
+        hostOptions = options;
+        return host;
+      },
+      environment: { XDG_SESSION_TYPE: 'wayland' },
+    });
+    const menu = {
+      popup: (options: PopupOptions) => { popupOptions = options; },
+      closePopup: () => {},
+    } as unknown as Menu;
+
+    popup.popup(menu, {
+      bounds: { x: 10, y: 10, width: 20, height: 20 },
+      position: { x: 15, y: 15 },
+    });
+
+    assert.equal(hostOptions?.x, undefined);
+    assert.equal(hostOptions?.y, undefined);
+    assert.equal(positions, 0);
+    assert.equal(shows, 1);
+    assert.equal(popupOptions?.window, host);
+    assert.equal(popupOptions?.x, undefined);
+    assert.equal(popupOptions?.y, undefined);
+    assert.equal(popupOptions?.sourceType, 'mouse');
+
+    popupOptions?.callback?.();
+    assert.equal(destroys, 1, 'native menu dismissal still destroys its transient owner');
   });
 });

@@ -15,9 +15,15 @@ export interface LinuxTrayActivationGeometry {
 type LinuxTrayMenuScreen = Pick<typeof import('electron').screen,
   'getCursorScreenPoint' | 'getDisplayNearestPoint'>;
 
+interface LinuxSessionEnvironment {
+  WAYLAND_DISPLAY?: string;
+  XDG_SESSION_TYPE?: string;
+}
+
 interface LinuxTrayMenuPopupOptions {
   screen: LinuxTrayMenuScreen;
   createHost(options: BrowserWindowConstructorOptions): BaseWindow;
+  environment?: LinuxSessionEnvironment;
 }
 
 export interface LinuxTrayMenuPopup {
@@ -49,6 +55,11 @@ const containsPoint = (rectangle: Rectangle, point: Point): boolean => (
   && point.x < rectangle.x + rectangle.width
   && point.y >= rectangle.y
   && point.y < rectangle.y + rectangle.height
+);
+
+const isWaylandSession = (environment: LinuxSessionEnvironment): boolean => (
+  environment.XDG_SESSION_TYPE?.toLowerCase() === 'wayland'
+  || Boolean(environment.WAYLAND_DISPLAY)
 );
 
 /**
@@ -115,6 +126,7 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
   let host: BaseWindow | null = null;
   let openMenu: Menu | null = null;
   let closed = false;
+  const canPositionHost = !isWaylandSession(options.environment ?? process.env);
 
   const releaseHost = (menu: Menu, popupHost: BaseWindow): void => {
     if (openMenu !== menu || host !== popupHost) return;
@@ -131,14 +143,16 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
         return;
       }
 
-      const cursor = options.screen.getCursorScreenPoint();
-      const pointer = isPoint(cursor) ? cursor : activation.position;
-      const display = options.screen.getDisplayNearestPoint(pointer);
-      const anchor = resolveLinuxTrayMenuAnchor(pointer, activation.bounds, display);
+      let anchor: Point | null = null;
+      if (canPositionHost) {
+        const cursor = options.screen.getCursorScreenPoint();
+        const pointer = isPoint(cursor) ? cursor : activation.position;
+        const display = options.screen.getDisplayNearestPoint(pointer);
+        anchor = resolveLinuxTrayMenuAnchor(pointer, activation.bounds, display);
+      }
 
       const popupHost = options.createHost({
-        x: anchor.x,
-        y: anchor.y,
+        ...(anchor ? { x: anchor.x, y: anchor.y } : {}),
         width: 1,
         height: 1,
         useContentSize: true,
@@ -166,13 +180,15 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
       popupHost.showInactive();
       // Reapply after mapping so X11 window-manager placement cannot move the
       // otherwise invisible owner away from its monitor-relative anchor.
-      popupHost.setPosition(anchor.x, anchor.y, false);
+      if (anchor) popupHost.setPosition(anchor.x, anchor.y, false);
       openMenu = menu;
       try {
         menu.popup({
           window: popupHost,
-          x: 0,
-          y: 0,
+          // Wayland does not permit global top-level positioning. Omitting
+          // coordinates lets the native menu runner use the current cursor
+          // while retaining the transient owner for outside-click dismissal.
+          ...(anchor ? { x: 0, y: 0 } : {}),
           sourceType: 'mouse',
           callback: () => releaseHost(menu, popupHost),
         });
