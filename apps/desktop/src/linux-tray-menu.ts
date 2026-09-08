@@ -205,19 +205,26 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
       openingMenu = menu;
 
       // Menu.popup() is implemented by Electron's native Views menu runner on
-      // Linux. Give it an active, menu-scoped owner before starting the runner:
-      // Views cancels a menu if its owner transitions to visible afterward.
-      // The transparent toolbar does not enter Linux task lists and is wholly
+      // Linux. Map a menu-scoped owner before starting the runner. The
+      // transparent toolbar does not enter Linux task lists and is wholly
       // independent of a hidden or minimized main window.
       popupHost.show();
       // Reapply after mapping so X11 window-manager placement cannot move the
       // otherwise invisible owner away from its monitor-relative anchor.
       if (anchor) popupHost.setPosition(anchor.x, anchor.y, false);
-      // Leave the native tray activation callback before starting the menu.
-      // This path is identical for physical and EventEmitter activations; it
-      // does not infer input provenance or depend on how long button 1 was held.
-      scheduleMenuOpen(() => {
+      // Leave the native tray activation callback, then ask the window manager
+      // to focus the mapped owner. On XFWM, show() emits synchronously while the
+      // owner is still unfocused; starting Views' menu runner then makes it
+      // close immediately. Wait for the native focus event and one subsequent
+      // turn instead of guessing at WM latency. This path is identical for
+      // physical and EventEmitter activations and has no button-hold timer.
+      const openMenuAfterFocus = (): void => {
         if (closed || openingMenu !== menu || host !== popupHost || popupHost.isDestroyed()) return;
+        if (!popupHost.isFocused()) {
+          popupHost.once('focus', () => scheduleMenuOpen(openMenuAfterFocus));
+          popupHost.focus();
+          return;
+        }
         if (anchor) popupHost.setPosition(anchor.x, anchor.y, false);
         openingMenu = null;
         openMenu = menu;
@@ -235,7 +242,8 @@ export const createLinuxTrayMenuPopup = (options: LinuxTrayMenuPopupOptions): Li
           releaseHost(menu, popupHost);
           throw error;
         }
-      });
+      };
+      scheduleMenuOpen(openMenuAfterFocus);
     },
     close() {
       if (closed) return;

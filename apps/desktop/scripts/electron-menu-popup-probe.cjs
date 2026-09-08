@@ -18,6 +18,7 @@ app.whenReady().then(() => {
   let ownersDestroyed = 0;
   let browserWindowOwners = 0;
   let toolbarOwners = 0;
+  let ownersFocused = 0;
   let activeOwner;
   const popup = createLinuxTrayMenuPopup({
     screen,
@@ -29,6 +30,7 @@ app.whenReady().then(() => {
       if (options.type === 'toolbar' && options.focusable === true) toolbarOwners += 1;
       activeOwner = owner;
       owner.once('show', () => { ownersMapped += 1; });
+      owner.once('focus', () => { ownersFocused += 1; });
       owner.once('closed', () => { ownersDestroyed += 1; });
       return owner;
     },
@@ -39,6 +41,7 @@ app.whenReady().then(() => {
   let trayActivations = 0;
   let opensAfterActivationDispatch = 0;
   let persistentDismissals = 0;
+  let menusShownWithFocusedOwner = 0;
   let activationDispatchReturned = true;
   let dismissalRequested = false;
   let tray;
@@ -78,6 +81,7 @@ app.whenReady().then(() => {
       menu = Menu.buildFromTemplate(template);
       menu.on('menu-will-show', () => {
         menuWillShow += 1;
+        if (activeOwner?.isFocused()) menusShownWithFocusedOwner += 1;
         if (activationDispatchReturned) opensAfterActivationDispatch += 1;
         const closingOwner = activeOwner;
         setTimeout(() => {
@@ -105,9 +109,11 @@ app.whenReady().then(() => {
               persistentDismissals,
               ownersCreated,
               ownersMapped,
+              ownersFocused,
               ownersDestroyed,
               browserWindowOwners,
               toolbarOwners,
+              menusShownWithFocusedOwner,
               trayDestroyed: tray.isDestroyed(),
             }));
             app.quit();

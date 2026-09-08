@@ -62,6 +62,7 @@ describe('Linux tray menu popup', () => {
     const hostOptions: BrowserWindowConstructorOptions[] = [];
     const positions: Array<[number, number]> = [];
     let shows = 0;
+    let focusRequests = 0;
     let destroys = 0;
     const pendingMenuOpens: Array<() => void> = [];
     const pendingDestructions: Array<() => void> = [];
@@ -75,12 +76,29 @@ describe('Linux tray menu popup', () => {
     const createHost = (options: BrowserWindowConstructorOptions): BaseWindow => {
       hostOptions.push(options);
       let destroyed = false;
+      let focused = false;
+      let focusListener: (() => void) | undefined;
       const host = {
         isDestroyed: () => destroyed,
+        isFocused: () => focused,
         setPosition: (x: number, y: number) => { positions.push([x, y]); },
         show: () => { shows += 1; },
+        focus: () => { focusRequests += 1; },
+        once: (event: string, listener: () => void) => {
+          assert.equal(event, 'focus');
+          focusListener = listener;
+          return host;
+        },
         destroy: () => { destroyed = true; destroys += 1; },
       } as unknown as BaseWindow;
+      Object.assign(host, {
+        focusFromWindowManager: () => {
+          focused = true;
+          const listener = focusListener;
+          focusListener = undefined;
+          listener?.();
+        },
+      });
       hosts.push(host);
       return host;
     };
@@ -120,6 +138,11 @@ describe('Linux tray menu popup', () => {
     assert.deepEqual(positions, [[-84, 30]]);
     assert.equal(popupCalls, 0, 'the native popup waits for tray activation dispatch to unwind');
     flushMenuOpens();
+    assert.equal(focusRequests, 1);
+    assert.equal(popupCalls, 0, 'showing the owner does not imply that the window manager focused it');
+    (hosts[0] as BaseWindow & { focusFromWindowManager(): void }).focusFromWindowManager();
+    assert.equal(popupCalls, 0, 'the native focus event still leaves the menu open for the following turn');
+    flushMenuOpens();
     assert.equal(popupCalls, 1);
     assert.equal(popupOptions?.window, hosts[0]);
     assert.equal(popupOptions?.x, 0);
@@ -137,6 +160,8 @@ describe('Linux tray menu popup', () => {
     assert.deepEqual(positions.at(-1), [-250, 30]);
     assert.equal(shows, 2);
     flushMenuOpens();
+    (hosts[1] as BaseWindow & { focusFromWindowManager(): void }).focusFromWindowManager();
+    flushMenuOpens();
     assert.equal(popupCalls, 2);
 
     popup.popup(menu, emptyGeometry);
@@ -146,6 +171,8 @@ describe('Linux tray menu popup', () => {
     assert.equal(destroys, 2);
 
     popup.popup(menu, emptyGeometry);
+    flushMenuOpens();
+    (hosts[2] as BaseWindow & { focusFromWindowManager(): void }).focusFromWindowManager();
     flushMenuOpens();
     popup.close();
     assert.equal(closeCalls, 2, 'shutdown closes the active native menu first');
@@ -161,13 +188,23 @@ describe('Linux tray menu popup', () => {
     let popupOptions: PopupOptions | undefined;
     let positions = 0;
     let shows = 0;
+    let focused = false;
+    let focusRequests = 0;
     let destroys = 0;
     let scheduledMenuOpen: (() => void) | undefined;
     let scheduledDestroy: (() => void) | undefined;
+    let focusListener: (() => void) | undefined;
     const host = {
       isDestroyed: () => false,
+      isFocused: () => focused,
       setPosition: () => { positions += 1; },
       show: () => { shows += 1; },
+      focus: () => { focusRequests += 1; },
+      once: (event: string, listener: () => void) => {
+        assert.equal(event, 'focus');
+        focusListener = listener;
+        return host;
+      },
       destroy: () => { destroys += 1; },
     } as unknown as BaseWindow;
     const popup = createLinuxTrayMenuPopup({
@@ -199,6 +236,11 @@ describe('Linux tray menu popup', () => {
     assert.equal(shows, 1);
     assert.equal(popupOptions, undefined);
     scheduledMenuOpen?.();
+    assert.equal(focusRequests, 1);
+    assert.equal(popupOptions, undefined);
+    focused = true;
+    focusListener?.();
+    scheduledMenuOpen?.();
     const openedPopupOptions = popupOptions as PopupOptions | undefined;
     assert.equal(openedPopupOptions?.window, host);
     assert.equal(openedPopupOptions?.x, undefined);
@@ -218,8 +260,11 @@ describe('Linux tray menu popup', () => {
     let destroys = 0;
     const host = {
       isDestroyed: () => false,
+      isFocused: () => false,
       setPosition: () => {},
       show: () => {},
+      focus: () => {},
+      once: () => host,
       destroy: () => { destroys += 1; },
     } as unknown as BaseWindow;
     const popup = createLinuxTrayMenuPopup({

@@ -93,9 +93,11 @@ describe('Electron Linux tray menu popup', () => {
       persistentDismissals: 2,
       ownersCreated: 2,
       ownersMapped: 2,
+      ownersFocused: 2,
       ownersDestroyed: 2,
       browserWindowOwners: 2,
       toolbarOwners: 2,
+      menusShownWithFocusedOwner: 2,
       trayDestroyed: true,
     });
   });
