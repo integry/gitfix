@@ -4,6 +4,7 @@ import path from 'path';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 import { createHooklessGit } from './hooklessGit.js';
+import { VISUAL_PREVIEW_RUNTIME_DIRECTORIES } from '../services/visualPreviewPaths.js';
 
 interface Author {
     name: string;
@@ -29,6 +30,14 @@ export interface CommitResult {
     commitMessage: string;
     filesChanged?: string[];
 }
+
+const GENERATED_PROPR_RUNTIME_PATHS = [
+    '.propr/assets',
+    '.propr/cache',
+    '.propr/.cache',
+    '.propr/node_modules',
+    ...VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
+];
 
 async function validateWorktree(worktreePath: string, issueNumber?: number): Promise<void> {
     const gitPath = path.join(worktreePath, '.git');
@@ -138,7 +147,7 @@ export async function commitChanges(worktreePath: string, commitMessage: string 
         await git.add('.');
         // Unstage generated ProPR runtime directories. Repo-authored files such
         // as .propr/setup.sh and .propr/package.json should remain committable.
-        for (const generatedPath of ['.propr/assets', '.propr/cache', '.propr/.cache', '.propr/node_modules', '.propr/previews']) {
+        for (const generatedPath of GENERATED_PROPR_RUNTIME_PATHS) {
             try {
                 await git.raw(['reset', 'HEAD', '--', generatedPath]);
             } catch {
@@ -146,6 +155,7 @@ export async function commitChanges(worktreePath: string, commitMessage: string 
             }
         }
         const status = await git.status();
+        const stagedFiles = status.files.filter(file => file.index !== ' ' && file.index !== '?');
 
         logGitStatus(status, worktreePath, issueNumber);
         assertNoUnmergedEntries(status);
@@ -155,7 +165,7 @@ export async function commitChanges(worktreePath: string, commitMessage: string 
         // parent and preserve the requested base in branch ancestry.
         const pendingMergeHead = await getPendingMergeHead(git);
 
-        if (status.files.length === 0 && !pendingMergeHead) {
+        if (stagedFiles.length === 0 && !pendingMergeHead) {
             logger.info({ worktreePath }, 'No changes to commit');
             return null;
         }
@@ -163,22 +173,22 @@ export async function commitChanges(worktreePath: string, commitMessage: string 
         logger.info({
             worktreePath,
             issueNumber,
-            totalFiles: status.files.length,
-            files: status.files.map((f: FileStatusResult) => ({ path: f.path, index: f.index, working_dir: f.working_dir })),
+            totalFiles: stagedFiles.length,
+            files: stagedFiles.map((f: FileStatusResult) => ({ path: f.path, index: f.index, working_dir: f.working_dir })),
             pendingMergeHead,
-        }, pendingMergeHead && status.files.length === 0 ? 'Finalizing pending merge with no tree changes' : 'Files to be committed');
+        }, pendingMergeHead && stagedFiles.length === 0 ? 'Finalizing pending merge with no tree changes' : 'Files to be committed');
 
         const finalCommitMessage = resolveCommitMessage(commitMessage, issueNumber, issueTitle);
 
         const result = await git.commit(finalCommitMessage);
         const commitHash = result.commit.replace(/^HEAD\s+/, '');
 
-        logger.info({ worktreePath, commitHash, filesChanged: status.files.length, issueNumber, commitMessage: finalCommitMessage }, 'Changes committed successfully');
+        logger.info({ worktreePath, commitHash, filesChanged: stagedFiles.length, issueNumber, commitMessage: finalCommitMessage }, 'Changes committed successfully');
 
         return {
             commitHash,
             commitMessage: finalCommitMessage,
-            filesChanged: status.files.map((file: FileStatusResult) => file.path)
+            filesChanged: stagedFiles.map((file: FileStatusResult) => file.path)
         };
 
     } catch (error) {

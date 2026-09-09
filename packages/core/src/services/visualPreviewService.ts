@@ -3,9 +3,19 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { VisualPreviewSettings, VisualPreviewType } from '../config/configManager.js';
 import { createHooklessGit } from '../git/hooklessGit.js';
+import {
+  VISUAL_PREVIEW_DIRECTORY,
+  VISUAL_PREVIEW_MANIFEST,
+  VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
+  VISUAL_PREVIEW_SOURCE_DIRECTORY,
+} from './visualPreviewPaths.js';
 
-export const VISUAL_PREVIEW_DIRECTORY = '.propr/previews';
-export const VISUAL_PREVIEW_MANIFEST = `${VISUAL_PREVIEW_DIRECTORY}/manifest.json`;
+export {
+  VISUAL_PREVIEW_DIRECTORY,
+  VISUAL_PREVIEW_MANIFEST,
+  VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
+  VISUAL_PREVIEW_SOURCE_DIRECTORY,
+} from './visualPreviewPaths.js';
 export const VISUAL_PREVIEW_MARKER = '<!-- propr-visual-preview -->';
 export const VISUAL_PREVIEW_SLOT = '<!-- propr-visual-preview-slot -->';
 
@@ -253,14 +263,19 @@ async function copyEvidenceToTemporaryDirectory(
   }
 }
 
-async function scrubVisualPreviewDirectory(worktreePath: string): Promise<void> {
-  const previewDirectory = path.resolve(worktreePath, VISUAL_PREVIEW_DIRECTORY);
-  await rm(previewDirectory, { recursive: true, force: true });
-
+async function scrubVisualPreviewDirectories(worktreePath: string): Promise<void> {
   const git = createHooklessGit(worktreePath);
-  const indexedPreviews = (await git.raw(['ls-files', '--', VISUAL_PREVIEW_DIRECTORY])).trim();
-  if (indexedPreviews) {
-    await git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', VISUAL_PREVIEW_DIRECTORY]);
+  const indexedPreviewPaths = (await git.raw([
+    'ls-files', '-z', '--', ...VISUAL_PREVIEW_RUNTIME_DIRECTORIES
+  ])).split('\0').filter(Boolean);
+
+  for (const runtimeDirectory of VISUAL_PREVIEW_RUNTIME_DIRECTORIES) {
+    await rm(path.resolve(worktreePath, runtimeDirectory), { recursive: true, force: true });
+    if (indexedPreviewPaths.some(filePath =>
+      filePath === runtimeDirectory || filePath.startsWith(`${runtimeDirectory}/`)
+    )) {
+      await git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', runtimeDirectory]);
+    }
   }
 }
 
@@ -275,7 +290,8 @@ async function currentPreviewChangePaths(worktreePath: string): Promise<string[]
 
 /**
  * Captures current preview evidence outside the repository, then restores the
- * preview directory to HEAD so a later `git add .` cannot commit runtime media.
+ * preview runtime directories to HEAD so a later `git add .` cannot commit
+ * media or preview-only source files.
  */
 export async function prepareVisualPreviewEvidence({
   worktreePath,
@@ -296,7 +312,7 @@ export async function prepareVisualPreviewEvidence({
   }
 
   try {
-    await scrubVisualPreviewDirectory(worktreePath);
+    await scrubVisualPreviewDirectories(worktreePath);
   } catch (error) {
     await cleanupPreparedVisualPreviewEvidence(prepared);
     throw error;
