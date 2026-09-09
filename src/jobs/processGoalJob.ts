@@ -45,6 +45,7 @@ import {
 } from './goalCheckpointPublisher.js';
 import { publishGoalVisualPreviews } from './goalVisualPreviewPublisher.js';
 import { labelCompletedGoalPullRequest } from './goalPullRequestLabel.js';
+import { updateCompletedGoalPullRequest } from './goalPullRequestCompletion.js';
 
 function isRecoverableInterruption(result: AgentExecutionResult): boolean {
     if (result.terminationReason) return true;
@@ -541,6 +542,7 @@ async function handleGoalResult(
     const completed = await operations.finalizeGoal(data, resultState, resultState === 'failed' ? failure : undefined);
     if (!completed) return { status: 'skipped', reason: 'goal_finalize_fence' };
     if (result.success && artifacts.finalPr) {
+        await operations.updatePullRequestDescription(goal, artifacts.finalPr.number, result);
         await operations.labelPullRequest(goal.repository, artifacts.finalPr.number);
         const task = await operations.stateManager().markTaskCompleted(goal.current_task_id, {
             prNumber: artifacts.finalPr.number, prUrl: artifacts.finalPr.url,
@@ -567,6 +569,7 @@ interface GoalResultOperations {
     rejectCheckpoint: typeof rejectDirectGoalCheckpoint;
     publishVisualPreviews: typeof publishOrchestratedGoalVisualPreviews;
     finalizeGoal: typeof finalizeGoal;
+    updatePullRequestDescription: typeof updateCompletedGoalPullRequest;
     labelPullRequest: typeof labelCompletedGoalPullRequest;
     markTaskReconciled: typeof markGoalTaskReconciled;
     stateManager(): Pick<ReturnType<typeof getStateManager>, 'markTaskCompleted' | 'markTaskFailed'>;
@@ -584,6 +587,7 @@ const defaultGoalResultOperations: GoalResultOperations = {
     rejectCheckpoint: rejectDirectGoalCheckpoint,
     publishVisualPreviews: publishOrchestratedGoalVisualPreviews,
     finalizeGoal,
+    updatePullRequestDescription: updateCompletedGoalPullRequest,
     labelPullRequest: labelCompletedGoalPullRequest,
     markTaskReconciled: markGoalTaskReconciled,
     stateManager: getStateManager,
