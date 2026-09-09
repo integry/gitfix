@@ -132,8 +132,8 @@ const AIModelSelectionSection: React.FC<AIModelSelectionSectionProps> = ({
         {/* Implementation Section */}
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <Cpu className="w-4 h-4 text-purple-600" />
-            <h5 className="text-xs font-semibold text-gray-900 uppercase tracking-wide">Implementation</h5>
+            <Cpu className="h-4 w-4 text-slate-400" />
+            <h5 className="text-[10px] uppercase font-bold tracking-widest text-slate-500">Implementation</h5>
           </div>
           <div className="space-y-3 pl-6">
             <SettingRow
@@ -185,8 +185,8 @@ const AIModelSelectionSection: React.FC<AIModelSelectionSectionProps> = ({
         {/* Planning Section */}
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <Brain className="w-4 h-4 text-blue-600" />
-            <h5 className="text-xs font-semibold text-gray-900 uppercase tracking-wide">Planning</h5>
+            <Brain className="h-4 w-4 text-slate-400" />
+            <h5 className="text-[10px] uppercase font-bold tracking-widest text-slate-500">Planning</h5>
           </div>
           <div className="space-y-3 pl-6">
             <SettingRow
@@ -298,8 +298,8 @@ const AIModelSelectionSection: React.FC<AIModelSelectionSectionProps> = ({
         {/* Review Section */}
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <ClipboardCheck className="w-4 h-4 text-green-600" />
-            <h5 className="text-xs font-semibold text-gray-900 uppercase tracking-wide">Review</h5>
+            <ClipboardCheck className="h-4 w-4 text-slate-400" />
+            <h5 className="text-[10px] uppercase font-bold tracking-widest text-slate-500">Review</h5>
           </div>
           <div className="space-y-3 pl-6">
             <SettingRow
