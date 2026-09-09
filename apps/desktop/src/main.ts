@@ -1645,6 +1645,12 @@ if (!hasSingleInstanceLock) {
         retryPending: credentialInitialization.retryPending,
       });
     }
+    if (app.isPackaged && !rendererPolicyPinnedForSmoke) {
+      const current = await credentials.listProfiles();
+      const activeOrigin = current.profiles
+        .find(profile => profile.id === current.activeProfileId)?.apiBaseUrl;
+      rendererPolicyOrigins = activeOrigin?.startsWith('http://') ? [activeOrigin] : [];
+    }
     if (nativeSmokePhase) {
       const current = await profiles.list();
       const expected = new Map([
