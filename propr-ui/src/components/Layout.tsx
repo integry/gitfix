@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ScrollText, ListTodo, BookMarked, Bot, Cpu, ShieldCheck, Inbox } from 'lucide-react';
+import { ScrollText, ListTodo, BookMarked, Bot, Cpu, ShieldCheck, Inbox, LogOut } from 'lucide-react';
 import { logout } from '../api/proprApi';
 import { useDynamicFavicon } from '../hooks/useDynamicFavicon';
 import { useSystemReadiness } from '../hooks/useSystemReadiness';
@@ -17,6 +17,7 @@ import { useNotificationCenter } from '../contexts/NotificationCenterContext';
 import { publicAssetUrl } from '../config/runtimeMode';
 import { DesktopInstanceSelector } from '../desktop/DesktopInstanceSelector';
 import { useDesktop } from '../desktop/DesktopContext';
+import UserAvatar from './UserAvatar';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -63,6 +64,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       ? [{ name: 'Coding Agents', href: '/ai-agents', icon: Bot }]
       : []),
     { name: 'LLM Log', href: '/llm-logs', icon: Cpu },
+  ];
+
+  const utilityNavigation: NavItem[] = [
     { name: 'Settings', href: '/settings', icon: SettingsIcon },
     ...(userHasPermission(user, 'instance.manage_members')
       ? [{ name: 'Access', href: '/admin/members', icon: ShieldCheck }]
@@ -167,6 +171,45 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     setIsSidebarOpen(true);
   };
 
+  const renderNavigationItem = (item: NavItem) => (
+    <Link
+      key={item.name}
+      to={item.href}
+      className={`flex items-center px-4 py-3 text-sm font-medium transition-all duration-200 border-r-2 ${
+        isActive(item.href)
+          ? 'bg-red-50 text-primary-600 border-primary-600 font-medium'
+          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border-transparent'
+      }`}
+    >
+      <item.icon className="w-5 h-5 mr-3" />
+      {item.name}
+      {item.name === 'Tasks' && displayTaskCount > 0 && (
+        <span className="ml-auto inline-flex items-center justify-center h-5 w-5 rounded-full bg-primary-500 text-xs font-semibold text-white">
+          {displayTaskCount}
+        </span>
+      )}
+      {item.name === 'Inbox' && unreadCount !== null && unreadCount > 0 && (
+        <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-primary-500 px-1.5 text-xs font-semibold leading-5 text-white">
+          {unreadCount > 99 ? '99+' : unreadCount}
+        </span>
+      )}
+      {item.name === 'Tasks' && displayTaskCount === 0 && !hasTasks && hasAgents && hasRepos && (
+        <span className="ml-auto w-2 h-2 rounded-full bg-amber-500" title="No tasks created yet" />
+      )}
+      {item.name === 'Plans' && generatingPlansCount > 0 && (
+        <span className="ml-auto inline-flex items-center justify-center h-5 w-5 rounded-full bg-primary-500 text-xs font-semibold text-white">
+          {generatingPlansCount}
+        </span>
+      )}
+      {item.name === 'Repositories' && !hasRepos && (
+        <span className="ml-auto w-2 h-2 rounded-full bg-amber-500" title="No repositories configured" />
+      )}
+      {item.name === 'Coding Agents' && !hasAgents && (
+        <span className="ml-auto w-2 h-2 rounded-full bg-amber-500" title="No AI agents configured" />
+      )}
+    </Link>
+  );
+
   return (
     <div className="desktop-shell flex h-full min-h-0 flex-col overflow-hidden bg-light-100 relative">
       <div className="desktop-shell-content relative flex min-h-0 flex-1 overflow-hidden">
@@ -200,44 +243,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         {desktop && <DesktopInstanceSelector transportReady={isConnected && user !== null} />}
         <div className="flex min-h-0 flex-1 flex-col">
           <nav className="flex flex-col gap-1 overflow-y-auto flex-1">
-            {navigation.map((item) => (
-              <Link
-                key={item.name}
-                to={item.href}
-                className={`flex items-center px-4 py-3 text-sm font-medium transition-all duration-200 border-r-2 ${
-                  isActive(item.href)
-                    ? 'bg-red-50 text-primary-600 border-primary-600 font-medium'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border-transparent'
-                }`}
-              >
-                <item.icon className="w-5 h-5 mr-3" />
-                {item.name}
-                {item.name === 'Tasks' && displayTaskCount > 0 && (
-                  <span className="ml-auto inline-flex items-center justify-center h-5 w-5 rounded-full bg-primary-500 text-xs font-semibold text-white">
-                    {displayTaskCount}
-                  </span>
-                )}
-                {item.name === 'Inbox' && unreadCount !== null && unreadCount > 0 && (
-                  <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-primary-500 px-1.5 text-xs font-semibold leading-5 text-white">
-                    {unreadCount > 99 ? '99+' : unreadCount}
-                  </span>
-                )}
-                {item.name === 'Tasks' && displayTaskCount === 0 && !hasTasks && hasAgents && hasRepos && (
-                  <span className="ml-auto w-2 h-2 rounded-full bg-amber-500" title="No tasks created yet" />
-                )}
-                {item.name === 'Plans' && generatingPlansCount > 0 && (
-                  <span className="ml-auto inline-flex items-center justify-center h-5 w-5 rounded-full bg-primary-500 text-xs font-semibold text-white">
-                    {generatingPlansCount}
-                  </span>
-                )}
-                {item.name === 'Repositories' && !hasRepos && (
-                  <span className="ml-auto w-2 h-2 rounded-full bg-amber-500" title="No repositories configured" />
-                )}
-                {item.name === 'Coding Agents' && !hasAgents && (
-                  <span className="ml-auto w-2 h-2 rounded-full bg-amber-500" title="No AI agents configured" />
-                )}
-              </Link>
-            ))}
+            {navigation.map(renderNavigationItem)}
           </nav>
           {(isDemoMode || userHasPermission(user, 'instance.manage_agents')) && (
             <AgentTankSidebar allowManualRefresh={!isDemoMode} />
@@ -256,6 +262,40 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </div>
             <div>© {new Date().getFullYear()} Rinalds Uzkalns</div>
           </footer>
+          <nav className="flex flex-none flex-col gap-1 border-t border-gray-100 py-1" aria-label="Application settings">
+            {utilityNavigation.map(renderNavigationItem)}
+          </nav>
+          {user && (
+            <div className="desktop-sidebar-profile flex flex-none items-center gap-2 border-t border-gray-200 px-3 py-3">
+              <a
+                href={`https://github.com/${user.username}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 transition-colors hover:bg-slate-100"
+              >
+                <UserAvatar
+                  user={user}
+                  className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-gray-200 object-cover text-xs font-bold transition-colors group-hover:border-gray-300"
+                  fallbackClassName="bg-primary-100 text-primary-600 group-hover:bg-primary-200"
+                />
+                <span className="min-w-0 leading-tight">
+                  <span className="block truncate text-sm font-semibold text-slate-700">
+                    {user.displayName || user.username}
+                  </span>
+                  <span className="block truncate text-xs text-slate-500">@{user.username}</span>
+                </span>
+              </a>
+              <button
+                type="button"
+                onClick={logout}
+                className="flex h-9 w-9 flex-none items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600"
+                aria-label="Logout"
+                title="Logout"
+              >
+                <LogOut className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 

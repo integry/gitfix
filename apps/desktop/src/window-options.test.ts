@@ -37,9 +37,27 @@ describe('desktop BrowserWindow security', () => {
     assert.equal('enableRemoteModule' in (options.webPreferences ?? {}), false);
   });
 
-  it('uses the native inset title bar only on macOS', () => {
-    assert.equal(createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'darwin').titleBarStyle, 'hiddenInset');
-    assert.equal(createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'win32').titleBarStyle, undefined);
+  it('integrates native window controls into the application shell', () => {
+    const macOptions = createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'darwin');
+    assert.equal(macOptions.titleBarStyle, 'hiddenInset');
+    assert.equal(macOptions.titleBarOverlay, undefined);
+
+    for (const platform of ['win32', 'linux'] as const) {
+      const options = createBrowserWindowOptions(
+        '/preload.cjs',
+        false,
+        normalWorkArea,
+        platform,
+        platform === 'linux' ? desktopIcon : undefined,
+      );
+      assert.equal(options.titleBarStyle, 'hidden');
+      assert.deepEqual(options.titleBarOverlay, {
+        color: '#f8fafc',
+        symbolColor: '#475569',
+        height: 56,
+      });
+      assert.equal(options.autoHideMenuBar, true);
+    }
   });
 
   it('retains the preferred and minimum responsive window sizes', () => {

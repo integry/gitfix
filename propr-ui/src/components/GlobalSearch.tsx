@@ -159,7 +159,7 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ inputRef: externalInputRef 
           onFocus={handleFocus}
           aria-label="Search"
           placeholder="Search..."
-          className="w-full pl-9 sm:pl-12 pr-8 sm:pr-10 py-1.5 sm:py-2 bg-gray-50 border border-slate-300 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 focus:bg-white transition-colors"
+          className="w-full bg-white py-1.5 pl-9 pr-14 text-sm text-gray-900 placeholder-gray-400 transition-colors border border-slate-300 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:py-2 sm:pl-12 sm:pr-16"
         />
         {/* Clear button or loading indicator */}
         {query && (
@@ -174,13 +174,18 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ inputRef: externalInputRef 
             )}
           </button>
         )}
+        {!query && (
+          <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 sm:right-3">
+            ⌘K
+          </kbd>
+        )}
       </div>
 
       {/* Results Dropdown */}
       {showDropdown && (
         <div
           ref={dropdownRef}
-          className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 shadow-xl ring-1 ring-black/5 z-50 max-h-[480px] overflow-y-auto"
+          className="desktop-toolbar-popover absolute left-0 right-0 top-full z-50 mt-1 max-h-[480px] overflow-y-auto border border-slate-200 bg-white shadow-xl ring-1 ring-black/5"
         >
           {/* Loading state */}
           {isLoading && !hasResults && (

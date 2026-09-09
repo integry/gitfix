@@ -15,6 +15,14 @@
     #f4f7f7;
 }
 
+.desktop-entry::before {
+  content: '';
+  position: fixed;
+  inset: 0 0 auto;
+  height: 3.5rem;
+  -webkit-app-region: drag;
+}
+
 .desktop-app {
   height: 100vh;
   overflow: hidden;
@@ -231,8 +239,12 @@
 .desktop-app .desktop-sidebar-header button,
 .desktop-app .desktop-main-content > header a,
 .desktop-app .desktop-main-content > header button,
-.desktop-app .desktop-main-content > header input { -webkit-app-region: no-drag; }
+.desktop-app .desktop-main-content > header input,
+.desktop-app .desktop-main-content > header kbd,
+.desktop-app .desktop-toolbar-popover { -webkit-app-region: no-drag; }
 .desktop-platform-macos .desktop-sidebar-header { padding-left: 5rem; }
+.desktop-platform-linux .desktop-content-toolbar > :last-child,
+.desktop-platform-windows .desktop-content-toolbar > :last-child { margin-right: 8.75rem; }
 
 @media (max-width: 1023px) {
   .desktop-platform-macos .desktop-main-content > header { padding-left: 5rem; }

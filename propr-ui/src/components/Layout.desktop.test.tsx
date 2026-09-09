@@ -5,6 +5,7 @@ import { DesktopContext, type DesktopContextValue } from '../desktop/DesktopCont
 import Layout from './Layout';
 
 const mocks = vi.hoisted(() => ({
+  logout: vi.fn(),
   openProfileManager: vi.fn(),
   retry: vi.fn(),
   reportConnectedRendererReady: vi.fn(async () => undefined),
@@ -20,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../api/proprApi', () => ({ logout: vi.fn() }));
+vi.mock('../api/proprApi', () => ({ logout: mocks.logout }));
 vi.mock('../hooks/useDynamicFavicon', () => ({ useDynamicFavicon: vi.fn() }));
 vi.mock('../hooks/useSystemReadiness', () => ({
   useSystemReadiness: () => ({ hasAgents: true, hasRepos: true, hasTasks: true }),
@@ -81,6 +82,12 @@ describe('Layout desktop instance selector', () => {
     expect(screen.getByText('Connected')).toBeInTheDocument();
     expect(document.querySelector('.desktop-titlebar')).not.toBeInTheDocument();
     expect(screen.getByTestId('global-header')).toHaveTextContent('GitHub user');
+    const profile = screen.getByText('@octocat').closest('.desktop-sidebar-profile');
+    expect(profile?.closest('aside')).not.toBeNull();
+    expect(profile?.previousElementSibling).toHaveAttribute('aria-label', 'Application settings');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Logout' }));
+    expect(mocks.logout).toHaveBeenCalledOnce();
 
     fireEvent.click(selector);
     expect(mocks.openProfileManager).toHaveBeenCalledOnce();

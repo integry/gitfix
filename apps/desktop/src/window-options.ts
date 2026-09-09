@@ -84,7 +84,17 @@ export const createBrowserWindowOptions = (
     backgroundColor: '#f8fafc',
     show: false,
     ...(platform === 'linux' ? { icon: desktopIcon } : {}),
-    ...(platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
+    ...(platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const }
+      : {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: {
+            color: '#f8fafc',
+            symbolColor: '#475569',
+            height: 56,
+          },
+          autoHideMenuBar: true,
+        }),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
