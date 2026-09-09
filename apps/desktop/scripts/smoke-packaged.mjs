@@ -33,7 +33,7 @@ import {
   createSmokeChildEnvironment,
   removePrivateSmokeProfile,
 } from './packaged-smoke-support.mjs';
-import { verifyPackagedTrayIcon } from './desktop-icon-assets.mjs';
+import { verifyPackagedLinuxIcon, verifyPackagedTrayIcon } from './desktop-icon-assets.mjs';
 
 const MAIN_PROCESS_ERROR_MARKERS = [
   'desktop.main_process.uncaught_exception',
@@ -63,9 +63,13 @@ if (process.platform === 'win32') {
 await access(binaryPath);
 
 if (process.platform === 'linux' || process.platform === 'darwin') {
+  const applicationRoot = process.platform === 'darwin'
+    ? resolve('out', `propr-desktop-darwin-${process.arch}`, 'propr-desktop.app')
+    : resolve('out', `propr-desktop-linux-${process.arch}`);
   const resourcesPath = process.platform === 'darwin'
-    ? resolve('out', `propr-desktop-darwin-${process.arch}`, 'propr-desktop.app', 'Contents', 'Resources')
-    : resolve('out', `propr-desktop-linux-${process.arch}`, 'resources');
+    ? resolve(applicationRoot, 'Contents', 'Resources')
+    : resolve(applicationRoot, 'resources');
+  if (process.platform === 'linux') await verifyPackagedLinuxIcon(applicationRoot);
   await verifyPackagedTrayIcon(resourcesPath);
 }
 
