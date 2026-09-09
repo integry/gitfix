@@ -346,6 +346,22 @@ jobs:
           ' bash "$keyring_root"
           npm run desktop:acceptance:verify
 
+      - name: Exercise real packaged Linux setup cancellation, retry, and interrupted relaunch
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        shell: bash
+        env:
+          PROPR_DESKTOP_REAL_LINUX_SETUP_ACCEPTANCE: '1'
+          PROPR_DESKTOP_SETUP_ACCEPTANCE_SOURCE_SHA: ${{ github.sha }}
+          PROPR_DESKTOP_SETUP_ACCEPTANCE_OUTPUT: ${{ github.workspace }}/desktop-acceptance-artifacts/linux-setup-lifecycle.json
+        run: |
+          keyring_root="$(mktemp -d)"
+          trap 'rm -rf -- "$keyring_root"' EXIT
+          dbus-run-session -- bash -euo pipefail -c '
+            export XDG_DATA_HOME="$1"
+            eval "$(printf "%s\n" "propr-packaged-setup-acceptance" | gnome-keyring-daemon --unlock --components=secrets)"
+            xvfb-run --auto-servernum npm run desktop:acceptance:setup-linux
+          ' bash "$keyring_root"
+
       - name: Publish mandatory packaged desktop acceptance evidence
         if: always() && matrix.platform == 'linux' && matrix.arch == 'x64'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

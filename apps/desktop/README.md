@@ -105,6 +105,29 @@ that resolved stack's ownership label, removes those containers, and starts the 
 data, credentials, logs, repositories, and the existing network remain in place; no default or personal CLI stack is
 targeted.
 
+### Opt-in packaged Linux setup cancellation acceptance
+
+After packaging Linux x64, exercise cancellation and retry through the real packaged renderer, IPC bridge,
+`DesktopSetupController`, and CLI host adapter with:
+
+```sh
+revision="$(git rev-parse HEAD)"
+PROPR_DESKTOP_REAL_LINUX_SETUP_ACCEPTANCE=1 \
+PROPR_DESKTOP_SETUP_ACCEPTANCE_SOURCE_SHA="$revision" \
+npm run desktop:acceptance:setup-linux
+```
+
+The harness creates one owner-only temporary profile and runtime root, unique non-default stack/network names, and
+three explicitly free loopback ports. Its Docker command boundary delegates the real CLI/daemon prerequisite and
+image-presence inspections, then holds (without executing) the first mutating image pull so the packaged controller can
+cancel an actually admitted child. It asserts settled visible recovery, child termination, a retry with a second real
+host inspection and no overlapping execution, and interrupted recovery after a process-tree termination/relaunch. It
+then verifies that no labelled container or unique network exists, that the host's container/network identities are
+unchanged, and removes the private root. No credential variables are inherited and the run stops before GitHub
+authentication or enrollment. The JSON report names the exact source SHA, command, package digest, verified phases,
+cleanup result, and the intentionally unverified provisioning phases. If Docker or its daemon is unavailable, the
+report is explicitly `unverified` at that phase and does not claim the lifecycle ran.
+
 Run the focused non-Docker regressions with:
 
 ```sh
