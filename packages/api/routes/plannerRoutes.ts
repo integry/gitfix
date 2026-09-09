@@ -64,6 +64,7 @@ const upload = multer({
 });
 
 export const attachmentUpload = upload.single('file');
+export const goalAttachmentUpload = upload.array('files', 10);
 
 interface PlannerRoutesDeps { db: Knex; }
 

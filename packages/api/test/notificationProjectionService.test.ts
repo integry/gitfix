@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- lifecycle projection regressions share one database fixture */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, test } from 'node:test';
 import type { Knex } from 'knex';
@@ -336,6 +337,109 @@ describe('notification lifecycle projection', { concurrency: false }, () => {
       await database('notification_user_states').pluck('user_id'),
       ['admin-user'],
     );
+  });
+
+  test('projects each Connect seat-limit block once for administrators', async () => {
+    const blockedAt = iso(-5_000);
+    const billingCycleResetAt = iso(30 * 24 * 60 * 60 * 1_000);
+    const snapshot = {
+      timestamp: iso(),
+      connectAccount: {
+        installationId: 42,
+        accountLogin: 'integry',
+        plan: 'community',
+        hasPlusAccess: false,
+        activeSeats: 2,
+        allowedSeats: 2,
+        seatsRemaining: 0,
+        billingCycleResetAt,
+        seatLimitBlockedAt: blockedAt,
+        sentAt: iso(),
+      },
+    };
+
+    await projection.projectSystemSnapshot(snapshot);
+    await projection.projectSystemSnapshot({
+      ...snapshot,
+      timestamp: iso(1_000),
+      connectAccount: { ...snapshot.connectAccount, sentAt: iso(1_000) },
+    });
+
+    const events = await database('notification_events').select('*');
+    assert.equal(events.length, 1);
+    assert.equal(events[0].kind, 'system_failure');
+    assert.equal(events[0].severity, 'warning');
+    assert.equal(events[0].title, 'GitHub event blocked by seat limit');
+    assert.equal(
+      events[0].body,
+      `No developer seat was available when ProPR Connect received a GitHub event. Current usage is 2 of 2; the billing cycle resets at ${billingCycleResetAt}.`,
+    );
+    assert.equal(events[0].occurred_at, blockedAt);
+    assert.deepEqual(JSON.parse(events[0].target_json), {
+      type: 'system_failure', component: 'propr-connect-seat-limit',
+    });
+    assert.deepEqual(JSON.parse(events[0].metadata_json), {
+      installationId: 42,
+      activeSeats: 2,
+      allowedSeats: 2,
+      seatsRemaining: 0,
+      billingCycleResetAt,
+    });
+    assert.deepEqual(
+      await database('notification_user_states').pluck('user_id'),
+      ['admin-user'],
+    );
+
+    const nextBlockedAt = iso(2_000);
+    clock += 3_000;
+    await projection.projectSystemSnapshot({
+      ...snapshot,
+      timestamp: iso(),
+      connectAccount: {
+        ...snapshot.connectAccount,
+        seatLimitBlockedAt: nextBlockedAt,
+        sentAt: iso(),
+      },
+    });
+    assert.equal(await countNotificationEvents(database), 2);
+  });
+
+  test('ignores absent or malformed Connect seat-limit block signals', async () => {
+    await projection.projectSystemSnapshot({
+      timestamp: iso(),
+      connectAccount: {
+        installationId: 42,
+        activeSeats: 2,
+        allowedSeats: 2,
+        seatsRemaining: 0,
+        billingCycleResetAt: iso(1_000),
+        seatLimitBlockedAt: 'not-a-timestamp',
+      },
+    });
+    await projection.projectSystemSnapshot({
+      timestamp: iso(1_000),
+      connectAccount: {
+        installationId: 42,
+        activeSeats: 2,
+        allowedSeats: 2,
+        seatsRemaining: 0,
+        billingCycleResetAt: iso(1_000),
+        seatLimitBlockedAt: null,
+      },
+    });
+    await projection.projectSystemSnapshot({
+      timestamp: iso(2_000),
+      connectAccount: {
+        installationId: 42,
+        activeSeats: 2,
+        allowedSeats: 2,
+        seatsRemaining: 0,
+        billingCycleResetAt: iso(4_000),
+        seatLimitBlockedAt: iso(3_000),
+      },
+    });
+
+    assert.equal(await countNotificationEvents(database), 0);
   });
 
   test('deduplicates system failures across instances and dismisses them on recovery', async () => {

@@ -81,7 +81,7 @@ export { applyDatabaseMigrations, type MigrationDatabase, type MigrationGateOpti
 export { getRepoConfigKey, detectDefaultBranch, listRepositoryBranchConfigurations } from './git/branchConfig.js';
 export type { BranchConfiguration } from './git/branchConfig.js';
 export { createHooklessGit, DISABLED_GIT_HOOKS_PATH } from './git/hooklessGit.js';
-export { AI_COMMIT_AUTHOR, commitChanges } from './git/commitOperations.js';
+export { AI_COMMIT_AUTHOR, InvalidCheckpointScopeError, commitChanges } from './git/commitOperations.js';
 export type { CommitResult } from './git/commitOperations.js';
 export { setupAuthenticatedRemote, ensureBranchAndPush, pushBranch } from './git/repoBranching.js';
 export { ensureRepoCloned, createWorktreeForIssue, getRepoUrl, fetchLatestChanges } from './git/repoManager.js';
@@ -176,6 +176,7 @@ export { validateAttachmentBaseUrlConfig } from './services/taskExecutionHelpers
 export { AttachmentService } from './services/attachmentService.js';
 export type { Attachment, MulterFile } from './services/attachmentService.js';
 export * from './services/visualPreviewService.js';
+export * from './services/publishedVisualPreviewService.js';
 export * from './services/visualPreviewOAuthCredentialService.js';
 export { PLANNER_SYSTEM_PROMPT, GRANULARITY_INSTRUCTIONS, getPlannerPrompt, REFINER_SYSTEM_PROMPT } from './claude/prompts/plannerPrompts.js';
 export type { Plan, PlanItem, RefinementResponse } from './claude/prompts/plannerPrompts.js';
@@ -316,6 +317,7 @@ export { processDetectedIssue, fetchIssuesForRepo } from './daemon/issueDetectio
 
 // Agent abstraction exports
 export { AgentRegistry, getAgentRegistry, type AgentRegistryOperationalStatus } from './agents/AgentRegistry.js';
+export * from './goalExports.js';
 export * from './agents/syntheticRouting.js';
 export { describeAgentTermination, isIncompleteAgentExecution, resolveAgentTerminationReason } from './agents/termination.js';
 export { ClaudeAgent } from './agents/impl/ClaudeAgent.js';

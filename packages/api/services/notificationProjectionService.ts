@@ -77,6 +77,15 @@ interface SourceActivityRow {
   metadata_json: string | null;
 }
 
+interface ConnectSeatLimitBlock {
+  installationId: number;
+  activeSeats: number;
+  allowedSeats: number;
+  seatsRemaining: number;
+  billingCycleResetAt: string;
+  blockedAt: string;
+}
+
 const SYSTEM_HEALTH_RULES: Readonly<Record<string, ReadonlySet<string>>> = {
   api: new Set(['healthy']),
   redis: new Set(['connected']),
@@ -214,6 +223,48 @@ function pullRequestAction(href: string | undefined) {
 
 function sourceMetadata(row: SourceActivityRow): Record<string, unknown> {
   return parseJsonObject(row.metadata_json);
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function normalizedTimestamp(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    return normalizeISO8601Timestamp(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function connectSeatLimitBlock(snapshot: SystemHealthSnapshot): ConnectSeatLimitBlock | undefined {
+  if (typeof snapshot.connectAccount !== 'object'
+    || snapshot.connectAccount === null
+    || Array.isArray(snapshot.connectAccount)) return undefined;
+  const account = snapshot.connectAccount as Record<string, unknown>;
+  const installationId = positiveInteger(account.installationId);
+  const activeSeats = nonNegativeInteger(account.activeSeats);
+  const allowedSeats = nonNegativeInteger(account.allowedSeats);
+  const seatsRemaining = nonNegativeInteger(account.seatsRemaining);
+  const billingCycleResetAt = normalizedTimestamp(account.billingCycleResetAt);
+  const blockedAt = normalizedTimestamp(account.seatLimitBlockedAt);
+  if (installationId === undefined
+    || activeSeats === undefined
+    || allowedSeats === undefined
+    || seatsRemaining === undefined
+    || billingCycleResetAt === undefined
+    || blockedAt === undefined) return undefined;
+  return {
+    installationId,
+    activeSeats,
+    allowedSeats,
+    seatsRemaining,
+    billingCycleResetAt,
+    blockedAt,
+  };
 }
 
 /**
@@ -424,6 +475,31 @@ export class NotificationProjectionService {
   ): Promise<void> {
     const snapshotAt = normalizeISO8601Timestamp(snapshot.timestamp);
     const recipients = await this.loadAdministratorRecipients(additionalAdministratorIds);
+
+    const seatLimitBlock = connectSeatLimitBlock(snapshot);
+    if (seatLimitBlock && seatLimitBlock.blockedAt <= snapshotAt) {
+      await this.notifications.createNotificationEvent({
+        deduplicationKey: stableKey(
+          'connect-seat-limit-blocked',
+          seatLimitBlock.installationId,
+          seatLimitBlock.blockedAt,
+        ),
+        kind: 'system_failure',
+        severity: 'warning',
+        target: { type: 'system_failure', component: 'propr-connect-seat-limit' },
+        title: 'GitHub event blocked by seat limit',
+        body: `No developer seat was available when ProPR Connect received a GitHub event. Current usage is ${seatLimitBlock.activeSeats} of ${seatLimitBlock.allowedSeats}; the billing cycle resets at ${seatLimitBlock.billingCycleResetAt}.`,
+        actions: ['dismiss'],
+        metadata: {
+          installationId: seatLimitBlock.installationId,
+          activeSeats: seatLimitBlock.activeSeats,
+          allowedSeats: seatLimitBlock.allowedSeats,
+          seatsRemaining: seatLimitBlock.seatsRemaining,
+          billingCycleResetAt: seatLimitBlock.billingCycleResetAt,
+        },
+        occurredAt: seatLimitBlock.blockedAt,
+      }, recipients);
+    }
 
     for (const [component, healthyValues] of Object.entries(SYSTEM_HEALTH_RULES)) {
       const rawStatus = snapshot[component];

@@ -24,7 +24,7 @@ interface ThinkingLogProps {
 }
 
 // Get category display info for gutter-style output
-// Icons use low-saturation colors (60% opacity), labels use slate-400
+// Icons use low-saturation colors (60% opacity), labels use accessible slate metadata tones.
 const getCategoryInfo = (type: 'analysis' | 'action' | 'summary' | 'search') => {
   switch (type) {
     case 'summary':
@@ -80,19 +80,19 @@ const TerminalLogEntry: React.FC<TerminalLogEntryProps> = ({ event, todoContext,
           {/* Icon + Category Label Row */}
           <div className="flex items-center gap-1.5">
             <Icon className={`h-3 w-3 ${categoryInfo.iconColor}`} />
-            <span className="text-[11px] font-mono font-bold uppercase tracking-tighter text-slate-400">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-tighter text-slate-500">
               {categoryInfo.label}
             </span>
           </div>
           {/* Timestamp below category label */}
           {event.relativeTime && (
-            <span className="font-mono text-[10px] text-slate-300 mt-0.5 ml-[18px]">
+            <span className="font-mono text-[10px] text-slate-500 mt-0.5 ml-[18px]">
               {event.relativeTime}
             </span>
           )}
           {/* Todo context if available */}
           {todoContext && (
-            <span className="text-[9px] text-slate-300 truncate mt-0.5 ml-[18px]">
+            <span className="text-[9px] text-slate-500 truncate mt-0.5 ml-[18px]">
               → {todoContext}
             </span>
           )}
