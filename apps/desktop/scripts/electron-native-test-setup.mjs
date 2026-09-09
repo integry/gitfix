@@ -12,6 +12,7 @@ const executableOnPath = (name, { environment, platform }) => (environment.PATH 
 const resolveElectronExecutable = () => require('electron');
 
 export const prepareNativeElectronTest = ({
+  allowHeadlessLinux = false,
   environment = process.env,
   findExecutable = executableOnPath,
   headlessReason = 'Electron needs DISPLAY or xvfb-run on Linux',
@@ -28,6 +29,13 @@ export const prepareNativeElectronTest = ({
     ? findExecutable('xvfb-run', { environment, platform })
     : undefined;
   if (platform === 'linux' && !environment.DISPLAY && !xvfbRun) {
+    if (allowHeadlessLinux) {
+      return {
+        electronExecutable: resolveElectron(),
+        headlessLinux: true,
+        xvfbRun: undefined,
+      };
+    }
     return { skipReason: headlessReason };
   }
 

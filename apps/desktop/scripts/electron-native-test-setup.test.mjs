@@ -7,6 +7,7 @@ describe('native Electron test setup', () => {
   it('keeps native probe modules free of eager Electron resolution', async () => {
     const probeSources = await Promise.all([
       'electron-frame-semantics.test.mjs',
+      'electron-pairing-zstd.test.mjs',
     ].map(file => readFile(new URL(file, import.meta.url), 'utf8')));
 
     for (const source of probeSources) {
@@ -39,6 +40,27 @@ describe('native Electron test setup', () => {
 
     assert.deepEqual(setup, { skipReason: 'headless' });
     assert.equal(resolutions, 0);
+  });
+
+  it('uses Chromium headless mode only when a session-only probe opts in', () => {
+    let resolutions = 0;
+    const setup = prepareNativeElectronTest({
+      allowHeadlessLinux: true,
+      environment: { PATH: '/missing' },
+      findExecutable: () => undefined,
+      platform: 'linux',
+      resolveElectron: () => {
+        resolutions += 1;
+        return '/electron';
+      },
+    });
+
+    assert.deepEqual(setup, {
+      electronExecutable: '/electron',
+      headlessLinux: true,
+      xvfbRun: undefined,
+    });
+    assert.equal(resolutions, 1);
   });
 
   it('resolves Electron once for a supported native worker', () => {
