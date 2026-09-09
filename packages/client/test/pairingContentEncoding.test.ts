@@ -98,6 +98,33 @@ describe('pairing response Content-Encoding', () => {
     }
   });
 
+  it('accepts only bounded, transparently decoded zstd response bytes', async () => {
+    const exact = jsonBytes(4_096);
+    const response = (body: Buffer, length = '128'): Response => new Response(body, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Encoding': 'zstd',
+        // Fetch implementations retain the compressed wire length after
+        // exposing decoded body bytes. Native Electron coverage exercises that
+        // boundary with a real zstd HTTP response.
+        'Content-Length': length,
+      },
+    });
+
+    assert.deepEqual(
+      await request('https://propr.example.test/pair', async () => response(exact)),
+      JSON.parse(exact.toString('utf8')),
+    );
+    await assert.rejects(
+      request('https://propr.example.test/pair', async () => response(jsonBytes(4_097))),
+      invalidResponse,
+    );
+    await assert.rejects(
+      request('https://propr.example.test/pair', async () => response(jsonBytes(32), '4097')),
+      invalidResponse,
+    );
+  });
+
   it('fails closed on truncated gzip and Brotli proxy responses without exposing decoder details', async () => {
     const decoded = jsonBytes(128);
     const gzip = encode(decoded, 'gzip');
@@ -117,7 +144,7 @@ describe('pairing response Content-Encoding', () => {
 
   it('rejects duplicate, stacked, empty, and unsupported Content-Encoding metadata', async () => {
     const body = jsonBytes(32);
-    const values = ['', 'gzip, gzip', 'gzip, br', 'deflate'];
+    const values = ['', 'gzip, gzip', 'gzip, br', 'zstd, gzip', 'deflate'];
 
     for (const value of values) {
       await assert.rejects(request('https://propr.example.test/pair', async () => new Response(body, {
