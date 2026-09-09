@@ -6,19 +6,45 @@ import { describe, it } from 'node:test';
 import { prepareNativeElectronTest } from './electron-native-test-setup.mjs';
 
 const fixture = resolve(dirname(fileURLToPath(import.meta.url)), 'electron-menu-popup-probe.cjs');
+const probeReadyMarker = 'PROPR_MENU_POPUP_PROBE_READY';
+const startupDeadlineMilliseconds = 30_000;
+const operationDeadlineMilliseconds = 15_000;
 
 const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   const child = spawn(command, args, {
+    detached: true,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
+  let deadline = 'startup';
+  let deadlineExceeded;
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data', value => { stdout += value; });
   child.stderr.on('data', value => { stderr += value; });
-  const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+  const killProcessGroup = () => {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch {
+      child.kill('SIGKILL');
+    }
+  };
+  let timer = setTimeout(() => {
+    deadlineExceeded = `${startupDeadlineMilliseconds}ms startup`;
+    killProcessGroup();
+  }, startupDeadlineMilliseconds);
+  child.stdout.on('data', value => {
+    stdout += value;
+    if (deadline === 'startup' && stdout.includes(probeReadyMarker)) {
+      deadline = 'native operation';
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        deadlineExceeded = `${operationDeadlineMilliseconds}ms native operation`;
+        killProcessGroup();
+      }, operationDeadlineMilliseconds);
+    }
+  });
   child.once('error', error => {
     clearTimeout(timer);
     rejectRun(error);
@@ -26,7 +52,10 @@ const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   child.once('close', (code, signal) => {
     clearTimeout(timer);
     if (code !== 0) {
-      rejectRun(new Error(`Electron menu popup probe failed (${String(code ?? signal)}): ${stderr.slice(-2_000)}`));
+      const timeout = deadlineExceeded ? ` exceeded its ${deadlineExceeded} deadline` : '';
+      rejectRun(new Error(
+        `Electron menu popup probe${timeout} failed (${String(code ?? signal)}) during ${deadline}: ${stderr.slice(-2_000)}`,
+      ));
       return;
     }
     const reportLine = stdout.trim().split(/\r?\n/u).findLast(line => line.startsWith('{'));
@@ -38,9 +67,9 @@ const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   });
 });
 
-describe('Electron native Menu popup semantics', () => {
-  it('opens and closes the real native menu also installed on a Linux Tray', {
-    timeout: 20_000,
+describe('Electron Linux tray menu popup', () => {
+  it('reopens in one process with a persistent main BrowserWindow and reports native teardown', {
+    timeout: startupDeadlineMilliseconds + operationDeadlineMilliseconds + 5_000,
   }, async context => {
     const setup = prepareNativeElectronTest({
       headlessReason: 'Electron needs a real DISPLAY or xvfb-run for the native menu boundary',
@@ -57,9 +86,42 @@ describe('Electron native Menu popup semantics', () => {
       : await runFixture(setup.electronExecutable, electronArguments);
 
     assert.deepEqual(report, {
-      menuWillShow: 1,
-      menuWillClose: 1,
-      popupCallback: 1,
+      menuWillShow: 2,
+      menuWillClose: 2,
+      trayActivations: 2,
+      opensAfterActivationDispatch: 2,
+      persistentDismissals: 2,
+      ownersCreated: 2,
+      ownersMapped: 2,
+      ownersFocused: 2,
+      ownersDestroyed: 2,
+      browserWindowOwners: 2,
+      toolbarOwners: 2,
+      menusShownWithFocusedOwner: 2,
+      menusShownWithPersistentMainWindow: 2,
+      menuClosuresWithPersistentMainWindow: 2,
+      persistentMainWindowsCreated: 1,
+      persistentMainWindowsDestroyed: 1,
+      trayDestroyed: true,
+      windowAllClosed: 1,
+      beforeQuit: 1,
+      willQuit: 1,
+      eventTrace: [
+        'tray-activation-1',
+        'menu-will-show-1',
+        'dismissal-requested-1',
+        'menu-will-close-1',
+        'owner-closed-1',
+        'tray-activation-2',
+        'menu-will-show-2',
+        'dismissal-requested-2',
+        'menu-will-close-2',
+        'owner-closed-2',
+        'main-window-closed',
+        'window-all-closed',
+        'before-quit',
+        'will-quit',
+      ],
     });
   });
 });

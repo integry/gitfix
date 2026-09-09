@@ -51,10 +51,11 @@ prove shell-owned XEmbed or StatusNotifierItem activation.
    change **Settings → Desktop notifications**. The quiet defaults are **Enable on this device** (master delivery),
    **Task started**, and **Task completed** off; **Task failed** and **Needs attention** are selected but remain inactive
    until master delivery is enabled.
-2. Before connecting, open the tray menu once with primary click, dismiss it with Escape, then open it once with
-   right-click. Confirm **Open ProPR**, **Switch / Manage Instances…**, and **Quit ProPR** work from both activation paths,
-   while account actions and the notification toggle are disabled. On Linux, double-click the tray icon and confirm
-   exactly one window is focused.
+2. Before connecting, open the tray menu once with primary click, dismiss it by physically clicking outside, then open it
+   again and dismiss it with Escape before opening it once with right-click. On a top Linux panel, confirm the primary
+   menu is anchored directly below the clicked icon on that monitor. Confirm **Open ProPR**, **Switch / Manage
+   Instances…**, and **Quit ProPR** work from both activation paths, while account actions and the notification toggle are
+   disabled.
 3. Connect and sign in. Confirm **New Plan**, **Tasks**, **Plans**, **Inbox**, **Switch / Manage Instances…**,
    **Notification Settings…**, and **Pause/Resume Native Notifications** appear in both the tray and application menus.
    Task and plan counts must open their matching destinations; unavailable counts must say unavailable rather than zero.
@@ -72,14 +73,20 @@ prove shell-owned XEmbed or StatusNotifierItem activation.
 
 For the Linux/XFCE XEmbed acceptance, log into a real XFCE X11 session and ensure the panel's **Notification Area** plugin
 is enabled before launching the exact packaged `propr-desktop` executable under test as the desktop user. Do not run it
-with `sudo`. Hover the 22×22 ProPR icon and verify its Active work tooltip, then perform the primary/Escape/right sequence
-from step 2 with a physical pointer. Repeat it after minimizing the 640×402 main window. Selecting **Open ProPR** must
-restore and focus that same window; selecting **Notification Settings…** must route within that window. If the icon or
+with `sudo`. Hover the 22×22 ProPR icon and verify its Active work tooltip, then perform the
+primary/outside-click/primary/Escape/right sequence from step 2 with a physical pointer. Verify both primary menus open
+below the top-panel icon and dismiss on the first outside click. Repeat the sequence after
+minimizing and after hiding the 640×402 main window. Selecting **Open ProPR** must restore and focus that same window;
+selecting **Notification Settings…** must route within that window. If the icon or
 right-click menu is absent, run `xfce4-panel --restart` in that disposable acceptance session (or log out and back in),
 confirm the Notification Area plugin reacquires the tray selection, and repeat before classifying an application failure.
 
 Electron 44 has two distinct Linux paths here. ProPR's primary handler must call `Menu.popup()` because Linux
-`TrayIcon` does not implement `Tray.popUpContextMenu()`. Right activation never reaches a JavaScript `right-click` event:
+`TrayIcon` does not implement `Tray.popUpContextMenu()`. The primary popup uses a transient transparent owner at the
+physical pointer's panel/work-area edge, rather than the main window, so the native Views menu runner owns its focus/grab
+and placement even while the app window is hidden. Electron renders this Linux path in its Chromium/Views menu style, so
+exact GTK theme equality with the right-click menu is not expected. Right activation never reaches a JavaScript
+`right-click` event:
 the GTK/XEmbed fallback connects `GtkStatusIcon`'s `popup_menu` signal directly to the menu installed by
 `setContextMenu()`. Consequently, a working tooltip plus a working primary menu but no right menu after the panel restart
 is shell-boundary evidence to report with the XFCE version, panel plugin list, and physical-pointer result; there is no
