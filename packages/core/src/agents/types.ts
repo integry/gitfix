@@ -45,6 +45,25 @@ export interface AgentTaskOptions {
     issueDetails?: IssueDetails;
     prompt: string;
 
+    /**
+     * Selects the provider's native long-running goal path. Goal input is
+     * delivered verbatim and provider session persistence is retained.
+     * Omitted for the existing one-shot task behavior.
+     */
+    executionMode?: 'task' | 'goal';
+    /** Exact provider session identity to resume in goal mode. */
+    resumeSessionId?: string;
+    /** Provider conversation identity when it differs from the session ID. */
+    resumeConversationId?: string;
+    /** Stable initial native goal instruction used by provider goal metadata APIs. */
+    nativeGoalObjective?: string;
+    /** Pending FIFO input consumed by the turn being started, when applicable. */
+    initialControlInputId?: string;
+    /** Durable ProPR checkpoint feedback to inject at the resumed Codex boundary. */
+    initialGoalFeedback?: string;
+    /** Durable controls observed only at provider turn boundaries. */
+    goalControl?: GoalExecutionControl;
+
     // Execution overrides
     model?: string;
     systemPrompt?: string;
@@ -52,7 +71,7 @@ export interface AgentTaskOptions {
     retryReason?: string;
 
     // Callbacks
-    onSessionId?: (sessionId: string, conversationId?: string) => void;
+    onSessionId?: (sessionId: string, conversationId?: string) => void | Promise<void>;
     onContainerId?: (containerId: string, containerName: string) => void;
 
     // GitHub token for container
@@ -76,6 +95,53 @@ export interface AgentTaskOptions {
 
     /** PR number when this is a PR follow-up task (distinct from issueRef.number) */
     prNumber?: number;
+}
+
+export interface GoalControlInput {
+    id: string;
+    message: string;
+}
+
+export interface GoalCheckpointRequest {
+    id?: string;
+    kind: 'agent';
+    commitMessage: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
+}
+
+export interface GoalCheckpointRejection {
+    kind: 'agent';
+    error: string;
+    commitMessage?: string;
+    include?: string[];
+    exclude?: string[];
+    summary?: string;
+}
+
+export interface GoalCheckpointOutcome {
+    accepted: boolean;
+    commitSha?: string | null;
+    error?: string;
+}
+
+export interface GoalControlSnapshot {
+    desiredState: 'running' | 'paused' | 'cancelled';
+    requestedModel: string;
+    pendingInputs: GoalControlInput[];
+    controlGeneration: number;
+}
+
+export interface GoalExecutionControl {
+    load(): Promise<GoalControlSnapshot>;
+    heartbeat(): Promise<void>;
+    setActiveTurn(turnId: string | null): Promise<void>;
+    markInputDelivered(inputId: string, turnId: string): Promise<void>;
+    markInputUndeliverable(inputId: string, reason: string): Promise<void>;
+    publishCheckpoint(request: GoalCheckpointRequest, turnId: string): Promise<GoalCheckpointOutcome>;
+    rejectCheckpoint(request: GoalCheckpointRejection, turnId: string): Promise<void>;
+    appendOutput(records: string[]): Promise<void>;
 }
 
 export interface TokenUsage {
@@ -160,6 +226,8 @@ export interface AgentExecutionResult {
 
     // Metadata
     modelUsed: string;
+    /** Model identity observed in provider output, distinct from the requested fallback. */
+    providerModel?: string;
     /** Effective reasoning level passed to the agent runtime, when configured. */
     reasoningLevel?: ReasoningLevel;
     sessionId?: string;
@@ -190,6 +258,9 @@ export type AgentTerminationReason = 'timeout' | 'max_turns';
 
 export interface Agent {
     readonly config: AgentConfig;
+
+    /** Whether this provider implements a proven durable goal/session path. */
+    readonly goalCapable: boolean;
 
     /**
      * Executes a complex task modifying files in the worktree.

@@ -6,6 +6,8 @@ import type { CommandMeta, UltrafixCommandMeta } from '../webhook/slashCommandPa
 import type { ReasoningLevel } from '@propr/shared';
 
 export interface IssueJobData {
+    /** Stable GitHub user ID when a verified triggering recipient is known. */
+    userId?: string;
     repoOwner: string;
     repoName: string;
     number: number;
@@ -39,6 +41,8 @@ export interface AutoResolveContext {
 }
 
 export interface CommentJobData {
+    /** Stable GitHub user ID when a verified triggering recipient is known. */
+    userId?: string;
     pullRequestNumber: number;
     commentId?: number;
     commentBody?: string;
@@ -102,7 +106,25 @@ export interface TaskImportJobData {
     taskDescription: string;
     repository: string;
     correlationId: string;
+    /** Stable GitHub user ID used for user-scoped views. */
+    userId: string;
     user?: string;
+}
+
+/** One continuation of the same native provider goal task/session. */
+export interface GoalJobData {
+    goalId: string;
+    taskId: string;
+    repoOwner: string;
+    repoName: string;
+    generation: number;
+    /** Opaque durable claim for this exact generation. */
+    claimId: string;
+    /** Exact initial native command or an ordinary same-session continuation. */
+    input?: string;
+    recovery?: boolean;
+    /** Ordinary replies do not by themselves declare the provider-owned goal complete. */
+    continuationKind?: 'run' | 'input';
 }
 
 export interface AnalysisJobData {
@@ -121,6 +143,8 @@ export interface SystemTaskJobData {
     prBranch: string;
     owner: string;
     correlationId: string;
+    /** Stable GitHub user ID used for user-scoped views and bound by authToken. */
+    userId: string;
     requestingUser: string;
     authToken: string;
     authTimestamp: number;
@@ -143,6 +167,8 @@ export interface IndexingJobData {
 }
 
 export interface MergeConflictJobData {
+    /** Stable GitHub user ID for comment-triggered jobs; absent for system detection. */
+    userId?: string;
     pullRequestNumber: number;
     repoOwner: string;
     repoName: string;
@@ -155,7 +181,7 @@ export interface MergeConflictJobData {
     systemGenerated: true;    // Distinguishes from user-authored follow-up comments
 }
 
-export type JobData = IssueJobData | CommentJobData | TaskImportJobData | AnalysisJobData | SystemTaskJobData | IndexingJobData | MergeConflictJobData;
+export type JobData = IssueJobData | CommentJobData | TaskImportJobData | GoalJobData | AnalysisJobData | SystemTaskJobData | IndexingJobData | MergeConflictJobData;
 
 export interface ClaudeOutputResult {
     type?: string;

@@ -25,6 +25,7 @@ export interface ImplementIssueContext {
   owner: string;
   repo: string;
   issueNumber: number;
+  userId: string;
   implementLabel: string;
   epicLabelName: string | null;
   autoMerge: boolean;
@@ -56,15 +57,17 @@ async function enqueueIssueImplementationJob(params: {
   owner: string;
   repo: string;
   issueNumber: number;
+  userId: string;
   triggeringLabel: string;
 }): Promise<void> {
-  const { owner, repo, issueNumber, triggeringLabel } = params;
+  const { owner, repo, issueNumber, userId, triggeringLabel } = params;
   const queue = await getIssueQueue();
   const jobId = `issue-${owner}-${repo}-${issueNumber}`;
   await queue.add('processGitHubIssue', {
     repoOwner: owner,
     repoName: repo,
     number: issueNumber,
+    userId,
     triggeringLabel,
     correlationId: generateCorrelationId()
   }, {
@@ -189,7 +192,7 @@ export async function handleMultiAgentImplementation(params: MultiAgentParams): 
   });
 
   try {
-    await enqueueIssueImplementationJob({ owner, repo, issueNumber, triggeringLabel: implementLabel });
+    await enqueueIssueImplementationJob({ owner, repo, issueNumber, userId: params.userId, triggeringLabel: implementLabel });
   } catch (err) {
     labelLogger.warn({ error: (err as Error).message }, 'Issue enqueue failed; relies on webhook or polling being enabled to process the labeled issue');
   }
@@ -243,7 +246,7 @@ export async function handleSingleAgentImplementation(params: SingleAgentParams)
   });
 
   try {
-    await enqueueIssueImplementationJob({ owner, repo, issueNumber, triggeringLabel: implementLabel });
+    await enqueueIssueImplementationJob({ owner, repo, issueNumber, userId: params.userId, triggeringLabel: implementLabel });
   } catch (err) {
     labelLogger.warn({ error: (err as Error).message }, 'Issue enqueue failed; relies on webhook or polling being enabled to process the labeled issue');
   }

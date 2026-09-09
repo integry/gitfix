@@ -17,9 +17,12 @@ function runPreviewDeploy({ stoppedService = "" } = {}) {
   const checkout = join(root, "checkout");
   const fakeBin = join(root, "bin");
   const stagingEnv = join(root, "staging.env");
+  const stagingDatabase = join(root, "propr.sqlite");
+  const dockerLog = join(root, "docker.log");
   mkdirSync(checkout);
   mkdirSync(fakeBin);
   writeFileSync(join(checkout, "docker-compose.yml"), "services: {}\n");
+  writeFileSync(stagingDatabase, "staging database");
   writeFileSync(stagingEnv, [
     "GH_AUTH_MODE=relay",
     "PROPR_GH_RELAY_URL=https://relay.example.test",
@@ -31,11 +34,12 @@ function runPreviewDeploy({ stoppedService = "" } = {}) {
     "SESSION_SECRET=session-secret",
     "MISTRAL_API_KEY=must-not-leak",
     "GH_WEBHOOK_SECRET=must-not-leak-either",
-    "DB_FILENAME=/does/not/exist.sqlite",
+    "DB_FILENAME=/usr/src/app/data/propr.sqlite",
     "",
   ].join("\n"));
 
   writeExecutable(join(fakeBin, "docker"), `#!/bin/sh
+printf '%s\\n' "$*" >> "${dockerLog}"
 if [ "$1" = "network" ]; then
   echo "172.17.0.1"
   exit 0
@@ -43,6 +47,11 @@ fi
 if [ "$1" = "compose" ] && [ "$2" = "version" ]; then
   exit 0
 fi
+case " $* " in
+  *" up -d --build "*)
+    test "$(cat "${join(checkout, "data", "propr.sqlite")}" 2>/dev/null)" = "staging database" || exit 42
+    ;;
+esac
 if [ "$1" = "inspect" ]; then
   for last_arg do :; done
   case "$last_arg" in
@@ -76,7 +85,7 @@ exit 0
       PR_HEAD_SHA: "1234567890abcdef",
       PR_HAS_DEMO_LABEL: "false",
       STAGING_ENV_FILE: stagingEnv,
-      STAGING_DB_PATH: "",
+      STAGING_DB_PATH: stagingDatabase,
     },
   });
 
@@ -84,6 +93,7 @@ exit 0
     return {
       ...result,
       previewEnv: readFileSync(join(checkout, ".env"), "utf8"),
+      dockerLog: readFileSync(dockerLog, "utf8"),
     };
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -100,6 +110,11 @@ test("preview deploy preserves only the credentials required by relay-backed pre
   assert.doesNotMatch(result.previewEnv, /^MISTRAL_API_KEY=/m);
   assert.doesNotMatch(result.previewEnv, /^GH_WEBHOOK_SECRET=/m);
   assert.match(result.stdout, /API health check passed/);
+  assert.doesNotMatch(result.dockerLog, /(?:^|\n)cp /);
+  const stopIndex = result.dockerLog.indexOf(" stop api daemon worker analysis-worker indexing-worker");
+  const startupIndex = result.dockerLog.indexOf(" up -d --build");
+  assert.ok(stopIndex >= 0);
+  assert.ok(startupIndex > stopIndex);
 });
 
 test("preview deploy fails when a backend container exits after compose up", () => {

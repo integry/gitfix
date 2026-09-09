@@ -45,6 +45,8 @@ export function createLiveDetailsRoutes(deps: LiveDetailsRoutesDeps) {
           res.json(activeRedisResult);
           return;
         }
+        const persistedGoalResult = await parsePersistedGoalOutput(db, taskId);
+        if (persistedGoalResult) { res.json(withStableResultEventIds(taskId, 'stored', taskId, persistedGoalResult)); return; }
         console.log('[live-details] No sessionId found in either SQLite or Redis');
         res.json({ events: [], todos: [], currentTask: null });
         return;
@@ -73,6 +75,8 @@ export function createLiveDetailsRoutes(deps: LiveDetailsRoutesDeps) {
             res.json(withStableResultEventIds(taskId, 'stored', sessionId, rawStoredOutput.rawFallback));
             return;
           }
+          const persistedGoalResult = await parsePersistedGoalOutput(db, taskId);
+          if (persistedGoalResult) { res.json(withStableResultEventIds(taskId, 'stored', sessionId, persistedGoalResult)); return; }
           res.json({ events: [], todos: [], currentTask: null });
           return;
         }
@@ -263,7 +267,7 @@ async function loadStoredExecutionOutput(redisClient: RedisClientType, sessionId
   const output = await fs.readFile(outputPath, 'utf8');
   return parseStoredOutputContent(output);
 }
-async function parseActiveExecutionOutput(redisClient: RedisClientType, db: Knex, taskId: string): Promise<ConversationResult | null> {
+async function parseActiveExecutionOutput(redisClient: RedisClientType, db: Knex, taskId: string): Promise<(ConversationResult & { nativeGoal?: ReturnType<typeof parseRedisOutput>['nativeGoal'] }) | null> {
   const output = await redisClient.get(`agent:output:${taskId}`);
   if (!output?.trim()) return null;
   const executionStartTimestamp = await findExecutionStartTimestamp(redisClient, db, taskId);
@@ -279,7 +283,8 @@ async function parseActiveExecutionOutput(redisClient: RedisClientType, db: Knex
       }) as unknown as Array<Record<string, unknown>>,
       todos: redisParsed.todos,
       currentTask: redisParsed.currentTask,
-      tokenUsage: redisParsed.tokenUsage
+      tokenUsage: redisParsed.tokenUsage,
+      nativeGoal: redisParsed.nativeGoal,
     };
   }
   const parsedOutput = parseStoredOutputContent(output);
@@ -287,6 +292,37 @@ async function parseActiveExecutionOutput(redisClient: RedisClientType, db: Knex
   return result
     ? withStableResultEventIds(taskId, 'redis', executionStartTimestamp ?? taskId, result)
     : null;
+}
+
+/** Provider-aware local projection shared by task details and goal summaries. */
+export async function projectTaskLiveDetails(
+  redisClient: RedisClientType,
+  db: Knex,
+  taskId: string,
+  sessionId?: string | null,
+): Promise<(ConversationResult & { nativeGoal?: ReturnType<typeof parseRedisOutput>['nativeGoal'] }) | null> {
+  const active = await parseActiveExecutionOutput(redisClient, db, taskId);
+  if (active) return active;
+  try {
+    const details = sessionId ? await parseExecutionDetailsFromDb(db, taskId, sessionId) : null;
+    if (details) return details;
+    return await parsePersistedGoalOutput(db, taskId);
+  } catch {
+    return null;
+  }
+}
+async function parsePersistedGoalOutput(db: Knex, taskId: string): Promise<ConversationResult | null> {
+  const history = await db('task_history').where({ task_id: taskId }).orderBy('timestamp', 'desc').limit(20).select('metadata');
+  const records = history.reverse().flatMap(entry => {
+    try {
+      const metadata = typeof entry.metadata === 'string' ? JSON.parse(entry.metadata) : entry.metadata;
+      return Array.isArray(metadata?.goalOutputRecords)
+        ? metadata.goalOutputRecords.filter((value: unknown): value is string => typeof value === 'string') : [];
+    } catch { return []; }
+  });
+  if (records.length === 0) return null;
+  const stored = parseStoredOutputContent(records.join('\n'));
+  return stored.parsed ?? stored.rawFallback;
 }
 export function parseStoredOutputContent(output: string): ParsedStoredOutput {
   if (!output.trim()) return { parsed: null, rawFallback: null, format: 'unknown' };
@@ -300,8 +336,38 @@ export function parseStoredOutputContent(output: string): ParsedStoredOutput {
   return { parsed: null, rawFallback, format };
 }
 function parseStoredOutputWithFormat(output: string, format: StoredOutputFormat, rawFallback: ConversationResult | null): ParsedStoredOutput {
+  if (format === 'codex' && hasCodexAppServerNotification(output)) {
+    const appServerOutput = parseRedisOutput(output.split('\n').filter(line => line.trim()));
+    return {
+      parsed: {
+        events: appServerOutput.events as unknown as Array<Record<string, unknown>>,
+        todos: appServerOutput.todos,
+        currentTask: appServerOutput.currentTask,
+        tokenUsage: appServerOutput.tokenUsage,
+      },
+      rawFallback,
+      format,
+    };
+  }
   const parsed = parseStoredOutputForFormat(output, format);
   return { parsed: isConversationResultEmpty(parsed) ? null : parsed, rawFallback, format };
+}
+function hasCodexAppServerNotification(output: string): boolean {
+  return output.split('\n').some(line => {
+    try {
+      const method = (JSON.parse(line) as { method?: unknown }).method;
+      return typeof method === 'string' && [
+        'error',
+        'warning',
+        'item/',
+        'model/',
+        'thread/',
+        'turn/',
+      ].some(prefix => method === prefix || method.startsWith(prefix));
+    } catch {
+      return false;
+    }
+  });
 }
 function parseStoredOutputForFormat(output: string, format: StoredOutputFormat): ConversationResult | null {
   if (format === 'claude') return parseClaudeOutputToConversationResult(output);

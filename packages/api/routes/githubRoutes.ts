@@ -128,9 +128,14 @@ export function createGitHubRoutes(deps: GitHubRoutesDeps) {
         res.status(400).json({ error: 'Invalid repository format. Expected: owner/name' });
         return;
       }
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({ error: 'Unable to determine requesting user ID' });
+        return;
+      }
       const jobId = `import-tasks-${repository.replace('/', '-')}-${Date.now()}`;
       const correlationId = `${jobId}-${Math.random().toString(36).substring(2, 9)}`;
-      const newJob = await taskQueue.add('processTaskImport', { taskDescription, repository, correlationId, user: req.user?.username }, { jobId, removeOnComplete: { age: 24 * 3600, count: 100 }, removeOnFail: { age: 7 * 24 * 3600 } });
+      const newJob = await taskQueue.add('processTaskImport', { taskDescription, repository, correlationId, userId, user: req.user?.username }, { jobId, removeOnComplete: { age: 24 * 3600, count: 100 }, removeOnFail: { age: 7 * 24 * 3600 } });
       await redisClient.lPush('system:activity:log', JSON.stringify({ id: `activity-${Date.now()}-${jobId}`, type: 'task_import', timestamp: new Date().toISOString(), user: req.user?.username, repository, description: `Task import job created for ${repository}`, status: 'pending' }));
       await redisClient.lTrim('system:activity:log', 0, 999);
       console.log(`Created task import job ${jobId} for repository ${repository}`);

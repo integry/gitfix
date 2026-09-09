@@ -305,6 +305,7 @@ export interface CleanupOptions {
     localRepoPath: string | undefined; worktreeInfo: WorktreeInfo | undefined;
     repoOwner: string; repoName: string; pullRequestNumber: number;
     jobBranchName: string | undefined; jobLlm: string | null | undefined;
+    jobUserId?: string;
     jobReasoningLevel?: ReasoningLevel;
     correlatedLogger: Logger; redisClient: Redis;
 }

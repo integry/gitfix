@@ -241,7 +241,7 @@ async function handleUltrafixContinuation(
     const { job, stateManager, taskId, redisClient, repoOwner, repoName, pullRequestNumber, correlatedLogger, correlationId } = params;
     try {
         const continuationResult = await continueUltrafixLoop({
-            owner: repoOwner, repo: repoName, pullRequestNumber, completedAction: action,
+            owner: repoOwner, repo: repoName, pullRequestNumber, completedAction: action, userId: job.data.userId,
             ultrafixMeta: job.data.ultrafixMeta!, redisClient, correlatedLogger, correlationId,
             currentJobId: job.id,
             currentReviewCommentIds: params.currentReviewCommentIds, currentReviewResultCount: params.currentReviewResultCount,

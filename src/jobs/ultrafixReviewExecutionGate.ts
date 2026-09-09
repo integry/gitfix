@@ -58,6 +58,7 @@ export async function isUltrafixReviewExecutionReady(
         nextAction: 'review',
         savedAt: new Date().toISOString(),
         reason,
+        ...(job.data.userId ? { userId: job.data.userId } : {}),
         ultrafixMeta: job.data.ultrafixMeta,
     });
     return false;

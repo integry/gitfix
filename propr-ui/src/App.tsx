@@ -42,6 +42,7 @@ const RevertPage = lazy(() => import('./pages/RevertPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const SummaryBrowserPage = lazy(() => import('./pages/SummaryBrowserPage'))
 const TasksPage = lazy(() => import('./pages/TasksPage'))
+const GoalsPage = lazy(() => import('./pages/GoalsPage'))
 
 type CompatibilityState = { status: 'checking' } | { status: 'ready' } | { status: 'blocked'; title: string; message: string };
 
@@ -203,6 +204,8 @@ const AppContent: React.FC = () => {
                         </Layout>
                       }
                     />
+                    <Route path="/goals" element={<Layout><GoalsPage /></Layout>} />
+                    <Route path="/goals/:goalId" element={<Layout><GoalsPage /></Layout>} />
                     <Route
                       path="/studio/new"
                       element={

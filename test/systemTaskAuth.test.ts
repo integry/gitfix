@@ -20,6 +20,7 @@ import type { SystemTaskJobData } from '@propr/core';
  */
 
 const TEST_SECRET = 'test-secret-key-for-unit-tests';
+const SERIALIZED_PRE_USER_ID_JOB = '{"type":"revert","owner":"testorg","repoName":"testrepo","prNumber":42,"requestingUser":"alice","commitHash":"abc1234def5678","targetCommentId":99999,"prBranch":"feature-branch","authTimestamp":1700000000000,"authToken":"8d0ce055c03d268b057200c2ee5374fac103f1b1545f9058e4b565e1a442b5cb","correlationId":"test-correlation"}';
 
 after(async () => {
     await closeConnection();
@@ -65,6 +66,7 @@ function makeJobData(overrides: Partial<SystemTaskJobData> = {}): SystemTaskJobD
         authTimestamp: Date.now(),
         authToken: '',
         correlationId: 'test-correlation',
+        userId: 'github-user-1',
         ...overrides
     };
 }
@@ -84,7 +86,7 @@ describe('System Task Authorization', () => {
             const payload = buildAuthPayload(data);
             assert.strictEqual(
                 payload,
-                'revert:testorg:testrepo:42:alice:abc1234def5678:99999:feature-branch:1700000000000'
+                'revert:testorg:testrepo:42:github-user-1:alice:abc1234def5678:99999:feature-branch:1700000000000'
             );
         });
 
@@ -112,6 +114,16 @@ describe('System Task Authorization', () => {
             const data = makeJobData();
             data.authToken = generateAuthToken(data, TEST_SECRET);
             const result = verifyAuthToken(data, TEST_SECRET);
+            assert.strictEqual(result.valid, true);
+        });
+
+        test('accepts a serialized job signed before userId was added', (t) => {
+            t.mock.method(Date, 'now', () => 1700000000000);
+            const data = JSON.parse(SERIALIZED_PRE_USER_ID_JOB) as SystemTaskJobData;
+
+            assert.strictEqual('userId' in data, false);
+            const result = verifyAuthToken(data, TEST_SECRET);
+
             assert.strictEqual(result.valid, true);
         });
 
@@ -184,6 +196,24 @@ describe('System Task Authorization', () => {
             const result = verifyAuthToken(data, TEST_SECRET);
             assert.strictEqual(result.valid, false);
         });
+
+        test('tampered userId invalidates token', () => {
+            const data = makeJobData();
+            data.authToken = generateAuthToken(data, TEST_SECRET);
+            data.userId = 'github-user-2';
+            const result = verifyAuthToken(data, TEST_SECRET);
+            assert.strictEqual(result.valid, false);
+            assert.strictEqual(result.reason, 'HMAC mismatch');
+        });
+
+        test('removing userId from a current token cannot downgrade it to legacy verification', () => {
+            const data = makeJobData();
+            data.authToken = generateAuthToken(data, TEST_SECRET);
+            delete (data as Partial<SystemTaskJobData>).userId;
+            const result = verifyAuthToken(data, TEST_SECRET);
+            assert.strictEqual(result.valid, false);
+            assert.strictEqual(result.reason, 'HMAC mismatch');
+        });
     });
 
     describe('Replay resistance (authTimestamp)', () => {
@@ -236,12 +266,12 @@ describe('System Task Authorization', () => {
     });
 
     describe('Fork PR payload (headRepoOwner/headRepoName)', () => {
-        test('payload without headRepoOwner/headRepoName is backward-compatible', () => {
+        test('payload without headRepoOwner/headRepoName keeps the non-fork canonical shape', () => {
             const data = makeJobData({ authTimestamp: 1700000000000 });
             const payload = buildAuthPayload(data);
             assert.strictEqual(
                 payload,
-                'revert:testorg:testrepo:42:alice:abc1234def5678:99999:feature-branch:1700000000000'
+                'revert:testorg:testrepo:42:github-user-1:alice:abc1234def5678:99999:feature-branch:1700000000000'
             );
         });
 
@@ -254,7 +284,7 @@ describe('System Task Authorization', () => {
             const payload = buildAuthPayload(data);
             assert.strictEqual(
                 payload,
-                'revert:testorg:testrepo:42:alice:abc1234def5678:99999:feature-branch:1700000000000:fork-user:forked-repo'
+                'revert:testorg:testrepo:42:github-user-1:alice:abc1234def5678:99999:feature-branch:1700000000000:fork-user:forked-repo'
             );
         });
 

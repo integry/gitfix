@@ -124,6 +124,7 @@ export async function handleUltrafixContinuation(
     try {
         const continuationResult = await continueUltrafixLoop({
             owner: repoOwner, repo: repoName, pullRequestNumber, completedAction: action,
+            userId: job.data.userId,
             ultrafixMeta: job.data.ultrafixMeta!, redisClient, correlatedLogger, correlationId,
             currentJobId: job.id,
         });
