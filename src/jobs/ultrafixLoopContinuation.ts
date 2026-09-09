@@ -41,6 +41,7 @@ export interface UltrafixContinuationParams {
     repo: string;
     pullRequestNumber: number;
     completedAction: UltrafixAction;
+    userId?: string;
     ultrafixMeta?: UltrafixCommandMeta;
     redisClient: Redis;
     correlatedLogger: Logger;
@@ -100,6 +101,7 @@ async function deferNextAction(
         nextAction,
         savedAt: new Date().toISOString(),
         reason: reasons.join(', '),
+        ...(params.userId ? { userId: params.userId } : {}),
         ultrafixMeta: params.ultrafixMeta,
         workEpoch: params.ultrafixMeta?.workEpoch,
     });
@@ -384,6 +386,7 @@ export async function resumeDeferredContinuation(
         repo,
         pullRequestNumber: pr,
         completedAction: state.lastAction ?? 'review',
+        userId: deferred.userId,
         ultrafixMeta,
         redisClient,
         correlatedLogger,

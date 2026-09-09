@@ -25,7 +25,7 @@ interface PullRequest {
 interface PRComment {
     id: number;
     body: string | null;
-    user: { login: string };
+    user: { id: number; login: string };
     created_at: string;
     pull_request_review_id?: number;
     path?: string;
@@ -57,11 +57,13 @@ interface CommentContext {
 interface CollectResult {
     unprocessedComments: UnprocessedComment[];
     selectedLlm: string | null;
+    userId?: string;
 }
 
 interface EnqueueJobDetails {
     unprocessedComments: UnprocessedComment[];
     selectedLlm: string | null;
+    userId?: string;
     pr: PullRequest;
     owner: string;
     repo: string;
@@ -184,13 +186,13 @@ async function processPullRequestComments(
         }, 'Comment details (no trigger keywords found)');
     }
 
-    const { unprocessedComments, selectedLlm } = await collectUnprocessedComments(
+    const { unprocessedComments, selectedLlm, userId } = await collectUnprocessedComments(
         commentsByTime, pr, { owner, repo, botUsername, correlationId }, config
     );
 
     if (unprocessedComments.length > 0) {
         await enqueuePRCommentJob(
-            { unprocessedComments, selectedLlm, pr, owner, repo },
+            { unprocessedComments, selectedLlm, userId, pr, owner, repo },
             { repoFullName, correlationId, redisClient: config.redisClient }
         );
     }
@@ -219,6 +221,8 @@ async function collectUnprocessedComments(
 
     const correlatedLogger = logger.withCorrelation(correlationId);
     const unprocessedComments: UnprocessedComment[] = [];
+    const recipientIds = new Set<string>();
+    let everyRecipientKnown = true;
 
     const hasProcessingLabel = await prHasProcessingLabel(pr);
     let selectedLlm: string | null = extractModelFromPRLabels(pr, MODEL_LABEL_PATTERN, correlationId);
@@ -275,9 +279,14 @@ async function collectUnprocessedComments(
             type: comment.pull_request_review_id ? 'review' : 'issue',
             hasCodeContext: !!(comment.pull_request_review_id && comment.diff_hunk)
         });
+        if (Number.isSafeInteger(comment.user.id)) recipientIds.add(String(comment.user.id));
+        else everyRecipientKnown = false;
     }
 
-    return { unprocessedComments, selectedLlm };
+    const userId = everyRecipientKnown && recipientIds.size === 1
+        ? recipientIds.values().next().value
+        : undefined;
+    return { unprocessedComments, selectedLlm, userId };
 }
 
 function extractModelFromComment(body: string, triggerKeywords: string[]): string | null {
@@ -321,7 +330,7 @@ async function enqueuePRCommentJob(
     jobDetails: EnqueueJobDetails,
     options: EnqueueOptions
 ): Promise<void> {
-    const { unprocessedComments, selectedLlm, pr, owner, repo } = jobDetails;
+    const { unprocessedComments, selectedLlm, userId, pr, owner, repo } = jobDetails;
     const { repoFullName, correlationId, redisClient } = options;
     const correlatedLogger = logger.withCorrelation(correlationId);
 
@@ -347,6 +356,7 @@ async function enqueuePRCommentJob(
     }
 
     const jobData: CommentJobData = {
+        ...(userId ? { userId } : {}),
         pullRequestNumber: pr.number,
         comments: unprocessedComments,
         repoOwner: owner,

@@ -14,6 +14,7 @@ export interface UltrafixDeferredContinuation {
     nextAction: UltrafixAction;
     savedAt: string;
     reason: string;
+    userId?: string;
     ultrafixMeta?: UltrafixCommandMeta;
     workEpoch?: number;
 }

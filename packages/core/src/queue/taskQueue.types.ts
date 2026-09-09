@@ -6,6 +6,8 @@ import type { CommandMeta, UltrafixCommandMeta } from '../webhook/slashCommandPa
 import type { ReasoningLevel } from '@propr/shared';
 
 export interface IssueJobData {
+    /** Stable GitHub user ID when a verified triggering recipient is known. */
+    userId?: string;
     repoOwner: string;
     repoName: string;
     number: number;
@@ -39,6 +41,8 @@ export interface AutoResolveContext {
 }
 
 export interface CommentJobData {
+    /** Stable GitHub user ID when a verified triggering recipient is known. */
+    userId?: string;
     pullRequestNumber: number;
     commentId?: number;
     commentBody?: string;
@@ -98,6 +102,8 @@ export interface TaskImportJobData {
     taskDescription: string;
     repository: string;
     correlationId: string;
+    /** Stable GitHub user ID used for user-scoped views. */
+    userId: string;
     user?: string;
 }
 
@@ -133,6 +139,8 @@ export interface SystemTaskJobData {
     prBranch: string;
     owner: string;
     correlationId: string;
+    /** Stable GitHub user ID used for user-scoped views and bound by authToken. */
+    userId: string;
     requestingUser: string;
     authToken: string;
     authTimestamp: number;
@@ -155,6 +163,8 @@ export interface IndexingJobData {
 }
 
 export interface MergeConflictJobData {
+    /** Stable GitHub user ID for comment-triggered jobs; absent for system detection. */
+    userId?: string;
     pullRequestNumber: number;
     repoOwner: string;
     repoName: string;

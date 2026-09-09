@@ -31,3 +31,4 @@ export { createNotificationRoutes } from './notificationRoutes.js';
 export { createAdminRoutes } from './adminRoutes.js';
 export { createGoalRoutes } from './goalRoutes.js';
 export { createVisualPreviewAuthRoutes } from './visualPreviewAuthRoutes.js';
+export { createVoiceRoutes } from './voiceRoutes.js';
