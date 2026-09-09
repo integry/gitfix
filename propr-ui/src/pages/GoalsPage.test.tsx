@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- list and detail behavior share one focused route-level suite */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,8 @@ vi.mock('../api/goals', () => ({
   pauseGoal: vi.fn(), resumeGoal: vi.fn(), cancelGoal: vi.fn(), deleteGoal: vi.fn(), requestGoalModel: vi.fn(), sendGoalInput: vi.fn(),
 }));
 vi.mock('../api/proprApi', () => ({ getInstanceCatalog: vi.fn(), getTaskLiveDetails: vi.fn() }));
+const demoState = { isDemoMode: false };
+vi.mock('../contexts/DemoModeContext', () => ({ useDemoMode: () => demoState }));
 const socket = vi.hoisted(() => ({
   isConnected: false as boolean, subscribeToTask: vi.fn(), unsubscribeFromTask: vi.fn(),
   subscribeToTaskLive: vi.fn(), unsubscribeFromTaskLive: vi.fn(),
@@ -46,6 +49,7 @@ describe('GoalsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    demoState.isDemoMode = false;
     socket.isConnected = false;
     socket.onTaskUpdate.mockImplementation(() => vi.fn());
     socket.onTaskLiveUpdate.mockImplementation(() => vi.fn());
@@ -73,6 +77,19 @@ describe('GoalsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start goal' }));
     await waitFor(() => expect(goalsApi.createGoal).toHaveBeenCalledWith(expect.objectContaining({ repository: 'acme/web', agentId: 'agent-1', model: 'gpt-5.6-sol', objective: 'Ship the dashboard', launchStrategy: 'orchestrate' })));
     expect(await screen.findByText('Goal detail')).toBeInTheDocument();
+  });
+
+  it('keeps goal creation read-only in demo mode', async () => {
+    demoState.isDemoMode = true;
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText('Demo mode is read-only. You can inspect existing goals, but cannot start a new one.')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Goal creation controls' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Start goal' })).toBeDisabled();
+    expect(screen.getByLabelText('Objective')).toBeDisabled();
+
+    fireEvent.submit(screen.getByRole('button', { name: 'Start goal' }).closest('form')!);
+    expect(goalsApi.createGoal).not.toHaveBeenCalled();
   });
 
   it('remembers reusable settings from the previously created goal', async () => {
@@ -261,6 +278,27 @@ describe('GoalsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: "What's done?" }));
     await waitFor(() => expect(goalsApi.sendGoalInput).toHaveBeenCalledWith('goal-1', { canned: 'done' }));
     expect(goalsApi.pauseGoal).not.toHaveBeenCalled();
+  });
+
+  it('keeps running goal controls and corrections read-only in demo mode', async () => {
+    demoState.isDemoMode = true;
+    render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText('Demo mode is read-only. You can monitor this goal, but cannot send corrections or change its model.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: "What's done?" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Correction or follow-up')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Model for next continuation')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('More goal actions'));
+    expect(screen.queryByRole('button', { name: 'Delete goal' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open task history' })).toBeInTheDocument();
+    expect(goalsApi.pauseGoal).not.toHaveBeenCalled();
+    expect(goalsApi.cancelGoal).not.toHaveBeenCalled();
+    expect(goalsApi.deleteGoal).not.toHaveBeenCalled();
+    expect(goalsApi.requestGoalModel).not.toHaveBeenCalled();
+    expect(goalsApi.sendGoalInput).not.toHaveBeenCalled();
   });
 
   it('shows visual preview evidence fetched from the open goal PR', async () => {

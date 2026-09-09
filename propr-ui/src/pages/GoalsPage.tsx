@@ -27,6 +27,7 @@ import { getModelDisplayName } from '../utils/modelDisplay';
 import { GoalAttachmentInput } from '../components/Goals/GoalAttachmentInput';
 import { clipboardImageFiles } from '../components/Goals/goalAttachmentUtils';
 import { resizeImage } from '../components/TaskPlanner/imageUtils';
+import { useDemoMode } from '../contexts/DemoModeContext';
 
 const buttonClass = 'inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50';
 const checkpointIntervalOptions = [5, 10, 15, 30, 60, 120];
@@ -45,6 +46,10 @@ async function addGoalFiles(
   }
   setFiles([...current, ...await Promise.all(incoming.map(resizeImage))]);
 }
+
+const createGoalWithOptionalFiles = (body: Parameters<typeof createGoal>[0], files: File[]) => files.length > 0
+  ? createGoal(body, files)
+  : createGoal(body);
 
 interface GoalFormSettings {
   repository: string;
@@ -156,6 +161,7 @@ function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['c
 }
 
 function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
+  const { isDemoMode } = useDemoMode();
   const previousSettings = useMemo(readGoalFormSettings, []);
   const [repositories, setRepositories] = useState<InstanceCatalogRepository[]>([]);
   const [agents, setAgents] = useState<GoalCapability[]>([]);
@@ -216,6 +222,7 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (isDemoMode) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -225,7 +232,7 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
         ...(launchStrategy === 'direct' ? { checkpointIntervalMinutes: checkpointInterval } : {}),
         ultrafix,
       };
-      const result = files.length > 0 ? await createGoal(createBody, files) : await createGoal(createBody);
+      const result = await createGoalWithOptionalFiles(createBody, files);
       saveGoalFormSettings({
         repository,
         agentId,
@@ -243,6 +250,7 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
   return (
     <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold"><Plus className="h-5 w-5" /> Start a goal</h2>
+      {isDemoMode && <p className="mb-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800">Demo mode is read-only. You can inspect existing goals, but cannot start a new one.</p>}
       {error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}
       {showRuntimeDiagnostics && <div className="mb-3 rounded bg-amber-50 p-3 text-sm text-amber-800">
         <p>No configured coding-agent runtime currently supports goals.</p>
@@ -251,7 +259,8 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
         </ul>
         <button type="button" disabled={rechecking} onClick={recheckCapabilities} className="mt-2 font-medium underline disabled:opacity-50">{rechecking ? 'Rechecking…' : 'Recheck runtimes'}</button>
       </div>}
-      <div className="grid gap-4 md:grid-cols-2">
+      <fieldset disabled={isDemoMode} aria-label="Goal creation controls" className={`min-w-0 border-0 p-0 ${isDemoMode ? 'opacity-70' : ''}`}>
+        <div className="grid gap-4 md:grid-cols-2">
         <div className="text-sm font-medium text-slate-700">Repository
           <RepositorySelector repos={repositoryOptions} selectedRepo={repository} onRepoChange={setRepository} className="mt-1" />
         </div>
@@ -268,15 +277,15 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
         <label className="text-sm font-medium text-slate-700">Maximum parallel tasks (optional)
           <input aria-label="Maximum parallel tasks" type="number" min="1" max="32" value={parallelism} onChange={event => setParallelism(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 p-2" />
         </label>
-      </div>
-      <fieldset className="mt-4">
+        </div>
+        <fieldset className="mt-4">
         <legend className="text-sm font-medium text-slate-700">Goal launch strategy</legend>
         <div className="mt-2 grid gap-3 md:grid-cols-2">
           <label className="flex cursor-pointer gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-700"><input aria-label="Agent implements directly" type="radio" name="launch-strategy" value="direct" checked={launchStrategy === 'direct'} onChange={() => setLaunchStrategy('direct')} /><span><strong className="block text-slate-900">Agent implements directly</strong>ProPR opens the draft PR before work begins and safely commits the agent's changes at checkpoints.</span></label>
           <label className="flex cursor-pointer gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-700"><input aria-label="Agent orchestrates through ProPR" type="radio" name="launch-strategy" value="orchestrate" checked={launchStrategy === 'orchestrate'} onChange={() => setLaunchStrategy('orchestrate')} /><span><strong className="block text-slate-900">Agent orchestrates through ProPR</strong>The agent owns decomposition, creates issues, and starts and monitors their implementation through ProPR.</span></label>
         </div>
-      </fieldset>
-      {launchStrategy === 'direct' && <div className="mt-4 max-w-xl">
+        </fieldset>
+        {launchStrategy === 'direct' && <div className="mt-4 max-w-xl">
         <div className="flex items-center justify-between gap-3">
           <label htmlFor="checkpoint-frequency" className="text-sm font-medium text-slate-700">Checkpoint target cadence</label>
           <output htmlFor="checkpoint-frequency" className="rounded-full bg-primary-500/10 px-2.5 py-1 text-xs font-semibold text-primary-700">{checkpointInterval} minutes</output>
@@ -297,8 +306,8 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
           {checkpointIntervalOptions.map(minutes => <span key={minutes}>{minutes}</span>)}
         </div>
         <p className="mt-2 text-xs text-slate-500">Guidance for the agent, not a timer. ProPR commits only when the agent declares a coherent checkpoint ready.</p>
-      </div>}
-      <div className="mt-4 text-sm font-medium text-slate-700">Objective
+        </div>}
+        <div className="mt-4 text-sm font-medium text-slate-700">Objective
         <textarea aria-label="Objective" value={objective} onChange={event => setObjective(event.target.value)} onPaste={event => {
           const pasted = clipboardImageFiles(event);
           if (!pasted.length) return;
@@ -306,9 +315,10 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
           void addGoalFiles(files, pasted, setFiles, setError);
         }} rows={5} className="mt-1 w-full rounded-md border border-slate-300 p-2" required />
         <GoalAttachmentInput files={files} onChange={setFiles} onError={setError} disabled={submitting} />
-      </div>
-      <label className="mt-3 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={ultrafix} onChange={event => setUltrafix(event.target.checked)} /> Ask the coding agent to use Ultrafix</label>
-      <button type="submit" disabled={submitting || !repository || !agentId || !model || !objective.trim() || !selectedAgent?.goalCapable} className={`${buttonClass} mt-4 bg-primary-600 text-white hover:bg-primary-700`}>{submitting ? 'Starting…' : 'Start goal'}</button>
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={ultrafix} onChange={event => setUltrafix(event.target.checked)} /> Ask the coding agent to use Ultrafix</label>
+        <button type="submit" disabled={isDemoMode || submitting || !repository || !agentId || !model || !objective.trim() || !selectedAgent?.goalCapable} title={isDemoMode ? 'Demo mode is read-only' : undefined} className={`${buttonClass} mt-4 bg-primary-600 text-white hover:bg-primary-700`}>{submitting ? 'Starting…' : 'Start goal'}</button>
+      </fieldset>
     </form>
   );
 }
@@ -387,6 +397,7 @@ function GoalList() {
 // eslint-disable-next-line complexity
 function GoalDetails({ goalId }: { goalId: string }) {
   const navigate = useNavigate();
+  const { isDemoMode } = useDemoMode();
   const [goal, setGoal] = useState<Goal | null>(null);
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -425,9 +436,9 @@ function GoalDetails({ goalId }: { goalId: string }) {
     const timer = window.setInterval(refreshPreviews, 30_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [goal?.finalPr?.number, goalId]);
-  const act = async (operation: () => Promise<{ goal: Goal }>) => { setBusy(true); setError(null); try { setGoal((await operation()).goal); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
+  const act = async (operation: () => Promise<{ goal: Goal }>) => { if (isDemoMode) return; setBusy(true); setError(null); try { setGoal((await operation()).goal); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
   const continueWith = async (body: { message?: string; canned?: 'done' | 'left' }, attachments: File[] = []) => {
-    if (!goal) return;
+    if (!goal || isDemoMode) return;
     setBusy(true); setError(null);
     try {
       const result = attachments.length > 0 ? await sendGoalInput(goal.id, body, attachments) : await sendGoalInput(goal.id, body);
@@ -435,7 +446,7 @@ function GoalDetails({ goalId }: { goalId: string }) {
     } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
   const remove = async () => {
-    if (!goal || !window.confirm('Delete this goal? If it is running, it will be stopped first. This action cannot be undone.')) return;
+    if (!goal || isDemoMode || !window.confirm('Delete this goal? If it is running, it will be stopped first. This action cannot be undone.')) return;
     setBusy(true); setError(null);
     try {
       await deleteGoal(goal.id);
@@ -450,6 +461,7 @@ function GoalDetails({ goalId }: { goalId: string }) {
   const terminal = Boolean(goal.resultState);
   const cancelling = !terminal && goal.desiredState === 'cancelled';
   const mutable = !terminal && !cancelling;
+  const canMutate = mutable && !isDemoMode;
   const strategyLabel = goal.launchStrategy === 'direct' ? 'Direct' : 'ProPR orchestrated';
   const currentModel = getModelDisplayName(goal.effectiveModel || goal.requestedModel);
   return <div className="min-h-full bg-white text-slate-900">
@@ -474,15 +486,15 @@ function GoalDetails({ goalId }: { goalId: string }) {
             <span className="text-xs text-slate-500">{goal.repository} · {goal.agent.alias}</span>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {goal.desiredState === 'running' && mutable && <button disabled={busy} onClick={() => act(() => pauseGoal(goal.id))} className={`${buttonClass} border border-amber-300 text-amber-800 hover:bg-amber-50`}><CirclePause className="h-4 w-4" />Pause</button>}
-            {goal.desiredState === 'paused' && mutable && <button disabled={busy} onClick={() => act(() => resumeGoal(goal.id))} className={`${buttonClass} border border-green-300 text-green-800 hover:bg-green-50`}><CirclePlay className="h-4 w-4" />{goal.pausePending ? 'Resume after safe boundary' : 'Resume'}</button>}
-            {mutable && <button disabled={busy} onClick={() => act(() => cancelGoal(goal.id))} className={`${buttonClass} border border-red-300 text-red-700 hover:bg-red-50`}><CircleStop className="h-4 w-4" />Cancel</button>}
+            {goal.desiredState === 'running' && canMutate && <button disabled={busy} onClick={() => act(() => pauseGoal(goal.id))} className={`${buttonClass} border border-amber-300 text-amber-800 hover:bg-amber-50`}><CirclePause className="h-4 w-4" />Pause</button>}
+            {goal.desiredState === 'paused' && canMutate && <button disabled={busy} onClick={() => act(() => resumeGoal(goal.id))} className={`${buttonClass} border border-green-300 text-green-800 hover:bg-green-50`}><CirclePlay className="h-4 w-4" />{goal.pausePending ? 'Resume after safe boundary' : 'Resume'}</button>}
+            {canMutate && <button disabled={busy} onClick={() => act(() => cancelGoal(goal.id))} className={`${buttonClass} border border-red-300 text-red-700 hover:bg-red-50`}><CircleStop className="h-4 w-4" />Cancel</button>}
             {goal.finalPr && <a href={goal.finalPr.url} target="_blank" rel="noreferrer" className={`${buttonClass} bg-primary-600 text-white shadow-sm hover:bg-primary-700`}><GitPullRequest className="h-4 w-4" />{goal.launchStrategy === 'direct' ? 'Open draft PR' : 'Review final PR'} <ExternalLink className="h-3.5 w-3.5" /></a>}
             <details className="group relative">
               <summary aria-label="More goal actions" className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md border border-slate-300 text-slate-600 transition hover:bg-slate-50 [&::-webkit-details-marker]:hidden"><MoreHorizontal className="h-4 w-4" /></summary>
               <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg">
                 <Link to={`/tasks/${goal.taskId}`} className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Open task history</Link>
-                <button disabled={busy} onClick={remove} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4" />Delete goal</button>
+                {!isDemoMode && <button disabled={busy} onClick={remove} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4" />Delete goal</button>}
               </div>
             </details>
           </div>
@@ -591,12 +603,12 @@ function GoalDetails({ goalId }: { goalId: string }) {
           </dl>
         </section>
 
-        {mutable && <section aria-labelledby="quick-actions-heading" className="mt-7">
+        {canMutate && <section aria-labelledby="quick-actions-heading" className="mt-7">
           <h2 id="quick-actions-heading" className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Quick actions</h2>
           <div className="mt-3 flex flex-wrap gap-2"><button disabled={busy} onClick={() => continueWith({ canned: 'done' })} className={`${buttonClass} border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50`}>What's done?</button><button disabled={busy} onClick={() => continueWith({ canned: 'left' })} className={`${buttonClass} border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50`}>What's left?</button></div>
         </section>}
 
-        {mutable ? <section aria-labelledby="correction-heading" className="sticky bottom-0 mt-auto pt-10">
+        {canMutate ? <section aria-labelledby="correction-heading" className="sticky bottom-0 mt-auto pt-10">
           <div className="mb-2 flex flex-col items-end gap-1">
             <label htmlFor="goal-continuation-model" className="text-xs text-slate-500">Model for next continuation</label>
             <select id="goal-continuation-model" value={goal.requestedModel} onChange={event => act(() => requestGoalModel(goal.id, event.target.value))} className="max-w-48 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 shadow-sm">{models.map(item => <option key={item} value={item}>{getModelDisplayName(item)}</option>)}</select>
@@ -612,7 +624,7 @@ function GoalDetails({ goalId }: { goalId: string }) {
             <GoalAttachmentInput files={files} onChange={setFiles} onError={setError} disabled={busy} compact />
             <div className="mt-2 flex justify-end"><button disabled={busy || !message.trim()} onClick={() => continueWith({ message }, files)} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}><Send className="h-4 w-4" />Send</button></div>
           </div>
-        </section> : <p className="mt-auto pt-10 text-sm text-slate-500">This goal no longer accepts corrections.</p>}
+        </section> : <p className="mt-auto pt-10 text-sm text-slate-500">{isDemoMode && mutable ? 'Demo mode is read-only. You can monitor this goal, but cannot send corrections or change its model.' : 'This goal no longer accepts corrections.'}</p>}
       </aside>
     </div>
   </div>;
