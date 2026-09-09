@@ -1,73 +1,28 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getQueueStats, getTasks, getSystemStatus } from '../api/proprApi';
-import type { LiveQueueJob, SystemAgentStatus } from '../api/proprTypes';
 import { getDrafts, DraftListItem } from '../api/plannerApi';
 import { useSocket } from '../contexts/useSocket';
 import { isDesktopRuntime } from '../config/runtimeMode';
+import {
+  buildReviewGroups,
+  buildRunningItems,
+  buildSystemHealth,
+  DISMISSED_PLAN_IDS_KEY,
+  DISMISSED_TASK_IDS_KEY,
+  filterActivePlans,
+  getDismissedIds,
+  getDismissedTaskTimestamps,
+  saveDismissedIds,
+  saveDismissedTaskTimestamps,
+} from './useHeaderStatsHelpers';
+import type {
+  DismissedTaskTimestamps,
+  RunningItem,
+  SystemHealth,
+  TaskGroup,
+} from './useHeaderStatsHelpers';
 
-// LocalStorage keys for dismissal tracking
-const DISMISSED_PLAN_IDS_KEY = 'dismissed_plan_ids';
-const DISMISSED_TASK_IDS_KEY = 'dismissed_task_ids';
-// New key for tracking PR-based dismissal timestamps
-// When a task is dismissed, we store the timestamp for that PR/issue key
-// All tasks created before that timestamp for that PR/issue are auto-dismissed
-const DISMISSED_TASK_TIMESTAMPS_KEY = 'dismissed_task_timestamps';
-
-interface Task {
-  id: string;
-  repository?: string;
-  repositoryOwner?: string;
-  repositoryName?: string;
-  issueNumber?: number;
-  prNumber?: number;
-  linkedIssueNumber?: number | null;
-  title?: string;
-  status: string;
-  createdAt: string;
-  completedAt?: string;
-  planIssueStatus?: string | null;
-}
-
-// Running item interface for AI Activity Monitor
-export interface RunningItem {
-  id: string;
-  navigationId?: string;
-  type: 'plan' | 'task';
-  label: string;
-  repository: string;
-  status: string;
-  createdAt: string;
-}
-
-// Map of PR/issue keys to dismissal timestamps
-// When a task group is dismissed, all tasks created before that timestamp are hidden
-interface DismissedTaskTimestamps {
-  [key: string]: number; // key format: "owner/repo-pr-123" or "owner/repo-issue-456", value: timestamp in ms
-}
-
-interface TaskGroup {
-  key: string;
-  repoOwner: string;
-  repoName: string;
-  prNumber?: number;
-  issueNumber?: number;
-  latestTask: Task;
-  allTasks: Task[];
-}
-
-interface SystemHealth {
-  daemon: string;
-  workers: string;
-  redis: string;
-  githubAuth: string;
-  claudeAuth: string;
-  indexing: string;
-  // Human-readable name and UI status of the active GitHub event intake path.
-  githubEventIntake: string;
-  githubEventIntakeStatus: string;
-  agents: SystemAgentStatus[];
-  isHealthy: boolean;
-}
+export type { RunningItem } from './useHeaderStatsHelpers';
 
 export interface HeaderStats {
   // Running tasks count from queue
@@ -112,82 +67,6 @@ export interface HeaderStats {
 
   // Refresh function
   refresh: () => Promise<void>;
-}
-
-// Helper to get dismissed IDs from localStorage
-const getDismissedIds = (key: string): string[] => {
-  try {
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
-};
-
-// Helper to save dismissed IDs to localStorage
-const saveDismissedIds = (key: string, ids: string[]): void => {
-  try {
-    localStorage.setItem(key, JSON.stringify(ids));
-  } catch {
-    console.error(`Failed to save dismissed IDs to ${key}`);
-  }
-};
-
-// Helper to get dismissed task timestamps from localStorage
-const getDismissedTaskTimestamps = (): DismissedTaskTimestamps => {
-  try {
-    const stored = localStorage.getItem(DISMISSED_TASK_TIMESTAMPS_KEY);
-    return stored ? JSON.parse(stored) : {};
-  } catch {
-    return {};
-  }
-};
-
-// Helper to save dismissed task timestamps to localStorage
-const saveDismissedTaskTimestamps = (timestamps: DismissedTaskTimestamps): void => {
-  try {
-    localStorage.setItem(DISMISSED_TASK_TIMESTAMPS_KEY, JSON.stringify(timestamps));
-  } catch {
-    console.error('Failed to save dismissed task timestamps');
-  }
-};
-
-// Helper to create a task group key for dismissal tracking
-const getTaskGroupKey = (repoOwner: string, repoName: string, prNumber?: number, issueNumber?: number): string => {
-  const repoPrefix = `${repoOwner}/${repoName}`;
-  if (prNumber) {
-    return `${repoPrefix}-pr-${prNumber}`;
-  } else if (issueNumber) {
-    return `${repoPrefix}-issue-${issueNumber}`;
-  }
-  return '';
-};
-
-function buildRunningItems(drafts: DraftListItem[], activeJobs: LiveQueueJob[]): RunningItem[] {
-  const runningItems: RunningItem[] = drafts
-    .filter(draft => draft.status === 'generating' || draft.status === 'refining')
-    .map(plan => ({
-      id: plan.draft_id,
-      type: 'plan' as const,
-      label: plan.name || plan.initial_prompt || 'Generating Plan',
-      repository: plan.repository,
-      status: plan.status === 'generating' ? 'Generating Spec' : 'Refining',
-      createdAt: plan.created_at,
-    }));
-
-  runningItems.push(...activeJobs.map(job => ({
-    id: job.id,
-    ...(job.taskId ? { navigationId: job.taskId } : {}),
-    type: 'task' as const,
-    label: job.title || `Task ${job.id.slice(0, 8)}`,
-    repository: job.repository,
-    status: 'Implementing',
-    createdAt: job.createdAt,
-  })));
-
-  return runningItems.sort((a, b) =>
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
 }
 
 export function useHeaderStats(): HeaderStats {
@@ -312,183 +191,13 @@ export function useHeaderStats(): HeaderStats {
         ? 'unavailable'
         : 'available');
 
-      // 2. Process active plans
-      // Plans are already pre-filtered at DB level (excludes merged, executed)
-      // Only need to filter out manually dismissed plans
-      const currentDismissedPlanIds = getDismissedIds(DISMISSED_PLAN_IDS_KEY);
-      const filteredPlans = draftsResponse.drafts.filter(draft => {
-        return !currentDismissedPlanIds.includes(draft.draft_id);
-      });
+      setActivePlans(filterActivePlans(draftsResponse.drafts));
 
-      // Already sorted by updated_at desc from API, but ensure order
-      filteredPlans.sort((a, b) => {
-        const dateA = new Date(a.updated_at).getTime();
-        const dateB = new Date(b.updated_at).getTime();
-        return dateB - dateA;
-      });
-
-      setActivePlans(filteredPlans);
-
-      // 3. Process review items
-      // Tasks are pre-filtered at DB level (completed/failed only, merged excluded)
-      // Group tasks by PR (or issue if no PR)
-      const tasks = (tasksResponse as { tasks: Task[] }).tasks || [];
-      const currentDismissedTaskIds = getDismissedIds(DISMISSED_TASK_IDS_KEY);
-      const currentDismissedTimestamps = getDismissedTaskTimestamps();
-
-      const groups: Record<string, TaskGroup> = {};
-      // Track issue-to-PR mapping: when a PR task has linkedIssueNumber,
-      // map that issue to the PR for merging groups
-      const issueToPrMap: Record<string, string> = {};
-
-      // Track which issues have PR followup tasks
-      // If a PR task exists for an issue, we should filter out the initial issue task
-      const prTasksByIssue: Record<string, boolean> = {};
-
-      // First pass: identify issues that have PR followup tasks
-      tasks.forEach(task => {
-        if (task.prNumber && task.issueNumber) {
-          let owner = task.repositoryOwner;
-          let name = task.repositoryName;
-          if (!owner || !name) {
-            const parts = (task.repository || 'unknown/unknown').split('/');
-            owner = parts[0] || 'unknown';
-            name = parts[1] || 'unknown';
-          }
-          const issueKey = `${owner}/${name}-issue-${task.issueNumber}`;
-          prTasksByIssue[issueKey] = true;
-        }
-      });
-
-      tasks.forEach(task => {
-        let owner = task.repositoryOwner;
-        let name = task.repositoryName;
-
-        if (!owner || !name) {
-          const parts = (task.repository || 'unknown/unknown').split('/');
-          owner = parts[0] || 'unknown';
-          name = parts[1] || 'unknown';
-        }
-
-        const repoPrefix = `${owner}/${name}`;
-
-        // Create group key: prefer PR number, fallback to issue number
-        const taskGroupKey = getTaskGroupKey(owner, name, task.prNumber, task.issueNumber) || task.id;
-
-        // Skip dismissed tasks using timestamp-based filtering
-        // If this PR/issue key has a dismissal timestamp, only show tasks created AFTER that timestamp
-        const dismissedTimestamp = currentDismissedTimestamps[taskGroupKey];
-        if (dismissedTimestamp) {
-          const taskCreatedAt = new Date(task.createdAt).getTime();
-          // Skip tasks created at or before the dismissal timestamp
-          if (taskCreatedAt <= dismissedTimestamp) {
-            return;
-          }
-        }
-
-        // Also check legacy dismissal by task ID for backwards compatibility
-        if (currentDismissedTaskIds.includes(task.id)) {
-          return;
-        }
-
-        // If this task has a PR and a linkedIssueNumber, record the mapping
-        // This allows us to merge issue-based groups into PR-based groups
-        if (task.prNumber && task.linkedIssueNumber) {
-          const issueKey = `${repoPrefix}-issue-${task.linkedIssueNumber}`;
-          const prKey = `${repoPrefix}-pr-${task.prNumber}`;
-          issueToPrMap[issueKey] = prKey;
-        }
-
-        // Use the already-computed group key (taskGroupKey is already computed above)
-        const key = taskGroupKey;
-
-        // Skip initial issue tasks if a PR followup exists for this issue
-        if (!task.prNumber && task.issueNumber && prTasksByIssue[key]) {
-          return;
-        }
-
-        if (!groups[key]) {
-          groups[key] = {
-            key,
-            repoOwner: owner,
-            repoName: name,
-            prNumber: task.prNumber,
-            issueNumber: task.issueNumber,
-            latestTask: task,
-            allTasks: [],
-          };
-        }
-
-        groups[key].allTasks.push(task);
-      });
-
-      // Merge issue-based groups into their corresponding PR groups
-      Object.entries(issueToPrMap).forEach(([issueKey, prKey]) => {
-        if (groups[issueKey] && groups[prKey]) {
-          // Merge issue group tasks into PR group
-          groups[prKey].allTasks.push(...groups[issueKey].allTasks);
-          // Remove the issue group
-          delete groups[issueKey];
-        }
-      });
-
-      // For each group, determine the latest task
-      // Tasks are pre-filtered at DB level, we just need to organize by group
-      const reviewableGroups: TaskGroup[] = [];
-
-      Object.values(groups).forEach(group => {
-        // Sort tasks by createdAt descending to find the latest
-        group.allTasks.sort((a, b) => {
-          const dateA = new Date(a.createdAt).getTime();
-          const dateB = new Date(b.createdAt).getTime();
-          return dateB - dateA;
-        });
-
-        const latestTask = group.allTasks[0];
-        group.latestTask = latestTask;
-
-        // Tasks are already pre-filtered at DB level to be completed/failed and not merged
-        // Just add to reviewable groups
-        reviewableGroups.push(group);
-      });
-
-      // Sort review groups by latest task's createdAt (newest first)
-      reviewableGroups.sort((a, b) => {
-        const dateA = new Date(a.latestTask.createdAt).getTime();
-        const dateB = new Date(b.latestTask.createdAt).getTime();
-        return dateB - dateA;
-      });
-
+      const reviewableGroups = buildReviewGroups(tasksResponse);
       setReviewGroups(reviewableGroups);
       setReviewCount(reviewableGroups.length);
 
-      // 4. Process system health
-      const workersStatus = statusResponse.workers.length > 0 ? 'Running' : 'Stopped';
-      const agentsHealthy = statusResponse.agents.every(agent => agent.status === 'Ready');
-      // 'Unknown' is treated as neutral so older backends that don't report intake
-      // status (and resolver-error/unknown modes) don't flip the header unhealthy,
-      // while an explicit 'Disconnected' from a stalled intake path does.
-      const intakeStatus = statusResponse.githubEventIntakeStatus || 'Unknown';
-      const health: SystemHealth = {
-        daemon: statusResponse.daemon,
-        workers: workersStatus,
-        redis: statusResponse.redis,
-        githubAuth: statusResponse.githubAuth,
-        claudeAuth: statusResponse.claudeAuth,
-        indexing: statusResponse.indexing,
-        githubEventIntake: statusResponse.githubEventIntake || 'Unknown',
-        githubEventIntakeStatus: intakeStatus,
-        agents: statusResponse.agents,
-        isHealthy:
-          statusResponse.daemon === 'Running' &&
-          workersStatus === 'Running' &&
-          statusResponse.redis === 'Connected' &&
-          statusResponse.githubAuth === 'Authenticated' &&
-          ['Idle', 'Active', 'Queued', 'Connected'].includes(statusResponse.indexing) &&
-          ['Connected', 'Active', 'Unknown'].includes(intakeStatus) &&
-          agentsHealthy,
-      };
-      setSystemHealth(health);
+      setSystemHealth(buildSystemHealth(statusResponse));
 
       setError(queueResult.errorMessage);
     } catch (err) {
