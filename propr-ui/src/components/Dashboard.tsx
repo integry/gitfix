@@ -216,7 +216,7 @@ const Dashboard: React.FC = () => {
       {/* Main Content - Studio Split Layout */}
       <div className="flex flex-col lg:flex-row">
         {/* Left Column (70%) - Activity Feed */}
-        <div className="flex-1 lg:w-[70%]">
+        <div className="flex flex-1 flex-col lg:w-[70%]">
           {/* Header toolbar */}
           <div className="flex items-center justify-between px-6 py-4">
             <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Recent Activity</h3>
@@ -229,7 +229,7 @@ const Dashboard: React.FC = () => {
             </Link>
           </div>
           {/* Task list content - no card, no border */}
-          <div className="px-6 pb-6">
+          <div className="flex flex-1 px-6 pb-6">
             <TaskList
               limit={10}
               showViewAll={false}

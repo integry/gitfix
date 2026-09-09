@@ -189,7 +189,7 @@ export default function VoiceBriefingControl() {
         ref={launcherRef}
         type="button"
         onClick={openPanel}
-        className="fixed bottom-[calc(var(--mobile-bottom-navigation-height)+0.75rem)] right-[max(0.75rem,env(safe-area-inset-right))] z-30 inline-flex min-h-11 items-center gap-2 rounded-full bg-slate-900 px-3.5 py-2.5 text-sm font-semibold text-white shadow-lg ring-1 ring-white/40 transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 md:bottom-5 md:right-5"
+        className="fixed bottom-[calc(var(--mobile-bottom-navigation-height)+0.75rem)] right-[max(0.75rem,env(safe-area-inset-right))] z-30 inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-slate-900 px-3.5 py-2.5 text-sm font-semibold text-white shadow-2xl transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 md:bottom-5 md:right-5"
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-label="Voice briefing"
