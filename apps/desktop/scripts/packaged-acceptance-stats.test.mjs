@@ -16,6 +16,7 @@ const taskStatsChartSource = readSource('../../../propr-ui/src/components/TaskSt
 const topModelsSource = readSource('../../../propr-ui/src/components/TopModels.tsx');
 const repositoryBreakdownSource = readSource('../../../propr-ui/src/components/RepositoryBreakdown.tsx');
 const headerStatsSource = readSource('../../../propr-ui/src/hooks/useHeaderStats.ts');
+const headerStatsHelpersSource = readSource('../../../propr-ui/src/hooks/useHeaderStatsHelpers.ts');
 
 const fixturePayload = pathname => {
   const route = `if (requestUrl.pathname === '${pathname}')`;
@@ -44,8 +45,16 @@ describe('packaged acceptance stats fixtures', () => {
 
     assert.deepEqual(payload, { drafts: [], total: 0, page: 1, limit: 20, hasMore: false });
     assert.ok(draftsRoute < genericApiFallback);
+    assert.match(
+      headerStatsSource,
+      /getDrafts\(\{\s*limit:\s*20,\s*excludeStatuses:\s*'merged'\s*\}\)/
+    );
     assert.match(headerStatsSource, /buildRunningItems\(\s*draftsResponse\.drafts,/);
-    assert.match(headerStatsSource, /draftsResponse\.drafts\.filter/);
+    assert.match(headerStatsSource, /filterActivePlans\(draftsResponse\.drafts\)/);
+    assert.match(
+      headerStatsHelpersSource,
+      /export function filterActivePlans\([\s\S]*?return drafts\s*\.filter/
+    );
     assert.ok(Array.isArray(payload.drafts));
   });
 
