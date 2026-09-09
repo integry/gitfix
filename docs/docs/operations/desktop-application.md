@@ -43,24 +43,25 @@ new trust generation and confirm and pair again.
 
 ## Native tray and menu verification
 
-Use a real Linux desktop panel or the macOS menu bar. The automated Xvfb boundary proves that Electron can create and
-close the native `Menu.popup()` used for Linux primary activation, but a bare Xvfb server has no tray manager and cannot
-prove shell-owned XEmbed or StatusNotifierItem activation.
+Use a real Linux desktop panel or the macOS menu bar. Automated tests cover the application-owned activation and window
+lifecycle, but a bare Xvfb server has no tray manager and cannot prove shell-owned XEmbed or StatusNotifierItem
+activation.
 
 1. Start the desktop app without enabling notifications. Confirm startup does not request notification permission or
    change **Settings → Desktop notifications**. The quiet defaults are **Enable on this device** (master delivery),
    **Task started**, and **Task completed** off; **Task failed** and **Needs attention** are selected but remain inactive
    until master delivery is enabled.
-2. Before connecting, open the tray menu once with primary click, dismiss it by physically clicking outside, then open it
-   again and dismiss it with Escape before opening it once with right-click. On a top Linux panel, confirm the primary
-   menu is anchored directly below the clicked icon on that monitor. Confirm **Open ProPR**, **Switch / Manage
-   Instances…**, and **Quit ProPR** work from both activation paths, while account actions and the notification toggle are
-   disabled.
+2. Before connecting on Linux, minimize the window and left-click the tray icon twice. Each activation must restore, show,
+   and focus the existing ProPR window without opening a menu or creating a second task-list window. Right-click the icon
+   and confirm the native menu remains available. Confirm **Open ProPR**, **Switch / Manage Instances…**, and **Quit
+   ProPR** work from that menu, while account actions and the notification toggle are disabled. On macOS, confirm ordinary
+   menu-bar activation continues to open the native menu.
 3. Connect and sign in. Confirm **New Plan**, **Tasks**, **Plans**, **Inbox**, **Switch / Manage Instances…**,
-   **Notification Settings…**, and **Pause/Resume Native Notifications** appear in both the tray and application menus.
+   **Notification Settings…**, and **Pause/Resume Native Notifications** appear in the tray and application menus.
    Task and plan counts must open their matching destinations; unavailable counts must say unavailable rather than zero.
-4. Minimize and then hide the window. Invoke each destination from the tray and application menu and confirm the window is
-   restored and focused. In a plan composer, confirm leaving through a native command asks before navigating.
+4. Minimize and then hide the window. On Linux, left-click the tray icon after each state and confirm the window is
+   restored and focused. Invoke each destination from the tray and application menu and confirm the same restoration
+   behavior. In a plan composer, confirm leaving through a native command asks before navigating.
 5. Verify `CmdOrCtrl+N`, `CmdOrCtrl+1`, `CmdOrCtrl+2`, `CmdOrCtrl+3`, `CmdOrCtrl+Shift+I`, `CmdOrCtrl+,`, and
    `CmdOrCtrl+Shift+N`. On macOS also confirm About, Services, Hide, Window, and standard Edit roles remain native.
 6. Pause native notifications and confirm the item becomes unchecked and reads **Resume Native Notifications** while
@@ -73,25 +74,20 @@ prove shell-owned XEmbed or StatusNotifierItem activation.
 
 For the Linux/XFCE XEmbed acceptance, log into a real XFCE X11 session and ensure the panel's **Notification Area** plugin
 is enabled before launching the exact packaged `propr-desktop` executable under test as the desktop user. Do not run it
-with `sudo`. Hover the 22×22 ProPR icon and verify its Active work tooltip, then perform the
-primary/outside-click/primary/Escape/right sequence from step 2 with a physical pointer. Verify both primary menus open
-below the top-panel icon and dismiss on the first outside click. Repeat the sequence after
-minimizing and after hiding the 640×402 main window. Selecting **Open ProPR** must restore and focus that same window;
+with `sudo`. Hover the 22×22 ProPR icon and verify its Active work tooltip. Minimize the 640×402 main window, left-click
+the icon, and verify that exact window is restored and focused without any popup or extra task-list window. Hide it and
+repeat, including two quick successive activations. Right-click the icon and verify the native menu opens below the
+top-panel icon and dismisses on the first outside click. Selecting **Open ProPR** must restore and focus the same window;
 selecting **Notification Settings…** must route within that window. If the icon or
 right-click menu is absent, run `xfce4-panel --restart` in that disposable acceptance session (or log out and back in),
 confirm the Notification Area plugin reacquires the tray selection, and repeat before classifying an application failure.
 
-Electron 44 has two distinct Linux paths here. ProPR's primary handler must call `Menu.popup()` because Linux
-`TrayIcon` does not implement `Tray.popUpContextMenu()`. The primary popup uses a transient transparent owner at the
-physical pointer's panel/work-area edge, rather than the main window, so the native Views menu runner owns its focus/grab
-and placement even while the app window is hidden. Electron renders this Linux path in its Chromium/Views menu style, so
-exact GTK theme equality with the right-click menu is not expected. Right activation never reaches a JavaScript
-`right-click` event:
-the GTK/XEmbed fallback connects `GtkStatusIcon`'s `popup_menu` signal directly to the menu installed by
-`setContextMenu()`. Consequently, a working tooltip plus a working primary menu but no right menu after the panel restart
-is shell-boundary evidence to report with the XFCE version, panel plugin list, and physical-pointer result; there is no
-second application event that can safely synthesize the right popup. Bare Xvfb and XTest-only results are insufficient to
-override that real-shell result.
+Electron 44 uses separate Linux paths for primary and context activation. ProPR handles the primary `click` event by
+dispatching its existing **Open ProPR** action. Right activation does not reach a JavaScript `right-click` event: the
+GTK/XEmbed fallback connects `GtkStatusIcon`'s `popup_menu` signal directly to the menu installed by `setContextMenu()`.
+Consequently, a working tooltip and left-click restoration but no right-click menu after the panel restart is
+shell-boundary evidence to report with the XFCE version, panel plugin list, and physical-pointer result. Bare Xvfb and
+XTest-only results are insufficient to override that real-shell result.
 
 ## Guided Linux setup
 

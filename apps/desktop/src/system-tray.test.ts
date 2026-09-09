@@ -83,7 +83,6 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => { creates += 1; return fakeTray as unknown as Tray; },
       buildMenu: template => { menuTemplate = template; return {} as Menu; },
-      popupMenu: () => undefined,
       setBadgeCount: count => { badges.push(count); return true; },
       fetchActiveWork: async () => ({ status: 'response', response: next }),
       commands: commandFixture(command => {
@@ -154,7 +153,6 @@ describe('desktop system tray', () => {
         return created as unknown as Tray;
       },
       buildMenu: () => ({} as Menu),
-      popupMenu: () => undefined,
       setBadgeCount: () => false,
       fetchActiveWork: async () => {
         fetches += 1;
@@ -203,48 +201,30 @@ describe('desktop system tray', () => {
     assert.equal(fetches, 2);
   });
 
-  it('uses the supported native popup path for Linux primary activation', () => {
+  it('opens ProPR on repeated Linux primary activation without invoking a popup', () => {
     const fakeTray = new FakeTray();
     const dispatched: string[] = [];
-    let popupMenu: Menu | null = null;
-    const popupActivations: Array<{ bounds: unknown; position: unknown }> = [];
-    let popupCloses = 0;
     const menu = {} as Menu;
     const controller = createDesktopTrayController({
       platform: 'linux',
       icon: {} as NativeImage,
       createTray: () => fakeTray as unknown as Tray,
       buildMenu: () => menu,
-      popupMenu: (value, activation) => { popupMenu = value; popupActivations.push(activation); },
-      closePopupMenu: () => { popupCloses += 1; },
       setBadgeCount: () => false,
       fetchActiveWork: async () => ({ status: 'disconnected' }),
       commands: commandFixture(command => dispatched.push(command)),
       log: () => undefined,
     });
     controller.start();
-    const bounds = { x: -44, y: 2, width: 22, height: 22 };
-    const position = { x: -33, y: 13 };
-    const activationEvents = [
-      {},
-      {
-        altKey: false,
-        ctrlKey: false,
-        metaKey: false,
-        shiftKey: false,
-        triggeredByAccelerator: false,
-      },
-    ];
-    for (const event of activationEvents) fakeTray.listeners.get('click')?.(event, bounds, position);
-    assert.equal(popupMenu, menu, 'Linux primary activation uses Menu.popup instead of Tray.popUpContextMenu');
-    assert.deepEqual(popupActivations, activationEvents.map(() => ({ bounds, position })),
-      'synthetic regression input and Electron-shaped input use the same production activation path');
-    assert.equal(fakeTray.popups, 0, 'the unsupported Linux Tray popup method is not called');
-    assert.deepEqual(dispatched, []);
+    fakeTray.listeners.get('click')?.();
+    fakeTray.listeners.get('click')?.();
+    assert.deepEqual(dispatched, ['open', 'open'], 'every primary activation reuses the Open ProPR action');
+    assert.equal(fakeTray.popups, 0, 'primary activation does not invoke a popup');
     assert.equal(fakeTray.menu, menu, 'setContextMenu remains installed for native right activation');
     assert.equal(fakeTray.listeners.has('double-click'), false, 'Linux does not expose a Tray double-click event');
     controller.close();
-    assert.equal(popupCloses, 1, 'tray shutdown also tears down the popup owner');
+    fakeTray.listeners.get('click')?.();
+    assert.deepEqual(dispatched, ['open', 'open'], 'activation after tray cleanup is ignored safely');
   });
 
   it('drops scoped stale responses and marks network failures unavailable instead of zero', async () => {
@@ -257,7 +237,6 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => fakeTray as unknown as Tray,
       buildMenu: () => ({} as Menu),
-      popupMenu: () => undefined,
       setBadgeCount: () => false,
       fetchActiveWork: async () => {
         request += 1;
@@ -293,7 +272,6 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => { created = true; return {} as Tray; },
       buildMenu: () => ({} as Menu),
-      popupMenu: () => undefined,
       setBadgeCount: () => false,
       fetchActiveWork: async () => ({ status: 'disconnected' }),
       commands: commandFixture(),

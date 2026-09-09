@@ -11,7 +11,7 @@ class FakeWindow {
 
   isDestroyed(): boolean { return this.destroyed; }
   isMinimized(): boolean { return this.minimized; }
-  restore(): void { this.restores += 1; }
+  restore(): void { this.restores += 1; this.minimized = false; }
   show(): void { this.shows += 1; }
   focus(): void { this.focuses += 1; }
   destroy(): void { this.destroyed = true; }
@@ -26,6 +26,27 @@ const deferred = <Value>() => {
 const nextTurn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 describe('main-window restoration', () => {
+  it('restores, shows, and focuses an existing minimized window on every activation', () => {
+    const current = new FakeWindow();
+    current.minimized = true;
+    let creations = 0;
+    const restorer = createMainWindowRestorer({
+      getWindow: () => current,
+      setWindow: assert.fail,
+      createWindow: async () => { creations += 1; return new FakeWindow(); },
+      shutdownStarted: () => false,
+      creationFailed: assert.fail,
+    });
+
+    restorer.restore();
+    restorer.restore();
+
+    assert.equal(current.restores, 1, 'only the minimized activation needs native restore');
+    assert.equal(current.shows, 2);
+    assert.equal(current.focuses, 2);
+    assert.equal(creations, 0, 'the normal creation path is not used while a live window exists');
+  });
+
   it('coalesces concurrent restore requests into one pending window creation', async () => {
     const pending = deferred<FakeWindow>();
     const created = new FakeWindow();
