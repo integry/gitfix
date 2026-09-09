@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import GoalsPage from './GoalsPage';
 import * as goalsApi from '../api/goals';
 import { getInstanceCatalog, getTaskLiveDetails } from '../api/proprApi';
+import ThinkingLog from '../components/TaskDetails/ThinkingLog';
 
 vi.mock('../api/goals', () => ({
   getGoalCapabilities: vi.fn(), listGoals: vi.fn(), getGoal: vi.fn(), createGoal: vi.fn(),
@@ -284,11 +285,11 @@ describe('GoalsPage', () => {
     demoState.isDemoMode = true;
     render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
 
-    expect(await screen.findByText('Demo mode is read-only. You can monitor this goal, but cannot send corrections or change its model.')).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText('Demo mode is read-only. Corrections disabled.')).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: "What's done?" })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Correction or follow-up')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Correction or follow-up')).toBeDisabled();
     expect(screen.queryByLabelText('Model for next continuation')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('More goal actions'));
@@ -369,6 +370,38 @@ describe('GoalsPage', () => {
     expect(screen.getAllByText('npm test')).toHaveLength(2);
   });
 
+  it('uses the refined completed-goal hierarchy and locked command bar', async () => {
+    const startedAt = '2026-09-09T10:00:00.000Z';
+    vi.mocked(goalsApi.getGoal).mockResolvedValue({
+      goal: {
+        ...goal,
+        desiredState: 'running',
+        resultState: 'completed',
+        startedAt,
+        completedAt: '2026-09-09T10:10:59.000Z',
+      },
+    });
+    render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    const title = await screen.findByRole('heading', { name: goal.title });
+    const completedStatus = within(title.parentElement!).getByText('Completed');
+    expect(completedStatus).toHaveClass('text-slate-500');
+    expect(completedStatus).not.toHaveClass('bg-green-100');
+    expect(screen.getByRole('complementary', { name: 'Steering console' })).toHaveClass('bg-slate-50');
+    expect(screen.getByRole('heading', { name: 'Goal output' })).toHaveClass('text-[10px]', 'uppercase', 'font-bold', 'text-slate-500');
+    expect(screen.queryByText("Follow the agent's progress or inspect the raw provider stream.")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Goal completed. Corrections disabled.')).toBeDisabled();
+  });
+
+  it('keeps readable log gutter metadata quiet but legible', () => {
+    render(<ThinkingLog events={[{
+      id: 'summary-1', type: 'thought', content: 'Summary: the goal is finished.', relativeTime: '6m 59s',
+    }]} />);
+
+    expect(screen.getByText('SUMMARY')).toHaveClass('text-slate-500');
+    expect(screen.getByText('6m 59s')).toHaveClass('text-slate-500');
+  });
+
   it('accepts a correction while the initial provider identity is still pending', async () => {
     vi.mocked(goalsApi.getGoal).mockResolvedValue({ goal: { ...goal, sessionId: null } });
     render(<MemoryRouter initialEntries={['/goals/goal-1']}><Routes><Route path="/goals/:goalId" element={<GoalsPage />} /></Routes></MemoryRouter>);
@@ -388,7 +421,7 @@ describe('GoalsPage', () => {
     expect(await screen.findByText('cancelling')).toBeInTheDocument();
     expect(screen.getByText(/Cancelling at the provider boundary/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Correction or follow-up')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Goal closed. Corrections disabled.')).toBeDisabled();
     expect(screen.queryByLabelText('Model for next continuation')).not.toBeInTheDocument();
   });
 

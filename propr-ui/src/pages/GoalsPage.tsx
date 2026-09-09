@@ -123,8 +123,14 @@ const capabilityAgentLabel = (agent: GoalCapability, agents: GoalCapability[]) =
   agents.map(candidate => ({ type: candidate.agentType, alias: candidate.agentAlias })),
 );
 
-function GoalState({ goal }: { goal: Goal }) {
+function GoalState({ goal, quietCompleted = false }: { goal: Goal; quietCompleted?: boolean }) {
   const state = goal.resultState || (goal.desiredState === 'cancelled' ? 'cancelling' : goal.desiredState);
+  if (quietCompleted && state === 'completed') {
+    return <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500">
+      <CheckCircle2 className="h-4 w-4" />
+      Completed
+    </span>;
+  }
   const color = state === 'completed' ? 'bg-green-100 text-green-800' : state === 'failed' || state === 'cancelled' ? 'bg-red-100 text-red-800' : state === 'paused' || state === 'cancelling' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800';
   return <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${color}`}>
     {state === 'running' && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
@@ -469,11 +475,13 @@ function GoalDetails({ goalId }: { goalId: string }) {
   return <div className="min-h-full bg-white text-slate-900">
     <header className="w-full border-b border-slate-200 px-4 py-3 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
           <Link to="/goals" className="text-sm font-medium text-slate-600 transition hover:text-primary-700">← All goals</Link>
-          <GoalState goal={goal} />
         </div>
-        <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{goal.title}</h1>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{goal.title}</h1>
+          <GoalState goal={goal} quietCompleted />
+        </div>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-700">
             <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Strategy</span>
@@ -577,8 +585,8 @@ function GoalDetails({ goalId }: { goalId: string }) {
         </section>
 
         <section className="mt-8 border-t border-slate-200 pt-5">
-          <header className="flex flex-wrap items-center justify-between gap-3">
-            <div><h2 className="font-semibold text-slate-900">Goal output</h2><p className="mt-0.5 text-xs text-slate-500">Follow the agent's progress or inspect the raw provider stream.</p></div>
+          <header className="flex items-center justify-between gap-3">
+            <h2 className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Goal output</h2>
             <div role="group" aria-label="Goal output view" className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
               <button type="button" aria-pressed={outputMode === 'readable'} onClick={() => setOutputMode('readable')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'readable' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><FileText className="h-3.5 w-3.5" />Human readable</button>
               <button type="button" aria-pressed={outputMode === 'terminal'} onClick={() => setOutputMode('terminal')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition ${outputMode === 'terminal' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><Terminal className="h-3.5 w-3.5" />Raw terminal</button>
@@ -626,7 +634,15 @@ function GoalDetails({ goalId }: { goalId: string }) {
             <GoalAttachmentInput files={files} onChange={setFiles} onError={setError} disabled={busy} compact />
             <div className="mt-2 flex justify-end"><button disabled={busy || !message.trim()} onClick={() => continueWith({ message }, files)} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}><Send className="h-4 w-4" />Send</button></div>
           </div>
-        </section> : <p className="mt-auto pt-10 text-sm text-slate-500">{isDemoMode && mutable ? 'Demo mode is read-only. You can monitor this goal, but cannot send corrections or change its model.' : 'This goal no longer accepts corrections.'}</p>}
+        </section> : <section aria-label="Correction command bar" className="sticky bottom-0 mt-auto pt-10">
+          <input
+            aria-label="Correction or follow-up"
+            type="text"
+            disabled
+            className="w-full cursor-not-allowed rounded-md border border-slate-200 bg-slate-100 px-3 py-3 text-sm text-slate-500 shadow-sm placeholder:text-slate-500 disabled:opacity-100"
+            placeholder={isDemoMode && mutable ? 'Demo mode is read-only. Corrections disabled.' : goal.resultState === 'completed' ? 'Goal completed. Corrections disabled.' : 'Goal closed. Corrections disabled.'}
+          />
+        </section>}
       </aside>
     </div>
   </div>;
