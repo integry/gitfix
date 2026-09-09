@@ -1,3 +1,4 @@
+const assert = require('node:assert/strict');
 const { resolve } = require('node:path');
 require('tsx/cjs');
 const { app, BrowserWindow, Menu, nativeImage, screen, Tray } = require('electron');
@@ -180,12 +181,15 @@ app.whenReady().then(() => {
         if (activationDispatchReturned) opensAfterActivationDispatch += 1;
         const menuIndex = menuWillShow;
         const closingOwner = activeOwner;
-        setImmediate(() => {
+        // This 100 ms delay observes menu persistence; it is not an input-hold
+        // workaround or a production timing dependency.
+        setTimeout(() => {
+          assert.equal(menuWillClose, menuIndex - 1, 'menu closed before intentional dismissal');
           dismissalRequested = true;
           eventTrace.push(`dismissal-requested-${menuIndex}`);
           if (menuIndex === 1) menu.closePopup(closingOwner);
           else controller.close();
-        });
+        }, 100);
       });
       menu.on('menu-will-close', () => {
         menuWillClose += 1;
