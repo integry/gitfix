@@ -307,6 +307,9 @@ export async function processMergeConflictJob(job: Job<MergeConflictJobData>): P
         if (mergeResult.outcome === 'failed') {
             throw new Error(`Merge failed: ${mergeResult.error}`);
         }
+        if (!mergeResult.baseCommit) {
+            throw new Error(`Merge did not identify the fetched base commit for ${baseBranch}`);
+        }
 
         if ((mergeResult.conflictedFiles?.length ?? 0) > 0 || prInfo) {
             await updateMergeTaskAfterLocalMerge({
@@ -330,7 +333,7 @@ export async function processMergeConflictJob(job: Job<MergeConflictJobData>): P
 
         const result = await handleMergeWithAgent({
             conflictedFiles: mergeResult.conflictedFiles,
-            worktreeInfo, branchName: headBranch, baseBranch,
+            worktreeInfo, branchName: headBranch, baseBranch, baseCommit: mergeResult.baseCommit,
             pullRequestNumber, repoUrl, repoOwner, repoName,
             githubToken, octokit, startingCommentId,
             stateManager, taskId, correlationId, correlatedLogger, redisClient,

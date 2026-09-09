@@ -53,7 +53,7 @@ describe("CLI OpenCode agent support", () => {
       {
         alias: "opencode",
         type: "opencode",
-        models: ["opencode-deepseek-v4-flash-free"],
+        models: ["opencode-big-pickle"],
       },
       client
     );
@@ -68,8 +68,8 @@ describe("CLI OpenCode agent support", () => {
         enabled: true,
         dockerImage: "propr/agent:latest",
         configPath: join(homedir(), ".config", "opencode"),
-        supportedModels: ["opencode-deepseek-v4-flash-free"],
-        defaultModel: "opencode-deepseek-v4-flash-free",
+        supportedModels: ["opencode-big-pickle"],
+        defaultModel: "opencode-big-pickle",
       }],
     });
   });

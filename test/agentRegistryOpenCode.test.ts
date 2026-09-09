@@ -16,8 +16,8 @@ const opencodeConfig: AgentConfig = {
     enabled: true,
     dockerImage: 'propr/agent:latest',
     configPath: '~/.config/opencode',
-    supportedModels: ['opencode-deepseek-v4-flash-free'],
-    defaultModel: 'opencode-deepseek-v4-flash-free'
+    supportedModels: ['opencode-big-pickle'],
+    defaultModel: 'opencode-big-pickle'
 };
 
 let AgentRegistry: typeof import('../packages/core/src/agents/AgentRegistry.js').AgentRegistry;
@@ -98,7 +98,7 @@ test('AgentRegistry registers enabled OpenCode configs by alias', async () => {
     );
 });
 
-test('AgentRegistry only prepares images through the explicit worker lifecycle', async () => {
+test('AgentRegistry keeps explicit config refresh inspect-only', async () => {
     const registry = AgentRegistry.getInstance();
     const preparationModes: boolean[] = [];
     (registry as unknown as {
@@ -116,6 +116,27 @@ test('AgentRegistry only prepares images through the explicit worker lifecycle',
     await registry.prepareImagesAndRefresh();
 
     assert.deepStrictEqual(preparationModes, [false, true]);
+});
+
+test('AgentRegistry prepares an execution image on first-use initialization', async () => {
+    const registry = AgentRegistry.getInstance();
+    const preparationModes: boolean[] = [];
+    (registry as unknown as {
+        ensureUnifiedAgentImage: (_configs: AgentConfig[], prepareImages: boolean) => Promise<string>;
+        registeredAgentImagesAvailable: () => Promise<boolean>;
+    }).ensureUnifiedAgentImage = async (_configs, prepareImages) => {
+        preparationModes.push(prepareImages);
+        return 'propr/agent:prepared';
+    };
+    (registry as unknown as {
+        registeredAgentImagesAvailable: () => Promise<boolean>;
+    }).registeredAgentImagesAvailable = async () => true;
+
+    await registry.ensureInitialized();
+    await registry.ensureInitialized();
+
+    assert.deepStrictEqual(preparationModes, [true]);
+    assert.strictEqual(registry.getAgentByAlias('opencode')?.config.dockerImage, 'propr/agent:prepared');
 });
 
 test('AgentRegistry coalesces concurrent refreshes in one process', async () => {
@@ -192,13 +213,15 @@ test('AgentRegistry automatically retries an unavailable unified image', async (
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const registry = AgentRegistry.getInstance();
     let attempts = 0;
+    const preparationModes: boolean[] = [];
     const internal = registry as unknown as {
-        ensureUnifiedAgentImage: () => Promise<string | null>;
+        ensureUnifiedAgentImage: (_configs: AgentConfig[], prepareImages: boolean) => Promise<string | null>;
         scheduleUnifiedAgentImageRetry: () => void;
         unavailableUnifiedAgentImage: { imageTag: string; error: string; recordedAt: string } | null;
     };
-    internal.ensureUnifiedAgentImage = async () => {
+    internal.ensureUnifiedAgentImage = async (_configs, prepareImages) => {
         attempts += 1;
+        preparationModes.push(prepareImages);
         if (attempts < 3) {
             internal.unavailableUnifiedAgentImage = {
                 imageTag: 'propr/agent:bundle-retry',
@@ -224,6 +247,7 @@ test('AgentRegistry automatically retries an unavailable unified image', async (
     await registry.waitForPendingRefresh();
 
     assert.strictEqual(attempts, 3);
+    assert.deepStrictEqual(preparationModes, [false, true, true]);
     assert.strictEqual(registry.getAgentByAlias('opencode')?.config.dockerImage, 'propr/agent:recovered');
     assert.deepStrictEqual(registry.getOperationalStatus(), {
         unifiedAgentImage: { status: 'ready' }
@@ -293,7 +317,13 @@ test('AgentRegistry throttles runtime package state checks on repeated initializ
 test('AgentRegistry refreshes before use when its registered image was removed', async () => {
     const registry = AgentRegistry.getInstance();
     let image = 'propr/agent:first';
-    (registry as unknown as { ensureUnifiedAgentImage: () => Promise<string> }).ensureUnifiedAgentImage = async () => image;
+    const preparationModes: boolean[] = [];
+    (registry as unknown as {
+        ensureUnifiedAgentImage: (_configs: AgentConfig[], prepareImages: boolean) => Promise<string>;
+    }).ensureUnifiedAgentImage = async (_configs, prepareImages) => {
+        preparationModes.push(prepareImages);
+        return image;
+    };
 
     await registry.refresh();
     assert.strictEqual(registry.getAgentByAlias('opencode')?.config.dockerImage, 'propr/agent:first');
@@ -308,6 +338,7 @@ test('AgentRegistry refreshes before use when its registered image was removed',
     await registry.ensureInitialized();
 
     assert.strictEqual(availabilityChecks, 1);
+    assert.deepStrictEqual(preparationModes, [false, true]);
     assert.strictEqual(registry.getAgentByAlias('opencode')?.config.dockerImage, 'propr/agent:second');
 });
 

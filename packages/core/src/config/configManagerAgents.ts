@@ -4,7 +4,6 @@ import {
     AGENT_DEFAULTS,
     MODEL_INFO_MAP,
     OPENCODE_MODELS,
-    VIBE_MODELS,
     getManagedAgentConfigRelativePath,
     type AgentType,
     type ReasoningLevel
@@ -220,10 +219,13 @@ const CURRENT_DEFAULT_MODELS: Partial<Record<AgentConfig['type'], string[]>> = {
     opencode: AGENT_DEFAULTS.opencode.defaultModels,
     vibe: AGENT_DEFAULTS.vibe.defaultModels
 };
-const VIBE_CURRENT_MODELS = VIBE_MODELS.map(model => model.id);
 const OPENCODE_CURRENT_MODELS = OPENCODE_MODELS.map(model => model.id);
 const RETIRED_OPENCODE_DEFAULT_MODELS = new Set([
-    'opencode-minimax-m3-free'
+    'opencode-minimax-m3-free',
+    'opencode-deepseek-v4-flash-free',
+    'opencode-laguna-s-2.1-free',
+    'opencode-ling-3.0-flash-free',
+    'opencode-north-mini-code-free'
 ]);
 const MANAGED_AGENT_IMAGE_PREFIX = 'propr/agent:';
 
@@ -295,7 +297,7 @@ function updateCodexDefaults(agent: AgentConfig): boolean {
         return false;
     }
 
-    if (!agent.defaultModel || agent.defaultModel === 'gpt-5.5' || agent.defaultModel === 'gpt-5.4') {
+    if (!agent.defaultModel || agent.defaultModel === 'gpt-5.6-sol' || agent.defaultModel === 'gpt-5.5' || agent.defaultModel === 'gpt-5.4') {
         agent.defaultModel = AGENT_DEFAULTS.codex.defaultModels[0];
         migrated = true;
         logger.info({ agentAlias: agent.alias, defaultModel: agent.defaultModel }, 'Updated Codex default model');
@@ -421,7 +423,10 @@ function removeDeprecatedModels(agent: AgentConfig): boolean {
     }
 
     agent.supportedModels = validModels;
-    logger.info({ agentAlias: agent.alias, removedModels }, 'Removed deprecated models from agent');
+    if (!agent.defaultModel || !validModels.includes(agent.defaultModel)) {
+        agent.defaultModel = validModels[0];
+    }
+    logger.info({ agentAlias: agent.alias, removedModels, defaultModel: agent.defaultModel }, 'Removed deprecated models from agent');
     return true;
 }
 
@@ -437,9 +442,6 @@ export function migrateAgentConfig(agent: AgentConfig): boolean {
         migrated = addMissingModels(agent, currentDefaultModels, 'Added current default models to agent') || migrated;
     }
 
-    if (agent.type === 'vibe') {
-        migrated = addMissingModels(agent, VIBE_CURRENT_MODELS, 'Added current Mistral Vibe models to agent') || migrated;
-    }
     migrated = updateCodexDefaults(agent) || migrated;
     migrated = updateDefaultCliVersion(agent) || migrated;
     migrated = updateAntigravityDefaults(agent) || migrated;

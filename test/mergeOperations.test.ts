@@ -52,7 +52,9 @@ describe('mergeBaseIntoBranch', () => {
     beforeEach(() => {
         resetMocks();
         // Default: all git commands succeed
-        mockGitInstance.raw.mock.mockImplementation(async () => '');
+        mockGitInstance.raw.mock.mockImplementation(async (args: string[]) =>
+            args[0] === 'rev-parse' ? 'base-commit-sha\n' : ''
+        );
         mockGitInstance.status.mock.mockImplementation(async () => ({ conflicted: [] }));
     });
 
@@ -60,6 +62,7 @@ describe('mergeBaseIntoBranch', () => {
         const result = await mergeBaseIntoBranch('/tmp/worktree', 'main');
 
         assert.strictEqual(result.outcome, 'clean');
+        assert.strictEqual(result.baseCommit, 'base-commit-sha');
         assert.strictEqual(result.conflictedFiles, undefined);
         assert.strictEqual(result.error, undefined);
 
@@ -96,6 +99,7 @@ describe('mergeBaseIntoBranch', () => {
     test('returns conflicts outcome when merge has conflicts', async () => {
         let callCount = 0;
         mockGitInstance.raw.mock.mockImplementation(async (args: string[]) => {
+            if (args[0] === 'rev-parse') return 'base-commit-sha\n';
             if (args[0] === 'merge' && args[1]?.startsWith('origin/')) {
                 throw new Error('CONFLICT (content): Merge conflict in src/index.ts\nAutomatic merge failed; fix conflicts and then commit the result.');
             }
@@ -109,11 +113,13 @@ describe('mergeBaseIntoBranch', () => {
         const result = await mergeBaseIntoBranch('/tmp/worktree', 'main');
 
         assert.strictEqual(result.outcome, 'conflicts');
+        assert.strictEqual(result.baseCommit, 'base-commit-sha');
         assert.deepStrictEqual(result.conflictedFiles, ['src/index.ts', 'src/utils.ts']);
     });
 
     test('returns failed outcome for non-conflict errors', async () => {
         mockGitInstance.raw.mock.mockImplementation(async (args: string[]) => {
+            if (args[0] === 'rev-parse') return 'base-commit-sha\n';
             if (args[0] === 'merge') {
                 throw new Error('fatal: not a git repository');
             }
@@ -142,6 +148,7 @@ describe('mergeBaseIntoBranch', () => {
 
     test('aborts merge on non-conflict failure', async () => {
         mockGitInstance.raw.mock.mockImplementation(async (args: string[]) => {
+            if (args[0] === 'rev-parse') return 'base-commit-sha\n';
             if (args[0] === 'merge' && args[1]?.startsWith('origin/')) {
                 throw new Error('fatal: some other merge error');
             }

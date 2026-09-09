@@ -45,7 +45,7 @@ describe('OpenCode API routes', () => {
             const [agent] = params.processedAgents ?? [];
             assert.equal(agent?.type, 'opencode');
             assert.equal(agent?.cliVersionType, 'default');
-            assert.equal(agent?.cliVersionResolved, '1.18.9');
+            assert.equal(agent?.cliVersionResolved, '1.18.29');
             return { status: 200, body: { success: true, agents: params.processedAgents } };
         });
         const routes = createAgentsRoutes({
@@ -65,7 +65,7 @@ describe('OpenCode API routes', () => {
                     enabled: true,
                     dockerImage: 'propr/agent:latest',
                     configPath: '~/.config/opencode',
-                    supportedModels: ['opencode-deepseek-v4-flash-free', 'openai/gpt-5.5'],
+                    supportedModels: ['opencode-big-pickle', 'openai/gpt-5.5'],
                     defaultModel: 'openai/gpt-5.5'
                 }]
             }
@@ -76,7 +76,7 @@ describe('OpenCode API routes', () => {
         assert.equal(redisClient.set.mock.calls.length, 1);
         const appliedAgent = (res.body?.agents as Array<Record<string, unknown>>)[0];
         assert.equal(appliedAgent?.type, 'opencode');
-        assert.deepEqual(appliedAgent?.supportedModels, ['opencode-deepseek-v4-flash-free', 'opencode-openai/gpt-5.5']);
+        assert.deepEqual(appliedAgent?.supportedModels, ['opencode-big-pickle', 'opencode-openai/gpt-5.5']);
         assert.equal(appliedAgent?.defaultModel, 'opencode-openai/gpt-5.5');
     });
 
@@ -103,8 +103,8 @@ describe('OpenCode API routes', () => {
                     enabled: true,
                     dockerImage: 'propr/agent:latest',
                     configPath: '~/.config/opencode',
-                    supportedModels: ['opencode-deepseek-v4-flash-free'],
-                    defaultModel: 'opencode-deepseek-v4-flash-free',
+                    supportedModels: ['opencode-big-pickle'],
+                    defaultModel: 'opencode-big-pickle',
                     cliVersionType: 'default',
                     cliVersion: 'latest'
                 }]
