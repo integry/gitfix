@@ -69,7 +69,7 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex-shrink-0 bg-white">
-        <div className="flex w-full items-end gap-3 border-b border-slate-200 px-4 sm:gap-6 sm:px-6">
+        <div className="flex w-full flex-col items-stretch gap-3 border-b border-slate-200 px-4 sm:flex-row sm:items-end sm:gap-6 sm:px-6">
           <div className="min-w-0 flex-1 overflow-x-auto">
             <div className="flex min-w-max gap-6" role="tablist" aria-label="Settings categories">
               {SETTINGS_CATEGORIES.map(category => {
@@ -103,7 +103,7 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
             </div>
           </div>
 
-          <div className="relative mb-2 ml-auto w-32 flex-shrink-0 sm:w-64">
+          <div className="relative order-first w-full flex-shrink-0 sm:order-none sm:mb-2 sm:ml-auto sm:w-64">
             <label htmlFor="settings-search" className="sr-only">Search settings</label>
             <Search
               aria-hidden="true"

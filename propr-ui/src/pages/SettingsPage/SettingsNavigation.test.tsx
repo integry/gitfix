@@ -42,9 +42,24 @@ describe('SettingsNavigation', () => {
     expect(modelsTab).not.toHaveClass('bg-gray-900', 'rounded-md');
     expect(modelsTab.querySelector('span')).toHaveClass('bg-slate-100', 'text-slate-500');
     const navigationRow = screen.getByRole('tablist', { name: 'Settings categories' }).parentElement?.parentElement;
-    expect(navigationRow).toHaveClass('w-full', 'border-b', 'border-slate-200');
+    expect(navigationRow).toHaveClass(
+      'w-full',
+      'flex-col',
+      'items-stretch',
+      'border-b',
+      'border-slate-200',
+      'sm:flex-row',
+      'sm:items-end'
+    );
     expect(navigationRow).toContainElement(screen.getByRole('searchbox', { name: 'Search settings' }));
-    expect(screen.getByRole('searchbox', { name: 'Search settings' }).parentElement).toHaveClass('ml-auto', 'flex-shrink-0');
+    expect(screen.getByRole('searchbox', { name: 'Search settings' }).parentElement).toHaveClass(
+      'order-first',
+      'w-full',
+      'flex-shrink-0',
+      'sm:order-none',
+      'sm:ml-auto',
+      'sm:w-64'
+    );
     expect(container.querySelector('[data-settings-section="model-selection"]')).toHaveClass(
       '[&_select]:max-w-md',
       '[&_select]:border',
