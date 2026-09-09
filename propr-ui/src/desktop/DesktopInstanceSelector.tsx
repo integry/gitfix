@@ -15,9 +15,13 @@ interface DesktopInstanceSelectorProps {
   transportReady?: boolean;
 }
 
-export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = ({ transportReady = false }) => {
+export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = ({ transportReady }) => {
   const desktop = useDesktop();
-  const connected = desktop?.connection.status === 'ready';
+  const activated = desktop?.connection.status === 'ready';
+  // The startup probe establishes the active profile and credentials. Once the
+  // connected app is mounted, its scoped socket is the live reachability signal.
+  const connected = Boolean(activated && transportReady !== false);
+  const reconnecting = Boolean(activated && transportReady === false);
 
   useEffect(() => {
     if (!connected || !transportReady) return;
@@ -29,7 +33,8 @@ export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = (
   if (!desktop) return null;
 
   const incompatible = desktop.connection.status === 'incompatible';
-  const statusLabel = connected ? 'Connected' : incompatible ? 'Update required' : 'Offline';
+  const statusLabel = connected ? 'Connected' : reconnecting ? 'Reconnecting' : incompatible ? 'Update required' : 'Offline';
+  const connectionClass = reconnecting ? 'reconnecting' : desktop.connection.status;
   const instanceLabel = parseProprConnectEndpoint(desktop.profile.baseUrl)
     ? 'ProPR Connect'
     : desktop.profile.kind === 'local'
@@ -42,13 +47,13 @@ export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = (
       <span className="desktop-instance-selector-label">Instance</span>
       <button
         type="button"
-        className={`desktop-instance-selector-button desktop-connection-${desktop.connection.status}`}
-        onClick={connected ? desktop.openProfileManager : desktop.retry}
+        className={`desktop-instance-selector-button desktop-connection-${connectionClass}`}
+        onClick={activated ? desktop.openProfileManager : desktop.retry}
         aria-label={`${statusLabel}: ${desktop.profile.name}`}
-        title={connected ? 'Manage instances' : 'Retry connection'}
+        title={activated ? 'Manage instances' : 'Retry connection'}
       >
         <span className="desktop-instance-icon" aria-hidden="true">
-          {connected ? <InstanceIcon /> : incompatible ? <CircleAlert /> : <CloudOff />}
+          {connected ? <InstanceIcon /> : reconnecting ? <RefreshCw className="desktop-spin" /> : incompatible ? <CircleAlert /> : <CloudOff />}
         </span>
         <span className="desktop-instance-copy">
           <strong>{desktop.profile.name}</strong>
@@ -58,7 +63,7 @@ export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = (
             {statusLabel}
           </small>
         </span>
-        {connected
+        {activated
           ? <ChevronDown className="desktop-instance-action" aria-hidden="true" />
           : <RefreshCw className="desktop-instance-action" aria-hidden="true" />}
       </button>

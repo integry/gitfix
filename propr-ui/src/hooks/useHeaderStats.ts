@@ -3,6 +3,7 @@ import { getQueueStats, getTasks, getSystemStatus } from '../api/proprApi';
 import type { LiveQueueJob, SystemAgentStatus } from '../api/proprTypes';
 import { getDrafts, DraftListItem } from '../api/plannerApi';
 import { useSocket } from '../contexts/useSocket';
+import { isDesktopRuntime } from '../config/runtimeMode';
 
 // LocalStorage keys for dismissal tracking
 const DISMISSED_PLAN_IDS_KEY = 'dismissed_plan_ids';
@@ -74,6 +75,9 @@ export interface HeaderStats {
 
   // Running items for AI Activity Monitor dropdown
   runningItems: RunningItem[];
+
+  // Whether the active-work snapshot is current and complete.
+  activityStatus: 'checking' | 'available' | 'unavailable';
 
   // Active plans (not merged, not closed), sorted by updated_at descending
   activePlans: DraftListItem[];
@@ -189,6 +193,7 @@ function buildRunningItems(drafts: DraftListItem[], activeJobs: LiveQueueJob[]):
 export function useHeaderStats(): HeaderStats {
   const [runningCount, setRunningCount] = useState<number>(0);
   const [runningItems, setRunningItems] = useState<RunningItem[]>([]);
+  const [activityStatus, setActivityStatus] = useState<HeaderStats['activityStatus']>('checking');
   const [activePlans, setActivePlans] = useState<DraftListItem[]>([]);
   const [reviewCount, setReviewCount] = useState<number>(0);
   const [reviewGroups, setReviewGroups] = useState<TaskGroup[]>([]);
@@ -215,9 +220,12 @@ export function useHeaderStats(): HeaderStats {
 
   // Track if component is mounted
   const isMountedRef = useRef(true);
+  const statsRequestRef = useRef(0);
 
   // WebSocket connection for real-time updates
-  const { onTaskUpdate, onDraftUpdate, isConnected } = useSocket();
+  const { onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, isConnected } = useSocket();
+  const socketConnectedRef = useRef(isConnected);
+  socketConnectedRef.current = isConnected;
 
   // Dismiss a plan
   const dismissPlan = useCallback((planId: string) => {
@@ -265,6 +273,7 @@ export function useHeaderStats(): HeaderStats {
 
   // Main fetch function
   const fetchStats = useCallback(async (isInitialLoad = false) => {
+    const request = ++statsRequestRef.current;
     try {
       if (isInitialLoad) {
         setIsLoading(true);
@@ -286,7 +295,7 @@ export function useHeaderStats(): HeaderStats {
         ]),
       ]);
 
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || request !== statsRequestRef.current) return;
 
       // Build running activity from generating/refining plans and authoritative
       // active queue jobs. Waiting and delayed jobs are intentionally excluded.
@@ -298,6 +307,10 @@ export function useHeaderStats(): HeaderStats {
       setRunningItems(runningItemsList);
       // Running count should match the actual running items to ensure consistency
       setRunningCount(runningItemsList.length);
+      setActivityStatus(queueResult.errorMessage
+        || (isDesktopRuntime() && !socketConnectedRef.current)
+        ? 'unavailable'
+        : 'available');
 
       // 2. Process active plans
       // Plans are already pre-filtered at DB level (excludes merged, executed)
@@ -479,11 +492,14 @@ export function useHeaderStats(): HeaderStats {
 
       setError(queueResult.errorMessage);
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || request !== statsRequestRef.current) return;
       console.error('Failed to fetch header stats:', err);
+      setRunningItems([]);
+      setRunningCount(0);
+      setActivityStatus('unavailable');
       setError((err as Error).message);
     } finally {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && request === statsRequestRef.current) {
         setIsLoading(false);
       }
     }
@@ -493,6 +509,28 @@ export function useHeaderStats(): HeaderStats {
   const refresh = useCallback(async () => {
     await fetchStats(false);
   }, [fetchStats]);
+
+  // In the desktop app, the scoped socket is the live lifecycle signal. A
+  // disconnect invalidates cached activity immediately; reconnecting performs
+  // a fresh authoritative snapshot without changing the saved profile or auth.
+  const previousSocketConnectionRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    const previous = previousSocketConnectionRef.current;
+    previousSocketConnectionRef.current = isConnected;
+    if (!isConnected) {
+      statsRequestRef.current += 1;
+      setRunningItems([]);
+      setRunningCount(0);
+      setActivityStatus('unavailable');
+      setIsLoading(false);
+      return;
+    }
+    if (previous === false) {
+      setActivityStatus('checking');
+      void fetchStats(false);
+    }
+  }, [fetchStats, isConnected]);
 
   // Initial load
   useEffect(() => {
@@ -522,15 +560,22 @@ export function useHeaderStats(): HeaderStats {
       fetchStats(false);
     };
 
-    // Subscribe to task and draft updates
+    const handleQueueStatsUpdate = () => {
+      console.log('[useHeaderStats] Received queue stats update, refreshing stats');
+      fetchStats(false);
+    };
+
+    // Subscribe to every event that can change active work.
     const unsubscribeTask = onTaskUpdate(handleTaskUpdate);
     const unsubscribeDraft = onDraftUpdate(handleDraftUpdate);
+    const unsubscribeQueueStats = onQueueStatsUpdate(handleQueueStatsUpdate);
 
     return () => {
       unsubscribeTask();
       unsubscribeDraft();
+      unsubscribeQueueStats();
     };
-  }, [isConnected, onTaskUpdate, onDraftUpdate, fetchStats]);
+  }, [isConnected, onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, fetchStats]);
 
   // Re-filter when dismissed IDs or timestamps change
   useEffect(() => {
@@ -544,6 +589,7 @@ export function useHeaderStats(): HeaderStats {
   return {
     runningCount,
     runningItems,
+    activityStatus,
     activePlans,
     reviewCount,
     reviewGroups,

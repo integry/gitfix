@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { TASK_UPDATE } from '@propr/shared';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SocketProvider } from './SocketProvider';
@@ -212,6 +214,25 @@ describe('SocketProvider', () => {
     expect(socketA.handlers.size).toBe(0);
     expect(socketB.disconnect).not.toHaveBeenCalled();
     expect(socketB.connect).not.toHaveBeenCalled();
+  });
+
+  it('drops application events delivered by an old desktop scope', () => {
+    const observed = vi.fn();
+    const Observer = () => {
+      const { onTaskUpdate } = useSocket();
+      useEffect(() => onTaskUpdate(observed), [onTaskUpdate]);
+      return null;
+    };
+    state.scope = scope('profile-a', 'AAAAAAAAAAAAAAAAAAAAAA');
+    render(<SocketProvider><Observer /></SocketProvider>);
+    const staleTaskHandler = sockets[0].handlers.get(TASK_UPDATE);
+
+    publish(scope('profile-b', 'BBBBBBBBBBBBBBBBBBBBBB'));
+    act(() => { staleTaskHandler?.({ eventType: TASK_UPDATE } as never); });
+
+    expect(observed).not.toHaveBeenCalled();
+    act(() => { sockets[1].handlers.get(TASK_UPDATE)?.({ eventType: TASK_UPDATE } as never); });
+    expect(observed).toHaveBeenCalledOnce();
   });
 
   it('fully detaches listeners and disconnects on unmount', () => {

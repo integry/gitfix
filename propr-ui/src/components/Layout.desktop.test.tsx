@@ -66,7 +66,10 @@ const renderLayout = (desktop: DesktopContextValue | null) => render(
 );
 
 describe('Layout desktop instance selector', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.socket.isConnected = true;
+  });
 
   it('places the labelled selector in the sidebar without duplicate desktop chrome', async () => {
     renderLayout(desktopValue());
@@ -101,6 +104,30 @@ describe('Layout desktop instance selector', () => {
     fireEvent.click(selector);
     expect(mocks.retry).toHaveBeenCalledOnce();
     expect(mocks.openProfileManager).not.toHaveBeenCalled();
+  });
+
+  it('uses the scoped transport for reconnecting and recovers without replacing the profile', async () => {
+    mocks.socket.isConnected = false;
+    const desktop = desktopValue();
+    const view = renderLayout(desktop);
+
+    const reconnecting = screen.getByRole('button', { name: 'Reconnecting: This computer' });
+    expect(reconnecting).toHaveTextContent('Reconnecting');
+    fireEvent.click(reconnecting);
+    expect(mocks.openProfileManager).toHaveBeenCalledOnce();
+    expect(mocks.retry).not.toHaveBeenCalled();
+
+    mocks.socket.isConnected = true;
+    view.rerender(
+      <MemoryRouter>
+        <DesktopContext.Provider value={desktop}>
+          <Layout><div>Page content</div></Layout>
+        </DesktopContext.Provider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Connected: This computer' })).toBeInTheDocument();
+    await waitFor(() => expect(mocks.reportConnectedRendererReady).toHaveBeenCalledOnce());
   });
 
   it('leaves the browser layout free of desktop-only instance controls', () => {
