@@ -32,7 +32,7 @@ describe('main-window restoration', () => {
     let creations = 0;
     const restorer = createMainWindowRestorer({
       getWindow: () => current,
-      setWindow: assert.fail,
+      setWindow: () => { assert.fail('the existing-window path must not replace the window'); },
       createWindow: async () => { creations += 1; return new FakeWindow(); },
       shutdownStarted: () => false,
       creationFailed: assert.fail,
