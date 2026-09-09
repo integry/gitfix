@@ -21,6 +21,8 @@ const OUTPUT_LIMIT = 64 * 1024;
 const SAFE_DOCKER_OPERATIONS = new Set(['version', 'info', 'images']);
 const SOURCE_SHA = /^[a-f0-9]{40}$/;
 const ISOLATION_ID = /^[a-f0-9]{16}$/;
+const INTERRUPTED_RECOVERY_MESSAGE = 'Setup was interrupted. Review the saved choices to continue.';
+const RELAUNCH_DIAGNOSTIC_EVENT_LIMIT = 12;
 
 const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
 
@@ -176,6 +178,34 @@ export const parseDockerEvents = contents => {
     }
     return value;
   });
+};
+
+export const createInterruptedRelaunchDiagnostics = ({ interrupted, events }) => {
+  const pullInvocations = events.filter(event => event.event === 'invoked' && event.operation === 'pull').length;
+  const rejectedCommands = events.filter(event => event.event === 'rejected').length;
+  const recoveryMessagePresent = typeof interrupted?.error === 'string';
+  const recoveryMessageMatches = interrupted?.error === INTERRUPTED_RECOVERY_MESSAGE;
+  const finalConditions = {
+    phase: typeof interrupted?.phase === 'string' ? interrupted.phase : null,
+    recoveryMessagePresent,
+    recoveryMessageMatches,
+    recoveryMessageBytes: recoveryMessagePresent ? Buffer.byteLength(interrupted.error, 'utf8') : 0,
+    recoveryMessageSha256: recoveryMessagePresent ? sha256(interrupted.error) : null,
+    pullInvocations,
+    rejectedCommands,
+  };
+  return {
+    failedConditions: [
+      ...(finalConditions.phase === 'interrupted' ? [] : ['interrupted-phase']),
+      ...(recoveryMessageMatches ? [] : ['recovery-message']),
+      ...(pullInvocations === 2 ? [] : ['pull-count']),
+      ...(rejectedCommands === 0 ? [] : ['rejected-command']),
+    ],
+    finalConditions,
+    totalOperationEvents: events.length,
+    recentOperationEvents: events.slice(-RELAUNCH_DIAGNOSTIC_EVENT_LIMIT)
+      .map(({ event, operation }) => ({ event, operation })),
+  };
 };
 
 const readDockerEvents = async eventPath => {
@@ -496,11 +526,9 @@ export const runPackagedLinuxSetupLifecycle = async ({
     await relaunch.page.getByRole('heading', { name: 'Continue your setup' }).waitFor();
     const interrupted = await setupStatus(relaunch.page);
     const finalEvents = await readDockerEvents(eventPath);
-    if (interrupted.phase !== 'interrupted'
-      || interrupted.error !== 'Setup was interrupted. Review the saved choices to continue.'
-      || finalEvents.filter(event => event.event === 'invoked' && event.operation === 'pull').length !== 2
-      || finalEvents.some(event => event.event === 'rejected')) {
-      throw new Error('Relaunch did not present isolated interrupted recovery without duplicate execution');
+    const relaunchDiagnostics = createInterruptedRelaunchDiagnostics({ interrupted, events: finalEvents });
+    if (relaunchDiagnostics.failedConditions.length > 0) {
+      throw new Error(`Relaunch did not present isolated interrupted recovery without duplicate execution: ${JSON.stringify(relaunchDiagnostics)}`);
     }
     relaunchOutput = relaunch.output();
     await terminateLaunch(relaunch, 'SIGTERM');

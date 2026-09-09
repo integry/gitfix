@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 import {
   createIsolatedSetupEnvironment,
   createLinuxSetupIsolation,
+  createInterruptedRelaunchDiagnostics,
   dockerWrapperSource,
   parseDockerEvents,
   probeDockerSupport,
@@ -84,11 +85,14 @@ describe('real packaged Linux setup lifecycle harness', () => {
     const wrapper = join(root, 'docker');
     const eventsPath = join(root, 'events.jsonl');
     try {
-      await writeFile(wrapper, dockerWrapperSource({ realDockerPath: '/bin/true', eventPath: eventsPath }), { mode: 0o700 });
+      await writeFile(wrapper, dockerWrapperSource({ realDockerPath: process.execPath, eventPath: eventsPath }), { mode: 0o700 });
       await chmod(wrapper, 0o700);
 
       const version = spawn(process.execPath, [wrapper, '--version']);
+      let delegatedOutput = '';
+      version.stdout.on('data', chunk => { delegatedOutput += chunk.toString('utf8'); });
       assert.deepEqual(await once(version, 'close'), [0, null]);
+      assert.equal(delegatedOutput.trim(), process.version);
 
       const rejected = spawn(process.execPath, [wrapper, 'rm', '-f', 'anything']);
       assert.deepEqual(await once(rejected, 'close'), [97, null]);
@@ -127,5 +131,48 @@ describe('real packaged Linux setup lifecycle harness', () => {
     assert.throws(() => parseDockerEvents(`${JSON.stringify({
       schemaVersion: 1, event: 'invoked', operation: 'pull', pid: 42, ppid: 1, time: 1, secret: 'no',
     })}\n`), /malformed/);
+  });
+
+  it('bounds interrupted-relaunch diagnostics to final conditions and operation metadata', () => {
+    const secretSentinel = 'token=secret-SENTINEL';
+    const diagnostics = createInterruptedRelaunchDiagnostics({
+      interrupted: { phase: 'failed', error: secretSentinel },
+      events: [
+        ...Array.from({ length: 12 }, (_, index) => ({
+          schemaVersion: 1, event: 'invoked', operation: 'info', pid: 20 + index, ppid: 1, time: index + 1,
+        })),
+        { schemaVersion: 1, event: 'invoked', operation: 'info', pid: 40, ppid: 1, time: 1 },
+        { schemaVersion: 1, event: 'invoked', operation: 'pull', pid: 41, ppid: 1, time: 2 },
+        { schemaVersion: 1, event: 'invoked', operation: 'rejected', pid: 42, ppid: 1, time: 3 },
+        { schemaVersion: 1, event: 'rejected', operation: 'rejected', pid: 42, ppid: 1, time: 4 },
+      ],
+    });
+    assert.deepEqual(diagnostics.failedConditions, [
+      'interrupted-phase', 'recovery-message', 'pull-count', 'rejected-command',
+    ]);
+    assert.equal(diagnostics.finalConditions.recoveryMessagePresent, true);
+    assert.equal(diagnostics.finalConditions.recoveryMessageMatches, false);
+    assert.equal(diagnostics.finalConditions.recoveryMessageBytes, Buffer.byteLength(secretSentinel));
+    assert.match(diagnostics.finalConditions.recoveryMessageSha256, /^[a-f0-9]{64}$/);
+    assert.equal(diagnostics.finalConditions.pullInvocations, 1);
+    assert.equal(diagnostics.finalConditions.rejectedCommands, 1);
+    assert.deepEqual(diagnostics.recentOperationEvents.at(-1), {
+      event: 'rejected', operation: 'rejected',
+    });
+    assert.equal(diagnostics.totalOperationEvents, 16);
+    assert.equal(diagnostics.recentOperationEvents.length, 12);
+    assert.equal(JSON.stringify(diagnostics).includes('pid'), false);
+    assert.equal(JSON.stringify(diagnostics).includes(secretSentinel), false);
+
+    assert.deepEqual(createInterruptedRelaunchDiagnostics({
+      interrupted: {
+        phase: 'interrupted',
+        error: 'Setup was interrupted. Review the saved choices to continue.',
+      },
+      events: [
+        { event: 'invoked', operation: 'pull' },
+        { event: 'invoked', operation: 'pull' },
+      ],
+    }).failedConditions, []);
   });
 });
