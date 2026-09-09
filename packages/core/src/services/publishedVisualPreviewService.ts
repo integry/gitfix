@@ -1,0 +1,72 @@
+import type { VisualPreviewType } from '../config/configManager.js';
+import { VISUAL_PREVIEW_MARKER } from './visualPreviewService.js';
+
+const MAX_PREVIEW_ASSETS = 8;
+
+export interface PublishedVisualPreview {
+  type: VisualPreviewType;
+  title: string;
+  description?: string;
+  url: string;
+}
+
+function publishedAttachmentUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:'
+      || parsed.hostname !== 'github.com'
+      || parsed.port
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+      || !/^\/user-attachments\/assets\/[A-Za-z0-9_-]+$/.test(parsed.pathname)) return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+function unescapeMarkdownText(value: string): string {
+  return value.replace(/\\([\\`*_[\]{}()<>#+.!|])/g, '$1');
+}
+
+/**
+ * Extract only the hosted media emitted by renderVisualPreviewSection. The
+ * strict GitHub attachment allowlist keeps PR-authored Markdown from becoming
+ * an arbitrary media source in downstream operator UIs.
+ */
+export function parsePublishedVisualPreviews(body: unknown): PublishedVisualPreview[] {
+  if (typeof body !== 'string') return [];
+  const markerIndex = body.lastIndexOf(VISUAL_PREVIEW_MARKER);
+  if (markerIndex < 0) return [];
+
+  const lines = body.slice(markerIndex + VISUAL_PREVIEW_MARKER.length).split(/\r?\n/);
+  const previews: PublishedVisualPreview[] = [];
+  for (let index = 0; index < lines.length && previews.length < MAX_PREVIEW_ASSETS; index += 1) {
+    if (!lines[index].startsWith('### ')) continue;
+    const title = unescapeMarkdownText(lines[index].slice(4).trim()).slice(0, 120);
+    let mediaIndex = index + 1;
+    while (mediaIndex < lines.length && !lines[mediaIndex].trim()) mediaIndex += 1;
+    const media = /^!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[A-Za-z0-9_-]+)\)$/.exec(lines[mediaIndex] || '');
+    if (!title || !media) continue;
+    const url = publishedAttachmentUrl(media[2]);
+    if (!url) continue;
+
+    const descriptionLines: string[] = [];
+    let descriptionIndex = mediaIndex + 1;
+    while (descriptionIndex < lines.length && !lines[descriptionIndex].startsWith('### ')) {
+      descriptionLines.push(lines[descriptionIndex]);
+      descriptionIndex += 1;
+    }
+    const description = unescapeMarkdownText(descriptionLines.join(' ').replace(/\s+/g, ' ').trim()).slice(0, 300);
+    previews.push({
+      type: media[1].trim() ? 'image' : 'video',
+      title,
+      ...(description ? { description } : {}),
+      url,
+    });
+    index = descriptionIndex - 1;
+  }
+  return previews;
+}

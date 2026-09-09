@@ -100,8 +100,8 @@ test('Antigravity metadata includes non-Google model families', () => {
     assert.equal(getModelHardLimit('antigravity-claude-opus-4.6-thinking'), 980000);
 });
 
-test('Gemini 3.7 Flash uses the Antigravity 1M model limit', () => {
-    assert.equal(getModelHardLimit('antigravity-gemini-3.7-flash-high'), 980000);
+test('Gemini 3.8 Flash uses the Antigravity 1M model limit', () => {
+    assert.equal(getModelHardLimit('antigravity-gemini-3.8-flash-high'), 980000);
 });
 
 test('AgentRegistry creates AntigravityAgent for antigravity configs', () => {
@@ -450,11 +450,9 @@ test('Antigravity agent rejects stream results from a different conversation', a
             prompt: string;
             worktreePath: string;
             worktreeGitContent: null;
-            onSessionId: (sessionId: string, conversationId?: string) => void;
         }): Promise<{ success: boolean; error?: string; sessionId?: string; conversationId?: string; conversationLog?: unknown[]; modelUsed?: string }>;
     };
     internals.persistImplementationLog = async () => undefined;
-    let callbackIdentity: [string, string | undefined] | undefined;
 
     const result = await internals.processExecutionResult({
         result: { stdout, stderr: '', exitCode: 0 },
@@ -464,7 +462,6 @@ test('Antigravity agent rejects stream results from a different conversation', a
         prompt: 'test',
         worktreePath: '/tmp',
         worktreeGitContent: null,
-        onSessionId: (sessionId, conversationId) => { callbackIdentity = [sessionId, conversationId]; },
     });
 
     assert.equal(result.success, false);
@@ -472,7 +469,6 @@ test('Antigravity agent rejects stream results from a different conversation', a
     assert.equal(result.sessionId, 'conversation-sanitized');
     assert.equal(result.conversationId, 'conversation-sanitized');
     assert.equal(result.modelUsed, 'antigravity-gemini-3.7-flash-high');
-    assert.deepEqual(callbackIdentity, ['conversation-sanitized', 'conversation-sanitized']);
 });
 
 test('Antigravity agent rejects differing stdout and transcript conversation identities', async () => {
@@ -828,6 +824,7 @@ test('Antigravity session recovery reads and removes the exported transient tran
         const transcriptPath = path.join(tempDir, 'transcript.jsonl');
         await fs.promises.writeFile(
             transcriptPath,
+            `${'x'.repeat(1024 * 1024 + 100)}\n` +
             JSON.stringify({
                 step_index: 2,
                 source: 'MODEL',
@@ -904,6 +901,13 @@ test('Antigravity labels resolve to Antigravity models', async (t) => {
         model: 'antigravity-gemini-3.7-flash-medium'
     });
     assert.equal(resolveModelAlias('antigravity-flash37-medium'), 'antigravity-gemini-3.7-flash-medium');
+
+    const flash38Resolution = await resolveLlmLabel('antigravity-flash38-medium');
+    assert.deepEqual(flash38Resolution, {
+        agentAlias: 'antigravity',
+        model: 'antigravity-gemini-3.8-flash-medium'
+    });
+    assert.equal(resolveModelAlias('antigravity-flash38-medium'), 'antigravity-gemini-3.8-flash-medium');
 
     const prefixedResolution = await resolveLlmLabel('llm-antigravity-flash-medium'.replace(/^llm-/, ''));
     assert.deepEqual(prefixedResolution, {

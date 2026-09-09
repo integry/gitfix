@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Verify that the pinned Antigravity image exposes and actually selects Gemini
-# 3.7 Flash at every supported effort tier. Requires authenticated host state.
+# 3.8 Flash at every supported effort tier. Requires authenticated host state.
 
 set -euo pipefail
 
 AGENT_TAG="${AGENT_TAG:-propr/agent:latest}"
 ANTIGRAVITY_CONFIG_PATH="${ANTIGRAVITY_CONFIG_PATH:-$HOME/.gemini}"
-EXPECTED_ANTIGRAVITY_VERSION="${EXPECTED_ANTIGRAVITY_VERSION:-1.1.13}"
+EXPECTED_ANTIGRAVITY_VERSION="${EXPECTED_ANTIGRAVITY_VERSION:-1.1.27}"
 
 if [ ! -d "$ANTIGRAVITY_CONFIG_PATH" ]; then
   echo "Antigravity credentials not found at $ANTIGRAVITY_CONFIG_PATH" >&2
@@ -55,9 +55,9 @@ echo "✓ Antigravity CLI version $actual_version"
 
 models_output="$(run_agy models)"
 models=(
-  "gemini-3.7-flash-high|Gemini 3.7 Flash (High)"
-  "gemini-3.7-flash-medium|Gemini 3.7 Flash (Medium)"
-  "gemini-3.7-flash-low|Gemini 3.7 Flash (Low)"
+  "gemini-3.8-flash-high|Gemini 3.8 Flash (High)"
+  "gemini-3.8-flash-medium|Gemini 3.8 Flash (Medium)"
+  "gemini-3.8-flash-low|Gemini 3.8 Flash (Low)"
 )
 for model in "${models[@]}"; do
   model_id="${model%%|*}"
@@ -68,7 +68,7 @@ for model in "${models[@]}"; do
     exit 1
   fi
 done
-echo "✓ Antigravity CLI advertises all Gemini 3.7 Flash tiers"
+echo "✓ Antigravity CLI advertises all Gemini 3.8 Flash tiers"
 
 for model in "${models[@]}"; do
   model_id="${model%%|*}"

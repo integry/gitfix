@@ -16,6 +16,7 @@ import {
   VISUAL_PREVIEW_SLOT,
   VISUAL_PREVIEW_SOURCE_DIRECTORY
 } from '../src/services/visualPreviewService.js';
+import { parsePublishedVisualPreviews } from '../src/services/publishedVisualPreviewService.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -154,6 +155,43 @@ test('removing an empty preview slot preserves unrelated body whitespace', () =>
     appendVisualPreviewSection(body, ''),
     '  Before\n\n\nUnrelated spacing\n\n\n\nAfter  '
   );
+});
+
+test('extracts only ProPR-published GitHub attachment previews from a PR body', () => {
+  const body = [
+    'Untrusted earlier Markdown ![Ignore](https://example.com/tracker.png)',
+    VISUAL_PREVIEW_MARKER,
+    '## Visual preview',
+    '',
+    '### Desktop \\*settings\\*',
+    '',
+    '![Desktop \\*settings\\*](https://github.com/user-attachments/assets/e3ee42c8-04a1-4ff7-af1a-1735cf52d06f)',
+    '',
+    'The changed settings screen.',
+    '',
+    '### Walkthrough',
+    '',
+    '![](https://github.com/user-attachments/assets/44384b71-8a61-4cc5-bd62-f4e882fd270a)',
+    '',
+    '### Suggested agent tools',
+    '',
+    '- **Browser:** capture UI',
+  ].join('\n');
+
+  assert.deepEqual(parsePublishedVisualPreviews(body), [
+    {
+      type: 'image',
+      title: 'Desktop *settings*',
+      description: 'The changed settings screen.',
+      url: 'https://github.com/user-attachments/assets/e3ee42c8-04a1-4ff7-af1a-1735cf52d06f',
+    },
+    {
+      type: 'video',
+      title: 'Walkthrough',
+      url: 'https://github.com/user-attachments/assets/44384b71-8a61-4cc5-bd62-f4e882fd270a',
+    },
+  ]);
+  assert.deepEqual(parsePublishedVisualPreviews(`${VISUAL_PREVIEW_MARKER}\n### Unsafe\n\n![Unsafe](https://example.com/a.png)`), []);
 });
 
 test('stages changed previews outside the repository and restores the preview directory to HEAD', async () => {

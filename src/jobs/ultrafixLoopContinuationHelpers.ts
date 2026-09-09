@@ -225,6 +225,7 @@ export async function enqueueNextStep(
 
     const issueQueue = await getIssueQueue();
     await issueQueue.add('processPullRequestComment', {
+        ...(params.userId ? { userId: params.userId } : {}),
         pullRequestNumber,
         repoOwner: owner,
         repoName: repo,

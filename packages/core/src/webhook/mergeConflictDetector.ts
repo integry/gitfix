@@ -171,6 +171,7 @@ export interface HandleMergeCommandOptions {
     owner: string;
     repoName: string;
     prNumber: number;
+    userId?: string;
     redisClient: Redis;
     correlationId: string;
 }
@@ -184,7 +185,7 @@ export interface HandleMergeCommandOptions {
 export async function handleMergeCommand(
     options: HandleMergeCommandOptions
 ): Promise<ConflictDetectionResult | null> {
-    const { owner, repoName, prNumber, correlationId } = options;
+    const { owner, repoName, prNumber, userId, correlationId } = options;
     const log = logger.withCorrelation(correlationId);
     const repository = `${owner}/${repoName}`;
 
@@ -202,6 +203,7 @@ export async function handleMergeCommand(
 
     const jobCorrelationId = generateCorrelationId();
     const jobData: MergeConflictJobData = {
+        ...(userId ? { userId } : {}),
         pullRequestNumber: prNumber,
         repoOwner: owner,
         repoName,

@@ -59,10 +59,15 @@ export interface LlmLabelResolution {
  */
 const MODEL_ALIASES: Record<ModelAlias, ModelId> = {
     // Fable aliases (top tier, above Opus)
-    'fable': 'claude-fable-5',
+    'fable': 'claude-fable-5-1',
+    'fable51': 'claude-fable-5-1',
+    'fable-5-1': 'claude-fable-5-1',
+    'claude-fable': 'claude-fable-5-1',
+    'claude-fable-5-1': 'claude-fable-5-1',
+
+    // Explicit Fable 5 aliases
     'fable5': 'claude-fable-5',
     'fable-5': 'claude-fable-5',
-    'claude-fable': 'claude-fable-5',
     'claude-fable-5': 'claude-fable-5',
 
     // Default aliases point to latest tier models

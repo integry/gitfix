@@ -187,6 +187,7 @@ export function buildMergeConflictComment(options: {
  * Converts a MergeConflictJobData into a CommentJobData for the PR comment processing pipeline.
  */
 export function mergeConflictJobToCommentJob(mergeJob: {
+    userId?: string;
     pullRequestNumber: number;
     repoOwner: string;
     repoName: string;
@@ -197,6 +198,7 @@ export function mergeConflictJobToCommentJob(mergeJob: {
     triggerSource: 'pull_request' | 'push' | 'auto_merge';
     correlationId: string;
 }): {
+    userId?: string;
     pullRequestNumber: number;
     repoOwner: string;
     repoName: string;
@@ -206,6 +208,7 @@ export function mergeConflictJobToCommentJob(mergeJob: {
     autoResolveContext: AutoResolveContext;
 } {
     return {
+        ...(mergeJob.userId ? { userId: mergeJob.userId } : {}),
         pullRequestNumber: mergeJob.pullRequestNumber,
         repoOwner: mergeJob.repoOwner,
         repoName: mergeJob.repoName,

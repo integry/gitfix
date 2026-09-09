@@ -163,6 +163,7 @@ describe('buildMergeConflictComment', () => {
 describe('mergeConflictJobToCommentJob', () => {
     test('converts merge conflict job data to comment job data', () => {
         const result = mergeConflictJobToCommentJob({
+            userId: '123456',
             pullRequestNumber: 42,
             repoOwner: 'test-owner',
             repoName: 'test-repo',
@@ -174,6 +175,7 @@ describe('mergeConflictJobToCommentJob', () => {
             correlationId: 'corr-1',
         });
 
+        assert.strictEqual(result.userId, '123456');
         assert.strictEqual(result.pullRequestNumber, 42);
         assert.strictEqual(result.repoOwner, 'test-owner');
         assert.strictEqual(result.repoName, 'test-repo');

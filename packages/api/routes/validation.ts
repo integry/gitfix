@@ -42,7 +42,7 @@ export const ALLOWED_MIME_TYPES = [
 
 // Allowed file extensions for uploads
 export const ALLOWED_EXTENSIONS = [
-  '.txt', '.md', '.csv', '.json', '.pdf',
+  '.txt', '.md', '.csv', '.json', '.log', '.pdf',
   '.png', '.jpg', '.jpeg', '.gif', '.webp',
 ] as const;
 

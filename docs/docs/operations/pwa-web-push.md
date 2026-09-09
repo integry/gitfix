@@ -7,6 +7,8 @@ title: PWA, Web Push, and Badges
 
 ProPR's production UI is an installable Progressive Web App (PWA). Web Push is optional: the Inbox and live UI continue to work when Push is not configured or a browser lacks Push or Badging APIs. Outside `localhost`, both the UI and API must be reached over HTTPS.
 
+Web Push delivers **text notifications** and may display them while the PWA is backgrounded. It never carries briefing audio or starts speech playback. [Voice Briefings](../features/voice-briefings.md) fetch text only when a signed-in user requests it and use browser/OS speech capabilities only in the visible app; backgrounding or locking the device cancels listening and playback.
+
 ## Configure VAPID
 
 Generate one P-256 VAPID key pair for each ProPR installation on an administrator-controlled machine. From a ProPR source checkout with dependencies installed, use the repository's pinned `web-push` package:

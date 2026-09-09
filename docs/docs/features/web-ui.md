@@ -12,6 +12,8 @@ Two persistent elements frame every page.
 
 **Header (top).** A global **search** (focus with `Cmd/Ctrl+K`) spans tasks, plans, and repositories. To its right: an **AI activity monitor** (how many tasks are running now), an **active plans** dropdown, a **tasks awaiting review** dropdown grouped by repo/PR/issue, a **quick add to-do** popover (`Alt+T`), a **New Plan** button, a **system health** indicator that opens a status modal (daemon, workers, Redis, GitHub auth, indexing, and per-agent health), and your GitHub profile with sign-out.
 
+**Voice briefing (lower right).** The on-demand control fetches a text snapshot of parallel or long-running work and can ask the browser to speak it. It does not keep a call or background listener open. Spoken commands use a fixed grammar, and stop or follow-up actions require a separate confirmation. See [Voice Briefings](./voice-briefings.md) for the command reference, privacy boundary, costs, and mobile limitations.
+
 When the backend runs with `PROPR_DEMO_MODE=true`, a banner indicates read-only access and all mutating actions are disabled. The synthetic demo identity has member-level operational access; installation-only Settings, Coding Agents, trusted-runtime, and Access controls are hidden.
 
 {/* SCREENSHOT PLACEHOLDER (P1): Capture the full app shell — left sidebar (nav + Agent Tank usage + version footer) and the global header (search, activity monitor, New Plan, system health, profile) — with the Dashboard behind it. */}

@@ -72,6 +72,53 @@ test('commitChanges disables every repository commit hook', async () => {
     }
 });
 
+test('commitChanges can create the empty bootstrap commit required for an early draft PR', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'propr-goal-bootstrap-'));
+    try {
+        const repoPath = path.join(tempDir, 'repo');
+        await git(tempDir, ['init', repoPath]);
+        await configureRepository(repoPath);
+
+        const result = await commitChanges(repoPath, 'chore(goal): initialize draft', null, { allowEmpty: true });
+
+        assert.ok(result?.commitHash);
+        assert.equal(await git(repoPath, ['log', '-1', '--format=%s']), 'chore(goal): initialize draft');
+        assert.equal(await git(repoPath, ['status', '--porcelain']), '');
+    } finally {
+        await rm(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('commitChanges stages only the agent-declared checkpoint scope', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'propr-goal-scope-'));
+    try {
+        const repoPath = path.join(tempDir, 'repo');
+        await git(tempDir, ['init', repoPath]);
+        await configureRepository(repoPath);
+        await writeFile(path.join(repoPath, 'stable.txt'), 'initial\n', 'utf8');
+        await writeFile(path.join(repoPath, 'parallel.txt'), 'initial\n', 'utf8');
+        await git(repoPath, ['add', '.']);
+        await git(repoPath, ['commit', '-m', 'initial']);
+
+        await writeFile(path.join(repoPath, 'stable.txt'), 'checkpoint ready\n', 'utf8');
+        await writeFile(path.join(repoPath, 'parallel.txt'), 'still in progress\n', 'utf8');
+        const result = await commitChanges(repoPath, 'feat: stable checkpoint', null, {
+            include: ['stable.txt'],
+            exclude: ['parallel.txt'],
+        });
+
+        assert.deepEqual(result?.filesChanged, ['stable.txt']);
+        assert.equal(await git(repoPath, ['show', '--format=', '--name-only', 'HEAD']), 'stable.txt');
+        assert.match(await git(repoPath, ['status', '--porcelain']), /parallel\.txt/);
+        await assert.rejects(
+            commitChanges(repoPath, 'feat: invalid scope', null, { include: ['../outside.txt'] }),
+            /normalized repository-relative file/,
+        );
+    } finally {
+        await rm(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('pushBranch disables repository pre-push hooks', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'propr-hookless-push-'));
     try {

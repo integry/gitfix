@@ -1,4 +1,7 @@
 export const ANTIGRAVITY_MODEL_LABELS: Record<string, string> = {
+    'antigravity-gemini-3.8-flash-medium': 'Gemini 3.8 Flash (Medium)',
+    'antigravity-gemini-3.8-flash-high': 'Gemini 3.8 Flash (High)',
+    'antigravity-gemini-3.8-flash-low': 'Gemini 3.8 Flash (Low)',
     'antigravity-gemini-3.7-flash-medium': 'Gemini 3.7 Flash (Medium)',
     'antigravity-gemini-3.7-flash-high': 'Gemini 3.7 Flash (High)',
     'antigravity-gemini-3.7-flash-low': 'Gemini 3.7 Flash (Low)',
@@ -18,7 +21,7 @@ export const ANTIGRAVITY_MODEL_LABELS: Record<string, string> = {
 // ProPR namespaces Antigravity model IDs with an `antigravity-` prefix so they
 // don't collide with other agents' models in config/labels (see
 // ANTIGRAVITY_MODELS in modelDefinitions). The Antigravity CLI (`agy --model`)
-// expects the exact external ID for Gemini 3.7 models. Older models still use
+// expects the exact external ID for Gemini 3.8 and 3.7 models. Older models still use
 // the HUMAN-READABLE display name exactly as `agy models` lists it — e.g.
 // "Gemini 3.1 Pro (High)" or "Claude Sonnet 4.6 (Thinking)".
 //
@@ -32,6 +35,9 @@ export const ANTIGRAVITY_MODEL_LABELS: Record<string, string> = {
 //   'antigravity-gemini-3.1-pro-high'        -> 'Gemini 3.1 Pro (High)'
 //   'antigravity-claude-sonnet-4.6-thinking' -> 'Claude Sonnet 4.6 (Thinking)'
 const ANTIGRAVITY_CANONICAL_MODEL_IDS: Record<string, string> = {
+    'antigravity-gemini-3.8-flash-high': 'gemini-3.8-flash-high',
+    'antigravity-gemini-3.8-flash-medium': 'gemini-3.8-flash-medium',
+    'antigravity-gemini-3.8-flash-low': 'gemini-3.8-flash-low',
     'antigravity-gemini-3.7-flash-high': 'gemini-3.7-flash-high',
     'antigravity-gemini-3.7-flash-medium': 'gemini-3.7-flash-medium',
     'antigravity-gemini-3.7-flash-low': 'gemini-3.7-flash-low',

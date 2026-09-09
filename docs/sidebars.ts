@@ -52,6 +52,11 @@ const sidebars: SidebarsConfig = {
       label: 'Web UI Guide',
     },
     {
+      type: 'doc',
+      id: 'features/voice-briefings',
+      label: 'Voice Briefings',
+    },
+    {
       type: 'category',
       label: 'Core Workflow',
       items: [

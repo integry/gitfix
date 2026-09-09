@@ -1,15 +1,15 @@
 {
-  "cliVersion": "1.1.13",
+  "cliVersion": "1.1.27",
   "models": [
     {
-      "id": "gemini-3.7-flash-high",
-      "displayName": "Gemini 3.7 Flash (High)",
+      "id": "gemini-3.8-flash-high",
+      "displayName": "Gemini 3.8 Flash (High)",
       "stream": [
         {
           "event": "init",
           "conversation_id": "fixture-conversation-high",
           "init": {
-            "model": "gemini-3.7-flash-high",
+            "model": "gemini-3.8-flash-high",
             "cwd": "/tmp",
             "tools": []
           }
@@ -35,14 +35,14 @@
       ]
     },
     {
-      "id": "gemini-3.7-flash-medium",
-      "displayName": "Gemini 3.7 Flash (Medium)",
+      "id": "gemini-3.8-flash-medium",
+      "displayName": "Gemini 3.8 Flash (Medium)",
       "stream": [
         {
           "event": "init",
           "conversation_id": "fixture-conversation-medium",
           "init": {
-            "model": "gemini-3.7-flash-medium",
+            "model": "gemini-3.8-flash-medium",
             "cwd": "/tmp",
             "tools": []
           }
@@ -68,14 +68,14 @@
       ]
     },
     {
-      "id": "gemini-3.7-flash-low",
-      "displayName": "Gemini 3.7 Flash (Low)",
+      "id": "gemini-3.8-flash-low",
+      "displayName": "Gemini 3.8 Flash (Low)",
       "stream": [
         {
           "event": "init",
           "conversation_id": "fixture-conversation-low",
           "init": {
-            "model": "gemini-3.7-flash-low",
+            "model": "gemini-3.8-flash-low",
             "cwd": "/tmp",
             "tools": []
           }

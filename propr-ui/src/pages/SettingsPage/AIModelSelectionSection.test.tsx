@@ -93,7 +93,11 @@ describe('AIModelSelectionSection', () => {
         onDefaultAgentChange={vi.fn()}
       />
     );
-    fireEvent.click(screen.getByLabelText('Gather related unchanged code'));
+    const checkbox = screen.getByLabelText('Gather related unchanged code');
+    const labelColumn = checkbox.parentElement?.querySelector('div');
+    expect(labelColumn).toContainElement(screen.getByText('Gather related unchanged code'));
+    expect(labelColumn).toContainElement(screen.getByText(/Lets a read-only scout locate/));
+    fireEvent.click(checkbox);
     expect(onEnabledChange).toHaveBeenCalledWith(false);
   });
 
