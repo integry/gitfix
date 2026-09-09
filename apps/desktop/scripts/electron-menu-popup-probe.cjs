@@ -5,6 +5,11 @@ const { createLinuxTrayMenuPopup } = require('../src/linux-tray-menu.ts');
 const { createDesktopTrayController } = require('../src/system-tray.ts');
 
 const probeReadyMarker = 'PROPR_MENU_POPUP_PROBE_READY';
+const activationIndex = Number.parseInt(process.env.PROPR_MENU_POPUP_ACTIVATION_INDEX ?? '0', 10);
+if (activationIndex !== 0 && activationIndex !== 1) {
+  throw new Error(`Unsupported tray activation probe index: ${process.env.PROPR_MENU_POPUP_ACTIVATION_INDEX}`);
+}
+const probeCase = activationIndex === 0 ? 'empty-event/direct-dismissal' : 'modifier-event/controller-teardown';
 let deadline;
 
 app.whenReady().then(() => {
@@ -31,7 +36,14 @@ app.whenReady().then(() => {
       activeOwner = owner;
       owner.once('show', () => { ownersMapped += 1; });
       owner.once('focus', () => { ownersFocused += 1; });
-      owner.once('closed', () => { ownersDestroyed += 1; });
+      owner.once('closed', () => {
+        ownersDestroyed += 1;
+        // Finish this independent native lifecycle before another probe starts.
+        // Rapidly mapping a replacement while XFWM is still processing this
+        // destruction can send its pending focus fallback to the new menu.
+        controller.close();
+        finishProbe();
+      });
       return owner;
     },
   });
@@ -58,12 +70,33 @@ app.whenReady().then(() => {
     },
   ];
 
+  const finishProbe = () => {
+    clearTimeout(deadline);
+    console.log(JSON.stringify({
+      probeCase,
+      menuWillShow,
+      menuWillClose,
+      trayActivations,
+      opensAfterActivationDispatch,
+      persistentDismissals,
+      ownersCreated,
+      ownersMapped,
+      ownersFocused,
+      ownersDestroyed,
+      browserWindowOwners,
+      toolbarOwners,
+      menusShownWithFocusedOwner,
+      trayDestroyed: tray.isDestroyed(),
+    }));
+    app.quit();
+  };
+
   const activateTray = () => {
     trayActivations += 1;
     activationDispatchReturned = false;
     tray.emit(
       'click',
-      activationEvents[trayActivations - 1],
+      activationEvents[activationIndex],
       { x: 0, y: 0, width: 0, height: 0 },
       screen.getCursorScreenPoint(),
     );
@@ -86,7 +119,7 @@ app.whenReady().then(() => {
         const closingOwner = activeOwner;
         setTimeout(() => {
           dismissalRequested = true;
-          if (menuWillShow === 1) menu.closePopup(closingOwner);
+          if (activationIndex === 0) menu.closePopup(closingOwner);
           else controller.close();
         }, 100);
       });
@@ -94,31 +127,6 @@ app.whenReady().then(() => {
         menuWillClose += 1;
         if (dismissalRequested) persistentDismissals += 1;
         dismissalRequested = false;
-        if (menuWillClose === 1) {
-          setImmediate(activateTray);
-          return;
-        }
-        setImmediate(() => {
-          setImmediate(() => {
-            clearTimeout(deadline);
-            console.log(JSON.stringify({
-              menuWillShow,
-              menuWillClose,
-              trayActivations,
-              opensAfterActivationDispatch,
-              persistentDismissals,
-              ownersCreated,
-              ownersMapped,
-              ownersFocused,
-              ownersDestroyed,
-              browserWindowOwners,
-              toolbarOwners,
-              menusShownWithFocusedOwner,
-              trayDestroyed: tray.isDestroyed(),
-            }));
-            app.quit();
-          });
-        });
       });
       return menu;
     },
