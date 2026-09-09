@@ -31,9 +31,10 @@ queue Tasks and the signed-in account's generating/refining Plans. Standalone in
 separately as **Open goals** and excluded from the active total because Goals have no authoritative executing state.
 The tooltip and menu retain separate Tasks, Plans, unsupported Goals, and Open goals values; `Unavailable` means the
 instance or active authenticated profile could not be verified and is intentionally distinct from a verified zero.
-Tray activation opens the actionable menu; **Open ProPR** restores and focuses the window, while **Quit ProPR** uses the
-normal coordinated shutdown. Closing a window keeps the existing platform behavior—it does not enable a new hidden
-background mode. Windows tray support remains deferred.
+On Linux, left-clicking the tray icon restores and focuses ProPR; right-clicking opens the native actionable menu. On
+macOS, menu-bar activation continues to open that menu. **Open ProPR** uses the same restoration path, while **Quit
+ProPR** uses the normal coordinated shutdown. Closing a window keeps the existing platform behavior—it does not enable a
+new hidden background mode. Windows tray support remains deferred.
 
 ### Recovery and troubleshooting
 

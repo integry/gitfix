@@ -57,7 +57,6 @@ import {
 } from './packaged-approval-session';
 import { createDesktopShutdownCoordinator } from './shutdown';
 import { createDesktopTrayController } from './system-tray';
-import { createLinuxTrayMenuPopup } from './linux-tray-menu';
 import { createMainWindowRestorer } from './main-window-restoration';
 import { DesktopSetupController } from './setup-controller';
 import { promptForWebhookSecret } from './secure-secret-prompt';
@@ -1735,19 +1734,11 @@ if (!hasSingleInstanceLock) {
       ? trayArtwork
       : trayArtwork.resize({ width: process.platform === 'darwin' ? 18 : 22 });
     if (process.platform === 'darwin' && !trayIcon.isEmpty()) trayIcon.setTemplateImage(true);
-    const linuxTrayMenuPopup = process.platform === 'linux'
-      ? createLinuxTrayMenuPopup({
-          screen,
-          createHost: options => new BrowserWindow(options),
-        })
-      : null;
     const desktopTray = createDesktopTrayController({
       platform: process.platform,
       icon: trayIcon,
       createTray: icon => new Tray(icon),
       buildMenu: template => Menu.buildFromTemplate(template),
-      popupMenu: (menu, activation) => linuxTrayMenuPopup?.popup(menu, activation),
-      closePopupMenu: () => linuxTrayMenuPopup?.close(),
       setBadgeCount: count => {
         try { return app.setBadgeCount(count); } catch { return false; }
       },
