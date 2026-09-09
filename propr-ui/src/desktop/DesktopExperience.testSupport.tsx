@@ -33,7 +33,11 @@ export const adaptersFor = (
     setActiveId: vi.fn(async () => undefined),
   },
   discovery: { supported: true, discover: vi.fn(async () => []) },
-  authentication: { authenticate: vi.fn(async () => undefined) },
+  authentication: {
+    authenticate: vi.fn(async () => undefined),
+    reopenApproval: vi.fn(async () => ({ status: 'succeeded' as const })),
+    copyApproval: vi.fn(async () => ({ status: 'succeeded' as const })),
+  },
   externalBrowser: { open: vi.fn(async () => undefined) },
   localSetup: { supported: true, setup: vi.fn(async () => localProfile) },
   connection: { probe: vi.fn(probe) },

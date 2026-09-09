@@ -23,7 +23,8 @@ macOS is remote-only: local setup is not offered and the app makes zero host-sta
 existing instance** and enter an HTTPS endpoint (or explicit loopback HTTP endpoint), or review a ProPR Connect discovery
 candidate. Manual, discovery, and `propr://connect` candidates are never paired or selected without confirmation. If the
 instance returns 401, **Sign in in browser** opens its API-supplied approval page; after approval, return to the app to
-finish pairing. Use the **Connected: _name_** control to switch, edit, remove, or re-pair saved profiles. Profile metadata
+finish pairing. If the default-browser handoff is not visible, use **Reopen browser** or **Copy approval link** while the
+current approval is still pending. Use the **Connected: _name_** control to switch, edit, remove, or re-pair saved profiles. Profile metadata
 survives relaunch; the credential remains in the OS secure store.
 
 Linux and macOS expose one native ProPR tray/menu-bar item. Its **Active work** total is the sum of current running

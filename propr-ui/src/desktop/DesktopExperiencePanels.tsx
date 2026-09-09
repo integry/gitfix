@@ -9,7 +9,9 @@ import {
   ArrowLeft,
   ChevronRight,
   Cloud,
+  Copy,
   Computer,
+  ExternalLink,
   LoaderCircle,
   Pencil,
   RefreshCw,
@@ -18,7 +20,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { normalizeBaseUrl } from './browserAdapters';
-import type { DesktopAuthenticationProgressStage, DesktopConnectionResult, DesktopProfile } from './types';
+import type { DesktopAuthenticationProgressStage, DesktopConnectionResult, DesktopPairingApprovalActionResult, DesktopProfile } from './types';
 
 interface DesktopSetupLayerProps {
   children: React.ReactNode;
@@ -243,31 +245,78 @@ const authenticationProgressMessage = (progress: DesktopAuthenticationProgressSt
     return 'Finish signing in and approve ProPR Desktop in your browser. This window will continue automatically.';
   }
   if (progress === 'browser-open-failed') {
-    return 'ProPR Desktop could not confirm that your browser opened. If the approval page appeared, finish there and this window will keep waiting. If it did not, check your default browser or desktop portal, then cancel and try again.';
+    return 'ProPR Desktop could not confirm that your browser opened. If the approval page appeared, finish there and this window will keep waiting. If it did not, reopen it or copy the approval link below.';
   }
   return 'Preparing a secure browser approval request…';
 };
 
-export const AuthenticationPanel = ({ profile, progress, onCancel, onChoose }: {
+export const AuthenticationPanel = ({ profile, progress, onCancel, onChoose, onReopen, onCopy }: {
   profile: DesktopProfile;
   progress: DesktopAuthenticationProgressStage;
   onCancel(): void;
   onChoose(): void;
-}) => (
-  <main className="desktop-connection-card" aria-live="polite">
-    <DesktopBrand />
-    <div className={`desktop-connection-visual ${progress === 'browser-open-failed' ? '' : 'desktop-connecting'}`}>
-      {progress === 'browser-open-failed' ? <AlertTriangle aria-hidden="true" /> : <LoaderCircle aria-hidden="true" />}
-    </div>
-    <span className="desktop-eyebrow">Waiting for browser approval</span>
-    <h1>{profile.name}</h1>
-    <p>{authenticationProgressMessage(progress)}</p>
-    <div className="desktop-connection-actions">
-      <button type="button" className="desktop-secondary-button" onClick={onCancel}>Cancel sign in</button>
-      <button type="button" className="desktop-link-button" onClick={onChoose}>Choose another instance</button>
-    </div>
-  </main>
-);
+  onReopen?(): Promise<DesktopPairingApprovalActionResult>;
+  onCopy?(): Promise<DesktopPairingApprovalActionResult>;
+}) => {
+  const [pendingAction, setPendingAction] = useState<'reopen' | 'copy' | null>(null);
+  const [feedback, setFeedback] = useState<{ error: boolean; message: string } | null>(null);
+  const recoveryAvailable = progress === 'approval-pending' || progress === 'browser-open-failed';
+  const runRecovery = async (
+    action: 'reopen' | 'copy',
+    recover: () => Promise<DesktopPairingApprovalActionResult>,
+  ) => {
+    setPendingAction(action);
+    setFeedback(null);
+    try {
+      const result = await recover();
+      if (result.status === 'succeeded') {
+        setFeedback({
+          error: false,
+          message: action === 'reopen'
+            ? 'Approval page requested in your default browser.'
+            : 'Approval link copied.',
+        });
+      } else if (result.status === 'unavailable') {
+        setFeedback({ error: true, message: 'This approval request is no longer available. Start sign in again.' });
+      } else {
+        setFeedback({
+          error: true,
+          message: action === 'reopen'
+            ? 'Could not reopen the approval page. Check your default browser, or copy the link instead.'
+            : 'Could not copy the approval link. Check clipboard access and try again.',
+        });
+      }
+    } catch {
+      setFeedback({
+        error: true,
+        message: action === 'reopen'
+          ? 'Could not reopen the approval page. Check your default browser, or copy the link instead.'
+          : 'Could not copy the approval link. Check clipboard access and try again.',
+      });
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  return (
+    <main className="desktop-connection-card" aria-live="polite">
+      <DesktopBrand />
+      <div className={`desktop-connection-visual ${progress === 'browser-open-failed' ? '' : 'desktop-connecting'}`}>
+        {progress === 'browser-open-failed' ? <AlertTriangle aria-hidden="true" /> : <LoaderCircle aria-hidden="true" />}
+      </div>
+      <span className="desktop-eyebrow">Waiting for browser approval</span>
+      <h1>{profile.name}</h1>
+      <p>{authenticationProgressMessage(progress)}</p>
+      {feedback && <div className={feedback.error ? 'desktop-inline-error' : 'desktop-inline-status'} role={feedback.error ? 'alert' : 'status'}>{feedback.message}</div>}
+      <div className="desktop-connection-actions">
+        {recoveryAvailable && onReopen && <button type="button" className="desktop-secondary-button" disabled={pendingAction !== null} onClick={() => void runRecovery('reopen', onReopen)}><ExternalLink /> {pendingAction === 'reopen' ? 'Reopening…' : 'Reopen browser'}</button>}
+        {recoveryAvailable && onCopy && <button type="button" className="desktop-secondary-button" disabled={pendingAction !== null} onClick={() => void runRecovery('copy', onCopy)}><Copy /> {pendingAction === 'copy' ? 'Copying…' : 'Copy approval link'}</button>}
+        <button type="button" className="desktop-secondary-button" onClick={onCancel}>Cancel sign in</button>
+        <button type="button" className="desktop-link-button" onClick={onChoose}>Choose another instance</button>
+      </div>
+    </main>
+  );
+};
 
 export const ManagedRecoveryReview = ({ profile, onCancel, onConfirm }: {
   profile: DesktopProfile;

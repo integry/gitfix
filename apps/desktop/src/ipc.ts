@@ -44,6 +44,7 @@ interface RegisterIpcOptions {
   devServerUrl: string | undefined;
   packagedRendererUrl: string;
   openExternal(url: string): Promise<void>;
+  platform?: NodeJS.Platform;
   rendererConsumerReady?(event: IpcMainInvokeEvent): boolean;
   acknowledgeDeepLink?(event: IpcMainInvokeEvent, acknowledgement: DesktopDeepLinkAcknowledgement): boolean;
   onRendererActiveProfileChanged?(origin: string | null): void;
@@ -318,6 +319,33 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     if (pairingAdmission?.profileId === profileId) pairingAdmission = null;
     return options.credentials.cancelPairing(profileId);
   });
+  const pairingApprovalAction = async (
+    action: 'reopen' | 'copy',
+    profileId: unknown,
+    operationId: unknown,
+    args: unknown[],
+  ) => {
+    if (args.length || typeof profileId !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(profileId)
+      || !isDesktopPairingOperationId(operationId)) {
+      throw new Error('Invalid desktop pairing approval action');
+    }
+    if (!['darwin', 'linux'].includes(options.platform ?? process.platform)) {
+      return { status: 'unavailable' as const };
+    }
+    const result = action === 'reopen'
+      ? await options.credentials.reopenPairingApproval(profileId, operationId)
+      : await options.credentials.copyPendingPairingApproval(profileId, operationId);
+    options.logger.log(result.status === 'failed' ? 'warn' : 'info', 'desktop.authentication_pair.approval_action', {
+      action,
+      status: result.status,
+    });
+    return result;
+  };
+  handle(IPC_CHANNELS.authenticationReopenApproval, (_event, profileId, operationId, ...args) =>
+    pairingApprovalAction('reopen', profileId, operationId, args));
+  handle(IPC_CHANNELS.authenticationCopyApproval, (_event, profileId, operationId, ...args) =>
+    pairingApprovalAction('copy', profileId, operationId, args));
   handle(IPC_CHANNELS.connectionProbe, (_event, profile) => options.credentials.probe(profile));
   handle(IPC_CHANNELS.connectionActivate, async (_event, activationTicket) => {
     const before = await options.credentials.listProfiles();

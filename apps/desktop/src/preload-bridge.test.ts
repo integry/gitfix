@@ -106,6 +106,8 @@ describe('desktop preload bridge', () => {
       { id: 'profile-1', label: 'Local', apiBaseUrl: 'http://localhost:4000' },
       admission.operationId,
     );
+    await bridge.authentication.reopenApproval('profile-1', admission.operationId);
+    await bridge.authentication.copyApproval('profile-1', admission.operationId);
     await bridge.connection.activate('activation-ticket');
     await bridge.connection.discard({ profileId: 'profile-1', transportScope: 'transport-scope' });
     await bridge.discovery.discover();
@@ -129,6 +131,14 @@ describe('desktop preload bridge', () => {
           { id: 'profile-1', label: 'Local', apiBaseUrl: 'http://localhost:4000' },
           pairingOperationId,
         ],
+      },
+      {
+        channel: IPC_CHANNELS.authenticationReopenApproval,
+        args: ['profile-1', pairingOperationId],
+      },
+      {
+        channel: IPC_CHANNELS.authenticationCopyApproval,
+        args: ['profile-1', pairingOperationId],
       },
       { channel: IPC_CHANNELS.connectionActivate, args: ['activation-ticket'] },
       {

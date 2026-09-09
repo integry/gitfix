@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  copyApprovedDesktopPairingUrl,
   DesktopPairingBrowserOpenError,
   openApprovedDesktopPairingUrl,
   supportsAmbiguousPairingLaunchRecovery,
@@ -37,6 +38,20 @@ describe('desktop pairing browser final sink', () => {
     }, { openExternal: async url => { opened.push(url); } });
 
     assert.deepEqual(opened, [approvalUrl]);
+  });
+
+  it('copies only the exact normalized approval URL at the main-process sink', () => {
+    const copied: string[] = [];
+    copyApprovedDesktopPairingUrl({
+      apiBaseUrl: 'https://api.example.test', pairingId, approvalUrl: fallback,
+    }, { writeText: value => { copied.push(value); } });
+    assert.deepEqual(copied, [fallback]);
+
+    assert.throws(() => copyApprovedDesktopPairingUrl({
+      apiBaseUrl: 'https://api.example.test', pairingId,
+      approvalUrl: `${fallback}?device_secret=must-not-copy`,
+    }, { writeText: value => { copied.push(value); } }), /request was rejected/);
+    assert.deepEqual(copied, [fallback]);
   });
 
   it('rejects replacement, mutation, noncanonical, and reserved-host values without opening', async () => {

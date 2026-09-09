@@ -177,6 +177,7 @@
 .desktop-primary-button svg,
 .desktop-secondary-button svg { width: .95rem; height: .95rem; }
 .desktop-inline-error { margin-top: .8rem; border: 1px solid #fed0ca; border-radius: .55rem; padding: .65rem .75rem; color: #9f2d20; background: #fff6f4; font-size: .76rem; line-height: 1.45; }
+.desktop-inline-status { margin-top: .8rem; border: 1px solid #b9dcd8; border-radius: .55rem; padding: .65rem .75rem; color: #0f6864; background: #f0f9f8; font-size: .76rem; line-height: 1.45; }
 
 .desktop-connection-card { text-align: center; }
 .desktop-connection-card .desktop-brand { justify-content: center; }
