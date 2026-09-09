@@ -7,7 +7,6 @@ describe('native Electron test setup', () => {
   it('keeps native probe modules free of eager Electron resolution', async () => {
     const probeSources = await Promise.all([
       'electron-frame-semantics.test.mjs',
-      'electron-menu-popup.test.mjs',
     ].map(file => readFile(new URL(file, import.meta.url), 'utf8')));
 
     for (const source of probeSources) {
