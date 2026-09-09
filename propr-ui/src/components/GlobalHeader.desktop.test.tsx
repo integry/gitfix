@@ -89,7 +89,7 @@ describe('GlobalHeader desktop toolbar', () => {
       </MemoryRouter>,
     );
 
-    const toolbar = container.querySelector('header.desktop-content-toolbar');
+    const toolbar = container.querySelector<HTMLElement>('header.desktop-content-toolbar');
     expect(toolbar).toHaveClass('bg-slate-50', 'grid-cols-[minmax(0,1fr)_16rem_minmax(0,1fr)]');
     expect(toolbar?.children).toHaveLength(3);
 
