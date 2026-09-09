@@ -18,7 +18,7 @@ export const LINUX_SETUP_ACCEPTANCE_OUTPUT = 'PROPR_DESKTOP_SETUP_ACCEPTANCE_OUT
 
 const TIMEOUT_MS = 60_000;
 const OUTPUT_LIMIT = 64 * 1024;
-const SAFE_DOCKER_OPERATIONS = new Set(['version', 'info', 'images']);
+const SAFE_DOCKER_OPERATIONS = new Set(['version', 'info', 'images', 'image-inspect']);
 const SOURCE_SHA = /^[a-f0-9]{40}$/;
 const ISOLATION_ID = /^[a-f0-9]{16}$/;
 const INTERRUPTED_RECOVERY_MESSAGE = 'Setup was interrupted. Review the saved choices to continue.';
@@ -129,6 +129,10 @@ const dockerOperation = args => {
   if (args.length === 1 && args[0] === '--version') return 'version';
   if (args[0] === 'info') return 'info';
   if (args[0] === 'images' && args[1] === '-q' && args.length === 3) return 'images';
+  if (args.length === 3 && args[0] === 'image' && args[1] === 'inspect'
+    && args[2].length > 0 && args[2] === args[2].trim() && !args[2].startsWith('-')) {
+    return 'image-inspect';
+  }
   if (args[0] === 'pull' && args.length === 2) return 'pull';
   return 'rejected';
 };
@@ -170,7 +174,7 @@ export const parseDockerEvents = contents => {
     if (!value || typeof value !== 'object' || Array.isArray(value)
       || Object.keys(value).sort().join(',') !== ['event', 'operation', 'pid', 'ppid', 'schemaVersion', 'time'].sort().join(',')
       || value.schemaVersion !== 1 || !['invoked', 'sigterm', 'sigint', 'delegate-error', 'rejected'].includes(value.event)
-      || !['version', 'info', 'images', 'pull', 'rejected'].includes(value.operation)
+      || !['version', 'info', 'images', 'image-inspect', 'pull', 'rejected'].includes(value.operation)
       || !Number.isSafeInteger(value.pid) || value.pid <= 1
       || !Number.isSafeInteger(value.ppid) || value.ppid <= 0
       || !Number.isSafeInteger(value.time) || value.time <= 0) {

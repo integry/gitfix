@@ -83,29 +83,47 @@ describe('real packaged Linux setup lifecycle harness', () => {
   it('delegates read-only Docker inspection, holds pull, and rejects mutations', async () => {
     const root = await mkdtemp(join(tmpdir(), 'propr-linux-setup-wrapper-test-'));
     const wrapper = join(root, 'docker');
+    const realDocker = join(root, 'real-docker');
     const eventsPath = join(root, 'events.jsonl');
     try {
-      await writeFile(wrapper, dockerWrapperSource({ realDockerPath: process.execPath, eventPath: eventsPath }), { mode: 0o700 });
+      await writeFile(realDocker, `#!/usr/bin/env node
+'use strict';
+process.stdout.write(JSON.stringify(process.argv.slice(2)));
+`, { mode: 0o700 });
+      await writeFile(wrapper, dockerWrapperSource({ realDockerPath: realDocker, eventPath: eventsPath }), { mode: 0o700 });
+      await chmod(realDocker, 0o700);
       await chmod(wrapper, 0o700);
 
       const version = spawn(process.execPath, [wrapper, '--version']);
       let delegatedOutput = '';
       version.stdout.on('data', chunk => { delegatedOutput += chunk.toString('utf8'); });
       assert.deepEqual(await once(version, 'close'), [0, null]);
-      assert.equal(delegatedOutput.trim(), process.version);
+      assert.deepEqual(JSON.parse(delegatedOutput), ['--version']);
 
-      const rejected = spawn(process.execPath, [wrapper, 'rm', '-f', 'anything']);
-      assert.deepEqual(await once(rejected, 'close'), [97, null]);
+      const inspect = spawn(process.execPath, [wrapper, 'image', 'inspect', 'propr/app:test']);
+      let inspectOutput = '';
+      inspect.stdout.on('data', chunk => { inspectOutput += chunk.toString('utf8'); });
+      assert.deepEqual(await once(inspect, 'close'), [0, null]);
+      assert.deepEqual(JSON.parse(inspectOutput), ['image', 'inspect', 'propr/app:test']);
+
+      for (const args of [
+        ['image', 'tag', 'propr/app:test', 'propr/app:mutated'],
+        ['image', 'inspect', 'propr/app:test', '--format', '{{.Id}}'],
+        ['image', 'inspect', '--help'],
+      ]) {
+        const rejected = spawn(process.execPath, [wrapper, ...args]);
+        assert.deepEqual(await once(rejected, 'close'), [97, null]);
+      }
 
       const held = spawn(process.execPath, [wrapper, 'pull', 'propr/app:test']);
-      const events = await waitForEventCount(eventsPath, 4);
+      const events = await waitForEventCount(eventsPath, 9);
       assert.equal(events.at(-1).operation, 'pull');
       held.kill('SIGTERM');
       assert.deepEqual(await once(held, 'close'), [143, null]);
-      const final = await waitForEventCount(eventsPath, 5);
+      const final = await waitForEventCount(eventsPath, 10);
       assert.equal(final.at(-1).event, 'sigterm');
       assert.deepEqual(final.filter(event => event.event === 'invoked').map(event => event.operation), [
-        'version', 'rejected', 'pull',
+        'version', 'image-inspect', 'rejected', 'rejected', 'rejected', 'pull',
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
