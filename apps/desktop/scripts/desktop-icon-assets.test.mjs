@@ -114,7 +114,10 @@ describe('desktop native icon assets', () => {
     assert.doesNotMatch(forge, /pwa-512x512|logo-only-small/);
     assert.match(main, /loadDesktopWindowIcon/);
     assert.match(main, /desktopWindowIcon\?\.image/);
+    assert.match(main, /createDesktopNotificationOptions/);
+    assert.match(main, /iconPath: desktopWindowIcon\?\.path/);
     assert.match(main, /resolveDesktopTrayIconPath/);
+    assert.match(smoke, /verifyPackagedLinuxIcon/);
     assert.match(smoke, /verifyPackagedTrayIcon/);
     assert.equal(workflow.match(/icons:verify-packaged/g)?.length, 2);
   });

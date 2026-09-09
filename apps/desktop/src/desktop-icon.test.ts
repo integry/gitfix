@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { NativeImage } from 'electron';
 import {
+  createDesktopNotificationOptions,
   DESKTOP_ICON_FILE,
   loadDesktopWindowIcon,
   resolveDesktopTrayIconPath,
@@ -94,5 +95,50 @@ describe('native desktop window icon', () => {
       }), undefined);
       assert.equal(attempted, false);
     }
+  });
+});
+
+describe('native desktop notification icon', () => {
+  it('passes the resolved transparent application artwork as a local Linux icon', () => {
+    const iconPath = `/opt/propr/resources/${DESKTOP_ICON_FILE}`;
+    assert.deepEqual(createDesktopNotificationOptions({
+      platform: 'linux',
+      title: 'Task completed',
+      body: 'integry/propr · Task #2248',
+      iconPath,
+    }), {
+      title: 'Task completed',
+      body: 'integry/propr · Task #2248',
+      icon: iconPath,
+    });
+  });
+
+  it('requires Linux notification artwork to use an absolute local path', () => {
+    for (const iconPath of [undefined, DESKTOP_ICON_FILE]) {
+      assert.throws(() => createDesktopNotificationOptions({
+        platform: 'linux',
+        title: 'Task completed',
+        body: 'Task',
+        iconPath,
+      }), /absolute ProPR application icon path/);
+    }
+  });
+
+  it('uses application identity instead of a custom per-alert icon on macOS', () => {
+    assert.deepEqual(createDesktopNotificationOptions({
+      platform: 'darwin',
+      title: 'Task completed',
+      body: 'Task',
+      iconPath: `/Applications/ProPR.app/Contents/Resources/${DESKTOP_ICON_FILE}`,
+    }), { title: 'Task completed', body: 'Task' });
+  });
+
+  it('does not opt deferred Windows notifications into custom icon handling', () => {
+    assert.deepEqual(createDesktopNotificationOptions({
+      platform: 'win32',
+      title: 'Task completed',
+      body: 'Task',
+      iconPath: `C:\\ProPR\\${DESKTOP_ICON_FILE}`,
+    }), { title: 'Task completed', body: 'Task' });
   });
 });
