@@ -263,6 +263,13 @@ async function createFallbackDatabase(): Promise<Knex> {
     table.text('tool_input');
     table.text('metadata');
   });
+  await database.schema.createTable('task_history', table => {
+    table.increments('history_id');
+    table.text('task_id').notNullable();
+    table.text('state').notNullable();
+    table.text('timestamp').notNullable();
+    table.text('metadata');
+  });
   return database;
 }
 
@@ -315,6 +322,43 @@ test('live-details database fallback preserves token usage and stable event IDs'
       cache_creation_input_tokens: 3,
       cache_read_input_tokens: 10
     });
+  } finally {
+    await database.destroy();
+  }
+});
+
+test('live-details keeps persisted goal output visible after completion cleanup', async () => {
+  const database = await createFallbackDatabase();
+  const taskId = 'goal-task-completed';
+  const outputRecords = [
+    { method: 'item/completed', params: { item: { id: 'summary', type: 'agentMessage', text: 'Implemented the requested goal.' } } },
+    { method: 'item/completed', params: { item: { id: 'tests', type: 'commandExecution', command: 'npm test', aggregatedOutput: 'passed', exitCode: 0 } } },
+    { method: 'turn/plan/updated', params: { plan: [{ step: 'Verify the completed goal', status: 'completed' }] } },
+  ].map(record => JSON.stringify(record));
+  try {
+    await database('task_history').insert({
+      task_id: taskId,
+      state: 'completed',
+      timestamp: timestamp(0),
+      metadata: JSON.stringify({ goalOutputRecords: outputRecords }),
+    });
+    const redisClient = { get: async () => null } as unknown as RedisClientType;
+    const { getLiveDetails } = createLiveDetailsRoutes({ redisClient, db: database });
+    const request = { params: { taskId } } as unknown as FlatRequest;
+    const completedResponse = createJsonResponse();
+
+    await getLiveDetails(request, completedResponse.response);
+
+    const completed = completedResponse.body() as {
+      events: Array<Record<string, unknown>>;
+      todos: Array<Record<string, unknown>>;
+      currentTask: string | null;
+    };
+    assert.deepEqual(completed.events.map(event => event.type), ['thought', 'tool_use', 'tool_result']);
+    assert.equal(completed.events[0].content, 'Implemented the requested goal.');
+    assert.equal(completed.events.every(event => typeof event.id === 'string'), true);
+    assert.deepEqual(completed.todos, [{ id: 'plan-0', content: 'Verify the completed goal', status: 'completed' }]);
+    assert.equal(completed.currentTask, null);
   } finally {
     await database.destroy();
   }
