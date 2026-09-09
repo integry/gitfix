@@ -100,8 +100,8 @@ test('Antigravity metadata includes non-Google model families', () => {
     assert.equal(getModelHardLimit('antigravity-claude-opus-4.6-thinking'), 980000);
 });
 
-test('Gemini 3.7 Flash uses the Antigravity 1M model limit', () => {
-    assert.equal(getModelHardLimit('antigravity-gemini-3.7-flash-high'), 980000);
+test('Gemini 3.8 Flash uses the Antigravity 1M model limit', () => {
+    assert.equal(getModelHardLimit('antigravity-gemini-3.8-flash-high'), 980000);
 });
 
 test('AgentRegistry creates AntigravityAgent for antigravity configs', () => {
@@ -904,6 +904,13 @@ test('Antigravity labels resolve to Antigravity models', async (t) => {
         model: 'antigravity-gemini-3.7-flash-medium'
     });
     assert.equal(resolveModelAlias('antigravity-flash37-medium'), 'antigravity-gemini-3.7-flash-medium');
+
+    const flash38Resolution = await resolveLlmLabel('antigravity-flash38-medium');
+    assert.deepEqual(flash38Resolution, {
+        agentAlias: 'antigravity',
+        model: 'antigravity-gemini-3.8-flash-medium'
+    });
+    assert.equal(resolveModelAlias('antigravity-flash38-medium'), 'antigravity-gemini-3.8-flash-medium');
 
     const prefixedResolution = await resolveLlmLabel('llm-antigravity-flash-medium'.replace(/^llm-/, ''));
     assert.deepEqual(prefixedResolution, {

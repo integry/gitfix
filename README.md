@@ -97,10 +97,10 @@ You supply your own provider credentials. The full model catalog, per-agent cred
 
 Add an `llm-<agent>-<model>` label to an issue to choose who processes it:
 
-- `llm-claude-opus5` — Claude Opus 5
-- `llm-codex-gpt54` — Codex GPT-5.4
-- `llm-opencode-deepseek-v4-flash-free` — OpenCode DeepSeek V4 Flash Free
-- `llm-antigravity-pro-high` — Antigravity Gemini 3.1 Pro High
+- `llm-claude-fable51` — Claude Fable 5.1
+- `llm-codex-astra` — Codex GPT-6 Astra
+- `llm-opencode-big-pickle` — OpenCode Big Pickle
+- `llm-antigravity-flash38-high` — Antigravity Gemini 3.8 Flash High
 - `llm-antigravity-opus46-thinking` — Antigravity Claude Opus 4.6 Thinking
 
 Multiple model labels on one issue create one independent job (and branch) per model. Add a `base-<branch>` label to target a non-default branch.

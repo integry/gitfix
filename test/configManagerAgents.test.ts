@@ -62,6 +62,7 @@ describe('agent config migration', () => {
         assert.strictEqual(agent.dockerImage, 'propr/agent:latest');
         assert.ok(agent.supportedModels.includes('claude-opus-5'));
         assert.ok(agent.supportedModels.includes('claude-sonnet-5'));
+        assert.ok(agent.supportedModels.includes('claude-fable-5-1'));
         assert.ok(agent.supportedModels.includes('claude-opus-4-6'));
         assert.ok(agent.supportedModels.includes('claude-sonnet-4-6'));
     });
@@ -88,7 +89,8 @@ describe('agent config migration', () => {
         assert.ok(codex.supportedModels.includes('gpt-5.6-terra'));
         assert.ok(codex.supportedModels.includes('gpt-5.6-luna'));
         assert.ok(codex.supportedModels.includes('gpt-5.5'));
-        assert.strictEqual(codex.defaultModel, 'gpt-5.6-sol');
+        assert.ok(codex.supportedModels.includes('gpt-6-astra'));
+        assert.strictEqual(codex.defaultModel, 'gpt-6-astra');
     });
 
     test('normalizes custom images during default CLI migration', () => {
@@ -102,7 +104,7 @@ describe('agent config migration', () => {
         assert.strictEqual(migrateAgentConfig(agent), true);
         assert.strictEqual(agent.cliVersionType, 'default');
         assert.strictEqual(agent.dockerImage, 'propr/agent:latest');
-        assert.strictEqual(agent.defaultModel, 'gpt-5.6-sol');
+        assert.strictEqual(agent.defaultModel, 'gpt-6-astra');
         assert.strictEqual(agent.cliVersionResolved, AGENT_DEFAULT_VERSIONS.codex);
     });
 
@@ -119,7 +121,8 @@ describe('agent config migration', () => {
         assert.ok(agent.supportedModels.includes('gpt-5.6-sol'));
         assert.ok(agent.supportedModels.includes('gpt-5.6-terra'));
         assert.ok(agent.supportedModels.includes('gpt-5.6-luna'));
-        assert.strictEqual(agent.defaultModel, 'gpt-5.6-sol');
+        assert.ok(agent.supportedModels.includes('gpt-6-astra'));
+        assert.strictEqual(agent.defaultModel, 'gpt-6-astra');
         assert.strictEqual(agent.cliVersionResolved, AGENT_DEFAULT_VERSIONS.codex);
     });
 
@@ -175,12 +178,12 @@ describe('agent config migration', () => {
 
         assert.strictEqual(migrateAgentConfig(agent), true);
         assert.ok(!agent.supportedModels.includes('opencode-minimax-m3-free'));
-        assert.ok(agent.supportedModels.includes('opencode-deepseek-v4-flash-free'));
-        assert.ok(agent.supportedModels.includes('opencode-laguna-s-2.1-free'));
-        assert.ok(agent.supportedModels.includes('opencode-ling-3.0-flash-free'));
-        assert.ok(agent.supportedModels.includes('opencode-north-mini-code-free'));
+        assert.ok(agent.supportedModels.includes('opencode-big-pickle'));
+        assert.ok(agent.supportedModels.includes('opencode-ling-3.0-flash-fin-free'));
+        assert.ok(agent.supportedModels.includes('opencode-muse-spark-1.3-contributor-free'));
+        assert.ok(!agent.supportedModels.includes('opencode-deepseek-v4-flash-free'));
         assert.ok(agent.supportedModels.includes('opencode-openai/gpt-5.5'));
-        assert.strictEqual(agent.defaultModel, 'opencode-deepseek-v4-flash-free');
+        assert.strictEqual(agent.defaultModel, 'opencode-big-pickle');
     });
 
     test('migrates legacy Antigravity config paths to Gemini credentials', () => {
@@ -195,7 +198,7 @@ describe('agent config migration', () => {
         assert.strictEqual(agent.configPath, '~/.gemini');
     });
 
-    test('adds Gemini 3.7 tiers without changing an existing Antigravity default', () => {
+    test('adds Gemini 3.8 tiers without changing an existing Antigravity default', () => {
         const existingDefault = 'antigravity-gemini-3.6-flash-medium';
         const agent = createAgent({
             type: 'antigravity',
@@ -206,10 +209,24 @@ describe('agent config migration', () => {
         });
 
         assert.strictEqual(migrateAgentConfig(agent), true);
-        assert.ok(agent.supportedModels.includes('antigravity-gemini-3.7-flash-high'));
-        assert.ok(agent.supportedModels.includes('antigravity-gemini-3.7-flash-medium'));
-        assert.ok(agent.supportedModels.includes('antigravity-gemini-3.7-flash-low'));
+        assert.ok(agent.supportedModels.includes('antigravity-gemini-3.8-flash-high'));
+        assert.ok(agent.supportedModels.includes('antigravity-gemini-3.8-flash-medium'));
+        assert.ok(agent.supportedModels.includes('antigravity-gemini-3.8-flash-low'));
         assert.strictEqual(agent.defaultModel, existingDefault);
         assert.strictEqual(agent.cliVersionResolved, AGENT_DEFAULT_VERSIONS.antigravity);
+    });
+
+    test('removes retired Vibe models and repairs a stale default', () => {
+        const agent = createAgent({
+            type: 'vibe',
+            supportedModels: ['devstral-small'],
+            defaultModel: 'devstral-small',
+            cliVersionType: 'default',
+            cliVersionResolved: AGENT_DEFAULT_VERSIONS.vibe
+        });
+
+        assert.strictEqual(migrateAgentConfig(agent), true);
+        assert.deepStrictEqual(agent.supportedModels, ['mistral-medium-3.5']);
+        assert.strictEqual(agent.defaultModel, 'mistral-medium-3.5');
     });
 });

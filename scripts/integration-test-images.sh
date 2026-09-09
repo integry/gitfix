@@ -241,9 +241,9 @@ echo "▸ configuring agents"
 # containers via docker socket, the bind mount resolves correctly on the host.
 ANTIGRAVITY_CFG="${HOME}/.gemini"
 VIBE_CFG="${HOME}/.vibe"
-VIBE_MODELS="${PROPR_E2E_VIBE_MODELS:-mistral-medium-3.5,devstral-small}"
-ANTIGRAVITY_MODELS="${PROPR_E2E_ANTIGRAVITY_MODELS:-antigravity-gemini-3.7-flash-medium,antigravity-gemini-3.7-flash-high,antigravity-gemini-3.7-flash-low,antigravity-gemini-3.6-flash-medium,antigravity-gemini-3.6-flash-high,antigravity-gemini-3.6-flash-low,antigravity-gemini-3.5-flash-medium,antigravity-gemini-3.5-flash-high,antigravity-gemini-3.5-flash-low,antigravity-gemini-3.1-pro-low,antigravity-gemini-3.1-pro-high,antigravity-claude-sonnet-4.6-thinking,antigravity-claude-opus-4.6-thinking,antigravity-gpt-oss-120b-medium}"
-OPENCODE_MODELS="${PROPR_E2E_OPENCODE_MODELS:-opencode-deepseek-v4-flash-free,opencode-go/qwen3.7-max,opencode-openai/gpt-5.5}"
+VIBE_MODELS="${PROPR_E2E_VIBE_MODELS:-mistral-medium-3.5}"
+ANTIGRAVITY_MODELS="${PROPR_E2E_ANTIGRAVITY_MODELS:-antigravity-gemini-3.8-flash-medium,antigravity-gemini-3.8-flash-high,antigravity-gemini-3.8-flash-low,antigravity-gemini-3.7-flash-medium,antigravity-gemini-3.7-flash-high,antigravity-gemini-3.7-flash-low,antigravity-gemini-3.6-flash-medium,antigravity-gemini-3.6-flash-high,antigravity-gemini-3.6-flash-low,antigravity-gemini-3.5-flash-medium,antigravity-gemini-3.5-flash-high,antigravity-gemini-3.5-flash-low,antigravity-gemini-3.1-pro-low,antigravity-gemini-3.1-pro-high,antigravity-claude-sonnet-4.6-thinking,antigravity-claude-opus-4.6-thinking,antigravity-gpt-oss-120b-medium}"
+OPENCODE_MODELS="${PROPR_E2E_OPENCODE_MODELS:-opencode-big-pickle,opencode-go/qwen3.7-max,opencode-openai/gpt-5.5}"
 json_array_from_csv() {
   local csv="$1"
   node -e 'const values = process.argv[1].split(",").map(v => v.trim()).filter(Boolean); console.log(JSON.stringify(values));' "$csv"
