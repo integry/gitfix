@@ -207,8 +207,10 @@
 .desktop-instance-copy .desktop-connection-dot { display: inline-block; margin-right: .32rem; vertical-align: .04rem; }
 .desktop-instance-action { color: #7c8d8c; }
 .desktop-connection-dot { width: .42rem; height: .42rem; border-radius: 50%; background: #24a36f; box-shadow: 0 0 0 2px rgba(36,163,111,.12); }
+.desktop-connection-reconnecting .desktop-connection-dot { background: #d47b36; }
 .desktop-connection-offline .desktop-connection-dot { background: #d47b36; }
 .desktop-connection-incompatible .desktop-connection-dot { background: #c4483b; }
+.desktop-connection-reconnecting .desktop-instance-icon { color: #a45d24; background: #fff3e8; }
 .desktop-connection-offline .desktop-instance-icon { color: #a45d24; background: #fff3e8; }
 .desktop-connection-incompatible .desktop-instance-icon { color: #ad392e; background: #fff0ed; }
 

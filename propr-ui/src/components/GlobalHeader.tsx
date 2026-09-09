@@ -21,6 +21,7 @@ interface GlobalHeaderProps {
   MenuIcon: React.FC<{ className?: string }>;
   isDemoMode?: boolean;
   headerStatsOverride?: Pick<HeaderStats, 'runningCount' | 'runningItems' | 'activePlans' | 'reviewGroups' | 'systemHealth'> & {
+    activityStatus?: HeaderStats['activityStatus'];
     dismissPlan?: HeaderStats['dismissPlan'];
     dismissTask?: HeaderStats['dismissTask'];
   };
@@ -35,6 +36,7 @@ function resolveHeaderStats(
   return {
     runningCount: override?.runningCount ?? stats.runningCount,
     runningItems: override?.runningItems ?? stats.runningItems,
+    activityStatus: override?.activityStatus ?? stats.activityStatus,
     activePlans: override?.activePlans ?? stats.activePlans,
     reviewGroups: override?.reviewGroups ?? stats.reviewGroups,
     systemHealth: override?.systemHealth ?? stats.systemHealth,
@@ -117,7 +119,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggl
   const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   const headerStats = useHeaderStats();
-  const { runningCount, runningItems, activePlans, reviewGroups, systemHealth, dismissPlan, dismissTask } = resolveHeaderStats(headerStatsOverride, headerStats);
+  const { runningCount, runningItems, activityStatus, activePlans, reviewGroups, systemHealth, dismissPlan, dismissTask } = resolveHeaderStats(headerStatsOverride, headerStats);
 
   const handleNewPlan = useCallback(() => {
     if (isDemoMode) return;
@@ -144,9 +146,9 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggl
         </button>
       </div>
 
-      {runningCount > 0 && (
+      {(runningCount > 0 || activityStatus !== 'available') && (
         <div className="hidden sm:flex items-center relative">
-          <AIActivityMonitor runningItems={runningItems} runningCount={runningCount} />
+          <AIActivityMonitor runningItems={runningItems} runningCount={runningCount} status={activityStatus} />
           <div className="absolute right-0 top-[20%] h-[60%] w-px bg-slate-200" />
         </div>
       )}
