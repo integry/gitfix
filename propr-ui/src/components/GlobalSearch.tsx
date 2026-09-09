@@ -159,7 +159,7 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ inputRef: externalInputRef 
           onFocus={handleFocus}
           aria-label="Search"
           placeholder="Search..."
-          className="w-full bg-white py-1.5 pl-9 pr-14 text-sm text-gray-900 placeholder-gray-400 transition-colors border border-slate-300 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:py-2 sm:pl-12 sm:pr-16"
+          className="w-full rounded-lg border-0 bg-slate-100 py-1.5 pl-9 pr-14 text-sm text-gray-900 shadow-inner placeholder-gray-400 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 sm:py-2 sm:pl-12 sm:pr-16"
         />
         {/* Clear button or loading indicator */}
         {query && (

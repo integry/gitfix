@@ -54,7 +54,7 @@ describe('desktop BrowserWindow security', () => {
       assert.deepEqual(options.titleBarOverlay, {
         color: '#f8fafc',
         symbolColor: '#475569',
-        height: 56,
+        height: 36,
       });
       assert.equal(options.autoHideMenuBar, true);
     }

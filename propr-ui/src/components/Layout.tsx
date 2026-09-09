@@ -189,10 +189,16 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     <Link
       key={item.name}
       to={item.href}
-      className={`flex items-center px-4 py-3 text-sm font-medium transition-all duration-200 border-r-2 ${
+      className={`flex items-center text-sm font-medium transition-colors duration-150 ${
+        desktop ? 'mx-2 rounded-lg px-3 py-2.5' : 'border-r-2 px-4 py-3'
+      } ${
         isActive(item.href)
-          ? 'bg-red-50 text-primary-600 border-primary-600 font-medium'
-          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border-transparent'
+          ? desktop
+            ? 'bg-teal-50 text-teal-700'
+            : 'bg-red-50 text-primary-600 border-primary-600 font-medium'
+          : desktop
+            ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border-transparent'
       }`}
     >
       <item.icon className="w-5 h-5 mr-3" />
@@ -222,6 +228,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   return (
     <div className="desktop-shell flex h-full min-h-0 flex-col overflow-hidden bg-light-100 relative">
+      {desktop && (
+        <div className="desktop-native-titlebar" aria-hidden="true">
+          <span>ProPR Desktop</span>
+        </div>
+      )}
       <div className="desktop-shell-content relative flex min-h-0 flex-1 overflow-hidden">
       {/* Mobile Overlay */}
       {isSidebarOpen && (

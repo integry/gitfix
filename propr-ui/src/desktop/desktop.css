@@ -19,7 +19,10 @@
   content: '';
   position: fixed;
   inset: 0 0 auto;
-  height: 3.5rem;
+  z-index: 50;
+  height: 36px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
   -webkit-app-region: drag;
 }
 
@@ -31,6 +34,76 @@
 
 .desktop-app > .desktop-shell {
   height: 100%;
+}
+
+.desktop-native-titlebar {
+  position: relative;
+  z-index: 50;
+  display: flex;
+  height: 36px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: .6875rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.desktop-native-titlebar > span {
+  pointer-events: none;
+}
+
+.desktop-entry,
+.desktop-app,
+.desktop-modal-backdrop,
+.desktop-entry *,
+.desktop-app *,
+.desktop-modal-backdrop * {
+  scrollbar-color: #64748b transparent;
+  scrollbar-width: thin;
+}
+
+.desktop-entry::-webkit-scrollbar,
+.desktop-app::-webkit-scrollbar,
+.desktop-modal-backdrop::-webkit-scrollbar,
+.desktop-entry *::-webkit-scrollbar,
+.desktop-app *::-webkit-scrollbar,
+.desktop-modal-backdrop *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.desktop-entry::-webkit-scrollbar-track,
+.desktop-app::-webkit-scrollbar-track,
+.desktop-modal-backdrop::-webkit-scrollbar-track,
+.desktop-entry *::-webkit-scrollbar-track,
+.desktop-app *::-webkit-scrollbar-track,
+.desktop-modal-backdrop *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.desktop-entry::-webkit-scrollbar-thumb,
+.desktop-app::-webkit-scrollbar-thumb,
+.desktop-modal-backdrop::-webkit-scrollbar-thumb,
+.desktop-entry *::-webkit-scrollbar-thumb,
+.desktop-app *::-webkit-scrollbar-thumb,
+.desktop-modal-backdrop *::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: #64748b;
+}
+
+.desktop-entry::-webkit-scrollbar-thumb:hover,
+.desktop-app::-webkit-scrollbar-thumb:hover,
+.desktop-modal-backdrop::-webkit-scrollbar-thumb:hover,
+.desktop-entry *::-webkit-scrollbar-thumb:hover,
+.desktop-app *::-webkit-scrollbar-thumb:hover,
+.desktop-modal-backdrop *::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }
 
 .desktop-brand {
@@ -230,25 +303,8 @@
 .desktop-add-instance { width: 100%; margin-top: .8rem; }
 
 .desktop-app .desktop-shell-content > aside { box-shadow: none; background: #fbfdfd; }
-.desktop-app .desktop-shell-content > aside nav a { border-right-width: 0; border-left: 2px solid transparent; }
-.desktop-app .desktop-shell-content > aside nav a.bg-red-50 { border-left-color: #1d8a8a; background: #edf7f6; }
 .desktop-app .desktop-shell-content header { box-shadow: none; }
-.desktop-app .desktop-sidebar-header,
-.desktop-app .desktop-main-content > header { -webkit-app-region: drag; }
-.desktop-app .desktop-sidebar-header a,
-.desktop-app .desktop-sidebar-header button,
-.desktop-app .desktop-main-content > header a,
-.desktop-app .desktop-main-content > header button,
-.desktop-app .desktop-main-content > header input,
-.desktop-app .desktop-main-content > header kbd,
 .desktop-app .desktop-toolbar-popover { -webkit-app-region: no-drag; }
-.desktop-platform-macos .desktop-sidebar-header { padding-left: 5rem; }
-.desktop-platform-linux .desktop-content-toolbar > :last-child,
-.desktop-platform-windows .desktop-content-toolbar > :last-child { margin-right: 8.75rem; }
-
-@media (max-width: 1023px) {
-  .desktop-platform-macos .desktop-main-content > header { padding-left: 5rem; }
-}
 
 .desktop-setup-wizard { width: min(100%, 46rem); border: 1px solid #d7e3e2; border-radius: 1.2rem; padding: 2rem; color: #263938; background: rgba(255,255,255,.97); box-shadow: 0 24px 70px rgba(25,48,48,.12); }
 .desktop-setup-wizard > .desktop-back-button { margin-bottom: 1.4rem; }

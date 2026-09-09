@@ -242,7 +242,7 @@ const Dashboard: React.FC = () => {
         <div className="hidden lg:block w-px bg-gray-200" />
 
         {/* Right Column (30%) - Unified Analytics Rail */}
-        <div className="lg:w-[30%] border-t lg:border-t-0 border-gray-200 bg-[#F8FAFC]">
+        <div className="dashboard-metrics-pane lg:w-[30%] border-t lg:border-t-0 border-gray-200 bg-slate-50">
           {/* Stats Grid - Top of Analytics Column */}
           <StatsGrid
             queueStats={queueStats}

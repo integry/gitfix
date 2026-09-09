@@ -96,10 +96,10 @@ describe('GlobalHeader desktop toolbar', () => {
     const [left, center, right] = Array.from(toolbar!.children) as HTMLElement[];
     expect(within(left).getByRole('button', { name: '0 Plans' })).toBeInTheDocument();
     expect(within(left).getByRole('button', { name: '1 Task' })).toBeInTheDocument();
-    expect(within(center).getByRole('textbox', { name: 'Search' })).toBeInTheDocument();
+    expect(within(center).getByRole('textbox', { name: 'Search' })).toHaveClass('border-0', 'bg-slate-100');
     expect(within(center).getByText('⌘K')).toBeInTheDocument();
     expect(within(right).getByRole('button', { name: 'Quick add to-do' })).toBeInTheDocument();
-    expect(within(right).getByRole('button', { name: 'New Plan' })).toBeInTheDocument();
+    expect(within(right).getByRole('button', { name: 'New Plan' })).toHaveClass('border-0', 'bg-teal-600');
     expect(within(right).getByRole('button', { name: 'System Status' })).toBeInTheDocument();
     expect(within(toolbar!).queryByText('The Octocat')).not.toBeInTheDocument();
     expect(within(toolbar!).queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument();

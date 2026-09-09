@@ -122,7 +122,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggl
             onClick={handleNewPlan}
             disabled={isDemoMode}
             title={newPlanTitle}
-            className={`flex items-center gap-2 whitespace-nowrap px-3 py-1.5 text-white text-sm font-medium hover:bg-teal-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed xl:px-4 ${newPlanBg}`}
+            className={`flex items-center gap-2 whitespace-nowrap rounded-lg border-0 px-3 py-1.5 text-white text-sm font-medium hover:bg-teal-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed xl:px-4 ${newPlanBg}`}
           >
             <ScrollText className="w-4 h-4" />
             <span>New Plan</span>

@@ -72,15 +72,23 @@ describe('Layout desktop instance selector', () => {
     mocks.socket.isConnected = true;
   });
 
-  it('places the labelled selector in the sidebar without duplicate desktop chrome', async () => {
+  it('places the labelled selector below dedicated native desktop chrome', async () => {
     renderLayout(desktopValue());
 
+    const titlebar = document.querySelector('.desktop-native-titlebar');
+    expect(titlebar).toHaveTextContent('ProPR Desktop');
+    expect(titlebar?.nextElementSibling).toHaveClass('desktop-shell-content');
     const selector = screen.getByRole('button', { name: 'Connected: This computer' });
     expect(selector.closest('aside')).not.toBeNull();
     expect(screen.getByText('Instance')).toBeInTheDocument();
     expect(screen.getByText('Local instance')).toBeInTheDocument();
     expect(screen.getByText('Connected')).toBeInTheDocument();
-    expect(document.querySelector('.desktop-titlebar')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveClass(
+      'mx-2',
+      'rounded-lg',
+      'bg-teal-50',
+      'text-teal-700',
+    );
     expect(screen.getByTestId('global-header')).toHaveTextContent('GitHub user');
     const profile = screen.getByText('@octocat').closest('.desktop-sidebar-profile');
     expect(profile?.closest('aside')).not.toBeNull();

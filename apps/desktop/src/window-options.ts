@@ -91,7 +91,7 @@ export const createBrowserWindowOptions = (
           titleBarOverlay: {
             color: '#f8fafc',
             symbolColor: '#475569',
-            height: 56,
+            height: 36,
           },
           autoHideMenuBar: true,
         }),
