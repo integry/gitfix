@@ -25,6 +25,7 @@ import {
   type DesktopConnectionScope,
   type DesktopPairingFailureCode as ContractDesktopPairingFailureCode,
   type DesktopPairingProgress as ContractDesktopPairingProgress,
+  type DesktopPairingApprovalActionResult,
   isDesktopPairingOperationId,
 } from './shared/contract';
 import { normalizeApiBaseUrl } from './security';
@@ -46,6 +47,7 @@ export interface CredentialServiceDependencies {
     | 'pendingRevocations' | 'completePendingRevocation' | 'awaitIdle'>;
   fetch: typeof globalThis.fetch;
   openPairingBrowser(request: DesktopPairingBrowserRequest): Promise<void>;
+  copyPairingApproval?(request: DesktopPairingBrowserRequest): void | Promise<void>;
   clientName: string;
   /** Deterministic pairing timing for protocol tests. Production uses the client defaults. */
   pairingTiming?: Pick<ProprDesktopPairingOptions, 'sleep' | 'now'>;
@@ -183,6 +185,18 @@ interface PendingActivation {
   activeProfileId: string | null;
   credential: StoredCredential;
   identityEpoch: string;
+  connectClaim: DesktopConnectIdentityClaimSnapshot;
+}
+
+interface PendingPairingApproval {
+  operationId: string;
+  profileId: string;
+  origin: string;
+  request: DesktopPairingBrowserRequest;
+  expiresAt: number;
+  profileGeneration: number;
+  selectionGeneration: number;
+  controller: AbortController;
   connectClaim: DesktopConnectIdentityClaimSnapshot;
 }
 
@@ -449,6 +463,7 @@ export class DesktopCredentialService {
   readonly #profiles: CredentialServiceDependencies['profiles'];
   readonly #fetch: typeof globalThis.fetch;
   readonly #openPairingBrowser: (request: DesktopPairingBrowserRequest) => Promise<void>;
+  readonly #copyPairingApproval: (request: DesktopPairingBrowserRequest) => void | Promise<void>;
   readonly #clientName: string;
   readonly #pairingTiming: Pick<ProprDesktopPairingOptions, 'sleep' | 'now'>;
   readonly #pairingProtocol: PairingProtocolRequestOptions;
@@ -462,6 +477,7 @@ export class DesktopCredentialService {
   readonly #lifecycleController = new AbortController();
   readonly #profileGenerations = new Map<string, number>();
   readonly #pairingControllers = new Map<string, AbortController>();
+  readonly #pendingPairingApprovals = new Map<string, PendingPairingApproval>();
   #selectionGeneration = 0;
   #latestProbeTicket = 0;
   #pendingActivation: PendingActivation | null = null;
@@ -481,6 +497,9 @@ export class DesktopCredentialService {
     this.#profiles = dependencies.profiles;
     this.#fetch = dependencies.fetch;
     this.#openPairingBrowser = dependencies.openPairingBrowser;
+    this.#copyPairingApproval = dependencies.copyPairingApproval ?? (() => {
+      throw new Error('Desktop pairing approval clipboard is unavailable');
+    });
     this.#clientName = dependencies.clientName;
     this.#pairingTiming = dependencies.pairingTiming ?? {};
     this.#pairingProtocol = dependencies.pairingProtocol ?? {};
@@ -585,6 +604,7 @@ export class DesktopCredentialService {
     for (const controller of this.#operationControllers) controller.abort(new Error('Desktop credential service disposed'));
     for (const controller of this.#pairingControllers.values()) controller.abort();
     this.#pairingControllers.clear();
+    this.#pendingPairingApprovals.clear();
     this.#disposePromise = (async () => {
       await this.#awaitIdle();
       await this.#profiles.awaitIdle();
@@ -651,6 +671,7 @@ export class DesktopCredentialService {
     this.#pendingActivation = null;
     for (const controller of this.#pairingControllers.values()) controller.abort();
     this.#pairingControllers.clear();
+    this.#pendingPairingApprovals.clear();
     this.#active = null;
     this.#schedulePendingRevocationRetry();
     await this.#profiles.setActive(profileId);
@@ -669,6 +690,24 @@ export class DesktopCredentialService {
     }
   }
 
+  async reopenPairingApproval(
+    profileId: string,
+    operationId: string,
+  ): Promise<DesktopPairingApprovalActionResult> {
+    return this.#usePendingPairingApproval(profileId, operationId, async request => {
+      await this.#openPairingBrowser(request);
+    });
+  }
+
+  async copyPendingPairingApproval(
+    profileId: string,
+    operationId: string,
+  ): Promise<DesktopPairingApprovalActionResult> {
+    return this.#usePendingPairingApproval(profileId, operationId, async request => {
+      await this.#copyPairingApproval(request);
+    });
+  }
+
   #cancelPairingNow(profileId: string): void {
     const generation = this.#bumpGeneration(profileId);
     // Cancelling an in-progress edit must not disable the still-committed
@@ -676,6 +715,7 @@ export class DesktopCredentialService {
     if (this.#active?.profileId === profileId) this.#active.profileGeneration = generation;
     this.#pairingControllers.get(profileId)?.abort();
     this.#pairingControllers.delete(profileId);
+    this.#pendingPairingApprovals.delete(profileId);
   }
 
   async pair(input: DesktopProfileInput, operationId: string = randomUUID()): Promise<{ paired: true }> {
@@ -735,17 +775,25 @@ export class DesktopCredentialService {
           credentialGeneration,
         },
         signal: controller.signal,
-        onApprovalRequired: async (approvalUrl, _expiresAt, pairingId) => {
+        onApprovalRequired: async (approvalUrl, expiresAt, pairingId) => {
           this.#assertPairingCurrent(
             proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
           );
+          const pendingApproval: PendingPairingApproval = {
+            operationId,
+            profileId: proposed.id,
+            origin: proposed.apiBaseUrl,
+            request: { apiBaseUrl: proposed.apiBaseUrl, pairingId, approvalUrl },
+            expiresAt: Date.parse(expiresAt),
+            profileGeneration,
+            selectionGeneration,
+            controller,
+            connectClaim,
+          };
+          this.#pendingPairingApprovals.set(proposed.id, pendingApproval);
           this.#reportFixedPairingProgress({ operationId, profileId: proposed.id, stage: 'browser-opening' });
           try {
-            await this.#openPairingBrowser({
-              apiBaseUrl: proposed.apiBaseUrl,
-              pairingId,
-              approvalUrl,
-            });
+            await this.#openPairingBrowser(pendingApproval.request);
             this.#reportFixedPairingProgress({ operationId, profileId: proposed.id, stage: 'approval-pending' });
           } catch (error) {
             if (!isDesktopPairingBrowserOpenError(error)) throw error;
@@ -872,6 +920,8 @@ export class DesktopCredentialService {
       throw error;
     } finally {
       if (this.#pairingControllers.get(proposed.id) === controller) this.#pairingControllers.delete(proposed.id);
+      const pendingApproval = this.#pendingPairingApprovals.get(proposed.id);
+      if (pendingApproval?.controller === controller) this.#pendingPairingApprovals.delete(proposed.id);
     }
     } finally {
       operation.done();
@@ -1818,6 +1868,46 @@ export class DesktopCredentialService {
     if (this.#active?.profileId === profileId) this.#active = null;
     this.#pairingControllers.get(profileId)?.abort();
     this.#pairingControllers.delete(profileId);
+    this.#pendingPairingApprovals.delete(profileId);
+  }
+
+  async #usePendingPairingApproval(
+    profileId: string,
+    operationId: string,
+    action: (request: DesktopPairingBrowserRequest) => void | Promise<void>,
+  ): Promise<DesktopPairingApprovalActionResult> {
+    const operation = this.#beginOperation();
+    try {
+      if (!isDesktopPairingOperationId(operationId)) return { status: 'unavailable' };
+      const pending = this.#pendingPairingApprovals.get(profileId);
+      if (!pending || pending.operationId !== operationId || pending.profileId !== profileId
+        || pending.origin !== pending.request.apiBaseUrl
+        || !Number.isFinite(pending.expiresAt)
+        || (this.#pairingTiming.now?.() ?? Date.now()) >= pending.expiresAt) {
+        if (pending?.operationId === operationId) this.#pendingPairingApprovals.delete(profileId);
+        return { status: 'unavailable' };
+      }
+      try {
+        this.#assertPairingCurrent(
+          pending.profileId,
+          pending.origin,
+          pending.profileGeneration,
+          pending.selectionGeneration,
+          pending.controller.signal,
+          pending.connectClaim,
+        );
+      } catch {
+        return { status: 'unavailable' };
+      }
+      try {
+        await action(pending.request);
+        return { status: 'succeeded' };
+      } catch {
+        return { status: 'failed' };
+      }
+    } finally {
+      operation.done();
+    }
   }
 
   #assertPairingCurrent(

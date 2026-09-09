@@ -31,6 +31,8 @@ The app validates compatibility and the instance's public identity before authen
 select **Sign in in browser**, complete the instance-supplied browser approval, and return to the app. The approval URL
 comes from the validated API response; the renderer cannot replace it. A ProPR Connect discovery result or
 `propr://connect` link opens a confirmation screen and never pairs, switches profiles, or sends credentials automatically.
+While Linux or macOS is waiting, **Reopen browser** retries the same approval in the default browser and **Copy approval
+link** copies it for a manual handoff. Both actions expire with the current pairing and never start a replacement request.
 
 ProPR sends external links through Electron's `shell.openExternal`, which opens the operating system's current-user
 default browser. To use Chromium, set it as that user's default HTTP and HTTPS handler in the operating-system settings.

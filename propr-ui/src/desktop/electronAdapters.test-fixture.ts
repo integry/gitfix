@@ -18,6 +18,8 @@ export const bridgeFixture = () => {
   let pairingAttempt = 0;
   const admit = vi.fn(async () => ({ operationId: pairingOperationId(++pairingAttempt) }));
   const pair = vi.fn(async () => ({ paired: true as const }));
+  const reopenApproval = vi.fn(async () => ({ status: 'succeeded' as const }));
+  const copyApproval = vi.fn(async () => ({ status: 'succeeded' as const }));
   const onDeepLink = vi.fn(() => () => undefined);
   const probe = vi.fn(async () => ({
     status: 'ready' as const,
@@ -71,7 +73,13 @@ export const bridgeFixture = () => {
       remove: async profileId => { profiles = profiles.filter(profile => profile.id !== profileId); },
       setActive: async profileId => { activeProfileId = profileId; },
     },
-    authentication: { admit, pair, cancel: vi.fn(async () => undefined) },
+    authentication: {
+      admit,
+      pair,
+      cancel: vi.fn(async () => undefined),
+      reopenApproval,
+      copyApproval,
+    },
     connection: { probe, activate, discard, invalidate: vi.fn(async () => ({ invalidated: false })) },
     discovery: { supported: true, discover, rediscover },
     lifecycle: {
@@ -91,7 +99,20 @@ export const bridgeFixture = () => {
       onProgress: () => () => undefined,
     },
   };
-  return { bridge, onDeepLink, admit, pair, probe, activate, discard, discover, rediscover, profiles: () => profiles };
+  return {
+    bridge,
+    onDeepLink,
+    admit,
+    pair,
+    reopenApproval,
+    copyApproval,
+    probe,
+    activate,
+    discard,
+    discover,
+    rediscover,
+    profiles: () => profiles,
+  };
 };
 
 export const fromProfile = (profile: StoredProfile) => ({

@@ -44,7 +44,12 @@ export interface DesktopAuthenticationAdapter {
     onProgress?: (stage: DesktopAuthenticationProgressStage) => void,
   ): Promise<void>;
   cancel?(profileId: string): Promise<void>;
+  reopenApproval?(profileId: string): Promise<DesktopPairingApprovalActionResult>;
+  copyApproval?(profileId: string): Promise<DesktopPairingApprovalActionResult>;
 }
+
+export type DesktopPairingApprovalActionResult =
+  import('../../../apps/desktop/src/shared/contract').DesktopPairingApprovalActionResult;
 
 export type DesktopAuthenticationProgressStage =
   | 'starting'

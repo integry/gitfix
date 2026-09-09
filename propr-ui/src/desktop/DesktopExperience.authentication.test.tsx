@@ -85,7 +85,18 @@ describe('DesktopExperience authentication', () => {
 
     act(() => reportProgress?.('approval-pending'));
     expect(await screen.findByText(/finish signing in and approve ProPR Desktop/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Reopen browser/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy approval link/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Cancel sign in/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Copy approval link/i }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Approval link copied.');
+    expect(adapters.authentication.copyApproval).toHaveBeenCalledWith(remoteProfile.id);
+
+    vi.mocked(adapters.authentication.reopenApproval!).mockResolvedValueOnce({ status: 'failed' });
+    fireEvent.click(screen.getByRole('button', { name: /Reopen browser/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not reopen.*default browser.*copy the link/i);
+    expect(document.body).not.toHaveTextContent(/https?:\/\/|pairing_id|device_secret/i);
 
     fireEvent.click(screen.getByRole('button', { name: /Cancel sign in/i }));
     expect(await screen.findByRole('button', { name: /Sign in in browser/i })).toBeInTheDocument();
@@ -109,6 +120,8 @@ describe('DesktopExperience authentication', () => {
 
     expect(await screen.findByText(/could not confirm that your browser opened/i)).toBeInTheDocument();
     expect(screen.getByText(/if the approval page appeared, finish there/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Reopen browser/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy approval link/i })).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/pairing_id|device_secret|xdg-open/i);
   });
 

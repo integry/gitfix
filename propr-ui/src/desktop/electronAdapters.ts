@@ -3,6 +3,7 @@ import { isProprLoopbackHostname, parseProprConnectEndpoint } from '@propr/share
 import type { DesktopBridge, DesktopDiscoveryCandidate, DesktopProfile as StoredDesktopProfile } from '../../../apps/desktop/src/shared/contract';
 import { getDesktopConnectionScope, setDesktopConnectionScope } from '../api/apiClient';
 import { DesktopAuthenticationError, type DesktopAdapters, type DesktopPlatform, type DesktopProfile } from './types';
+import type { DesktopPairingApprovalActionResult } from './types';
 import { reportPackagedAcceptanceRendererLifecycle } from './packagedAcceptanceRendererLifecycle';
 
 const platform = (value: string): DesktopPlatform => {
@@ -82,8 +83,18 @@ const clearRendererProfileState = (): boolean => {
   }
 };
 
+const safePairingApprovalActionResult = (value: unknown): DesktopPairingApprovalActionResult => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { status: 'failed' };
+  const result = value as Record<string, unknown>;
+  return Object.keys(result).length === 1
+    && ['succeeded', 'unavailable', 'failed'].includes(result.status as string)
+    ? { status: result.status as DesktopPairingApprovalActionResult['status'] }
+    : { status: 'failed' };
+};
+
 export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAdapters => {
   let publishedProfile: { id: string; origin: string; identityEpoch: string } | null = null;
+  const pairingOperations = new Map<string, string>();
   const desktopPlatform = platform(navigator.platform || navigator.userAgent);
   return {
   platform: desktopPlatform,
@@ -137,6 +148,7 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
   authentication: {
     async authenticate(profile, onProgress) {
       const { operationId } = await bridge.authentication.admit(profile.id);
+      pairingOperations.set(profile.id, operationId);
       const unsubscribe = bridge.authentication.onProgress?.(progress => {
         if (progress.profileId === profile.id && progress.operationId === operationId) onProgress?.(progress.stage);
       }) ?? (() => undefined);
@@ -145,11 +157,29 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
         if (!result.paired) throw new DesktopAuthenticationError(result.code);
       } finally {
         unsubscribe();
+        if (pairingOperations.get(profile.id) === operationId) pairingOperations.delete(profile.id);
       }
     },
-    cancel(profileId) {
+    async cancel(profileId) {
+      pairingOperations.delete(profileId);
       return bridge.authentication.cancel(profileId);
     },
+    ...(desktopPlatform !== 'windows' ? {
+      async reopenApproval(profileId: string) {
+        const operationId = pairingOperations.get(profileId);
+        if (!operationId) return { status: 'unavailable' as const };
+        return safePairingApprovalActionResult(
+          await bridge.authentication.reopenApproval(profileId, operationId),
+        );
+      },
+      async copyApproval(profileId: string) {
+        const operationId = pairingOperations.get(profileId);
+        if (!operationId) return { status: 'unavailable' as const };
+        return safePairingApprovalActionResult(
+          await bridge.authentication.copyApproval(profileId, operationId),
+        );
+      },
+    } : {}),
   },
   externalBrowser: { open: url => bridge.external.open(url) },
   localSetup: {

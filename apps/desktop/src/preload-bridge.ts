@@ -173,6 +173,10 @@ export const createDesktopBridge = (
       },
       pair: (profile, operationId) => invoke(ipc, IPC_CHANNELS.authenticationPair, profile, operationId),
       cancel: (profileId) => invoke(ipc, IPC_CHANNELS.authenticationCancel, profileId),
+      reopenApproval: (profileId, operationId) =>
+        invoke(ipc, IPC_CHANNELS.authenticationReopenApproval, profileId, operationId),
+      copyApproval: (profileId, operationId) =>
+        invoke(ipc, IPC_CHANNELS.authenticationCopyApproval, profileId, operationId),
       onProgress: listener => {
         pairingProgressListeners.add(listener);
         return () => pairingProgressListeners.delete(listener);

@@ -14,6 +14,8 @@ export const IPC_CHANNELS = Object.freeze({
   authenticationPairAdmit: 'desktop:authentication-pair-admit',
   authenticationPair: 'desktop:authentication-pair',
   authenticationCancel: 'desktop:authentication-cancel',
+  authenticationReopenApproval: 'desktop:authentication-reopen-approval',
+  authenticationCopyApproval: 'desktop:authentication-copy-approval',
   authenticationProgress: 'desktop:authentication-progress',
   connectionProbe: 'desktop:connection-probe',
   connectionActivate: 'desktop:connection-activate',
@@ -134,6 +136,10 @@ export interface DesktopPairingProgress {
   profileId: string;
   stage: 'browser-opening' | 'approval-pending' | 'browser-open-failed';
 }
+
+export type DesktopPairingApprovalActionResult = {
+  status: 'succeeded' | 'unavailable' | 'failed';
+};
 
 /** Secret-free candidate projected by the trusted main-process discovery service. */
 export interface DesktopDiscoveryCandidate {
@@ -379,6 +385,8 @@ export interface DesktopBridge {
     admit(profileId: string): Promise<{ operationId: string }>;
     pair(profile: DesktopProfileInput, operationId: string): Promise<DesktopPairingResult>;
     cancel(profileId: string): Promise<void>;
+    reopenApproval(profileId: string, operationId: string): Promise<DesktopPairingApprovalActionResult>;
+    copyApproval(profileId: string, operationId: string): Promise<DesktopPairingApprovalActionResult>;
     onProgress?(listener: (progress: DesktopPairingProgress) => void): () => void;
   };
   connection: {

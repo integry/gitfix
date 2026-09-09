@@ -116,6 +116,44 @@ describe('Electron remote instance adapters', () => {
     }));
     expect(currentProgress).toEqual(['approval-pending']);
   });
+
+  it('binds approval recovery to the current admitted operation and drops it on cancellation', async () => {
+    const fixture = bridgeFixture();
+    fixture.pair.mockImplementation(async () => await new Promise(() => undefined));
+    const adapters = createElectronDesktopAdapters(fixture.bridge);
+    const profile = (await adapters.profiles.list())[0];
+
+    void adapters.authentication.authenticate(profile);
+    await vi.waitFor(() => expect(fixture.pair).toHaveBeenCalledOnce());
+    await expect(adapters.authentication.reopenApproval?.(profile.id)).resolves.toEqual({ status: 'succeeded' });
+    await expect(adapters.authentication.copyApproval?.(profile.id)).resolves.toEqual({ status: 'succeeded' });
+    expect(fixture.reopenApproval).toHaveBeenCalledWith(profile.id, pairingOperationId(1));
+    expect(fixture.copyApproval).toHaveBeenCalledWith(profile.id, pairingOperationId(1));
+
+    fixture.reopenApproval.mockResolvedValueOnce({
+      status: 'succeeded',
+      approvalUrl: 'https://must-not-cross-renderer.invalid',
+    } as never);
+    await expect(adapters.authentication.reopenApproval?.(profile.id)).resolves.toEqual({ status: 'failed' });
+
+    await adapters.authentication.cancel?.(profile.id);
+    await expect(adapters.authentication.copyApproval?.(profile.id)).resolves.toEqual({ status: 'unavailable' });
+    expect(fixture.copyApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers pairing approval recovery on macOS and Linux while leaving Windows deferred', () => {
+    const platform = vi.spyOn(window.navigator, 'platform', 'get');
+    platform.mockReturnValue('MacIntel');
+    const mac = createElectronDesktopAdapters(bridgeFixture().bridge);
+    expect(mac.authentication.reopenApproval).toEqual(expect.any(Function));
+    expect(mac.authentication.copyApproval).toEqual(expect.any(Function));
+
+    platform.mockReturnValue('Win32');
+    const windows = createElectronDesktopAdapters(bridgeFixture().bridge);
+    expect(windows.authentication.reopenApproval).toBeUndefined();
+    expect(windows.authentication.copyApproval).toBeUndefined();
+    platform.mockRestore();
+  });
   it('matches the shared canonical origin parity table before profile IPC', async () => {
     const fixture = bridgeFixture();
     const adapters = createElectronDesktopAdapters(fixture.bridge);

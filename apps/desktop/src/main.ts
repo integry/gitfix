@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -52,7 +52,7 @@ import {
   type DesktopNativeCommandDispatcher,
 } from './native-commands';
 import { ProfileStore, type EncryptionProvider } from './profile-store';
-import { openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
+import { copyApprovedDesktopPairingUrl, openApprovedDesktopPairingUrl, supportsAmbiguousPairingLaunchRecovery } from './pairing-browser';
 import {
   clearPackagedApprovalStorage,
   createPackagedApprovalNavigation,
@@ -1591,6 +1591,7 @@ if (!hasSingleInstanceLock) {
           : request => openApprovedDesktopPairingUrl(request, shell, {
               ambiguousOsLaunchFailure: supportsAmbiguousPairingLaunchRecovery(process.platform),
             }),
+      copyPairingApproval: request => copyApprovedDesktopPairingUrl(request, clipboard),
       clientName: `ProPR Desktop (${process.platform})`,
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
@@ -1797,6 +1798,7 @@ if (!hasSingleInstanceLock) {
       devServerUrl,
       packagedRendererUrl,
       openExternal: openAllowedExternalUrl,
+      platform: process.platform,
       rendererConsumerReady: event => {
         const ready = deepLinkDelivery.rendererConsumerReady(event.sender, event.senderFrame);
         if (ready) recordNativeEvent('desktop.deeplink.consumer_ready');

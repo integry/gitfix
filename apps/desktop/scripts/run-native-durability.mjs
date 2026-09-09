@@ -5,7 +5,7 @@ const EXPECTED = Object.freeze({
   'credential-service': 72,
   'profile-store': 37,
   'pairing-shutdown': 10,
-  'pairing-browser': 4,
+  'pairing-browser': 7,
 });
 const expectedTotal = Object.values(EXPECTED).reduce((total, count) => total + count, 0);
 const tsxCli = fileURLToPath(import.meta.resolve('tsx/cli'));

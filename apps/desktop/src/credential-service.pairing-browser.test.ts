@@ -53,6 +53,9 @@ interface PairingProofOptions {
   beforeProvisional?(): void;
   onRequest?(request: { url: string; authorization: string | null }): void;
   onProgress?(progress: DesktopPairingProgress): void;
+  now?(): number;
+  sleep?(milliseconds: number, signal?: AbortSignal): Promise<void>;
+  copyPairingApproval?(request: DesktopPairingBrowserRequest): void | Promise<void>;
 }
 
 const createService = async (
@@ -65,8 +68,12 @@ const createService = async (
   const service = new DesktopCredentialService({
     profiles: new ProfileStore(directory, encryption),
     clientName: 'Pairing sink test',
-    pairingTiming: { now: () => pairingNow, sleep: async () => undefined },
+    pairingTiming: {
+      now: proof.now ?? (() => pairingNow),
+      sleep: proof.sleep ?? (async () => undefined),
+    },
     openPairingBrowser,
+    copyPairingApproval: proof.copyPairingApproval,
     reportPairingProgress: proof.onProgress,
     fetch: async (input, init) => {
       const url = input.toString();
@@ -208,6 +215,132 @@ describe('DesktopCredentialService pairing browser sink', () => {
     ]);
     assert.equal(JSON.stringify(progress).includes('portal detail'), false);
     assert.equal(JSON.stringify(progress).includes(approvalUrl), false);
+  });
+
+  it('reopens and copies only the current unexpired pairing without restarting its protocol', async () => {
+    const opened: string[] = [];
+    const copied: string[] = [];
+    const requests: string[] = [];
+    const progress: DesktopPairingProgress[] = [];
+    let releasePoll!: () => void;
+    const sleep = async (_milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+      releasePoll = resolve;
+      signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+    });
+    const service = await createService(async request => { opened.push(request.approvalUrl); }, {
+      sleep,
+      onProgress: value => progress.push(value),
+      onRequest: request => requests.push(request.url),
+      copyPairingApproval: request => { copied.push(request.approvalUrl); },
+    });
+    const profile = { id: 'profile-a', label: 'Remote ProPR', apiBaseUrl: origin };
+    const pairing = service.pair(profile, pairingOperationId);
+    while (!releasePoll) await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(await service.reopenPairingApproval('profile-a', pairingOperationId), {
+      status: 'succeeded',
+    });
+    assert.deepEqual(await service.copyPendingPairingApproval('profile-a', pairingOperationId), {
+      status: 'succeeded',
+    });
+    assert.deepEqual(await service.reopenPairingApproval(
+      'profile-a', '00000000-0000-4000-8000-000000000002',
+    ), { status: 'unavailable' });
+    assert.deepEqual(await service.copyPendingPairingApproval('profile-b', pairingOperationId), {
+      status: 'unavailable',
+    });
+    assert.deepEqual(opened, [approvalUrl, approvalUrl]);
+    assert.deepEqual(copied, [approvalUrl]);
+    assert.equal(progress.filter(value => value.stage === 'browser-opening').length, 1);
+    assert.equal(requests.filter(url => url === `${origin}/api/desktop/pairings`).length, 1);
+    assert.equal(JSON.stringify([opened, copied, progress]).includes('D'.repeat(43)), false);
+
+    releasePoll();
+    assert.deepEqual(await pairing, { paired: true });
+    assert.deepEqual(await service.copyPendingPairingApproval('profile-a', pairingOperationId), {
+      status: 'unavailable',
+    });
+  });
+
+  it('keeps polling after an explicit reopen rejection and expires recovery at the original deadline', async () => {
+    let now = pairingNow;
+    let openCount = 0;
+    let releasePoll!: () => void;
+    const service = await createService(async () => {
+      openCount += 1;
+      if (openCount > 1) throw new Error(`private shell rejection ${approvalUrl}`);
+    }, {
+      now: () => now,
+      sleep: async (_milliseconds, signal) => new Promise<void>((resolve, reject) => {
+        releasePoll = resolve;
+        signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      }),
+    });
+    const profile = { id: 'profile-a', label: 'Remote ProPR', apiBaseUrl: origin };
+    const pairing = service.pair(profile, pairingOperationId);
+    const pairingCancelled = assert.rejects(
+      pairing,
+      error => desktopPairingFailureCode(error) === 'PAIRING_CANCELLED',
+    );
+    while (!releasePoll) await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(await service.reopenPairingApproval('profile-a', pairingOperationId), {
+      status: 'failed',
+    });
+    assert.equal(openCount, 2);
+    now = pairingNow + 10_000;
+    assert.deepEqual(await service.reopenPairingApproval('profile-a', pairingOperationId), {
+      status: 'unavailable',
+    });
+    assert.equal(openCount, 2);
+
+    await service.cancelPairing('profile-a');
+    await pairingCancelled;
+  });
+
+  it('rejects cancelled and replaced operation recovery for the same profile', async () => {
+    const copied: string[] = [];
+    const progress: DesktopPairingProgress[] = [];
+    const service = await createService(async () => undefined, {
+      sleep: async (_milliseconds, signal) => new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      }),
+      onProgress: value => progress.push(value),
+      copyPairingApproval: request => { copied.push(request.approvalUrl); },
+    });
+    const profile = { id: 'profile-a', label: 'Remote ProPR', apiBaseUrl: origin };
+    const replacementOperationId = '00000000-0000-4000-8000-000000000002';
+    const original = service.pair(profile, pairingOperationId);
+    const originalCancelled = assert.rejects(
+      original,
+      error => desktopPairingFailureCode(error) === 'PAIRING_CANCELLED',
+    );
+    while (!progress.some(value => value.operationId === pairingOperationId && value.stage === 'approval-pending')) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    const replacement = service.pair(profile, replacementOperationId);
+    const replacementCancelled = assert.rejects(
+      replacement,
+      error => desktopPairingFailureCode(error) === 'PAIRING_CANCELLED',
+    );
+    while (!progress.some(value => value.operationId === replacementOperationId && value.stage === 'approval-pending')) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+
+    assert.deepEqual(await service.copyPendingPairingApproval('profile-a', pairingOperationId), {
+      status: 'unavailable',
+    });
+    assert.deepEqual(await service.copyPendingPairingApproval('profile-a', replacementOperationId), {
+      status: 'succeeded',
+    });
+    assert.deepEqual(copied, [approvalUrl]);
+
+    await service.cancelPairing('profile-a');
+    await originalCancelled;
+    await replacementCancelled;
+    assert.deepEqual(await service.copyPendingPairingApproval('profile-a', replacementOperationId), {
+      status: 'unavailable',
+    });
   });
 
   it('classifies unavailable OS secure storage without starting discovery or pairing', async () => {
