@@ -10,10 +10,10 @@ const probeReadyMarker = 'PROPR_MENU_POPUP_PROBE_READY';
 const startupDeadlineMilliseconds = 30_000;
 const operationDeadlineMilliseconds = 15_000;
 
-const runFixture = (command, args, env = process.env) => new Promise((resolveRun, rejectRun) => {
+const runFixture = (command, args) => new Promise((resolveRun, rejectRun) => {
   const child = spawn(command, args, {
     detached: true,
-    env,
+    env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
@@ -68,8 +68,8 @@ const runFixture = (command, args, env = process.env) => new Promise((resolveRun
 });
 
 describe('Electron Linux tray menu popup', () => {
-  it('opens and dismisses production BrowserWindow owners through Linux tray activation', {
-    timeout: 2 * (startupDeadlineMilliseconds + operationDeadlineMilliseconds) + 5_000,
+  it('reopens in one process with a persistent main BrowserWindow and reports native teardown', {
+    timeout: startupDeadlineMilliseconds + operationDeadlineMilliseconds + 5_000,
   }, async context => {
     const setup = prepareNativeElectronTest({
       headlessReason: 'Electron needs a real DISPLAY or xvfb-run for the native menu boundary',
@@ -80,43 +80,48 @@ describe('Electron Linux tray menu popup', () => {
       context.skip(setup.skipReason);
       return;
     }
-    const reports = [];
-    // Exercise both Electron activation-event shapes in complete native app
-    // lifecycles. Reusing one process lets destruction of the first focused
-    // owner race XFWM's pending desktop-focus fallback against the next menu.
-    for (const activationIndex of [0, 1]) {
-      const electronArguments = ['--no-sandbox', '--disable-gpu', fixture];
-      const environment = {
-        ...process.env,
-        PROPR_MENU_POPUP_ACTIVATION_INDEX: String(activationIndex),
-      };
-      reports.push(setup.xvfbRun
-        ? await runFixture(
-            setup.xvfbRun,
-            ['--auto-servernum', setup.electronExecutable, ...electronArguments],
-            environment,
-          )
-        : await runFixture(setup.electronExecutable, electronArguments, environment));
-    }
+    const electronArguments = ['--no-sandbox', '--disable-gpu', fixture];
+    const report = setup.xvfbRun
+      ? await runFixture(setup.xvfbRun, ['--auto-servernum', setup.electronExecutable, ...electronArguments])
+      : await runFixture(setup.electronExecutable, electronArguments);
 
-    const expectedEvidence = {
-      menuWillShow: 1,
-      menuWillClose: 1,
-      trayActivations: 1,
-      opensAfterActivationDispatch: 1,
-      persistentDismissals: 1,
-      ownersCreated: 1,
-      ownersMapped: 1,
-      ownersFocused: 1,
-      ownersDestroyed: 1,
-      browserWindowOwners: 1,
-      toolbarOwners: 1,
-      menusShownWithFocusedOwner: 1,
+    assert.deepEqual(report, {
+      menuWillShow: 2,
+      menuWillClose: 2,
+      trayActivations: 2,
+      opensAfterActivationDispatch: 2,
+      persistentDismissals: 2,
+      ownersCreated: 2,
+      ownersMapped: 2,
+      ownersFocused: 2,
+      ownersDestroyed: 2,
+      browserWindowOwners: 2,
+      toolbarOwners: 2,
+      menusShownWithFocusedOwner: 2,
+      menusShownWithPersistentMainWindow: 2,
+      menuClosuresWithPersistentMainWindow: 2,
+      persistentMainWindowsCreated: 1,
+      persistentMainWindowsDestroyed: 1,
       trayDestroyed: true,
-    };
-    assert.deepEqual(reports, [
-      { probeCase: 'empty-event/direct-dismissal', ...expectedEvidence },
-      { probeCase: 'modifier-event/controller-teardown', ...expectedEvidence },
-    ]);
+      windowAllClosed: 1,
+      beforeQuit: 1,
+      willQuit: 1,
+      eventTrace: [
+        'tray-activation-1',
+        'menu-will-show-1',
+        'dismissal-requested-1',
+        'menu-will-close-1',
+        'owner-closed-1',
+        'tray-activation-2',
+        'menu-will-show-2',
+        'dismissal-requested-2',
+        'menu-will-close-2',
+        'owner-closed-2',
+        'main-window-closed',
+        'window-all-closed',
+        'before-quit',
+        'will-quit',
+      ],
+    });
   });
 });

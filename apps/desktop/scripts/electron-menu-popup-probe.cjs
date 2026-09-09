@@ -5,26 +5,138 @@ const { createLinuxTrayMenuPopup } = require('../src/linux-tray-menu.ts');
 const { createDesktopTrayController } = require('../src/system-tray.ts');
 
 const probeReadyMarker = 'PROPR_MENU_POPUP_PROBE_READY';
-const activationIndex = Number.parseInt(process.env.PROPR_MENU_POPUP_ACTIVATION_INDEX ?? '0', 10);
-if (activationIndex !== 0 && activationIndex !== 1) {
-  throw new Error(`Unsupported tray activation probe index: ${process.env.PROPR_MENU_POPUP_ACTIVATION_INDEX}`);
-}
-const probeCase = activationIndex === 0 ? 'empty-event/direct-dismissal' : 'modifier-event/controller-teardown';
 let deadline;
+let persistentMainWindow;
+let tray;
+let controller;
+let menu;
+let activeOwner;
+let menuWillShow = 0;
+let menuWillClose = 0;
+let trayActivations = 0;
+let opensAfterActivationDispatch = 0;
+let persistentDismissals = 0;
+let ownersCreated = 0;
+let ownersMapped = 0;
+let ownersFocused = 0;
+let ownersDestroyed = 0;
+let browserWindowOwners = 0;
+let toolbarOwners = 0;
+let menusShownWithFocusedOwner = 0;
+let menusShownWithPersistentMainWindow = 0;
+let menuClosuresWithPersistentMainWindow = 0;
+let persistentMainWindowsCreated = 0;
+let persistentMainWindowsDestroyed = 0;
+let windowAllClosed = 0;
+let beforeQuit = 0;
+let willQuit = 0;
+let activationDispatchReturned = true;
+let dismissalRequested = false;
+const eventTrace = [];
+
+const reportEvidence = () => {
+  clearTimeout(deadline);
+  console.log(JSON.stringify({
+    menuWillShow,
+    menuWillClose,
+    trayActivations,
+    opensAfterActivationDispatch,
+    persistentDismissals,
+    ownersCreated,
+    ownersMapped,
+    ownersFocused,
+    ownersDestroyed,
+    browserWindowOwners,
+    toolbarOwners,
+    menusShownWithFocusedOwner,
+    menusShownWithPersistentMainWindow,
+    menuClosuresWithPersistentMainWindow,
+    persistentMainWindowsCreated,
+    persistentMainWindowsDestroyed,
+    trayDestroyed: tray?.isDestroyed() ?? false,
+    windowAllClosed,
+    beforeQuit,
+    willQuit,
+    eventTrace,
+  }));
+};
+
+// Match the production Linux lifecycle: retaining any BrowserWindow prevents
+// transient menu-owner teardown from quitting the application, while closing
+// the final window deliberately quits it.
+app.on('window-all-closed', () => {
+  windowAllClosed += 1;
+  eventTrace.push('window-all-closed');
+  app.quit();
+});
+app.on('before-quit', () => {
+  beforeQuit += 1;
+  eventTrace.push('before-quit');
+});
+app.on('will-quit', () => {
+  willQuit += 1;
+  eventTrace.push('will-quit');
+  reportEvidence();
+});
 
 app.whenReady().then(() => {
+  // The desktop creates this regular hidden BrowserWindow before its tray and
+  // retains it for the whole tray lifetime. It is intentionally never shown:
+  // the menu helper must remain independent of main-window visibility.
+  persistentMainWindow = new BrowserWindow({
+    title: 'ProPR Desktop',
+    width: 1280,
+    height: 820,
+    minWidth: 880,
+    minHeight: 620,
+    backgroundColor: '#f8fafc',
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      devTools: false,
+    },
+  });
+  persistentMainWindowsCreated += 1;
+  persistentMainWindow.once('closed', () => {
+    persistentMainWindowsDestroyed += 1;
+    eventTrace.push('main-window-closed');
+  });
+
   process.stdout.write(`${probeReadyMarker}\n`);
   deadline = setTimeout(() => {
     console.error('Electron menu popup probe timed out after readiness');
     app.exit(1);
   }, 10_000);
-  let ownersCreated = 0;
-  let ownersMapped = 0;
-  let ownersDestroyed = 0;
-  let browserWindowOwners = 0;
-  let toolbarOwners = 0;
-  let ownersFocused = 0;
-  let activeOwner;
+
+  const activationEvents = [
+    {},
+    {
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      triggeredByAccelerator: false,
+    },
+  ];
+
+  const activateTray = () => {
+    trayActivations += 1;
+    eventTrace.push(`tray-activation-${trayActivations}`);
+    activationDispatchReturned = false;
+    tray.emit(
+      'click',
+      activationEvents[trayActivations - 1],
+      { x: 0, y: 0, width: 0, height: 0 },
+      screen.getCursorScreenPoint(),
+    );
+    activationDispatchReturned = true;
+  };
+
   const popup = createLinuxTrayMenuPopup({
     screen,
     environment: {},
@@ -38,70 +150,16 @@ app.whenReady().then(() => {
       owner.once('focus', () => { ownersFocused += 1; });
       owner.once('closed', () => {
         ownersDestroyed += 1;
-        // Finish this independent native lifecycle before another probe starts.
-        // Rapidly mapping a replacement while XFWM is still processing this
-        // destruction can send its pending focus fallback to the new menu.
-        controller.close();
-        finishProbe();
+        eventTrace.push(`owner-closed-${ownersDestroyed}`);
+        if (ownersDestroyed === 1) {
+          setImmediate(activateTray);
+          return;
+        }
+        persistentMainWindow?.destroy();
       });
       return owner;
     },
   });
-
-  let menuWillShow = 0;
-  let menuWillClose = 0;
-  let trayActivations = 0;
-  let opensAfterActivationDispatch = 0;
-  let persistentDismissals = 0;
-  let menusShownWithFocusedOwner = 0;
-  let activationDispatchReturned = true;
-  let dismissalRequested = false;
-  let tray;
-  let menu;
-  let controller;
-  const activationEvents = [
-    {},
-    {
-      altKey: false,
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: false,
-      triggeredByAccelerator: false,
-    },
-  ];
-
-  const finishProbe = () => {
-    clearTimeout(deadline);
-    console.log(JSON.stringify({
-      probeCase,
-      menuWillShow,
-      menuWillClose,
-      trayActivations,
-      opensAfterActivationDispatch,
-      persistentDismissals,
-      ownersCreated,
-      ownersMapped,
-      ownersFocused,
-      ownersDestroyed,
-      browserWindowOwners,
-      toolbarOwners,
-      menusShownWithFocusedOwner,
-      trayDestroyed: tray.isDestroyed(),
-    }));
-    app.quit();
-  };
-
-  const activateTray = () => {
-    trayActivations += 1;
-    activationDispatchReturned = false;
-    tray.emit(
-      'click',
-      activationEvents[activationIndex],
-      { x: 0, y: 0, width: 0, height: 0 },
-      screen.getCursorScreenPoint(),
-    );
-    activationDispatchReturned = true;
-  };
 
   controller = createDesktopTrayController({
     platform: 'linux',
@@ -114,17 +172,27 @@ app.whenReady().then(() => {
       menu = Menu.buildFromTemplate(template);
       menu.on('menu-will-show', () => {
         menuWillShow += 1;
+        eventTrace.push(`menu-will-show-${menuWillShow}`);
         if (activeOwner?.isFocused()) menusShownWithFocusedOwner += 1;
+        if (persistentMainWindow && !persistentMainWindow.isDestroyed()) {
+          menusShownWithPersistentMainWindow += 1;
+        }
         if (activationDispatchReturned) opensAfterActivationDispatch += 1;
+        const menuIndex = menuWillShow;
         const closingOwner = activeOwner;
-        setTimeout(() => {
+        setImmediate(() => {
           dismissalRequested = true;
-          if (activationIndex === 0) menu.closePopup(closingOwner);
+          eventTrace.push(`dismissal-requested-${menuIndex}`);
+          if (menuIndex === 1) menu.closePopup(closingOwner);
           else controller.close();
-        }, 100);
+        });
       });
       menu.on('menu-will-close', () => {
         menuWillClose += 1;
+        eventTrace.push(`menu-will-close-${menuWillClose}`);
+        if (persistentMainWindow && !persistentMainWindow.isDestroyed()) {
+          menuClosuresWithPersistentMainWindow += 1;
+        }
         if (dismissalRequested) persistentDismissals += 1;
         dismissalRequested = false;
       });
