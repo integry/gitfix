@@ -160,6 +160,8 @@ function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['c
   </section>;
 }
 
+// The create surface coordinates persisted settings, runtime capabilities, attachments, and demo-mode access.
+// eslint-disable-next-line complexity
 function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
   const { isDemoMode } = useDemoMode();
   const previousSettings = useMemo(readGoalFormSettings, []);
