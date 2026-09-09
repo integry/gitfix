@@ -1,5 +1,5 @@
-import { join, resolve } from 'node:path';
-import type { NativeImage } from 'electron';
+import { isAbsolute, join, resolve } from 'node:path';
+import type { NativeImage, NotificationConstructorOptions } from 'electron';
 
 export const DESKTOP_ICON_FILE = 'propr-desktop.png';
 export const TRAY_ICON_FILE = 'propr-tray.png';
@@ -14,6 +14,24 @@ export interface DesktopWindowIcon {
   path: string;
   size: { width: number; height: number };
 }
+
+export const createDesktopNotificationOptions = ({
+  platform,
+  title,
+  body,
+  iconPath,
+}: {
+  platform: NodeJS.Platform;
+  title: string;
+  body: string;
+  iconPath?: string;
+}): NotificationConstructorOptions => {
+  if (platform !== 'linux') return { title, body };
+  if (!iconPath || !isAbsolute(iconPath)) {
+    throw new Error('Linux desktop notifications require an absolute ProPR application icon path');
+  }
+  return { title, body, icon: iconPath };
+};
 
 export const resolveLinuxDesktopIconPath = ({
   isPackaged,

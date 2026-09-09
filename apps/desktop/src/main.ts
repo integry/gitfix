@@ -28,7 +28,11 @@ import { registerPackagedAcceptanceZoomIpc } from './acceptance-zoom';
 import { DeepLinkDelivery, deepLinkAcknowledgementTimeoutMs } from './deep-link-delivery';
 import { handleDeepLinkDeliveryFailure } from './deep-link-failure-policy';
 import { clearDesktopInstanceCookies } from './desktop-session';
-import { loadDesktopWindowIcon, resolveDesktopTrayIconPath } from './desktop-icon';
+import {
+  createDesktopNotificationOptions,
+  loadDesktopWindowIcon,
+  resolveDesktopTrayIconPath,
+} from './desktop-icon';
 import {
   DesktopCredentialService,
   type DesktopCurrentUserProxyEvidence,
@@ -1682,7 +1686,12 @@ if (!hasSingleInstanceLock) {
       isSupported: () => Notification.isSupported(),
       isActiveScope: scope => credentials.isActiveConnectionScope(scope),
       show: (payload, onClick) => {
-        const notification = new Notification({ title: payload.title, body: payload.body });
+        const notification = new Notification(createDesktopNotificationOptions({
+          platform: process.platform,
+          title: payload.title,
+          body: payload.body,
+          iconPath: desktopWindowIcon?.path,
+        }));
         notification.once('click', onClick);
         notification.show();
         return {

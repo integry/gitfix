@@ -37,6 +37,11 @@ macOS, menu-bar activation continues to open that menu. **Open ProPR** uses the 
 ProPR** uses the normal coordinated shutdown. Closing a window keeps the existing platform behavior—it does not enable a
 new hidden background mode. Windows tray support remains deferred.
 
+Linux native task notifications pass the same transparent, full-color ProPR application artwork to Electron as an
+absolute local icon path in both development and packaged execution. macOS notifications continue to use the app's
+bundle identity and the operating system's native presentation instead of requesting a custom per-alert icon; local
+notification testing does not require Apple signing. Windows native notifications remain deferred.
+
 ### Recovery and troubleshooting
 
 - If Linux does not show **Set up this computer**, confirm that the running artifact is a current Linux package. The
