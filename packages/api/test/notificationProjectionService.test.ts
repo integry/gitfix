@@ -123,8 +123,8 @@ describe('notification lifecycle projection', { concurrency: false }, () => {
     );
     assert.deepEqual(events.map(event => ({ title: event.title, body: event.body })), [
       {
-        title: 'PR #42 ready for review',
-        body: 'Keep only the newest actionable Inbox update.',
+        title: 'Keep only the newest actionable Inbox update.',
+        body: 'PR #42 is ready for review.',
       },
       {
         title: 'Review completed for PR #7',
@@ -281,11 +281,11 @@ describe('notification lifecycle projection', { concurrency: false }, () => {
     const listed = await new NotificationService({ database }).listNotifications('admin-user');
     const lifecycleEvents = listed.notifications.filter(notification => [
       'Task failed for issue #101',
-      'Implementation completed for issue #102',
+      'Issue #102 implementation completed',
       'Review completed for PR #7',
     ].includes(notification.title));
     assert.deepEqual(lifecycleEvents.map(notification => notification.title).sort(), [
-      'Implementation completed for issue #102',
+      'Issue #102 implementation completed',
       'Review completed for PR #7',
       'Task failed for issue #101',
     ]);
@@ -502,6 +502,7 @@ describe('notification lifecycle projection', { concurrency: false }, () => {
         },
         createPullRequestAttentionNotificationEvent: async () => null,
         createPullRequestNotificationEvent: async () => null,
+        createSourceActivityNotificationEvent: async () => null,
         reconcileSystemFailureTransition: async () => ({ accepted: true, event: null }),
       },
       logger: { warn: message => warnings.push(message) },
