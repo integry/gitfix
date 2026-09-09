@@ -13,7 +13,8 @@ import {
   renderVisualPreviewSection,
   renderVisualPreviewUploadFailureSection,
   VISUAL_PREVIEW_MARKER,
-  VISUAL_PREVIEW_SLOT
+  VISUAL_PREVIEW_SLOT,
+  VISUAL_PREVIEW_SOURCE_DIRECTORY
 } from '../src/services/visualPreviewService.js';
 import { parsePublishedVisualPreviews } from '../src/services/publishedVisualPreviewService.js';
 
@@ -200,15 +201,19 @@ test('stages changed previews outside the repository and restores the preview di
   await git.addConfig('user.name', 'ProPR Test');
   await git.addConfig('user.email', 'test@propr.dev');
   await writeFile(path.join(worktree, '.propr/previews/tracked.png'), 'original');
+  await mkdir(path.join(worktree, VISUAL_PREVIEW_SOURCE_DIRECTORY), { recursive: true });
+  await writeFile(path.join(worktree, VISUAL_PREVIEW_SOURCE_DIRECTORY, 'tracked.html'), 'original source');
   await git.add('.');
   await git.commit('initial preview');
 
   await writeFile(path.join(worktree, '.propr/previews/tracked.png'), 'updated');
+  await writeFile(path.join(worktree, VISUAL_PREVIEW_SOURCE_DIRECTORY, 'tracked.html'), 'updated source');
+  await writeFile(path.join(worktree, VISUAL_PREVIEW_SOURCE_DIRECTORY, 'scratch.js'), 'preview source');
   await writeFile(path.join(worktree, '.propr/previews/desktop.png'), 'desktop');
   await writeFile(path.join(worktree, '.propr/previews/manifest.json'), JSON.stringify({
     previews: [{ path: 'desktop.png', title: 'Desktop settings' }]
   }));
-  await git.add('.propr/previews');
+  await git.add(['.propr/previews', VISUAL_PREVIEW_SOURCE_DIRECTORY]);
 
   const prepared = await prepareVisualPreviewEvidence({
     worktreePath: worktree,
@@ -220,6 +225,11 @@ test('stages changed previews outside the repository and restores the preview di
   assert.deepEqual(prepared.evidence.assets.map(asset => asset.title), ['Desktop settings', 'Tracked']);
   assert.equal(await readFile(prepared.evidence.assets[0].absolutePath, 'utf8'), 'desktop');
   assert.equal(await readFile(path.join(worktree, '.propr/previews/tracked.png'), 'utf8'), 'original');
+  assert.equal(
+    await readFile(path.join(worktree, VISUAL_PREVIEW_SOURCE_DIRECTORY, 'tracked.html'), 'utf8'),
+    'original source'
+  );
+  await assert.rejects(access(path.join(worktree, VISUAL_PREVIEW_SOURCE_DIRECTORY, 'scratch.js')));
   await assert.rejects(access(path.join(worktree, '.propr/previews/desktop.png')));
   await assert.rejects(access(path.join(worktree, '.propr/previews/manifest.json')));
   assert.equal((await git.status()).files.length, 0);

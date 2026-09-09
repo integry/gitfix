@@ -76,7 +76,7 @@ When enabled, the implementation agent evaluates the completed change:
 - Captures focus on the change rather than generic application screens and must not contain credentials, personal data, or unrelated content.
 - If capture is blocked, the agent can recommend the concrete browser, emulator, or media tool that should be added to the agent image.
 
-Agents generate files under the transient `.propr/previews/` runtime directory. Optional titles, descriptions, and tool recommendations are recorded in `.propr/previews/manifest.json`. Before committing, ProPR copies accepted files to worker-owned temporary storage and removes the runtime directory from the worktree. Preview files are therefore never included in the implementation commit.
+Agents generate media under the transient `.propr/previews/` runtime directory and may use `.propr/preview-src/` for preview-only source material. Optional titles, descriptions, and tool recommendations are recorded in `.propr/previews/manifest.json`. Before committing, ProPR copies accepted files to worker-owned temporary storage and removes both runtime directories from the worktree. A second safeguard at the commit boundary excludes them from work output, so preview artifacts are never included in the implementation commit.
 
 Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video formats are MP4, MOV, and WebM; H.264 MP4 is the most broadly compatible choice. Each attachment must be smaller than 10 MB.
 

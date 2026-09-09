@@ -4,6 +4,7 @@ import path from 'path';
 import logger from '../utils/logger.js';
 import { handleError } from '../utils/errorHandler.js';
 import { createHooklessGit } from './hooklessGit.js';
+import { VISUAL_PREVIEW_RUNTIME_DIRECTORIES } from '../services/visualPreviewPaths.js';
 
 interface Author {
     name: string;
@@ -30,7 +31,13 @@ interface CommitOptions {
     exclude?: string[];
 }
 
-const GENERATED_RUNTIME_PATHS = ['.propr/assets', '.propr/cache', '.propr/.cache', '.propr/node_modules', '.propr/previews'];
+const GENERATED_PROPR_RUNTIME_PATHS = [
+    '.propr/assets',
+    '.propr/cache',
+    '.propr/.cache',
+    '.propr/node_modules',
+    ...VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
+];
 
 export class InvalidCheckpointScopeError extends Error {}
 
@@ -44,14 +51,14 @@ function validateScopedPath(file: string): string {
 }
 
 function isGeneratedRuntimePath(file: string): boolean {
-    return GENERATED_RUNTIME_PATHS.some(generated => file === generated || file.startsWith(`${generated}/`));
+    return GENERATED_PROPR_RUNTIME_PATHS.some(generated => file === generated || file.startsWith(`${generated}/`));
 }
 
 async function stageCommitFiles(git: SimpleGit, options: CommitOptions): Promise<void> {
     const scoped = options.include !== undefined || options.exclude !== undefined;
     if (!scoped) {
         await git.add('.');
-        for (const generatedPath of GENERATED_RUNTIME_PATHS) {
+        for (const generatedPath of GENERATED_PROPR_RUNTIME_PATHS) {
             try { await git.raw(['reset', 'HEAD', '--', generatedPath]); } catch { /* path was not staged */ }
         }
         return;
