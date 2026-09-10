@@ -70,6 +70,7 @@ Run these from the repository root:
 npm run desktop:dev
 npm run desktop:typecheck
 npm run desktop:test
+npm run test:native-durability -w @propr/desktop
 npm run desktop:package
 npm run desktop:smoke # Run under xvfb-run on a headless Linux host.
 npm run desktop:acceptance # Linux x64 package; run under Xvfb in a D-Bus/keyring session.
@@ -84,6 +85,16 @@ npm run make:rpm -w @propr/desktop
 # macOS only, after packaging the selected architecture:
 npm run make:dmg -w @propr/desktop -- --arch=arm64
 ```
+
+The Linux transaction durability parity gate runs on both x64 and arm64 package jobs.
+Its exact inventory is 140 tests: 86 credential-service (including the 11 credential
+regressions from #2299), 37 profile-store, 10 pairing-shutdown, and 7 pairing-browser.
+`scripts/run-native-durability.mjs` requires exact suite and scenario counts, all 140
+tests passing, zero failures/cancellations/skips, and a successful child-process exit.
+When adding coverage to these suites, reconcile the runner inventory with an actual
+native durability run; extra tests also fail until the inventory is updated. The
+credential-service inventory is shared with the existing Windows runner; Windows job
+scope and platform-specific scenario expectations are unchanged.
 
 ### Source-built Linux local runtime
 
