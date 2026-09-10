@@ -1469,15 +1469,21 @@ try {
   incompatibleOrigin = await createFixture('incompatible', FIXED_ACCEPTANCE_ORIGINS.incompatible);
   await runJourney('first-run-chooser', 'default', null, async page => {
     await page.getByRole('heading', { name: 'Let’s set up this computer' }).waitFor();
+    const expectedKeyboardOrder = [
+      'Minimize window',
+      'Maximize or restore window',
+      'Close window',
+      'Set up this computer',
+      'Connect to an existing instance',
+      'Search for instances on this network',
+    ];
     const seen = [];
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < expectedKeyboardOrder.length; index += 1) {
       await page.keyboard.press('Tab');
       seen.push(await page.evaluate(() => document.activeElement?.textContent?.trim() || document.activeElement?.getAttribute('aria-label')));
     }
-    keyboardOrder = seen.every(Boolean) && new Set(seen).size === seen.length
-      && seen[0].includes('Set up this computer')
-      && seen[1].includes('Connect to an existing instance')
-      && seen[2].includes('Search for instances on this network');
+    keyboardOrder = seen.length === expectedKeyboardOrder.length
+      && seen.every((label, index) => label?.includes(expectedKeyboardOrder[index]));
     visibleFocus = await page.evaluate(() => {
       const element = document.activeElement;
       if (!(element instanceof HTMLElement)) return false;

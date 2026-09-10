@@ -12,6 +12,12 @@ const ruleFor = (selector: string): string => {
   return desktopStyles.slice(bodyStart, end);
 };
 
+const zIndexFor = (selector: string): number => {
+  const match = ruleFor(selector).match(/z-index:\s*(\d+)/);
+  if (!match) throw new Error(`Missing z-index for ${selector}`);
+  return Number(match[1]);
+};
+
 describe('desktop window chrome styles', () => {
   it('uses the Electron overlay safe rectangle with an exact Linux control fallback', () => {
     expect(ruleFor('.desktop-entry-drag-region')).toContain('left: env(titlebar-area-x, 0px)');
@@ -38,5 +44,9 @@ describe('desktop window chrome styles', () => {
     );
     expect(ruleFor('.desktop-window-controls')).toContain('-webkit-app-region: no-drag');
     expect(ruleFor('.desktop-window-controls')).toContain('height: var(--desktop-titlebar-height)');
+  });
+
+  it('keeps Linux window controls above application modal backdrops', () => {
+    expect(zIndexFor('.desktop-window-controls')).toBeGreaterThan(zIndexFor('.desktop-modal-backdrop'));
   });
 });
