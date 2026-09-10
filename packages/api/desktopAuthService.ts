@@ -209,9 +209,11 @@ function validBinding(value: unknown): DesktopPairingBinding {
     throw new DesktopAuthError('INVALID_PAIRING_BINDING', 400, 'Desktop pairing binding is invalid');
   }
   const input = value as Record<string, unknown>;
-  const origin = typeof input.origin === 'string' ? normalizeProprApiOrigin(input.origin) : null;
+  const rawOrigin = typeof input.origin === 'string' ? input.origin : null;
+  const origin = rawOrigin === null ? null : normalizeProprApiOrigin(rawOrigin);
   if (typeof input.instanceId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(input.instanceId)
     || origin === null || origin !== input.origin
+    || (isProprConnectReservedHostAttempt(rawOrigin) && !parseProprConnectEndpoint(rawOrigin))
     || input.scope !== DESKTOP_INSTANCE_SCOPE
     || typeof input.credentialGeneration !== 'string'
     || !/^[A-Za-z0-9_-]{22}$/.test(input.credentialGeneration)) {
@@ -253,7 +255,6 @@ function frontendApprovalBase(configured?: string): URL {
 }
 
 interface PublicApiBase {
-  url: URL;
   managedSelector: string | null;
 }
 
@@ -305,9 +306,17 @@ function publicApiBase(configured?: string): PublicApiBase | null {
     throw new Error('API_PUBLIC_URL uses a noncanonical reserved ProPR tunnel host');
   }
   return {
-    url,
     managedSelector: canonicalManagedUrl ? canonicalManagedUrl.slice('https://'.length) : null,
   };
+}
+
+function pairingBrowserUrl(pairingId: string, selectedOrigin: string): URL {
+  validPairingId(pairingId);
+  const origin = normalizeProprApiOrigin(selectedOrigin);
+  if (origin === null || origin !== selectedOrigin) {
+    throw new DesktopAuthError('INVALID_PAIRING_BINDING', 400, 'Desktop pairing binding is invalid');
+  }
+  return new URL(`/api/desktop/pairings/${pairingId}/browser`, `${origin}/`);
 }
 
 function tokenSummary(row: TokenRow): DesktopTokenSummary {
@@ -362,13 +371,14 @@ export class DesktopAuthService {
     const deviceSecret = opaqueValue();
     const createdAt = this.now();
     const expiresAt = new Date(createdAt.getTime() + this.pairingTtlMs);
-    const apiApprovalBase = publicApiBase(this.publicApiUrl);
-    const approvalUrl = apiApprovalBase?.url ?? this.getFrontendApprovalUrl(pairingId);
-    if (apiApprovalBase) {
-      approvalUrl.pathname = `${approvalUrl.pathname.replace(/\/$/, '')}/api/desktop/pairings/${pairingId}/browser`;
-      approvalUrl.search = '';
-      approvalUrl.hash = '';
-    }
+    // Keep validating the operator-owned public URL, but do not use it as the
+    // desktop's browser authority. The already validated pairing binding is
+    // the endpoint the user selected and the client discovered. Building only
+    // this fixed route from that origin avoids Host/forwarded-header trust and
+    // lets remote instances pair while API_PUBLIC_URL retains its localhost
+    // default.
+    publicApiBase(this.publicApiUrl);
+    const approvalUrl = pairingBrowserUrl(pairingId, binding.origin);
 
     await this.database<PairingRow>('desktop_pairing_requests').insert({
       id: pairingId,
@@ -394,13 +404,22 @@ export class DesktopAuthService {
   }
 
   getFrontendApprovalUrl(pairingId: string): URL {
+    return this.frontendApprovalUrl(pairingId, this.publicApiUrl);
+  }
+
+  async getFrontendApprovalUrlForPairing(pairingId: string): Promise<URL> {
+    const pairing = await this.activePairing(pairingId);
+    return this.frontendApprovalUrl(pairingId, pairing.requested_origin);
+  }
+
+  private frontendApprovalUrl(pairingId: string, selectedOrigin?: string): URL {
     validPairingId(pairingId);
     const approvalUrl = frontendApprovalBase(this.approvalBaseUrl);
     approvalUrl.pathname = `${approvalUrl.pathname.replace(/\/$/, '')}/desktop/pairing`;
     approvalUrl.search = '';
     approvalUrl.hash = '';
     approvalUrl.searchParams.set('pairing_id', pairingId);
-    const apiBase = publicApiBase(this.publicApiUrl);
+    const apiBase = publicApiBase(selectedOrigin);
     if (approvalUrl.origin === 'https://app.propr.dev' && apiBase?.managedSelector) {
       approvalUrl.searchParams.set('tunnel', apiBase.managedSelector);
     }

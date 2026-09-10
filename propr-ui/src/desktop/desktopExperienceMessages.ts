@@ -1,10 +1,10 @@
 import type { DesktopConnectionResult } from './types';
 
 export const managedRecoveryMessage =
-  'This ProPR Connect endpoint may be stale or the local stack may have restarted. Restart Connect if needed, then retry, re-enter, or rediscover the connection.';
+  'ProPR Desktop could not reach the selected ProPR Connect endpoint. Retry it, re-enter its address, or use trusted local Connect discovery to refresh it.';
 
 export const managedRediscoveryUnavailableMessage =
-  'Connect rediscovery is unavailable. Retry the saved connection or re-enter its Connect address.';
+  'Trusted local Connect discovery is unavailable on this device. Retry the saved connection or re-enter its Connect address.';
 
 export const safeConnectionMessage = (
   result: Exclude<DesktopConnectionResult, { status: 'ready' }>,

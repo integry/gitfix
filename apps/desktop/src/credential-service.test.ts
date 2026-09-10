@@ -366,12 +366,13 @@ describe('main-process desktop credential service', () => {
       transportScope: string | null;
       body: string | null;
     }> = [];
+    const openedApprovalUrls: string[] = [];
     let pairingNumber = 0;
     const service = createCredentialService({
       profiles: store,
       clientName: 'Connect claim test',
       pairingTiming: { now: () => pairingNow, sleep: async () => undefined },
-      openPairingBrowser: async () => undefined,
+      openPairingBrowser: async request => { openedApprovalUrls.push(request.approvalUrl); },
       snapshotConnectIdentityClaim: (profileId, origin) => connect.snapshotIdentityClaim(profileId, origin),
       fetch: async (input, init) => {
         const url = input.toString();
@@ -396,7 +397,7 @@ describe('main-process desktop credential service', () => {
           return pairingStartResponse(url, init, {
             pairingId: `dpr_${pairingCharacter.repeat(22)}`,
             deviceSecret: pairingCharacter.repeat(43),
-            approvalUrl: `${origin}/approve`,
+            approvalUrl: `${origin}/api/desktop/pairings/dpr_${pairingCharacter.repeat(22)}/browser`,
             expiresAt: new Date(pairingNow + 10_000).toISOString(),
             interval: 1,
           }, 201);
@@ -570,6 +571,11 @@ describe('main-process desktop credential service', () => {
     assert.equal(requests.slice(concurrentPairingStart, replacementIdentityMatch + 1)
       .some(request => request.authorization !== null), false);
     assert.equal(requests.some(request => request.authorization === `Bearer ${token('C')}`), false);
+    assert.deepEqual(openedApprovalUrls, [
+      `${origins.current}/api/desktop/pairings/dpr_${'B'.repeat(22)}/browser`,
+      `${origins.current}/api/desktop/pairings/dpr_${'C'.repeat(22)}/browser`,
+      `${origins.replacement}/api/desktop/pairings/dpr_${'D'.repeat(22)}/browser`,
+    ]);
     assert.deepEqual(await store.readCredential(profile.id), {
       version: 2,
       profileId: profile.id,

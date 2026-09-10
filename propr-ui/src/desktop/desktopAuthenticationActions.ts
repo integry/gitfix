@@ -35,10 +35,10 @@ const authenticationFailureMessage = (
       return 'The instance became unreachable while waiting for browser approval. Check the connection and try again.';
     }
     if (error.code === 'PAIRING_REJECTED') {
-      return 'The instance rejected desktop pairing. Confirm it supports this Desktop version, then try again.';
+      return 'ProPR Desktop could not verify the pairing response for this endpoint. Confirm the instance is up to date, then try again.';
     }
   }
-  return 'ProPR Connect pairing could not be completed. Try again.';
+  return 'Desktop pairing could not be completed. Try again.';
 };
 
 export const createDesktopAuthenticationActions = ({

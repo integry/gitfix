@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, test } from 'node:test';
+import type { Request, Response } from 'express';
 import knex, { type Knex } from 'knex';
 import { closeConnection } from '@propr/core';
 import { PROPR_API_ORIGIN_PARITY_CASES } from '@propr/shared';
 import { up as createDesktopAuthTables } from '../../core/src/db/migrations/20260829000000_create_desktop_auth.js';
 import { up as addTwoPhaseDesktopPairing } from '../../core/src/db/migrations/20260830000000_add_two_phase_desktop_pairing.js';
 import { DesktopAuthError, DesktopAuthService } from '../desktopAuthService.js';
+import { createDesktopAuthRoutes } from '../routes/desktopAuthRoutes.js';
 
 let database: Knex;
 let now: Date;
@@ -38,7 +40,66 @@ afterEach(async () => database.destroy());
 after(async () => closeConnection());
 
 describe('desktop managed Connect pairing authority', () => {
-  test('uses the configured API browser entry and preserves only a managed hosted tunnel selector', async () => {
+  test('uses the selected localhost, manual HTTPS, and discovered Connect endpoint with a localhost public default', async () => {
+    const origins = [
+      'http://localhost:4000',
+      'https://api.gitfix.dev',
+      'https://t-instance123.propr.dev',
+    ] as const;
+    for (const [index, origin] of origins.entries()) {
+      const selected = new DesktopAuthService({
+        database,
+        now: () => new Date(now),
+        approvalBaseUrl: 'https://app.propr.dev',
+        publicApiUrl: 'http://localhost:4000',
+      });
+      const pairing = await startPairing(selected, `Selected endpoint ${index}`, origin);
+      assert.equal(
+        pairing.approvalUrl,
+        `${origin}/api/desktop/pairings/${pairing.pairingId}/browser`,
+      );
+      assert.equal(
+        (await selected.getFrontendApprovalUrlForPairing(pairing.pairingId)).toString(),
+        origin === 'https://t-instance123.propr.dev'
+          ? `https://app.propr.dev/desktop/pairing?pairing_id=${pairing.pairingId}&tunnel=t-instance123.propr.dev`
+          : `https://app.propr.dev/desktop/pairing?pairing_id=${pairing.pairingId}`,
+      );
+    }
+  });
+
+  test('ignores Host and forwarded headers when entering a selected Connect pairing', async () => {
+    const selected = new DesktopAuthService({
+      database,
+      now: () => new Date(now),
+      approvalBaseUrl: 'https://app.propr.dev',
+      publicApiUrl: 'http://localhost:4000',
+    });
+    const pairing = await startPairing(
+      selected,
+      'Header boundary test',
+      'https://t-instance123.propr.dev',
+    );
+    const routes = createDesktopAuthRoutes({ service: selected });
+    let redirected = '';
+    await routes.openPairingApproval({
+      params: { pairingId: pairing.pairingId },
+      headers: {
+        host: 'attacker.example',
+        forwarded: 'host=attacker.example;proto=http',
+        'x-forwarded-host': 'attacker.example',
+        'x-forwarded-proto': 'http',
+      },
+      isAuthenticated: () => false,
+    } as unknown as Request, {
+      redirect(value: string) { redirected = value; },
+    } as unknown as Response);
+
+    const expectedFrontend = `https://app.propr.dev/desktop/pairing?pairing_id=${pairing.pairingId}&tunnel=t-instance123.propr.dev`;
+    assert.equal(redirected, `/api/auth/github?redirect_to=${encodeURIComponent(expectedFrontend)}`);
+    assert.equal(redirected.includes('attacker.example'), false);
+  });
+
+  test('uses the selected Connect browser entry and preserves only a managed hosted tunnel selector', async () => {
     const hosted = new DesktopAuthService({
       database,
       now: () => new Date(now),
@@ -136,7 +197,7 @@ describe('desktop managed Connect pairing authority', () => {
       && !error.message.includes('T-Instance123'));
   });
 
-  test('matches the shared canonical origin parity table for the public REST and Socket origin', async () => {
+  test('matches the shared canonical origin parity table for the selected REST and Socket origin', async () => {
     let index = 0;
     for (const [name, input, expected] of PROPR_API_ORIGIN_PARITY_CASES) {
       const candidate = new DesktopAuthService({

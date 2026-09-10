@@ -61,7 +61,7 @@ describe('DesktopExperience managed Connect recovery', () => {
     }));
     await renderOfflineProfile(adapters);
 
-    expect(screen.getByText(/endpoint may be stale or the local stack may have restarted/i)).toBeInTheDocument();
+    expect(screen.getByText(/could not reach the selected ProPR Connect endpoint/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Re-enter Connect address' })).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent('t-stale123.propr.dev');
@@ -76,7 +76,7 @@ describe('DesktopExperience managed Connect recovery', () => {
     ]);
     fireEvent.click(await renderOfflineProfile(adapters));
 
-    expect(await screen.findByText(/rediscovery is unavailable.*re-enter/i)).toBeInTheDocument();
+    expect(await screen.findByText(/trusted local Connect discovery is unavailable.*re-enter/i)).toBeInTheDocument();
     expect(adapters.discovery.discover).not.toHaveBeenCalled();
     expect(adapters.profiles.save).not.toHaveBeenCalled();
   });
@@ -93,7 +93,7 @@ describe('DesktopExperience managed Connect recovery', () => {
     adapters.managedTunnelRecovery = { rediscover: vi.fn(async () => candidate) };
     fireEvent.click(await renderOfflineProfile(adapters));
 
-    expect(await screen.findByText(/rediscovery is unavailable.*re-enter/i)).toBeInTheDocument();
+    expect(await screen.findByText(/trusted local Connect discovery is unavailable.*re-enter/i)).toBeInTheDocument();
     expect(adapters.profiles.save).not.toHaveBeenCalled();
     expect(adapters.connection.probe).toHaveBeenCalledTimes(1);
   });
@@ -105,7 +105,7 @@ describe('DesktopExperience managed Connect recovery', () => {
     };
     fireEvent.click(await renderOfflineProfile(adapters));
 
-    expect(await screen.findByText(/rediscovery is unavailable.*re-enter/i)).toBeInTheDocument();
+    expect(await screen.findByText(/trusted local Connect discovery is unavailable.*re-enter/i)).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/token-sentinel|private\/path/i);
     expect(adapters.profiles.save).not.toHaveBeenCalled();
   });
@@ -207,7 +207,7 @@ describe('DesktopExperience managed Connect recovery', () => {
     render(<DesktopExperience adapters={adapters}><div>Dashboard content</div></DesktopExperience>);
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in in browser' }));
 
-    expect(await screen.findByText(/pairing could not be completed.*try again/i)).toBeInTheDocument();
+    expect(await screen.findByText(/desktop pairing could not be completed.*try again/i)).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/password-sentinel|Users\/private/i);
   });
 

@@ -353,7 +353,7 @@ describe('DesktopExperience profile management', () => {
     render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
 
     fireEvent.click(await screen.findByRole('button', { name: /Sign in in browser/i }));
-    expect(await screen.findByText(/pairing could not be completed.*try again/i)).toBeInTheDocument();
+    expect(await screen.findByText(/desktop pairing could not be completed.*try again/i)).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent('Browser launch failed.');
     expect(screen.getByRole('button', { name: /Sign in in browser/i })).toBeInTheDocument();
 

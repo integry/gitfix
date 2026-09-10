@@ -150,7 +150,7 @@ describe('DesktopExperience authentication', () => {
     ['APPROVAL_EXPIRED', /browser approval expired.*start sign in again/i],
     ['SECURE_STORAGE_FAILED', /could not save.*secure storage.*system keychain/i],
     ['PAIRING_UNREACHABLE', /instance became unreachable.*browser approval/i],
-    ['PAIRING_REJECTED', /instance rejected desktop pairing/i],
+    ['PAIRING_REJECTED', /could not verify the pairing response.*endpoint/i],
   ] as const)('shows safe recovery for %s', async (code, message) => {
     const adapters = adaptersFor(
       [remoteProfile],

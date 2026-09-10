@@ -61,14 +61,14 @@ afterEach(async () => database.destroy());
 after(async () => closeConnection());
 
 describe('desktop browser pairing', () => {
-  test('stores only a device-secret hash and builds a fixed trusted approval URL', async () => {
+  test('stores only a device-secret hash and builds the fixed browser route on the selected endpoint', async () => {
     const pairing = await startPairing(service, '  Work   Laptop  ');
     const row = await database('desktop_pairing_requests').where({ id: pairing.pairingId }).first();
     const audit = await database('desktop_auth_audit').first();
 
     assert.match(pairing.pairingId, /^dpr_[A-Za-z0-9_-]{22}$/);
     assert.match(pairing.deviceSecret, /^[A-Za-z0-9_-]{43}$/);
-    assert.equal(pairing.approvalUrl, `https://app.example.test/base/desktop/pairing?pairing_id=${pairing.pairingId}`);
+    assert.equal(pairing.approvalUrl, `https://app.example.test/api/desktop/pairings/${pairing.pairingId}/browser`);
     assert.equal(pairing.approvalUrl.includes(pairing.deviceSecret), false);
     assert.equal(row.client_name, 'Work Laptop');
     assert.equal(row.requested_origin, 'https://app.example.test');
@@ -204,11 +204,24 @@ describe('desktop browser pairing', () => {
     assert.equal(await expiringService.cleanupPairings(), 1);
   });
 
-  test('rejects unsafe names and non-HTTPS approval origins', async () => {
+  test('rejects unsafe names, endpoint bindings, and frontend approval origins', async () => {
     await assert.rejects(startPairing(service, 'bad\nname'), /printable characters/);
     await assert.rejects(startPairing(service, 'x'.repeat(81)), /1 to 80/);
+    for (const unsafeOrigin of [
+      'http://remote.example.test',
+      'https://user:secret@remote.example.test',
+      'https://remote.example.test/private',
+      'https://x.t-instance123.propr.dev',
+    ]) {
+      await assert.rejects(
+        startPairing(service, 'Unsafe endpoint', unsafeOrigin),
+        (error: unknown) => error instanceof DesktopAuthError
+          && error.code === 'INVALID_PAIRING_BINDING',
+      );
+    }
     const insecure = new DesktopAuthService({ database, approvalBaseUrl: 'http://remote.example.test' });
-    await assert.rejects(startPairing(insecure, 'Laptop'), /requires HTTPS/);
+    const pairing = await startPairing(insecure, 'Laptop');
+    await assert.rejects(insecure.getFrontendApprovalUrlForPairing(pairing.pairingId), /requires HTTPS/);
   });
 
 });

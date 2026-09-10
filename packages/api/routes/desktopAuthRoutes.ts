@@ -118,8 +118,9 @@ export function createDesktopAuthRoutes(options: DesktopAuthRoutesOptions = {}) 
   async function openPairingApproval(req: Request, res: Response): Promise<void> {
     const pairingId = pathParameter(req.params.pairingId);
     try {
-      await service.getPairingForApproval(pairingId);
-      const frontendUrl = service.getFrontendApprovalUrl(pairingId).toString();
+      // Resolve the UI handoff from the validated endpoint bound into this
+      // pairing. Request Host and forwarded headers are deliberately ignored.
+      const frontendUrl = (await service.getFrontendApprovalUrlForPairing(pairingId)).toString();
       if (req.isAuthenticated?.() && req.user && isUserWhitelisted(req.user.username)) {
         res.redirect(frontendUrl);
         return;
