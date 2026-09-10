@@ -7,6 +7,10 @@ interface BaseBranchSelectorProps {
   onChange: (branch: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  controlId?: string;
+  labelledBy?: string;
+  describedBy?: string;
+  menuPosition?: 'absolute' | 'inline';
 }
 
 export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
@@ -14,7 +18,11 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
   value,
   onChange,
   placeholder = 'e.g., develop',
-  disabled = false
+  disabled = false,
+  controlId,
+  labelledBy,
+  describedBy,
+  menuPosition = 'absolute'
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [filter, setFilter] = useState('');
@@ -98,9 +106,14 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
     return (
       <div className="relative" ref={containerRef}>
         <button
+          id={controlId}
           type="button"
           onClick={handleOpen}
           disabled={disabled || !repoName}
+          aria-labelledby={labelledBy}
+          aria-describedby={describedBy}
+          aria-haspopup="listbox"
+          aria-expanded={false}
           className={`w-full px-3 py-2 text-left bg-white border border-gray-300 rounded-md font-mono text-sm transition-colors flex items-center justify-between ${
             disabled || !repoName
               ? 'opacity-50 cursor-not-allowed bg-gray-100'
@@ -136,14 +149,24 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
     <div ref={containerRef} className="relative">
       <div className="relative">
         <input
+          id={controlId}
           ref={inputRef}
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter branches..."
+          aria-labelledby={labelledBy}
+          aria-describedby={describedBy}
+          aria-expanded={true}
+          aria-controls={controlId ? `${controlId}-options` : undefined}
+          role="combobox"
           className="w-full px-3 py-2 text-sm border border-primary-500 rounded-t-md font-mono focus:outline-none focus:ring-2 focus:ring-primary-500"
         />
-        <div className="absolute right-0 top-full left-0 max-h-60 overflow-y-auto bg-white border border-t-0 border-gray-300 rounded-b-md shadow-lg z-20">
+        <div
+          id={controlId ? `${controlId}-options` : undefined}
+          role="listbox"
+          className={`${menuPosition === 'inline' ? 'relative' : 'absolute right-0 top-full left-0'} max-h-60 overflow-y-auto bg-white border border-t-0 border-gray-300 rounded-b-md shadow-lg z-20`}
+        >
           {isLoading ? (
             <div className="px-3 py-4 text-sm text-gray-500 flex items-center gap-2">
               <svg className="animate-spin h-4 w-4 text-primary-600" fill="none" viewBox="0 0 24 24">
@@ -162,6 +185,8 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelect('')}
+                role="option"
+                aria-selected={!value}
                 className={`w-full px-3 py-2 text-sm text-left hover:bg-gray-50 flex items-center justify-between border-b border-gray-100 ${
                   !value ? 'bg-primary-50 text-primary-700' : 'text-gray-600'
                 }`}
@@ -178,6 +203,8 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
                   key={branch}
                   type="button"
                   onClick={() => handleSelect(branch)}
+                  role="option"
+                  aria-selected={branch === value}
                   className={`w-full px-3 py-2 text-sm font-mono text-left hover:bg-primary-50 flex items-center justify-between ${
                     branch === value ? 'bg-primary-50 text-primary-700' : 'text-gray-900'
                   }`}
