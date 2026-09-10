@@ -756,6 +756,7 @@ export class ProfileStore {
     expected: StoredCredential,
     expectedProfileOrigin: string,
     isCurrent: () => boolean,
+    clearActiveSelection = false,
   ): Promise<boolean> {
     const profileId = expected?.profileId;
     assertProfileId(profileId);
@@ -775,6 +776,9 @@ export class ProfileStore {
         || credential.publicInstanceIdentity !== expected.publicInstanceIdentity
         || credential.token !== expected.token) return false;
       await this.#moveCredentialToPending(state, profileId);
+      // Logout commits selection and credential retirement together. Never
+      // clear a different account selected while this transaction was queued.
+      if (clearActiveSelection && state.activeProfileId === profileId) state.activeProfileId = null;
       await this.#writeState(state);
       return true;
     });

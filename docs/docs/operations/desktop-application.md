@@ -53,20 +53,61 @@ rollout. Until then, use separate browser profiles for independent web logins.
 
 ### Validation and logout integration
 
-The account regression suite covers two users at one and different endpoints, interruption during
-confirmation, reload with no active selection, wrong-user reauthorization, permission denial, expiry,
-removal, stale transport generations, and bounded identity responses. Renderer tests cover the
-account chooser, teardown, rapid A/B/A switching, and late response bodies. Existing credential,
-profile durability, tray, notification, and socket security tests remain applicable.
+Scoped logout from PR #2270, exact source head
+`3d0dba0ab95ee2ee075a77b0a6fa828dd674ad1b`, is combined with account switching in
+this follow-up. The API client has one cancellation controller and one response/body guard.
+Both endpoint changes and account changes invalidate pending requests, buffered body reads,
+clones, and stale error handling. Desktop requests without an active scope are rejected.
+Logout retires only the active binding's credential and clears its active selection in the same
+local transaction. Offline revocation remains in the encrypted retry journal; other saved
+credentials and GitHub identities survive. A failed local logout remains visibly retryable.
 
-Before release, exercise two real GitHub identities on Linux and macOS with OS secure storage and
-confirm the native identity dialog, revocation, reload, tray counts, and notification clicks. Native
-approval is deliberate and has no automated acceptance-mode bypass. The independent logout fix is
-an integration dependency: this change does not edit the logout endpoint, cookie/CSRF protocol, or
-logout handlers. After combining that work on
-[the desktop epic #1970](https://github.com/integry/propr/issues/1970), verify that logging out of one
-binding leaves the other saved account usable. Web and independent-window scope must remain explicit
-when closing the initial desktop delivery.
+The combined HTTP/Socket.IO regression pairs Alice and Bob on one loopback endpoint, activates
+Alice, holds REST headers and streaming bodies, switches to Bob, rejects late Alice results,
+checks Bob's live socket and REST identity, logs Bob out offline, reopens storage, verifies that
+Alice still works, and rejects reauthorizing Bob as Alice. It also rejects a stale Alice logout
+while Bob is active. The native version runs production preload/IPC handlers, Electron session
+request hooks, credential service, API client, logout, and SocketProvider across actual processes.
+It uses synthetic browser approval and storage encryption in a private temporary directory;
+it does not test GitHub OAuth, the native confirmation dialog, or an OS keychain.
+
+Commands run for this follow-up (from the repository root):
+
+```sh
+npm --workspace propr-ui test -- src/desktop/account-switching.integration.test.tsx src/api/apiClient.accounts.test.ts src/api/proprApi.logout.test.ts src/api/demoMode.test.ts src/desktop/DesktopExperience.transport.test.tsx src/contexts/SocketProvider.test.tsx
+npx tsx --test apps/desktop/src/credential-service.test.ts apps/desktop/src/profile-store.test.ts apps/desktop/src/saved-accounts.test.ts apps/desktop/src/ipc-lifecycle.test.ts apps/desktop/src/preload-bridge.test.ts
+DISPLAY=:93 node apps/desktop/scripts/smoke-two-accounts.mjs
+npx tsx --test test/agentVersionManagement.test.ts test/goalExecutionMode.test.ts
+npm run desktop:typecheck
+npm run desktop:package
+npm run desktop:smoke:inspect
+DISPLAY=:93 XAUTHORITY=/tmp/propr-xvfb/Xauthority dbus-run-session -- npm run desktop:smoke
+DISPLAY=:93 node --test apps/desktop/scripts/linux-window-frame.test.mjs
+```
+
+The focused suites passed: 60 UI tests (plus the two UI Docker-context checks), 152 main-process
+and storage tests, 26 tests in the two imported Node test files, the native two-account regression,
+and desktop/UI typechecks. Linux x64 packaging and packaged executable/fuse inspection succeeded.
+The native harness ran with Chromium's sandbox disabled on an isolated Xvfb display; this is test evidence, not a production sandbox verification. The packaged smoke
+failed at launch because the container cannot provide a correctly owned/configured SUID sandbox
+helper. Therefore packaged two-account acceptance has **not** passed. Native pointer/frame tests
+skipped because an isolated window manager and xdotool were unavailable; frame and transparent
+wordmark implementation/assets were not changed. The display number and Xauthority path above
+are temporary runner values; use your own isolated desktop session when rerunning.
+
+The execution environment also blocked `git merge --no-commit --no-ff` before it could write
+`ORIG_HEAD.lock`: the linked worktree's Git metadata is root-owned. Three-way file integration
+and semantic conflict resolution were prepared and tested, but a merge parent was **not**
+recorded. The committing owner must finish a true merge of the exact logout head into the
+account-switching branch, retaining these resolutions; do not merge the desktop epic into main.
+
+Before release, repeat this journey with two real GitHub identities on Linux and macOS, using
+different browser profiles on the same endpoint. Verify native identity confirmation and wrong-user
+rejection, OS-encrypted persistence, offline logout followed by restart, eventual revocation of
+only the logged-out token, switching back to the other account, tray counts, and delayed
+notification clicks. Also verify the shipped frame and transparent wordmark in active/inactive
+windows. No remote deployment or user credential reset was performed. Browser account switching
+and independent desktop windows remain the explicit follow-ups described above.
 
 ## Platform and runtime matrix
 

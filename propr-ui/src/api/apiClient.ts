@@ -19,6 +19,7 @@ const invalidateDesktopRequests = (): void => {
 };
 const desktopScopeListeners = new Set<() => void>();
 const responseScopes = new WeakMap<Response, DesktopConnectionScope | null>();
+const responseGuards = new WeakMap<Response, () => void>();
 const DEFINITIVE_INSTANCE_TOKEN_CODES = new Set([
   'INVALID_INSTANCE_TOKEN',
   'INSTANCE_TOKEN_EXPIRED',
@@ -277,6 +278,7 @@ export const apiFetch = async (
   options: ApiFetchOptions = {}
 ): Promise<Response> => {
   const requestScope = desktopConnectionScope;
+  if (isDesktopRuntime() && !requestScope) throw new Error('Desktop authentication is required.');
   const requestClient = getProprClient();
   let requestInit = scopedRequestInit(input, init, requestScope);
   const scopeSignal = desktopScopeController.signal;
@@ -286,13 +288,19 @@ export const apiFetch = async (
       ? AbortSignal.any([scopeSignal, callerSignal]) : scopeSignal };
   }
   const checkCurrent = () => {
-    if (requestScope && (scopeSignal.aborted || !isCurrentDesktopScope(requestScope))) {
-      throw new DOMException('Desktop account changed', 'AbortError');
+    if (requestScope && (scopeSignal.aborted || requestInit?.signal?.aborted || !isCurrentDesktopScope(requestScope))) {
+      throw new DOMException('Desktop connection changed', 'AbortError');
     }
   };
   const guardResponse = (response: Response): Response => {
-    checkCurrent();
+    try { checkCurrent(); } catch (error) {
+      // Discard an unconsumed late response even when the transport ignored abort.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
+    responseScopes.set(response, requestScope);
     if (!requestScope) return response;
+    responseGuards.set(response, checkCurrent);
     // A response may have arrived before switching while its body is still pending.
     for (const method of ['json', 'text', 'blob', 'arrayBuffer', 'formData'] as const) {
       if (typeof response[method] !== 'function') continue;
@@ -311,12 +319,11 @@ export const apiFetch = async (
     return response;
   };
   const response = guardResponse(await requestClient.fetch(input, requestInit));
-  responseScopes.set(response, requestScope);
-  if (isReplayableApiRequest(input, init, options)
-    && await shouldRetryAfterTokenRefresh(response)
-    && isCurrentDesktopScope(requestScope)) {
+  const retry = isReplayableApiRequest(input, init, options)
+    && await shouldRetryAfterTokenRefresh(response);
+  checkCurrent();
+  if (retry && isCurrentDesktopScope(requestScope)) {
     const retried = guardResponse(await requestClient.fetch(input, requestInit));
-    responseScopes.set(retried, requestScope);
     return retried;
   }
   checkCurrent();
@@ -324,11 +331,11 @@ export const apiFetch = async (
 };
 
 export const handleApiResponse = async (response: Response): Promise<Response> => {
-  const scope = responseScopes.get(response);
-  if (scope && !isCurrentDesktopScope(scope)) throw new DOMException('Desktop account changed', 'AbortError');
+  responseGuards.get(response)?.();
   if (response.ok) return response;
 
   const data = await parseApiErrorBody(response);
+  responseGuards.get(response)?.();
   if (response.status === 401) return await throwUnauthorizedResponse(data, response);
   const errorMessage = getApiErrorMessage(data);
 

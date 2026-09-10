@@ -379,7 +379,7 @@ export interface DesktopBridge {
     onNativeCommand(listener: (delivery: DesktopNativeCommandDelivery) => void): () => void;
   };
   auth: {
-    logout(apiBaseUrl: string): Promise<void>;
+    logout(scope: DesktopConnectionScope): Promise<void>;
   };
   external: {
     open(url: string): Promise<void>;

@@ -120,13 +120,14 @@ describe('demo mode API helpers', () => {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
-    vi.spyOn(refreshed, 'clone').mockReturnValue({
-      json: async () => {
-        parsingStarted();
-        await released;
-        return { code: 'TOKEN_REFRESHED' };
-      },
-    } as Response);
+    // Keep the complete Response interface used by desktop body-read fencing.
+    const cloned = refreshed.clone();
+    vi.spyOn(cloned, 'json').mockImplementation(async () => {
+      parsingStarted();
+      await released;
+      return { code: 'TOKEN_REFRESHED' };
+    });
+    vi.spyOn(refreshed, 'clone').mockReturnValue(cloned);
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(refreshed);
     setDesktopConnectionScope({
       bridge: {} as never,
@@ -145,6 +146,7 @@ describe('demo mode API helpers', () => {
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(fetchMock).toHaveBeenCalledOnce();
+    await expect(refreshed.json()).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   it('surfaces an unreplayed token refresh as retry-required without logging out', async () => {
@@ -312,7 +314,10 @@ describe('demo mode API helpers', () => {
 
     const scopedResponse = await apiFetch('/api/tasks');
     setDesktopConnectionScope(scopeB);
-    await expect(handleApiResponse(scopedResponse)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(handleApiResponse(scopedResponse)).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'Desktop connection changed',
+    });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(listener).not.toHaveBeenCalled();

@@ -487,6 +487,7 @@ export class DesktopCredentialService {
   #latestProbeTicket = 0;
   #pendingActivation: PendingActivation | null = null;
   #active: ActiveCredential | null = null;
+  readonly #loggingOutProfiles = new Set<string>();
   #publishingPair = false;
   #publishWaiters: Array<() => void> = [];
   #retryRequested = false;
@@ -715,6 +716,7 @@ export class DesktopCredentialService {
   }
 
   #cancelPairingNow(profileId: string): void {
+    if (this.#loggingOutProfiles.has(profileId)) throw new Error('Desktop logout is in progress');
     const generation = this.#bumpGeneration(profileId);
     // Cancelling an in-progress edit must not disable the still-committed
     // credential for an active profile.
@@ -730,6 +732,7 @@ export class DesktopCredentialService {
     await this.#waitForPairPublish();
     this.#schedulePendingRevocationRetry();
     if (!input.id) throw new Error('Desktop profile id is required');
+    if (this.#loggingOutProfiles.has(input.id)) throw new Error('Desktop logout is in progress');
     if (!isDesktopPairingOperationId(operationId)) {
       throw new Error('Invalid desktop pairing operation');
     }
@@ -959,6 +962,7 @@ export class DesktopCredentialService {
     await this.#waitForPairPublish();
     this.#schedulePendingRevocationRetry();
     if (!input.id) throw new Error('Desktop profile id is required');
+    if (this.#loggingOutProfiles.has(input.id)) throw new Error('Desktop logout is in progress');
     const origin = normalizeApiBaseUrl(input.apiBaseUrl ?? '');
     if (!origin || origin !== input.apiBaseUrl) throw new Error('Invalid desktop API URL');
     const connectClaim = this.#snapshotConnectIdentityClaim(input.id, origin);
@@ -1260,6 +1264,53 @@ export class DesktopCredentialService {
       identityEpoch: pending.identityEpoch,
     };
     } finally {
+      operation.done();
+    }
+  }
+
+  /** Retire only the renderer's current bearer; retain the saved instance and other credentials. */
+  async logout(value: DesktopConnectionScope): Promise<void> {
+    const operation = this.#beginOperation();
+    let active: ActiveCredential | null = null;
+    let generation: number | undefined;
+    try {
+      await this.#waitForPairPublish();
+      active = this.#active;
+      if (!active || !value || typeof value !== 'object'
+        || active.profileId !== value.profileId || active.transportScope !== value.transportScope
+        || this.#loggingOutProfiles.has(active.profileId)) {
+        throw new Error('Desktop logout scope is no longer active');
+      }
+      this.#loggingOutProfiles.add(active.profileId);
+      // Fence old probes, pairing, REST and socket reconnects before any disk I/O.
+      generation = this.#bumpGeneration(active.profileId);
+      this.#pendingActivation = null;
+      this.#pairingControllers.get(active.profileId)?.abort();
+      this.#pairingControllers.delete(active.profileId);
+      this.#pendingPairingApprovals.delete(active.profileId);
+      const removed = await this.#profiles.removeCredentialIfCurrent(
+        active, active.origin, () => this.#generation(active!.profileId) === generation, true,
+      );
+      if (!removed) throw new Error('Desktop credential changed before logout completed');
+      if (this.#active === active) this.#active = null;
+      // The store atomically detaches the credential into its encrypted retry
+      // journal. No network result can make it locally usable after this point.
+      this.#schedulePendingRevocationRetry();
+    } catch (error) {
+      // A failed local commit is not logout. Keep the same identity retryable,
+      // without restoring it over a concurrent profile change or shutdown.
+      if (!this.#closed && active && this.#active === active
+        && generation !== undefined && this.#generation(active.profileId) === generation) {
+        const retained = await this.#profiles.readCredential(active.profileId).catch(() => null);
+        if (retained?.token === active.token && retained.origin === active.origin
+          && retained.publicInstanceIdentity === active.publicInstanceIdentity
+          && this.#active === active && this.#generation(active.profileId) === generation) {
+          active.profileGeneration = generation;
+        }
+      }
+      throw error;
+    } finally {
+      if (active && generation !== undefined) this.#loggingOutProfiles.delete(active.profileId);
       operation.done();
     }
   }
