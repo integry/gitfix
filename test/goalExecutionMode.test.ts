@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import {
   CODEX_GOAL_OBJECTIVE_MAX_LENGTH,
@@ -23,13 +25,17 @@ import { buildCodexAppServerDockerArgs, buildCodexDockerArgs } from '../packages
 import { AntigravityAgent } from '../packages/core/src/agents/impl/AntigravityAgent.ts';
 import type { Agent, AgentConfig } from '../packages/core/src/agents/types.ts';
 
+// Codex validates the bind source before building Docker arguments.
+const codexConfigPath = mkdtempSync(join(tmpdir(), 'propr-goal-codex-config-'));
+after(() => rmSync(codexConfigPath, { recursive: true, force: true }));
+
 const baseConfig = (type: AgentConfig['type']): AgentConfig => ({
   id: `${type}-id`,
   type,
   alias: `${type}-test`,
   enabled: true,
   dockerImage: 'propr/agent:test',
-  configPath: `/tmp/${type}-config`,
+  configPath: type === 'codex' ? codexConfigPath : `/tmp/${type}-config`,
   supportedModels: ['test-model'],
   defaultModel: 'test-model',
 });
