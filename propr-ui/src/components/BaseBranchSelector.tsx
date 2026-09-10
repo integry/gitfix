@@ -13,6 +13,18 @@ interface BaseBranchSelectorProps {
   menuPosition?: 'absolute' | 'inline';
 }
 
+const getOptionsId = (controlId?: string): string | undefined =>
+  controlId ? `${controlId}-options` : undefined;
+
+const getClosedControlLabelledBy = (
+  labelledBy: string | undefined,
+  value: string,
+  selectedValueId: string,
+): string | undefined => {
+  if (!labelledBy) return undefined;
+  return value ? `${labelledBy} ${selectedValueId}` : labelledBy;
+};
+
 export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
   repoName,
   value,
@@ -33,6 +45,8 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedValueId = useId();
+  const optionsId = getOptionsId(controlId);
+  const closedControlLabelledBy = getClosedControlLabelledBy(labelledBy, value, selectedValueId);
 
   // Parse owner/repo from repoName
   const parseRepo = (name: string): { owner: string; repo: string } | null => {
@@ -117,9 +131,7 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
           type="button"
           onClick={handleOpen}
           disabled={disabled || !repoName}
-          aria-labelledby={labelledBy
-            ? `${labelledBy}${value ? ` ${selectedValueId}` : ''}`
-            : undefined}
+          aria-labelledby={closedControlLabelledBy}
           aria-describedby={describedBy}
           aria-haspopup="listbox"
           aria-expanded={false}
@@ -168,12 +180,12 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
           aria-labelledby={labelledBy}
           aria-describedby={describedBy}
           aria-expanded={true}
-          aria-controls={controlId ? `${controlId}-options` : undefined}
+          aria-controls={optionsId}
           role="combobox"
           className="w-full px-3 py-2 text-sm border border-primary-500 rounded-t-md font-mono focus:outline-none focus:ring-2 focus:ring-primary-500"
         />
         <div
-          id={controlId ? `${controlId}-options` : undefined}
+          id={optionsId}
           role="listbox"
           className={`${menuPosition === 'inline' ? 'relative' : 'absolute right-0 top-full left-0'} max-h-60 overflow-y-auto bg-white border border-t-0 border-gray-300 rounded-b-md shadow-lg z-20`}
         >
