@@ -19,6 +19,10 @@ export const PACKAGED_CONNECT_EVIDENCE_FAILURE_CODES = Object.freeze([
   'PAIRING_REQUEST_AFTER_TERMINAL',
   'DELAYED_APPROVAL_READINESS_MISSING',
   'BOOTSTRAP_AUTHORIZATION_PRESENT',
+  'ACCOUNT_CONFIRMATION_COUNT_MISMATCH',
+  'ACCOUNT_PROBE_COUNT_MISMATCH',
+  'ACCOUNT_REQUEST_BOUNDARY_INVALID',
+  'ACCOUNT_CONFIRMATION_ORDER_INVALID',
   'AUTHENTICATED_REST_COUNT_MISMATCH',
   'AUTHENTICATED_SOCKET_COUNT_MISMATCH',
   'REST_SCOPE_MISMATCH',
@@ -45,6 +49,23 @@ export const collectAcceptedSocketEvidence = ({ requests, authorization }) => {
   };
 };
 
+export const collectPackagedConnectAccountEvidence = ({ requests, authorization }) => {
+  const accounts = requests.filter(request => request.method !== 'OPTIONS'
+    && request.url?.split('?')[0] === '/api/auth/user');
+  const confirmations = accounts.filter(request => request.url === '/api/auth/user?desktop_account_confirmation=1');
+  const probes = accounts.filter(request => request.url === '/api/auth/user');
+  const activationIndex = requests.findIndex(request => request.method === 'POST' && request.url?.endsWith('/activate'));
+  const confirmationIndex = requests.indexOf(confirmations[0]);
+  return {
+    accountConfirmationCount: confirmations.length,
+    accountProbeCount: probes.length,
+    accountRequestBoundaryValid: accounts.every(request => request.method === 'GET'
+      && request.accountAccepted === true && request.authorization === authorization && request.transportScope === null),
+    accountConfirmationOrderValid: activationIndex >= 0 && confirmationIndex > activationIndex
+      && accounts.filter(request => request !== confirmations[0]).every(request => requests.indexOf(request) > confirmationIndex),
+  };
+};
+
 const failureChecks = Object.freeze([
   // Pair contributes eight discoveries. The fresh reprobe process contributes
   // its profile probe plus the mandatory pre-Socket.IO identity gate.
@@ -66,6 +87,10 @@ const failureChecks = Object.freeze([
   ['PAIRING_REQUEST_AFTER_TERMINAL', evidence => evidence.pairingRequestAfterTerminal],
   ['DELAYED_APPROVAL_READINESS_MISSING', evidence => !evidence.delayedApprovalReadinessProven],
   ['BOOTSTRAP_AUTHORIZATION_PRESENT', evidence => evidence.bootstrapAuthorizationPresent],
+  ['ACCOUNT_CONFIRMATION_COUNT_MISMATCH', evidence => evidence.accountConfirmationCount !== 1],
+  ['ACCOUNT_PROBE_COUNT_MISMATCH', evidence => evidence.accountProbeCount < 2],
+  ['ACCOUNT_REQUEST_BOUNDARY_INVALID', evidence => !evidence.accountRequestBoundaryValid],
+  ['ACCOUNT_CONFIRMATION_ORDER_INVALID', evidence => !evidence.accountConfirmationOrderValid],
   ['AUTHENTICATED_REST_COUNT_MISMATCH', evidence => evidence.authenticatedRestCount < 2],
   ['AUTHENTICATED_SOCKET_COUNT_MISMATCH', evidence => evidence.authenticatedSocketCount < 2],
   ['REST_SCOPE_MISMATCH', evidence => evidence.restScopeCount !== 1 || !evidence.restHasOnlyNullScope],

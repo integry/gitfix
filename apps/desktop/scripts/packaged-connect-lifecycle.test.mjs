@@ -124,7 +124,8 @@ describe('packaged Connect bounded child lifecycle', () => {
     assert.match(harness, /request\.method === 'GET'[\s\S]*?\/\\\/browser\$\//u);
     assert.match(harness, /pairingBrowserCredentialPresent: pairingBrowsers\.some/u);
     assert.doesNotMatch(evaluator, /pairingPollCount < 3/u);
-    assert.match(harness, /const approvalReadinessDelayMs = process\.platform === 'darwin' \? 300 : 0/u);
+    const fixture = await readFile(new URL('./packaged-connect-journey-fixture.mjs', import.meta.url), 'utf8');
+    assert.match(fixture, /approvalReadinessDelayMs = process\.platform === 'darwin' \? 300 : 0/u);
     assert.match(harness, /pairingIntentSequenceValid: hasExactModes\(pairingStarts\) && hasExactModes\(pairingBrowsers\)/u);
     assert.match(harness, /pairingRequestAfterTerminal: bootstrap\.length !== pairingRequestCountAtPairTerminal/u);
     assert.match(harness, /delayedApprovalReadinessProven: process\.platform !== 'darwin'/u);
