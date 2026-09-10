@@ -167,7 +167,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
   }, [adapters, cancelDiscovery, enqueueProfileMutation, reportAcceptanceStage]);
 
-  const { authenticate, cancelAuthentication } = createDesktopAuthenticationActions({
+  const { authenticate, cancelAuthentication, runBlockedAction } = createDesktopAuthenticationActions({
     adapters,
     cancelDiscovery,
     connect,
@@ -330,31 +330,6 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   };
 
   const retry = () => { if ('profile' in state) void connect(state.profile); };
-
-  const runBlockedAction = async (
-    profile: DesktopProfile,
-    action: () => Promise<void>,
-    failureMessage: string,
-    connectFailureMessage?: string,
-    onSuccess?: () => Promise<void>,
-  ) => {
-    cancelDiscovery();
-    const attempt = connectionAttempt.current;
-    try {
-      await action();
-      if (connectionAttempt.current === attempt) await onSuccess?.();
-    } catch {
-      const message = recoverableError(failureMessage);
-      setState(current => current.phase === 'blocked' && current.profile.id === profile.id
-        ? {
-          ...current,
-          result: parseProprConnectEndpoint(profile.baseUrl) && connectFailureMessage
-            ? { status: 'offline', message: recoverableError(connectFailureMessage) }
-            : { ...current.result, message },
-        }
-        : current);
-    }
-  };
 
   const openEditor = (profile: DesktopProfile | 'new') => {
     cancelDiscovery();

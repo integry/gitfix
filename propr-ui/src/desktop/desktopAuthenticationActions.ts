@@ -1,5 +1,6 @@
+import { parseProprConnectEndpoint } from '@propr/shared';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
-import { settleAuthenticationCancellation, type ExperienceState } from './desktopExperienceState';
+import { recoverableError, settleAuthenticationCancellation, type ExperienceState } from './desktopExperienceState';
 import {
   DesktopAuthenticationError,
   type DesktopAdapters,
@@ -92,5 +93,30 @@ export const createDesktopAuthenticationActions = ({
     setState({ phase: 'blocked', profile: current.profile, result: current.result });
   };
 
-  return { authenticate, cancelAuthentication };
+  const runBlockedAction = async (
+    profile: DesktopProfile,
+    action: () => Promise<void>,
+    failureMessage: string,
+    connectFailureMessage?: string,
+    onSuccess?: () => Promise<void>,
+  ) => {
+    cancelDiscovery();
+    const attempt = connectionAttempt.current;
+    try {
+      await action();
+      if (connectionAttempt.current === attempt) await onSuccess?.();
+    } catch {
+      const message = recoverableError(failureMessage);
+      setState(current => current.phase === 'blocked' && current.profile.id === profile.id
+        ? {
+          ...current,
+          result: parseProprConnectEndpoint(profile.baseUrl) && connectFailureMessage
+            ? { status: 'offline', message: recoverableError(connectFailureMessage) }
+            : { ...current.result, message },
+        }
+        : current);
+    }
+  };
+
+  return { authenticate, cancelAuthentication, runBlockedAction };
 };

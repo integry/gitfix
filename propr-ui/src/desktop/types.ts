@@ -1,3 +1,5 @@
+import type { DesktopGitHubAccount } from '../../../apps/desktop/src/shared/github-account';
+
 export type DesktopPlatform = 'macos' | 'windows' | 'linux';
 
 export type DesktopDeepLinkConsumption = {
@@ -6,7 +8,7 @@ export type DesktopDeepLinkConsumption = {
 };
 
 export interface DesktopProfile {
-  account?: import('../../../apps/desktop/src/shared/github-account').DesktopGitHubAccount;
+  account?: DesktopGitHubAccount;
   id: string;
   name: string;
   baseUrl: string;
