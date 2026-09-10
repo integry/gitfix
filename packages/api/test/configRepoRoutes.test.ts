@@ -271,14 +271,14 @@ test('POST repository config preserves an omitted option for existing repositori
 
 test('GET settings exposes configured override and effective detection for every repository', async () => {
   for (const detectedPlan of ['unknown', 'free', 'paid'] as const) {
-    const calls: Array<string | undefined> = [];
+    const calls: Array<[string | undefined, string | undefined]> = [];
     const routes = createConfigRoutes({
       redisClient: {} as never,
       configStore: {
         loadMonitoredReposRaw: async () => ['auto', 'free', 'paid'].map(plan => ({ id: plan, name: `integry/${plan}`, enabled: true, visualPreview: { enabled: true, types: ['video'], githubAttachmentPlan: plan as 'auto' | 'free' | 'paid' } })),
-        loadGitHubAttachmentCapacity: async override => {
-          calls.push(override);
-          return resolveGitHubAttachmentCapacity(override, override ? 'unknown' : detectedPlan);
+        loadGitHubAttachmentCapacity: async (override, repository) => {
+          calls.push([override, repository]);
+          return resolveGitHubAttachmentCapacity(override, override === 'auto' ? detectedPlan : 'unknown');
         },
       },
     });
@@ -290,6 +290,42 @@ test('GET settings exposes configured override and effective detection for every
       const plan = repo.visualPreview.githubAttachmentPlan;
       assert.deepEqual(repo.visualPreview.githubAttachmentCapacity, resolveGitHubAttachmentCapacity(plan, plan === 'auto' ? detectedPlan : 'unknown'));
     }
-    assert.deepEqual(calls, [undefined, 'free', 'paid']);
+    assert.deepEqual(calls, [
+      ['auto', 'integry/auto'],
+      ['free', 'integry/free'],
+      ['paid', 'integry/paid'],
+    ]);
   }
+});
+
+test('GET settings resolves auto capacity separately for repositories with different owners', async () => {
+  const routes = createConfigRoutes({
+    redisClient: {} as never,
+    configStore: {
+      loadMonitoredReposRaw: async () => [
+        { id: 'self', name: 'credential-user/project', enabled: true },
+        { id: 'other', name: 'other-user/project', enabled: true },
+        { id: 'org', name: 'acme-organization/project', enabled: true },
+      ],
+      loadGitHubAttachmentCapacity: async (override, repository) => resolveGitHubAttachmentCapacity(
+        override,
+        repository?.startsWith('credential-user/') ? 'paid' : 'unknown',
+      ),
+    },
+  });
+  const response = createResponse();
+
+  await routes.getRepos({} as never, response as never);
+
+  const repos = response.body?.repos_to_monitor as Array<{ visualPreview: { githubAttachmentCapacity: ReturnType<typeof resolveGitHubAttachmentCapacity> } }>;
+  assert.deepEqual(repos.map(repo => repo.visualPreview.githubAttachmentCapacity.source), [
+    'detected',
+    'conservative-fallback',
+    'conservative-fallback',
+  ]);
+  assert.deepEqual(repos.map(repo => repo.visualPreview.githubAttachmentCapacity.videoLimitBytes), [
+    100 * 1024 * 1024,
+    10 * 1024 * 1024,
+    10 * 1024 * 1024,
+  ]);
 });

@@ -67,13 +67,13 @@ test('inline eligibility carries structured reasons independently of original ca
   for (const size of [0, -1, NaN, Infinity]) assert.equal(githubInlineEligibility('video/mp4', size).eligible, false);
 });
 
-test('detection uses only GET /user with the existing token, without requesting scopes or permissions', async () => {
+test('detection uses only GET /user for a repository owned by the authenticated user', async () => {
   const requests: Array<{ url: unknown; init: RequestInit | undefined }> = [];
-  const result = await loadGitHubAttachmentCapacity('auto', {
+  const result = await loadGitHubAttachmentCapacity('auto', 'Integry/propr', {
     resolveToken: async () => 'existing-upload-token',
     fetch: async (url, init) => {
       requests.push({ url, init });
-      return new Response(JSON.stringify({ plan: { name: 'pro' } }));
+      return new Response(JSON.stringify({ login: 'integry', plan: { name: 'pro' } }));
     },
   });
   assert.equal(result.effectivePlan, 'paid');
@@ -82,6 +82,18 @@ test('detection uses only GET /user with the existing token, without requesting 
   assert.equal(requests[0].init?.method, 'GET');
   assert.deepEqual(requests[0].init?.headers, { Accept: 'application/vnd.github+json', Authorization: 'Bearer existing-upload-token', 'User-Agent': 'ProPR' });
   assert.equal(requests[0].init?.body, undefined);
+});
+
+test('auto does not apply the authenticated user plan to repositories owned by other users or organizations', async () => {
+  for (const repository of ['other-user/project', 'acme-organization/project']) {
+    const result = await loadGitHubAttachmentCapacity('auto', repository, {
+      resolveToken: async () => 'existing-token',
+      fetch: async () => new Response(JSON.stringify({ login: 'credential-user', plan: { name: 'pro' } })),
+    });
+    assert.equal(result.source, 'conservative-fallback');
+    assert.equal(result.effectivePlan, 'free');
+    assert.equal(result.videoLimitBytes, 10 * MIB);
+  }
 });
 
 test('missing, denied, unavailable, ambiguous, and malformed detection falls back without retries or auth changes', async () => {
@@ -94,7 +106,7 @@ test('missing, denied, unavailable, ambiguous, and malformed detection falls bac
     async () => { throw new Error('network unavailable'); },
   ]) {
     let calls = 0;
-    const result = await loadGitHubAttachmentCapacity('auto', {
+    const result = await loadGitHubAttachmentCapacity('auto', 'integry/propr', {
       resolveToken: async () => 'existing-token',
       fetch: async () => { calls++; return fetcher(); },
     });
@@ -102,13 +114,23 @@ test('missing, denied, unavailable, ambiguous, and malformed detection falls bac
     assert.equal(result.videoLimitBytes, 10 * MIB);
     assert.equal(calls, 1);
   }
-  const missing = await loadGitHubAttachmentCapacity('auto', { resolveToken: async () => { throw new Error('missing'); }, fetch: async () => { assert.fail('must not fetch without credentials'); } });
+  const missing = await loadGitHubAttachmentCapacity('auto', 'integry/propr', { resolveToken: async () => { throw new Error('missing'); }, fetch: async () => { assert.fail('must not fetch without credentials'); } });
   assert.equal(missing.source, 'conservative-fallback');
+});
+
+test('auto without a valid target repository falls back without reading credentials', async () => {
+  for (const repository of [undefined, '', 'missing-repository', '/missing-owner']) {
+    const result = await loadGitHubAttachmentCapacity('auto', repository, {
+      resolveToken: async () => { assert.fail('auto must not inspect an unrelated credential owner'); },
+      fetch: async () => { assert.fail('auto must not fetch without a target repository owner'); },
+    });
+    assert.equal(result.source, 'conservative-fallback');
+  }
 });
 
 test('explicit overrides do not need credentials or additional API access', async () => {
   for (const override of ['free', 'paid'] as const) {
-    const result = await loadGitHubAttachmentCapacity(override, { resolveToken: async () => { assert.fail('override must not read credentials'); }, fetch: async () => { assert.fail('override must not fetch'); } });
+    const result = await loadGitHubAttachmentCapacity(override, 'integry/propr', { resolveToken: async () => { assert.fail('override must not read credentials'); }, fetch: async () => { assert.fail('override must not fetch'); } });
     assert.equal(result.effectivePlan, override);
     assert.equal(result.source, 'override');
   }
