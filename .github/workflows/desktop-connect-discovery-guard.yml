@@ -92,6 +92,15 @@ jobs:
       - name: Package the target-native desktop app
         run: npm run desktop:package
 
+      - name: Verify Connect account confirmation and pairing regressions
+        if: matrix.platform == 'linux' || matrix.platform == 'darwin'
+        run: >-
+          npx tsx --test
+          apps/desktop/scripts/packaged-connect-journey.test.mjs
+          apps/desktop/scripts/packaged-connect-evidence.test.mjs
+          apps/desktop/src/packaged-connect-account-confirmation.test.ts
+          apps/desktop/src/saved-accounts.test.ts
+
       - name: Inspect the unsigned target-native desktop app
         run: npm run desktop:smoke:inspect
 

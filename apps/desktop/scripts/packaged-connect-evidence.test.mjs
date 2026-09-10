@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   collectAcceptedSocketEvidence,
+  collectPackagedConnectAccountEvidence,
   evaluatePackagedConnectEvidence,
   PACKAGED_CONNECT_EVIDENCE_FAILURE_CODES,
   PACKAGED_CONNECT_EVIDENCE_FAILURE_EVENT,
@@ -25,6 +26,10 @@ const passingEvidence = () => ({
   pairingRequestAfterTerminal: false,
   delayedApprovalReadinessProven: true,
   bootstrapAuthorizationPresent: false,
+  accountConfirmationCount: 1,
+  accountProbeCount: 2,
+  accountRequestBoundaryValid: true,
+  accountConfirmationOrderValid: true,
   authenticatedRestCount: 2,
   authenticatedSocketCount: 2,
   restScopeCount: 1,
@@ -55,6 +60,10 @@ const failingEvidence = Object.freeze({
   PAIRING_REQUEST_AFTER_TERMINAL: { pairingRequestAfterTerminal: true },
   DELAYED_APPROVAL_READINESS_MISSING: { delayedApprovalReadinessProven: false },
   BOOTSTRAP_AUTHORIZATION_PRESENT: { bootstrapAuthorizationPresent: true },
+  ACCOUNT_CONFIRMATION_COUNT_MISMATCH: { accountConfirmationCount: 0 },
+  ACCOUNT_PROBE_COUNT_MISMATCH: { accountProbeCount: 1 },
+  ACCOUNT_REQUEST_BOUNDARY_INVALID: { accountRequestBoundaryValid: false },
+  ACCOUNT_CONFIRMATION_ORDER_INVALID: { accountConfirmationOrderValid: false },
   AUTHENTICATED_REST_COUNT_MISMATCH: { authenticatedRestCount: 1 },
   AUTHENTICATED_SOCKET_COUNT_MISMATCH: { authenticatedSocketCount: 1 },
   REST_SCOPE_MISMATCH: { restScopeCount: 2 },
@@ -144,4 +153,35 @@ describe('packaged Connect aggregate evidence', () => {
       assert.doesNotMatch(JSON.stringify(record), /private|secret|999/u);
     });
   }
+});
+
+
+test('account evidence requires activated confirmation before saved-account and renderer validation', () => {
+  const authorization = 'Bearer fixture-token';
+  const activation = { method: 'POST', url: '/api/desktop/pairings/test/activate' };
+  const accountRequest = url => ({
+    method: 'GET', url, authorization, transportScope: null, accountAccepted: true,
+  });
+  const confirmation = accountRequest('/api/auth/user?desktop_account_confirmation=1');
+  const probe = accountRequest('/api/auth/user');
+  const renderer = accountRequest('/api/auth/user?proprDesktopScopeGeneration=1');
+  const requests = [activation, confirmation, probe, renderer, { ...probe }, { ...renderer }];
+  const collect = requests => collectPackagedConnectAccountEvidence({ requests, authorization });
+  const evaluate = requests => evaluatePackagedConnectEvidence({ ...passingEvidence(), ...collect(requests) })?.code;
+  assert.equal(evaluate(requests), undefined);
+  assert.equal(evaluate(requests.filter(request => request !== confirmation)), 'ACCOUNT_CONFIRMATION_COUNT_MISMATCH');
+  assert.equal(evaluate([...requests, { ...confirmation }]), 'ACCOUNT_CONFIRMATION_COUNT_MISMATCH');
+  assert.equal(evaluate(requests.filter(request => request !== probe)), 'ACCOUNT_PROBE_COUNT_MISMATCH');
+  assert.equal(evaluate([confirmation, activation, ...requests.slice(2)]), 'ACCOUNT_CONFIRMATION_ORDER_INVALID');
+  assert.equal(evaluate([activation, probe, confirmation, renderer, { ...probe }]), 'ACCOUNT_CONFIRMATION_ORDER_INVALID');
+  for (const change of [
+    { method: 'POST' }, { accountAccepted: false }, { authorization: null }, { transportScope: 'leaked-scope' },
+  ]) {
+    assert.equal(evaluate(requests.map(request => request === confirmation ? { ...request, ...change } : request)),
+      'ACCOUNT_REQUEST_BOUNDARY_INVALID');
+  }
+  // Host confirmation and reprobes cannot substitute for renderer transport evidence.
+  assert.equal(evaluatePackagedConnectEvidence({
+    ...passingEvidence(), ...collect(requests), authenticatedRestCount: 0,
+  })?.code, 'AUTHENTICATED_REST_COUNT_MISMATCH');
 });
