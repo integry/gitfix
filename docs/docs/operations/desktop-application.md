@@ -95,11 +95,12 @@ skipped because an isolated window manager and xdotool were unavailable; frame a
 wordmark implementation/assets were not changed. The display number and Xauthority path above
 are temporary runner values; use your own isolated desktop session when rerunning.
 
-The execution environment also blocked `git merge --no-commit --no-ff` before it could write
-`ORIG_HEAD.lock`: the linked worktree's Git metadata is root-owned. Three-way file integration
-and semantic conflict resolution were prepared and tested, but a merge parent was **not**
-recorded. The committing owner must finish a true merge of the exact logout head into the
-account-switching branch, retaining these resolutions; do not merge the desktop epic into main.
+The true merge is recorded in `a0c75f8fb4bd75ac9f886b62876e276f68ffb616`, with parents
+`4d5daa6270cc2bf2bcb6c16f6ee6099498edad26` and the exact logout head
+`3d0dba0ab95ee2ee075a77b0a6fa828dd674ad1b`. Its tree is identical to `4d5daa62`, preserving
+the semantic conflict resolutions, including atomic signed-out selection and the single
+response/body guard. The missing merge-parent blocker is resolved; packaged acceptance and
+real-account smoke testing remain unverified as described above and below.
 
 Before release, repeat this journey with two real GitHub identities on Linux and macOS, using
 different browser profiles on the same endpoint. Verify native identity confirmation and wrong-user
