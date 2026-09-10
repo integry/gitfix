@@ -1,22 +1,11 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useId, useMemo } from 'react';
 import { AgentConfig, chatWithAgents, ChatResult, ChatQuery } from '../../api/proprApi';
 import { MODEL_INFO_MAP, AgentType } from '../../config/modelDefinitions';
 import { ProviderLogo } from '../ui/ProviderLogo';
-import { Bot, User, Send } from 'lucide-react';
-import { Layers3 } from 'lucide-react';
+import { Bot, Check, Layers3, Search, Send, User, X } from 'lucide-react';
 import type { SyntheticAgentConfig } from '@propr/shared';
 
-// Enhanced badge colors for selected state - more visually prominent
 type AgentVisualType = AgentType | 'synthetic';
-
-const selectedBadgeColors: Record<AgentVisualType, string> = {
-  claude: 'bg-orange-500 text-white border-orange-600 shadow-md ring-2 ring-orange-300',
-  codex: 'bg-green-500 text-white border-green-600 shadow-md ring-2 ring-green-300',
-  antigravity: 'bg-violet-500 text-white border-violet-600 shadow-md ring-2 ring-violet-300',
-  opencode: 'bg-cyan-500 text-white border-cyan-600 shadow-md ring-2 ring-cyan-300',
-  vibe: 'bg-pink-500 text-white border-pink-600 shadow-md ring-2 ring-pink-300',
-  synthetic: 'bg-slate-600 text-white border-slate-700 shadow-md ring-2 ring-slate-300'
-};
 
 interface ChatPanelProps {
   agents: AgentConfig[];
@@ -71,7 +60,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [modelSearch, setModelSearch] = useState('');
+  const [isSelectorOpen, setIsSelectorOpen] = useState(false);
+  const [activeOptionIndex, setActiveOptionIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const selectorRef = useRef<HTMLDivElement>(null);
+  const modelOptionsId = useId();
 
   // Build list of all enabled agent+model combinations
   const agentModelOptions = useMemo(() => {
@@ -103,6 +97,20 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
     return options;
   }, [agents, syntheticAgents]);
 
+  const filteredModelOptions = useMemo(() => {
+    const terms = modelSearch.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return agentModelOptions;
+
+    return agentModelOptions.filter(option => {
+      const searchableText = `${option.agentAlias} ${option.modelName} ${option.modelId}`.toLocaleLowerCase();
+      return terms.every(term => searchableText.includes(term));
+    });
+  }, [agentModelOptions, modelSearch]);
+
+  const selectedModelOptions = useMemo(() => selectedModels
+    .map(selection => agentModelOptions.find(option => isSameAgentModel(option, selection)))
+    .filter((option): option is AgentModelOption => Boolean(option)), [agentModelOptions, selectedModels]);
+
   // Keep selections limited to combinations exposed by the Playground. If an
   // agent is disabled or removed, fall back to the first available option.
   useEffect(() => {
@@ -128,6 +136,17 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  useEffect(() => {
+    const closeSelector = (event: PointerEvent) => {
+      if (!selectorRef.current?.contains(event.target as Node)) {
+        setIsSelectorOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', closeSelector);
+    return () => document.removeEventListener('pointerdown', closeSelector);
+  }, []);
 
   const handleSend = async () => {
     if (!input.trim() || selectedModels.length === 0 || disabled) return;
@@ -198,52 +217,140 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
     );
   };
 
+  const handleModelSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      setIsSelectorOpen(false);
+      return;
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setIsSelectorOpen(true);
+      setActiveOptionIndex(current => {
+        if (filteredModelOptions.length === 0) return 0;
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        return (current + direction + filteredModelOptions.length) % filteredModelOptions.length;
+      });
+      return;
+    }
+
+    if (event.key === 'Enter' && isSelectorOpen && filteredModelOptions.length > 0) {
+      event.preventDefault();
+      toggleSelection(filteredModelOptions[Math.min(activeOptionIndex, filteredModelOptions.length - 1)]);
+      setModelSearch('');
+      setActiveOptionIndex(0);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-[#F8FAFC]">
-      {/* Compact model selector header */}
-      <div className="px-4 py-3 flex-shrink-0">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-500 font-medium">Select models to test:</span>
+      {/* Search-first model selector */}
+      <div className="relative z-10 flex-shrink-0 border-b border-slate-200 bg-white" ref={selectorRef}>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <input
+            type="text"
+            role="combobox"
+            aria-label="Search and add models to compare"
+            aria-controls={modelOptionsId}
+            aria-expanded={isSelectorOpen}
+            aria-autocomplete="list"
+            autoComplete="off"
+            value={modelSearch}
+            onFocus={() => {
+              setIsSelectorOpen(true);
+              setActiveOptionIndex(0);
+            }}
+            onChange={event => {
+              setModelSearch(event.target.value);
+              setIsSelectorOpen(true);
+              setActiveOptionIndex(0);
+            }}
+            onKeyDown={handleModelSearchKeyDown}
+            placeholder={'Search and add models to compare (e.g., "Opus", "GPT-6")...'}
+            className="w-full border-b border-slate-200 bg-white py-3 pl-11 pr-4 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500"
+          />
+        </div>
+
+        <div className="flex min-h-10 items-center gap-2 px-4 py-2">
+          <div className="scrollbar-stealth flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+            {selectedModelOptions.length > 0 ? selectedModelOptions.map(option => (
+              <button
+                key={JSON.stringify([option.agentId, option.modelId])}
+                type="button"
+                onClick={() => toggleSelection(option)}
+                aria-label={`${option.agentAlias}: ${option.modelName}`}
+                aria-pressed="true"
+                title={`Remove ${option.modelName}`}
+                className="inline-flex flex-shrink-0 items-center gap-1.5 rounded border border-slate-200 bg-slate-100 px-2 py-1 font-mono text-[12px] text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+              >
+                {option.syntheticConfigId
+                  ? <Layers3 className="h-3 w-3" aria-hidden="true" />
+                  : <ProviderLogo provider={option.agentAlias} className="h-3 w-3" />}
+                <span>{option.modelName}</span>
+                <X className="h-3 w-3 text-slate-400" aria-hidden="true" />
+              </button>
+            )) : (
+              <span className={`whitespace-nowrap text-[11px] ${agentModelOptions.length > 0 ? 'text-amber-600' : 'text-slate-500'}`}>
+                {agentModelOptions.length > 0 ? 'Select at least one model to start chatting' : 'No enabled models available.'}
+              </span>
+            )}
+          </div>
           <button
+            type="button"
             onClick={() => setMessages([])}
-            className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded hover:bg-white/50 transition-colors"
+            className="flex-shrink-0 rounded px-2 py-1 text-xs text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700"
             title="Clear History"
           >
             Clear
           </button>
         </div>
-        {/* Compact model selector with tiny chips - wraps to multiple rows */}
-        <div className="flex flex-wrap gap-1.5">
-          {agentModelOptions.length === 0 ? (
-            <p className="text-[10px] text-gray-500">No enabled models available.</p>
-          ) : (
-            agentModelOptions.map(option => {
+
+        {isSelectorOpen && (
+          <div
+            id={modelOptionsId}
+            role="listbox"
+            aria-label="Available models"
+            aria-multiselectable="true"
+            className="absolute left-3 right-3 top-[46px] z-20 max-h-72 overflow-y-auto rounded-md border border-slate-200 bg-white py-1 shadow-xl scrollbar-stealth"
+          >
+            {filteredModelOptions.length > 0 ? filteredModelOptions.map((option, index) => {
               const selection = { agentId: option.agentId, modelId: option.modelId };
               const isSelected = selectedModels.some(selected => isSameAgentModel(selected, selection));
               return (
                 <button
                   key={JSON.stringify([option.agentId, option.modelId])}
                   type="button"
-                  onClick={() => toggleSelection(option)}
-                  aria-label={`${option.agentAlias}: ${option.modelName}`}
-                  aria-pressed={isSelected}
-                  className={`px-2 py-0.5 text-[10px] rounded-full border transition-all duration-200 flex items-center gap-1 whitespace-nowrap ${
-                    isSelected
-                      ? selectedBadgeColors[option.agentType]
-                      : 'bg-white/70 border-gray-200 text-gray-400 hover:bg-white hover:border-gray-300 hover:text-gray-600'
+                  role="option"
+                  aria-selected={isSelected}
+                  onMouseEnter={() => setActiveOptionIndex(index)}
+                  onClick={() => {
+                    toggleSelection(option);
+                    setModelSearch('');
+                    setActiveOptionIndex(0);
+                  }}
+                  className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
+                    index === activeOptionIndex ? 'bg-slate-100' : 'hover:bg-slate-50'
                   }`}
                 >
-                  {option.syntheticConfigId
-                    ? <Layers3 className="h-3 w-3" aria-hidden="true" />
-                    : <ProviderLogo provider={option.agentAlias} className="w-3 h-3" />}
-                  {option.modelName}
+                  <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+                    {option.syntheticConfigId
+                      ? <Layers3 className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                      : <ProviderLogo provider={option.agentAlias} className="h-4 w-4" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium text-slate-800">{option.modelName}</span>
+                    <span className="block truncate font-mono text-[10px] text-slate-400">{option.agentAlias} · {option.modelId}</span>
+                  </span>
+                  {isSelected && <Check className="h-4 w-4 flex-shrink-0 text-teal-600" aria-hidden="true" />}
                 </button>
               );
-            })
-          )}
-        </div>
-        {selectedModels.length === 0 && agentModelOptions.length > 0 && (
-          <p className="text-[10px] text-amber-600 mt-1.5">Select at least one model to start chatting</p>
+            }) : (
+              <div className="px-3 py-6 text-center text-sm text-slate-500">
+                No models match “{modelSearch.trim()}”.
+              </div>
+            )}
+          </div>
         )}
       </div>
 

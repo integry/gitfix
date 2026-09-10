@@ -6,6 +6,7 @@ import { type AgentType, MODEL_INFO_MAP, typeBadgeColors } from '../../config/mo
 import { ProviderLogo } from '../../components/ui/ProviderLogo';
 import { isAgentLoginSupported } from '@propr/shared';
 import AgentLoginModal from './AgentLoginModal';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 
 // --- Icons ---
 
@@ -113,6 +114,46 @@ function getModelDisplayName(modelId: string, modelInfo: typeof MODEL_INFO_MAP[s
 
 const getAgentTypeLabel = (type: AgentType) => type === 'opencode' ? 'OpenCode' : type;
 
+// The catalog is ordered for capability rather than release date, so keep the
+// lifecycle cutoffs explicit. Unknown and custom model IDs stay visible.
+const LEGACY_MODEL_IDS: Partial<Record<AgentType, ReadonlySet<string>>> = {
+  claude: new Set([
+    'claude-fable-5',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-4-6',
+    'claude-opus-4-5-20251101',
+    'claude-sonnet-4-5-20250929',
+    'claude-haiku-4-5-20251001',
+  ]),
+  codex: new Set([
+    'gpt-5.5',
+    'gpt-5.5-pro',
+    'gpt-5.4',
+    'gpt-5.4-pro',
+    'gpt-5.4-mini',
+    'gpt-5.4-nano',
+    'gpt-5.3-codex',
+    'gpt-5.3-codex-spark',
+    'gpt-5.2',
+    'gpt-5-mini',
+    'gpt-5-nano',
+  ]),
+  antigravity: new Set([
+    'antigravity-gemini-3.6-flash-medium',
+    'antigravity-gemini-3.6-flash-high',
+    'antigravity-gemini-3.6-flash-low',
+    'antigravity-gemini-3.5-flash-medium',
+    'antigravity-gemini-3.5-flash-high',
+    'antigravity-gemini-3.5-flash-low',
+    'antigravity-gemini-3.1-pro-low',
+    'antigravity-gemini-3.1-pro-high',
+  ]),
+};
+
+const isLegacyModel = (agentType: AgentType, modelId: string) =>
+  LEGACY_MODEL_IDS[agentType]?.has(modelId) ?? false;
+
 // High-density model row component - tighter padding for density
 const ModelRow: React.FC<{
   modelId: string;
@@ -189,6 +230,29 @@ const AgentCard: React.FC<{
   onSelectModel?: (agentId: string, modelId: string) => void;
   readOnly?: boolean;
 }> = ({ agent, onLogin, onEdit, onDelete, onToggle, onSelectModel, readOnly = false }) => {
+  const [showLegacyModels, setShowLegacyModels] = useState(false);
+  const currentModels = agent.supportedModels.filter(modelId => !isLegacyModel(agent.type, modelId));
+  const legacyModels = agent.supportedModels.filter(modelId => isLegacyModel(agent.type, modelId));
+
+  const renderModelRow = (modelId: string) => {
+    const modelInfo = MODEL_INFO_MAP[modelId];
+    const isDefault = agent.defaultModel === modelId;
+    const modelCustomLabel = agent.modelCustomLabels?.[modelId];
+
+    return (
+      <ModelRow
+        key={modelId}
+        modelId={modelId}
+        modelInfo={modelInfo}
+        isDefault={isDefault}
+        customLabel={modelCustomLabel}
+        agentAlias={agent.alias}
+        onSelect={() => onSelectModel?.(agent.id, modelId)}
+        selectionDisabled={!agent.enabled || !onSelectModel}
+      />
+    );
+  };
+
   return (
     <div className="border-b border-slate-100 py-4 first:pt-0">
       {/* --- Agent Header: [Icon] [Bold Name] [Brand Badge] ... [Toggle] [Edit] --- */}
@@ -264,25 +328,26 @@ const AgentCard: React.FC<{
           </div>
         </div>
 
-        {/* Model rows */}
-        {agent.supportedModels.map(modelId => {
-          const modelInfo = MODEL_INFO_MAP[modelId];
-          const isDefault = agent.defaultModel === modelId;
-          const modelCustomLabel = agent.modelCustomLabels?.[modelId];
+        {/* Current and previous-generation models remain visible by default. */}
+        {currentModels.map(renderModelRow)}
 
-          return (
-            <ModelRow
-              key={modelId}
-              modelId={modelId}
-              modelInfo={modelInfo}
-              isDefault={isDefault}
-              customLabel={modelCustomLabel}
-              agentAlias={agent.alias}
-              onSelect={() => onSelectModel?.(agent.id, modelId)}
-              selectionDisabled={!agent.enabled || !onSelectModel}
-            />
-          );
-        })}
+        {legacyModels.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowLegacyModels(current => !current)}
+            aria-expanded={showLegacyModels}
+            className="flex w-full cursor-pointer items-center justify-center gap-1.5 border-y border-dashed border-slate-200 bg-transparent py-2 text-[11px] font-medium text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
+          >
+            {showLegacyModels
+              ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+              : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
+            {showLegacyModels
+              ? 'Hide legacy models'
+              : `Show ${legacyModels.length} legacy ${legacyModels.length === 1 ? 'model' : 'models'}`}
+          </button>
+        )}
+
+        {showLegacyModels && legacyModels.map(renderModelRow)}
       </div>
     </div>
   );
