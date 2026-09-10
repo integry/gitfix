@@ -28,6 +28,49 @@ const connectDiscovery = {
 };
 
 describe('desktop IPC shutdown gate', () => {
+  it('routes trusted scoped logout through credentials and clears only its notifications after durable removal', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const scope = { profileId: 'a', transportScope: 'scope-a' };
+    const notificationScope = { ...scope, userId: 'account-a' };
+    const completed = deferred<void>();
+    const entered = deferred<void>();
+    const order: string[] = [];
+    const registered = registerIpcHandlers({
+      app: {} as App,
+      ipcMain: { handle: (channel: string, handler: (...args: any[]) => unknown) => handlers.set(channel, handler), removeHandler: (channel: string) => handlers.delete(channel) } as unknown as IpcMain,
+      profiles: {} as ProfileStore,
+      credentials: {
+        logout: async (value: unknown) => { assert.deepEqual(value, scope); order.push('logout'); entered.resolve(); await completed.promise; },
+        hasActiveRendererBinding: () => false,
+      } as unknown as DesktopCredentialService,
+      notifications: {
+        activeScope: () => notificationScope,
+        clear: value => { assert.deepEqual(value, notificationScope); order.push('clear-notifications'); },
+      } as NonNullable<Parameters<typeof registerIpcHandlers>[0]['notifications']>,
+      connectDiscovery,
+      lifecycle: {} as LocalLifecycleController,
+      logger: { log: () => undefined } as unknown as DesktopLogger,
+      desktopSession: { fetch: async () => { throw new Error('Cookie logout must not run'); } } as unknown as Session,
+      devServerUrl: undefined,
+      packagedRendererUrl: 'propr-renderer://app/index.html',
+      openExternal: async () => undefined,
+      onActiveWorkConnectionUnavailable: reason => { assert.equal(reason, 'logged-out'); order.push('stop-native-work'); },
+    });
+    const handler = handlers.get(IPC_CHANNELS.authLogout)!;
+    const event = { senderFrame: { url: 'propr-renderer://app/index.html' } };
+    await assert.rejects(Promise.resolve(handler({ senderFrame: { url: 'https://attacker.example' } }, scope)), /Untrusted/);
+    await assert.rejects(Promise.resolve(handler(event, 'https://a.example.test')), /IPC_OPERATION_FAILED/);
+    await assert.rejects(Promise.resolve(handler(event, scope, 'extra')), /IPC_OPERATION_FAILED/);
+    assert.deepEqual(order, []);
+    const pending = handler(event, scope);
+    await entered.promise;
+    assert.deepEqual(order, ['logout']);
+    completed.resolve();
+    await pending;
+    assert.deepEqual(order, ['logout', 'clear-notifications', 'stop-native-work']);
+    registered.dispose();
+  });
+
   it('authorizes only fixed no-argument controls for the IPC sender owning the window', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const acceptedSender = {};
@@ -1109,7 +1152,7 @@ describe('desktop IPC shutdown gate', () => {
     assert.equal(handlers.size, 0);
   });
 
-  for (const category of ['profile', 'pairing', 'session'] as const) {
+  for (const category of ['profile', 'pairing', 'logout'] as const) {
     it(`runs an admitted ${category} handler through the production before-quit drain`, async () => {
       const handlers = new Map<string, (...args: any[]) => unknown>();
       const ipcMain = {
@@ -1127,12 +1170,11 @@ describe('desktop IPC shutdown gate', () => {
       const credentials = {
         listProfiles: category === 'profile' ? begin : async () => ({ profiles: [], activeProfileId: null }),
         pair: category === 'pairing' ? begin : async () => ({ paired: true }),
+        logout: category === 'logout' ? begin : async () => undefined,
         dispose: async () => undefined,
       } as unknown as DesktopCredentialService;
       const desktopSession = {
-        fetch: category === 'session'
-          ? async () => await begin() as Response
-          : async () => new Response(null, { status: 204 }),
+        fetch: async () => { throw new Error('Cookie logout must not be used'); },
       } as unknown as Session;
       const registered = registerIpcHandlers({
         app: {
@@ -1164,7 +1206,7 @@ describe('desktop IPC shutdown gate', () => {
         : null;
       const args = category === 'pairing'
         ? [{ id: 'profile-a', label: 'A', apiBaseUrl: 'https://a.example.test' }, pairingAdmission!.operationId]
-        : category === 'session' ? ['https://a.example.test'] : [];
+        : category === 'logout' ? [{ profileId: 'profile-a', transportScope: 'scope-a' }] : [];
       const admitted = invoke(channel, ...args);
       await started.promise;
 

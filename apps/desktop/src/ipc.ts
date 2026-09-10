@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { App, IpcMain, IpcMainInvokeEvent, Session } from 'electron';
-import { clearDesktopInstanceCookies, logoutDesktopSession } from './desktop-session';
+import { clearDesktopInstanceCookies } from './desktop-session';
 import { desktopPairingFailureCode, type DesktopCredentialService } from './credential-service';
 import type { DesktopConnectDiscoveryService } from './connect-discovery';
 import type { DesktopLogger } from './logger';
@@ -38,7 +38,7 @@ interface RegisterIpcOptions {
   connectDiscovery: Pick<DesktopConnectDiscoveryService, 'discover' | 'rediscover'>;
   lifecycle: LocalLifecycleController;
   setup?: DesktopSetupController;
-  notifications?: Pick<NativeNotificationService, 'get' | 'update' | 'test' | 'publish' | 'clear'>;
+  notifications?: Pick<NativeNotificationService, 'get' | 'update' | 'test' | 'publish' | 'clear' | 'activeScope'>;
   logger: DesktopLogger;
   desktopSession: Session;
   devServerUrl: string | undefined;
@@ -243,9 +243,21 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       throw new Error('Unexpected desktop deep-link consumer readiness');
     }
   });
-  handle(IPC_CHANNELS.authLogout, async (_event, apiBaseUrl) => {
-    await logoutDesktopSession(options.desktopSession, apiBaseUrl);
-    options.onActiveWorkConnectionUnavailable?.('logged-out');
+  handle(IPC_CHANNELS.authLogout, async (_event, scope, ...args) => {
+    if (args.length || !scope || typeof scope !== 'object' || Array.isArray(scope)
+      || Object.keys(scope).length !== 2
+      || typeof scope.profileId !== 'string' || typeof scope.transportScope !== 'string') {
+      throw new Error('Invalid desktop logout scope');
+    }
+    const notificationScope = options.notifications?.activeScope();
+    await options.credentials.logout(scope);
+    if (notificationScope && notificationScope.profileId === scope.profileId
+      && notificationScope.transportScope === scope.transportScope) {
+      options.notifications?.clear(notificationScope);
+    }
+    if (options.onActiveWorkConnectionUnavailable && !options.credentials.hasActiveRendererBinding()) {
+      options.onActiveWorkConnectionUnavailable('logged-out');
+    }
   });
   handle(IPC_CHANNELS.openExternal, async (_event, value: unknown) => {
     if (typeof value !== 'string' || !isSafeExternalUrl(value)) throw new Error('External URL is not allowed');
