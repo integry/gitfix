@@ -131,9 +131,9 @@ const ModelRow: React.FC<{
   onSelect,
   selectionDisabled = false
 }) => (
-  <div className="flex flex-wrap sm:flex-nowrap items-center py-1 px-2 hover:bg-slate-50 transition-colors text-sm">
+  <div className="ai-agent-model-row flex flex-wrap sm:flex-nowrap items-center py-1 px-2 hover:bg-slate-50 transition-colors text-sm">
     {/* Name + Badge column */}
-    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+    <div className="ai-agent-model-name flex items-center gap-1.5 flex-1 min-w-0">
       <button
         type="button"
         onClick={onSelect}
@@ -158,14 +158,14 @@ const ModelRow: React.FC<{
     </div>
 
     {/* Context Limit column - fixed width for alignment, hidden on mobile */}
-    <div className="hidden sm:block w-14 text-right flex-shrink-0 mr-3">
+    <div className="ai-agent-model-context hidden sm:block w-14 text-right flex-shrink-0 mr-3">
       {modelInfo?.contextWindow && (
         <span className="font-mono text-[11px] text-gray-500">{modelInfo.contextWindow}</span>
       )}
     </div>
 
     {/* ID/Alias column - responsive: full width on mobile, fixed width on desktop */}
-    <div className="flex flex-wrap items-center gap-1 w-full sm:w-[220px] mt-2 sm:mt-0 justify-start sm:justify-end">
+    <div className="ai-agent-model-identifiers flex flex-wrap items-center gap-1 w-full sm:w-[220px] mt-2 sm:mt-0 justify-start sm:justify-end">
       <span className="inline-flex items-center gap-0.5">
         <CodeChip className="bg-purple-50 text-purple-700 border-purple-200 text-[10px]">{modelId}</CodeChip>
         <CopyButton text={modelId} className="hover:text-purple-600" />
@@ -192,8 +192,8 @@ const AgentCard: React.FC<{
   return (
     <div className="border-b border-slate-100 py-4 first:pt-0">
       {/* --- Agent Header: [Icon] [Bold Name] [Brand Badge] ... [Toggle] [Edit] --- */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="ai-agent-card-header flex items-center justify-between">
+        <div className="ai-agent-card-identity flex items-center gap-2">
           <ProviderLogo provider={agent.type} className="w-5 h-5 text-gray-700 flex-shrink-0" />
           <span className="font-semibold text-gray-900">{agent.alias}</span>
           <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded border capitalize ${typeBadgeColors[agent.type]}`}>
@@ -202,7 +202,7 @@ const AgentCard: React.FC<{
           <CodeChip>{agent.configPath}</CodeChip>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="ai-agent-card-actions flex items-center gap-1.5">
           {isAgentLoginSupported(agent.type) && (
             <button
               onClick={onLogin}
@@ -253,9 +253,9 @@ const AgentCard: React.FC<{
       </div>
 
       {/* --- High-Density Model Rows - tighter padding --- */}
-      <div className="mt-2 ml-7">
+      <div className="ai-agent-models mt-2 ml-7">
         {/* Header row - hidden on mobile for stacked layout */}
-        <div className="hidden sm:flex items-center py-1 px-2 text-[10px] text-gray-400 uppercase tracking-wide font-medium border-b border-slate-100">
+        <div className="ai-agent-model-header hidden sm:flex items-center py-1 px-2 text-[10px] text-gray-400 uppercase tracking-wide font-medium border-b border-slate-100">
           <div className="flex-1">Model</div>
           <div className="w-14 text-right flex-shrink-0 mr-3">Context</div>
           <div className="flex items-center gap-1 w-[220px] justify-end">

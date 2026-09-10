@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Inbox } from 'lucide-react';
 import { getTasks, getRepositoryStats } from '../api/proprApi';
 import { useSocket } from '../contexts/useSocket';
 import type { RepoOption } from './RepositorySelector';
@@ -256,11 +257,14 @@ const TaskList: React.FC<TaskListProps> = ({ limit, showViewAll = false, hideFil
   // Dashboard integration: simpler layout without anchored header/footer
   if (hideFilters) {
     return (
-      <div>
+      <div className="flex min-h-[18rem] w-full flex-1 flex-col">
         <Filters {...filterProps} />
 
         {tasks.length === 0 ? (
-          <p className="text-gray-500 text-center py-8">No tasks found — try clearing filters, or start one by creating a plan or adding your ProPR trigger label to a GitHub issue.</p>
+          <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
+            <Inbox className="mb-4 h-12 w-12 text-slate-200" aria-hidden="true" />
+            <p className="max-w-md text-sm text-slate-500">No tasks found — try clearing filters, or start one by creating a plan or adding your ProPR trigger label to a GitHub issue.</p>
+          </div>
         ) : (
           <TaskTableContent {...tableContentProps} />
         )}

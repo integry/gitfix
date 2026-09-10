@@ -76,14 +76,6 @@ const EnrollmentControl: React.FC = () => {
   if (push.isLoading) {
     return <p className="text-xs text-gray-500">Checking this browser...</p>;
   }
-  if (!push.capabilities?.push.configured) {
-    return (
-      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-        Web Push is not configured for this ProPR instance. An administrator must configure
-        the VAPID keys before this browser can be enabled.
-      </div>
-    );
-  }
   if (push.requiresIosInstallation) {
     return (
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs leading-5 text-blue-800">
@@ -96,6 +88,14 @@ const EnrollmentControl: React.FC = () => {
     return (
       <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
         This browser does not support the service worker and Push APIs required for notifications.
+      </div>
+    );
+  }
+  if (!push.capabilities?.push.configured) {
+    return (
+      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+        Web Push is not configured for this ProPR instance. An administrator must configure
+        the VAPID keys before this browser can be enabled.
       </div>
     );
   }
@@ -204,11 +204,13 @@ const NotificationSettingsSection: React.FC = () => {
       </div>
 
       <div className="space-y-5">
-        <div>
-          <p className="mb-2 text-xs font-medium text-gray-700">Browser push</p>
-          <EnrollmentControl />
-          {push.error && <p role="alert" className="mt-2 text-xs text-red-600">{push.error}</p>}
-        </div>
+        {push.serviceWorkerOriginSupported && (
+          <div>
+            <p className="mb-2 text-xs font-medium text-gray-700">Browser push</p>
+            <EnrollmentControl />
+            {push.error && <p role="alert" className="mt-2 text-xs text-red-600">{push.error}</p>}
+          </div>
+        )}
 
         <div>
           <div className="mb-2 grid grid-cols-[1fr_auto_auto] gap-4 border-b border-gray-200 pb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">

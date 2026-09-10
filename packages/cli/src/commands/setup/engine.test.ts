@@ -118,6 +118,47 @@ test("imports an upload-compatible gh token after the backend becomes healthy", 
   assert.ok(log.includes('visual previews: configured from the gh CLI session (@octocat)'));
 });
 
+test("keeps visual-preview credential failures non-blocking and secrets out of reporter output", async () => {
+  const sentinels = [
+    "ghp_TOKEN_SENTINEL_123456789",
+    "Bearer BEARER_SENTINEL_123456789",
+    "https://secret.example/SENSITIVE_PATH_SENTINEL",
+    "SENSITIVE_USERNAME_SENTINEL",
+  ];
+  const logOutput: string[] = [];
+  const progressOutput: string[] = [];
+  let healthChecks = 0;
+  let attempts = 0;
+
+  const result = await runSetup({
+    root: "/stack",
+    reporter: {
+      onLog: (line) => logOutput.push(line),
+      onProgress: (event) => progressOutput.push(JSON.stringify(event)),
+    },
+    actions: mockActions({
+      checkBackendHealth: async () => {
+        healthChecks += 1;
+        return { healthy: true, detail: "API healthy" };
+      },
+      configureVisualPreviewCredential: async () => {
+        attempts += 1;
+        throw new Error(sentinels.join(" "));
+      },
+    }),
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(statusOf(result.state, "start-stack"), "done");
+  assert.equal(healthChecks, 1);
+  assert.equal(attempts, 1);
+  assert.ok(logOutput.includes("visual previews: could not import the gh CLI token; add a PAT in Settings"));
+  for (const sentinel of sentinels) {
+    assert.equal(logOutput.join("\n").includes(sentinel), false);
+    assert.equal(progressOutput.join("\n").includes(sentinel), false);
+  }
+});
+
 test("an incomplete stack root (missing dirs) is re-scaffolded even when .env exists", async () => {
   let scaffolded = false;
   const result = await runSetup({
@@ -476,7 +517,7 @@ test("relay enrollment seeds when PROPR_ADMIN_USERS contains no effective userna
   assert.match(getStep(result.state, "github-auth")?.detail ?? "", /bootstrap administrator: octocat/);
 });
 
-test("keeping relay auth seeds its authenticated identity before starting an adminless stack", async () => {
+test("keeping relay auth does not infer bootstrap eligibility from installation access", async () => {
   const env: Record<string, string> = {
     GH_AUTH_MODE: "relay",
     GH_INSTALLATION_ID: "42",
@@ -505,10 +546,11 @@ test("keeping relay auth seeds its authenticated identity before starting an adm
     }),
   });
 
-  assert.equal(env.PROPR_ADMIN_USERS, "octocat");
-  assert.equal(env.GITHUB_USER_WHITELIST, "alice,octocat");
-  assert.match(getStep(result.state, "github-auth")?.detail ?? "", /bootstrap administrator: octocat/);
-  assert.equal(startCalled, true);
+  assert.equal(env.PROPR_ADMIN_USERS, undefined);
+  assert.equal(env.GITHUB_USER_WHITELIST, "alice");
+  assert.equal(statusOf(result.state, "github-auth"), "failed");
+  assert.match(getStep(result.state, "github-auth")?.detail ?? "", /no instance administrator/);
+  assert.equal(startCalled, false);
 });
 
 test("keeping non-demo auth without a safe bootstrap identity blocks startup", async () => {
@@ -811,6 +853,184 @@ test("relay enrollment asks the user to pick among multiple installations", asyn
   assert.equal(enrolledId, "200", "the picked installation is the one enrolled");
 });
 
+test("cancellation during installation revalidation prevents enrollment", async () => {
+  const controller = new AbortController();
+  let discoveryCalls = 0;
+  let enrolled = false;
+  const result = await runSetup({
+    root: "/stack",
+    signal: controller.signal,
+    prompts: relayPrompts({ selectInstallation: async () => "100" }),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      fetchRelayInstallations: async () => {
+        discoveryCalls += 1;
+        if (discoveryCalls === 2) controller.abort();
+        return { username: "octocat", installations: [inst(100, "acme")] };
+      },
+      enrollRelay: async () => {
+        enrolled = true;
+        return { relayUrl: "https://relay/v1", token: "prt_x" };
+      },
+    }),
+  });
+  assert.equal(discoveryCalls, 2);
+  assert.equal(enrolled, false);
+  assert.equal(result.completed, false);
+});
+
+test("cancellation during enrollment prevents applying the returned token", async () => {
+  const controller = new AbortController();
+  let relayConfigurationApplied = false;
+  const result = await runSetup({
+    root: "/stack",
+    signal: controller.signal,
+    prompts: relayPrompts({ selectInstallation: async () => "100" }),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      fetchRelayInstallations: async () => ({
+        username: "octocat", installations: [inst(100, "acme")],
+      }),
+      enrollRelay: async () => {
+        controller.abort();
+        return { relayUrl: "https://relay/v1", token: "prt_x" };
+      },
+      applyEnvSelection: (_root, vars) => {
+        if (vars.GH_AUTH_MODE === "relay") relayConfigurationApplied = true;
+        return { written: Object.keys(vars), skipped: [] };
+      },
+    }),
+  });
+  assert.equal(relayConfigurationApplied, false);
+  assert.equal(result.completed, false);
+});
+
+test("relay enrollment never silently chooses the first of multiple installations", async () => {
+  let enrolled = false;
+  const result = await runSetup({
+    root: "/stack",
+    prompts: relayPrompts(),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      fetchRelayInstallations: async () => ({
+        username: "octocat",
+        installations: [inst(100, "acme", "Organization"), inst(200, "widgets")],
+      }),
+      enrollRelay: async () => { enrolled = true; return { relayUrl: "https://relay/v1", token: "prt_x" }; },
+    }),
+  });
+  assert.equal(enrolled, false);
+  assert.equal(statusOf(result.state, "github-auth"), "failed");
+  assert.match(getStep(result.state, "github-auth")?.detail ?? "", /choose .* explicitly/i);
+});
+
+test("interactive relay enrollment refreshes after app installation and validates a stale choice", async () => {
+  let discoveries = 0;
+  let promptsSeen = 0;
+  const opened: string[] = [];
+  let enrolledId: string | undefined;
+  const result = await runSetup({
+    root: "/stack",
+    prompts: relayPrompts({
+      configureGithubAuth: async () => ({ mode: "relay", enrollRelay: { relayUrl: DEFAULT_PROPR_GH_RELAY_URL } }),
+      chooseInstallation: async ({ username, installations, enrollmentPermissionError }) => {
+        promptsSeen += 1;
+        assert.equal(username, "octocat");
+        if (promptsSeen === 1) {
+          assert.equal(installations.length, 0);
+          return { action: "install" };
+        }
+        if (promptsSeen === 2) return { action: "select", installationId: "200" };
+        assert.match(enrollmentPermissionError ?? "", /changed|no longer accessible/i);
+        return { action: "select", installationId: "100" };
+      },
+    }),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      openUrl: async url => { opened.push(url); },
+      fetchRelayInstallations: async () => {
+        discoveries += 1;
+        if (discoveries === 1) return { username: "octocat", installations: [] };
+        if (discoveries === 2) return { username: "octocat", installations: [inst(100, "acme"), inst(200, "widgets")] };
+        return { username: "octocat", installations: [inst(100, "acme")] };
+      },
+      enrollRelay: async ({ installationId }) => {
+        enrolledId = installationId;
+        return { relayUrl: DEFAULT_PROPR_GH_RELAY_URL, token: "prt_x" };
+      },
+    }),
+  });
+  assert.deepEqual(opened, ["https://github.com/apps/propr-dev/installations/new"]);
+  assert.equal(enrolledId, "100");
+  assert.equal(statusOf(result.state, "github-auth"), "done");
+});
+
+test("an enrollment 403 returns to explicit selection without treating access as ownership", async () => {
+  let enrollmentCalls = 0;
+  let promptsSeen = 0;
+  const result = await runSetup({
+    root: "/stack",
+    prompts: relayPrompts({
+      chooseInstallation: async ({ enrollmentPermissionError }) => {
+        promptsSeen += 1;
+        if (promptsSeen === 1) return { action: "select", installationId: "100" };
+        assert.match(enrollmentPermissionError ?? "", /requires an installation owner/i);
+        return { action: "select", installationId: "200" };
+      },
+    }),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      fetchRelayInstallations: async () => ({
+        username: "member-user",
+        installations: [inst(100, "member-org", "Organization"), inst(200, "owned-user")],
+      }),
+      enrollRelay: async ({ installationId }) => {
+        enrollmentCalls += 1;
+        if (installationId === "100") throw Object.assign(new Error("owner authorization required"), { status: 403 });
+        return { relayUrl: "https://relay/v1", token: "prt_x" };
+      },
+    }),
+  });
+  assert.equal(enrollmentCalls, 2);
+  assert.equal(promptsSeen, 2);
+  assert.equal(statusOf(result.state, "github-auth"), "done");
+});
+
+test("interactive relay enrollment can force re-authentication and rediscover another account", async () => {
+  let username = "first-user";
+  let forced = false;
+  let promptsSeen = 0;
+  const result = await runSetup({
+    root: "/stack",
+    prompts: relayPrompts({
+      chooseInstallation: async context => {
+        promptsSeen += 1;
+        if (promptsSeen === 1) {
+          assert.equal(context.username, "first-user");
+          return { action: "reauthenticate" };
+        }
+        assert.equal(context.username, "second-user");
+        return { action: "select", installationId: "200" };
+      },
+    }),
+    actions: mockActions({
+      hasGithubToken: () => true,
+      loginWithGithub: async ({ force } = {}) => {
+        forced = force === true;
+        username = "second-user";
+        return true;
+      },
+      fetchRelayInstallations: async () => ({
+        username,
+        installations: [inst(username === "first-user" ? 100 : 200, username)],
+      }),
+    }),
+  });
+  assert.equal(forced, true);
+  assert.equal(promptsSeen, 2);
+  assert.equal(statusOf(result.state, "github-auth"), "done");
+});
+
 test("relay enrollment offers an interactive login when no token, then enrolls", async () => {
   let loginCalled = false;
   let tokenPresent = false;
@@ -1098,6 +1318,24 @@ test("an unhealthy backend fails setup and does not launch the UI", async () => 
   assert.equal(result.completed, false);
 });
 
+test("a host compatibility failure keeps its actionable recovery before completion", async () => {
+  const result = await runSetup({
+    root: "/stack",
+    actions: mockActions({
+      checkBackendHealth: async () => ({
+        healthy: false,
+        detail: "desktop runtime propr/app:0.8.15 is incompatible",
+        nextAction: "Install the app image released for API compatibility 2026-06-27, then retry local setup.",
+      }),
+    }),
+  });
+  const step = getStep(result.state, "start-stack");
+  assert.equal(step?.status, "failed");
+  assert.match(step?.detail ?? "", /propr\/app:0\.8\.15/);
+  assert.match(step?.nextAction ?? "", /2026-06-27.*retry local setup/);
+  assert.equal(result.completed, false);
+});
+
 test("backend access errors preserve the distinction between 401 and 403", () => {
   assert.deepEqual(classifyBackendAccessError(Object.assign(new Error("Unauthorized"), { status: 401 })), {
     healthy: false,
@@ -1169,6 +1407,65 @@ test("an already-running stack is reused, not restarted", async () => {
   });
   assert.equal(started, false, "a running stack must not be restarted");
   assert.equal(statusOf(result.state, "start-stack"), "done");
+});
+
+test("an explicitly confirmed desktop-owned replacement gates the aligned running runtime", async () => {
+  let runtime: "retained" | "aligned" = "retained";
+  let ordinaryStarts = 0;
+  let replacements = 0;
+  const result = await runSetup({
+    root: "/desktop-managed-root",
+    prompts: {
+      confirmReplaceRunningStack: async ({ rootDir, detail }) => {
+        assert.equal(rootDir, "/desktop-managed-root");
+        assert.match(detail, /0\.8\.15.*incompatible/);
+        return true;
+      },
+    },
+    actions: mockActions({
+      isStackRunning: async () => true,
+      startStack: async () => { ordinaryStarts += 1; },
+      replaceRunningStack: async ({ rootDir }) => {
+        assert.equal(rootDir, "/desktop-managed-root");
+        replacements += 1;
+        runtime = "aligned";
+      },
+      checkBackendHealth: async () => runtime === "retained"
+        ? {
+            healthy: false,
+            detail: "desktop runtime propr/app:0.8.15 is incompatible",
+            nextAction: "Restart with aligned runtime while retaining managed data.",
+            recoveryAction: "replace-running-stack",
+          }
+        : { healthy: true, detail: "desktop contract ready" },
+    }),
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(ordinaryStarts, 0, "the retained stack must not take the ordinary start path");
+  assert.equal(replacements, 1);
+  assert.match(getStep(result.state, "start-stack")?.detail ?? "", /restarted with aligned images/);
+});
+
+test("an incompatible running stack is left intact without explicit replacement confirmation", async () => {
+  let replacements = 0;
+  const result = await runSetup({
+    root: "/desktop-managed-root",
+    actions: mockActions({
+      isStackRunning: async () => true,
+      replaceRunningStack: async () => { replacements += 1; },
+      checkBackendHealth: async () => ({
+        healthy: false,
+        detail: "desktop runtime propr/app:0.8.15 is incompatible",
+        nextAction: "Choose Restart with aligned runtime.",
+        recoveryAction: "replace-running-stack",
+      }),
+    }),
+  });
+
+  assert.equal(result.completed, false);
+  assert.equal(replacements, 0);
+  assert.equal(getStep(result.state, "start-stack")?.recoveryAction, "replace-running-stack");
 });
 
 test("selecting polling selects the mode via GITHUB_EVENT_INTAKE_MODE", async () => {

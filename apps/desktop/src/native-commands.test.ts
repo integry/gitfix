@@ -1,0 +1,265 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { createDesktopNativeCommandDispatcher } from './native-commands';
+import type { DesktopNativeCommandDelivery, DesktopNotificationScope } from './shared/contract';
+
+const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>(settle => { resolve = settle; });
+  return { promise, resolve };
+};
+
+describe('desktop native command dispatcher', () => {
+  it('restores a hidden window, gates auth actions, and delivers only fixed renderer commands when ready', () => {
+    const sent: DesktopNativeCommandDelivery[] = [];
+    let restores = 0;
+    let scope: { profileId: string; transportScope: string } | null = null;
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => ({ isDestroyed: () => false, webContents: { send: (_channel, value) => sent.push(value) } }),
+      restoreWindow: () => { restores += 1; },
+      activeConnectionScope: () => scope,
+      activeNotificationScope: () => null,
+      notificationState: () => ({ available: false, enabled: false }),
+      setNativeNotificationsEnabled: async () => undefined,
+      quit: () => undefined,
+    });
+    dispatcher.rendererReady();
+    dispatcher.dispatch('tasks');
+    assert.deepEqual(sent, []);
+    assert.equal(restores, 0);
+
+    scope = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    dispatcher.connectionAvailable();
+    dispatcher.dispatch('tasks');
+    dispatcher.dispatch('manage-instances');
+    dispatcher.dispatch('quit');
+    assert.deepEqual(sent, [
+      { command: 'tasks', connectionScope: scope },
+      { command: 'manage-instances', connectionScope: scope },
+      { command: 'quit', connectionScope: scope },
+    ]);
+    assert.equal(restores, 3);
+  });
+
+  it('queues startup navigation but drops it after an instance switch', () => {
+    const sent: DesktopNativeCommandDelivery[] = [];
+    let scope = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => ({ isDestroyed: () => false, webContents: { send: (_channel, value) => sent.push(value) } }),
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => scope,
+      activeNotificationScope: () => null,
+      notificationState: () => ({ available: false, enabled: false }),
+      setNativeNotificationsEnabled: async () => undefined,
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+    dispatcher.dispatch('plans');
+    scope = { profileId: 'profile-b', transportScope: 'zyxwvutsrqponmlkjihgfe' };
+    dispatcher.rendererReady();
+    assert.deepEqual(sent, []);
+    dispatcher.dispatch('inbox');
+    assert.deepEqual(sent, [{ command: 'inbox', connectionScope: scope }]);
+  });
+
+  it('flushes to the exact recreated window before its global reference is published', () => {
+    const sent: DesktopNativeCommandDelivery[] = [];
+    const connectionScope = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => connectionScope,
+      activeNotificationScope: () => null,
+      notificationState: () => ({ available: false, enabled: false }),
+      setNativeNotificationsEnabled: async () => undefined,
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+    dispatcher.dispatch('new-plan');
+    dispatcher.rendererReady({
+      isDestroyed: () => false,
+      webContents: { send: (_channel, command) => sent.push(command) },
+    });
+    assert.deepEqual(sent, [{ command: 'new-plan', connectionScope }]);
+  });
+
+  it('persists notification pause/resume, publishes state changes, and disposes commands', async () => {
+    const notificationScope: DesktopNotificationScope = {
+      profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv', userId: 'user-a',
+    };
+    let enabled = true;
+    let updates = 0;
+    let quits = 0;
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => notificationScope,
+      activeNotificationScope: () => notificationScope,
+      notificationState: () => ({ available: true, enabled }),
+      setNativeNotificationsEnabled: async (_scope, value) => { enabled = value; },
+      quit: () => { quits += 1; },
+    });
+    dispatcher.connectionAvailable();
+    const unsubscribe = dispatcher.subscribe(() => { updates += 1; });
+    assert.equal(dispatcher.getState().nativeNotificationsEnabled, true);
+    dispatcher.dispatch('toggle-native-notifications');
+    await tick();
+    assert.equal(enabled, false);
+    assert.equal(updates, 1);
+    dispatcher.dispatch('quit');
+    assert.equal(quits, 0);
+
+    dispatcher.close();
+    dispatcher.dispatch('quit');
+    dispatcher.dispatch('toggle-native-notifications');
+    await tick();
+    assert.equal(quits, 0);
+    assert.equal(updates, 1);
+    unsubscribe();
+  });
+
+  it('serializes rapid notification toggles against the latest persisted state', async () => {
+    const notificationScope: DesktopNotificationScope = {
+      profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv', userId: 'user-a',
+    };
+    let enabled = true;
+    const writes: boolean[] = [];
+    const first = deferred();
+    const second = deferred();
+    const gates = [first, second];
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => notificationScope,
+      activeNotificationScope: () => notificationScope,
+      notificationState: () => ({ available: true, enabled }),
+      setNativeNotificationsEnabled: async (_scope, value) => {
+        const gate = gates[writes.length];
+        writes.push(value);
+        await gate.promise;
+        enabled = value;
+      },
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+
+    dispatcher.dispatch('toggle-native-notifications');
+    dispatcher.dispatch('toggle-native-notifications');
+    await tick();
+    assert.deepEqual(writes, [false]);
+
+    first.resolve();
+    await tick();
+    assert.deepEqual(writes, [false, true]);
+    second.resolve();
+    await tick();
+    assert.equal(enabled, true);
+  });
+
+  it('drops a queued notification toggle after the initiating connection is replaced', async () => {
+    const accountA: DesktopNotificationScope = {
+      profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv', userId: 'user-a',
+    };
+    const accountB: DesktopNotificationScope = {
+      profileId: 'profile-b', transportScope: 'zyxwvutsrqponmlkjihgfe', userId: 'user-b',
+    };
+    let scope = accountA;
+    const preferences = new Map([[accountA.profileId, true], [accountB.profileId, true]]);
+    const writes: string[] = [];
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => scope,
+      activeNotificationScope: () => scope,
+      notificationState: () => ({ available: true, enabled: preferences.get(scope.profileId) ?? false }),
+      setNativeNotificationsEnabled: async (_notificationScope, value) => {
+        writes.push(scope.profileId);
+        preferences.set(scope.profileId, value);
+      },
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+
+    dispatcher.dispatch('toggle-native-notifications');
+    scope = accountB;
+    dispatcher.connectionUnavailable();
+    dispatcher.connectionAvailable();
+    await tick();
+
+    assert.deepEqual(writes, []);
+    assert.equal(preferences.get(accountA.profileId), true);
+    assert.equal(preferences.get(accountB.profileId), true);
+  });
+
+  it('drops a queued notification toggle when another user becomes active on the same connection', async () => {
+    const accountA: DesktopNotificationScope = {
+      profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv', userId: 'user-a',
+    };
+    const accountB: DesktopNotificationScope = { ...accountA, userId: 'user-b' };
+    let activeAccount = accountA;
+    const preferences = new Map([[accountA.userId, true], [accountB.userId, true]]);
+    const writes: string[] = [];
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => activeAccount,
+      activeNotificationScope: () => activeAccount,
+      notificationState: () => ({
+        available: true,
+        enabled: preferences.get(activeAccount.userId) ?? false,
+      }),
+      setNativeNotificationsEnabled: async (notificationScope, value) => {
+        writes.push(notificationScope.userId);
+        preferences.set(notificationScope.userId, value);
+      },
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+
+    dispatcher.dispatch('toggle-native-notifications');
+    activeAccount = accountB;
+    await tick();
+
+    assert.deepEqual(writes, []);
+    assert.equal(preferences.get(accountA.userId), true);
+    assert.equal(preferences.get(accountB.userId), true);
+  });
+
+  it('drops a queued notification toggle when the dispatcher closes before its microtask', async () => {
+    const notificationScope: DesktopNotificationScope = {
+      profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv', userId: 'user-a',
+    };
+    let enabled = true;
+    let writes = 0;
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => notificationScope,
+      activeNotificationScope: () => notificationScope,
+      notificationState: () => ({ available: true, enabled }),
+      setNativeNotificationsEnabled: async (_scope, value) => {
+        writes += 1;
+        enabled = value;
+      },
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+
+    dispatcher.dispatch('toggle-native-notifications');
+    dispatcher.close();
+    await tick();
+
+    assert.equal(writes, 0);
+    assert.equal(enabled, true);
+  });
+});

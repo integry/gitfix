@@ -1,5 +1,5 @@
-import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom'
+import React, { lazy, Suspense, useEffect, useState } from 'react'
+import { BrowserRouter, HashRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import { ToastProvider } from './components/ui/Toast'
 import { SocketProvider } from './contexts/SocketProvider'
@@ -7,20 +7,26 @@ import { useDemoMode } from './contexts/DemoModeContext'
 import { DemoModeProvider } from './contexts/DemoModeProvider'
 import DemoModeBanner from './components/DemoModeBanner'
 import './App.css'
-import { getCurrentUser, INSTANCE_AUTHORIZATION_CHANGED_EVENT } from './api/proprApi'
 import { checkProprApiCompatibility, ProprCompatibilityCheckError } from './api/compatibility'
 import {
   hostedUiConnectionIssue,
+  getRuntimeApiBaseUrlState,
   isHostedOAuthCompletionRoute,
   isHostedUiOrigin,
   pathWithActiveHostedTunnelFlow,
 } from './config/runtimeConfig'
 import { AuthProvider, useCurrentUser, userHasPermission } from './contexts/AuthContext'
-import type { CurrentUser, InstancePermission } from './api/proprTypes'
+import type { InstancePermission } from './api/proprTypes'
 import RouteChunkErrorBoundary from './components/RouteChunkErrorBoundary'
 import { ConnectAccountProvider } from './contexts/ConnectAccountContext'
 import { BrowserPushProvider } from './hooks/useBrowserPush'
 import { NotificationCenterProvider } from './contexts/NotificationCenterContext'
+import { isDesktopRuntime, publicAssetUrl } from './config/runtimeMode'
+import { DesktopPresentationBoundary } from './desktop/DesktopPresentationBoundary'
+import { useCurrentUserBootstrap } from './hooks/useCurrentUserBootstrap'
+import { DesktopTaskNotificationAdapter } from './desktop/DesktopTaskNotificationAdapter'
+
+const Router = isDesktopRuntime() ? HashRouter : BrowserRouter;
 
 const AiAgentsPage = lazy(() => import('./pages/AiAgentsPage'))
 const AccessManagementPage = lazy(() => import('./pages/AccessManagementPage'))
@@ -28,6 +34,7 @@ const Dashboard = lazy(() => import('./components/Dashboard'))
 const LlmLogsPage = lazy(() => import('./pages/LlmLogsPage'))
 const InboxPage = lazy(() => import('./pages/InboxPage'))
 const LoginPage = lazy(() => import('./pages/LoginPage'))
+const DesktopPairingPage = lazy(() => import('./pages/DesktopPairingPage'))
 const PlansPage = lazy(() => import('./pages/PlansPage'))
 const PlanStudioPage = lazy(() => import('./pages/PlanStudioPage'))
 const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'))
@@ -37,12 +44,7 @@ const SummaryBrowserPage = lazy(() => import('./pages/SummaryBrowserPage'))
 const TasksPage = lazy(() => import('./pages/TasksPage'))
 const GoalsPage = lazy(() => import('./pages/GoalsPage'))
 
-type CompatibilityState =
-  | { status: 'checking' }
-  | { status: 'ready' }
-  | { status: 'blocked'; title: string; message: string };
-
-const AUTHORIZATION_REFRESH_INTERVAL_MS = 60_000;
+type CompatibilityState = { status: 'checking' } | { status: 'ready' } | { status: 'blocked'; title: string; message: string };
 
 const LoadingSpinner: React.FC = () => (
   <div className="flex h-screen w-full items-center justify-center bg-gray-50">
@@ -93,7 +95,7 @@ const HostedConnectionBlocked: React.FC<{ title: string; message: string }> = ({
 const HostedOAuthCompletion: React.FC = () => (
   <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
     <main className="text-center">
-      <img src="/media/logo-and-name.png" alt="ProPR" className="mx-auto mb-4 h-12 w-auto" />
+      <img src={publicAssetUrl('/media/logo-and-name.png')} alt="ProPR" className="mx-auto mb-4 h-12 w-auto" />
       <h1 className="text-xl font-semibold text-gray-950">GitHub sign-in complete</h1>
       <p className="mt-3 text-sm text-gray-600">You can close this window and return to ProPR.</p>
     </main>
@@ -141,92 +143,23 @@ export const NotFoundRouteContent: React.FC<{ hostname?: string }> = ({ hostname
 
 const AppContent: React.FC = () => {
   const { isDemoMode, isLoading: isDemoModeLoading } = useDemoMode();
-  // Auth check state - start loading unless already on login page
-  const [isLoading, setIsLoading] = useState(window.location.pathname !== '/login');
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const {
+    currentUser,
+    currentUserAbsent,
+    currentUserLoading,
+    isInitialLoading,
+    refreshCurrentUser,
+  } = useCurrentUserBootstrap({ isDemoMode, isDemoModeLoading });
 
-  const refreshCurrentUser = useCallback(async () => {
-    if (refreshPromiseRef.current) return refreshPromiseRef.current;
-    const request = getCurrentUser()
-      .then(user => { setCurrentUser(user); })
-      .finally(() => {
-        if (refreshPromiseRef.current === request) refreshPromiseRef.current = null;
-      });
-    refreshPromiseRef.current = request;
-    return request;
-  }, []);
-
-  // Perform initial auth check
-  useEffect(() => {
-    if (isDemoModeLoading) return;
-
-    const checkSession = async () => {
-      // Don't check if we are already on login page
-      if (window.location.pathname === '/login') {
-        setIsLoading(false);
-        return;
-      }
-
-      try {
-        await refreshCurrentUser();
-        // Session is valid
-        setIsLoading(false);
-      } catch (error) {
-        // If error is NOT 'Authentication required', we let the app render (to show errors).
-        // If it IS 'Authentication required', handleApiResponse handles the redirect,
-        // so we keep isLoading=true to prevent UI flash.
-        if (error instanceof Error && error.message !== 'Authentication required') {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    checkSession();
-  }, [isDemoModeLoading, refreshCurrentUser]);
-
-  useEffect(() => {
-    const handleAuthorizationChanged = () => {
-      void refreshCurrentUser().catch(error => {
-        console.error('Failed to refresh instance authorization:', error);
-      });
-    };
-    window.addEventListener(INSTANCE_AUTHORIZATION_CHANGED_EVENT, handleAuthorizationChanged);
-    return () => window.removeEventListener(INSTANCE_AUTHORIZATION_CHANGED_EVENT, handleAuthorizationChanged);
-  }, [refreshCurrentUser]);
-
-  useEffect(() => {
-    if (isDemoMode || window.location.pathname === '/login') return;
-    const refreshAuthorization = () => {
-      if (document.visibilityState === 'hidden') return;
-      void refreshCurrentUser().catch(error => {
-        console.error('Failed to synchronize instance authorization:', error);
-      });
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') refreshAuthorization();
-    };
-    const interval = window.setInterval(refreshAuthorization, AUTHORIZATION_REFRESH_INTERVAL_MS);
-    window.addEventListener('focus', refreshAuthorization);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('focus', refreshAuthorization);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [isDemoMode, refreshCurrentUser]);
-
-
-  // Render spinner while checking auth
-  if (isDemoModeLoading || isLoading) return <LoadingSpinner />;
-
-  return (
-    <SocketProvider disabled={isDemoMode}>
+  // Keep the provider mounted for lifecycle attribution, but do not construct a
+  // socket until the active desktop scope has an authenticated REST user.
+  const content = isDemoModeLoading || isInitialLoading ? <LoadingSpinner /> : (
       <ToastProvider>
         <div className={`flex h-screen flex-col ${isDemoMode ? 'pt-9' : ''}`}>
           <DemoModeBanner />
           <div className="min-h-0 flex-1">
             <AuthProvider user={currentUser} refreshUser={refreshCurrentUser}>
+              <DesktopTaskNotificationAdapter />
               <BrowserPushProvider>
                 <NotificationCenterProvider key={currentUser?.id ?? (isDemoMode ? 'demo' : 'anonymous')}>
                   <Router>
@@ -236,6 +169,7 @@ const AppContent: React.FC = () => {
                     <Suspense fallback={<LoadingSpinner />}>
                       <Routes>
                     <Route path="/login" element={<LoginPage />} />
+                    <Route path="/desktop/pairing" element={<DesktopPairingPage />} />
                     <Route path="/revert" element={<RevertPage />} />
                     <Route
                       path="/"
@@ -359,11 +293,25 @@ const AppContent: React.FC = () => {
           </div>
         </div>
       </ToastProvider>
+  );
+
+  const disableReasons = {
+    demoModeLoading: isDemoModeLoading,
+    demoMode: isDemoMode,
+    currentUserLoading,
+    currentUserAbsent,
+  };
+  return (
+    <SocketProvider
+      disabled={Object.values(disableReasons).some(Boolean)}
+      disableReasons={disableReasons}
+    >
+      {content}
     </SocketProvider>
   );
 };
 
-const App: React.FC = () => {
+const WebApp: React.FC = () => {
   // The compatibility gate only applies to the hosted UI — a single static bundle
   // serving many per-instance proxies, where the UI and API are versioned
   // independently. On a local/self-hosted origin the UI and API ship together, so
@@ -377,7 +325,7 @@ const App: React.FC = () => {
   );
   const connectionIssue = isHostedOAuthCompletion
     ? null
-    : hostedUiConnectionIssue(
+    : getRuntimeApiBaseUrlState().issue ?? hostedUiConnectionIssue(
       window.location.hostname,
       window.__PROPR_CONFIG__,
       window.location.search
@@ -385,7 +333,6 @@ const App: React.FC = () => {
   const [compatibility, setCompatibility] = useState<CompatibilityState>(
     isHosted && !isHostedOAuthCompletion && !connectionIssue ? { status: 'checking' } : { status: 'ready' }
   );
-
   useEffect(() => {
     if (!isHosted || isHostedOAuthCompletion || connectionIssue) return;
     let cancelled = false;
@@ -455,4 +402,4 @@ const App: React.FC = () => {
   )
 }
 
-export default App
+export default function App() { return <DesktopPresentationBoundary fallback={<WebApp />} desktop={<DemoModeProvider><AppContent /></DemoModeProvider>} />; }

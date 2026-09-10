@@ -6,6 +6,7 @@
  * and provides standardized error handling.
  */
 
+import { DEFAULT_LOCAL_API_BASE_URL } from "@propr/shared";
 import { ConfigManager, createConfigManager } from "../config/index.js";
 import {
   ApiClientOptions,
@@ -25,7 +26,7 @@ import {
 /**
  * Default base URL for the ProPR backend API.
  */
-const DEFAULT_BASE_URL = "http://localhost:4000";
+const DEFAULT_BASE_URL = DEFAULT_LOCAL_API_BASE_URL;
 
 /**
  * Default request timeout in milliseconds (30 seconds).

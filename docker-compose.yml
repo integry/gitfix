@@ -258,6 +258,9 @@ services:
       - PROPR_CONTAINERIZED=1
       - PROPR_STACK=${PROPR_STACK:-propr}
       - CONFIG_REPO_PATH=/tmp/config_repo
+      # Keep API-owned durable state on the mounted data directory even though
+      # the development command runs from /usr/src/app/packages/api.
+      - DATA_DIR=/usr/src/app/data
       # Allow injection of API_PUBLIC_URL for PR preview environments
       - API_PUBLIC_URL=${API_PUBLIC_URL:-http://localhost:4000}
       # Allow injection of FRONTEND_URL for CORS in PR preview environments

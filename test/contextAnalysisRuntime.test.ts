@@ -1,5 +1,10 @@
 import { after, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getManagedAgentConfigPath } from '@propr/shared';
+import { CodexAgent } from '../packages/core/src/agents/impl/CodexAgent.js';
 import { createContainerExecutionId } from '../packages/core/src/agents/impl/utils/containerExecutionId.js';
 import {
   buildCodexDockerArgs,
@@ -14,9 +19,36 @@ import {
   resolveContextAnalysisTimeoutMs,
 } from '../packages/core/src/services/relevance/contextAnalysisConfig.js';
 
+const codexRuntimeRoot = mkdtempSync(join(tmpdir(), 'propr-codex-runtime-'));
+const defaultTestConfigPath = join(codexRuntimeRoot, 'default-config');
+mkdirSync(defaultTestConfigPath, { recursive: true });
+
 after(async () => {
+  rmSync(codexRuntimeRoot, { recursive: true, force: true });
   await closeConnection();
 });
+
+function withCodexEnvironment<T>(
+  environment: Record<string, string | undefined>,
+  run: () => T,
+): T {
+  const keys = ['HOME', 'CODEX_CONFIG_PATH', 'HOST_CODEX_DIR', 'PROPR_CONTAINERIZED', 'PROPR_MANAGED_CREDENTIALS_DIR'] as const;
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  try {
+    for (const key of keys) {
+      const value = environment[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    return run();
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
 
 describe('context analysis runtime safeguards', () => {
   const codexConfig = {
@@ -25,7 +57,7 @@ describe('context analysis runtime safeguards', () => {
     alias: 'codex',
     enabled: true,
     dockerImage: 'propr/agent:test',
-    configPath: '/tmp/codex-config',
+    configPath: defaultTestConfigPath,
     supportedModels: ['gpt-5.6-sol'],
   };
 
@@ -41,6 +73,84 @@ describe('context analysis runtime safeguards', () => {
   function codexConfigOverrides(args: string[]): string[] {
     return args.flatMap((arg, index) => arg === '--config' ? [args[index + 1]] : []);
   }
+
+  test('mounts the approved Codex host mapping when backend HOME differs', () => {
+    const hostConfigPath = join(codexRuntimeRoot, 'desktop-user', '.codex');
+    mkdirSync(hostConfigPath, { recursive: true });
+
+    const args = withCodexEnvironment({
+      HOME: '/root',
+      PROPR_CONTAINERIZED: '1',
+      CODEX_CONFIG_PATH: hostConfigPath,
+    }, () => buildCodexDockerArgs({ ...codexConfig, configPath: '~/.codex' }, codexParams));
+
+    assert.ok(args.includes(`${hostConfigPath}:/home/node/.codex:rw`));
+    assert.equal(args.some(arg => arg.includes('/root/.codex:/home/node/.codex')), false);
+  });
+
+  test('does not replace an explicit Codex config path with the host default mapping', () => {
+    const customConfigPath = join(codexRuntimeRoot, 'custom-codex');
+    const hostConfigPath = join(codexRuntimeRoot, 'host-codex');
+    mkdirSync(customConfigPath, { recursive: true });
+    mkdirSync(hostConfigPath, { recursive: true });
+
+    const args = withCodexEnvironment({
+      HOME: '/root',
+      PROPR_CONTAINERIZED: '1',
+      CODEX_CONFIG_PATH: hostConfigPath,
+    }, () => buildCodexDockerArgs({ ...codexConfig, configPath: customConfigPath }, codexParams));
+
+    assert.ok(args.includes(`${customConfigPath}:/home/node/.codex:rw`));
+  });
+
+  test('does not replace managed Codex credentials with the host default mapping', () => {
+    const managedRoot = join(codexRuntimeRoot, 'managed');
+    const managedConfigPath = join(managedRoot, 'codex-test', '.codex');
+    const hostConfigPath = join(codexRuntimeRoot, 'host-codex-managed-case');
+    mkdirSync(managedConfigPath, { recursive: true });
+    mkdirSync(hostConfigPath, { recursive: true });
+
+    const args = withCodexEnvironment({
+      HOME: '/root',
+      PROPR_CONTAINERIZED: '1',
+      CODEX_CONFIG_PATH: hostConfigPath,
+      PROPR_MANAGED_CREDENTIALS_DIR: managedRoot,
+    }, () => buildCodexDockerArgs({
+      ...codexConfig,
+      configPath: getManagedAgentConfigPath('codex-test', 'codex'),
+    }, codexParams));
+
+    assert.ok(args.includes(`${managedConfigPath}:/home/node/.codex:rw`));
+  });
+
+  test('fails before Docker argument construction when the host mapping is absent or unavailable', () => {
+    assert.throws(
+      () => withCodexEnvironment({
+        HOME: '/root',
+        PROPR_CONTAINERIZED: '1',
+      }, () => buildCodexDockerArgs({ ...codexConfig, configPath: '~/.codex' }, codexParams)),
+      /has no host mapping.*HOST_CODEX_DIR/,
+    );
+
+    const missingPath = join(codexRuntimeRoot, 'not-mounted');
+    assert.throws(
+      () => withCodexEnvironment({
+        HOME: '/root',
+        PROPR_CONTAINERIZED: '1',
+        CODEX_CONFIG_PATH: missingPath,
+      }, () => buildCodexDockerArgs({ ...codexConfig, configPath: '~/.codex' }, codexParams)),
+      /credential directory is unavailable.*HOST_CODEX_DIR/,
+    );
+  });
+
+  test('reports Codex unhealthy when the selected host credential mapping is absent', async () => {
+    const healthy = await withCodexEnvironment({
+      HOME: '/root',
+      PROPR_CONTAINERIZED: '1',
+    }, () => new CodexAgent({ ...codexConfig, configPath: '~/.codex' }).healthCheck());
+
+    assert.equal(healthy, false);
+  });
 
   test('creates distinct fallback container IDs for parallel calls in the same millisecond', (t) => {
     t.mock.method(Date, 'now', () => 1_785_825_895_919);

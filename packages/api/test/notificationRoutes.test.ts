@@ -81,16 +81,20 @@ function createService(overrides: Partial<NotificationRouteService> = {}): Notif
     };
 }
 
-function createVapidConfiguration(): { subject: string; publicKey: string; privateKey: string } {
+function createVapidConfiguration(rawPrivateKey?: Buffer): {
+    subject: string; publicKey: string; privateKey: string;
+} {
     const ecdh = createECDH('prime256v1');
-    ecdh.generateKeys();
-    const privateKey = ecdh.getPrivateKey();
+    if (rawPrivateKey) ecdh.setPrivateKey(rawPrivateKey);
+    else ecdh.generateKeys();
+    // Node omits leading zero bytes, while VAPID private keys are fixed-width scalars.
+    const privateKey = Buffer.alloc(32);
+    const generatedPrivateKey = ecdh.getPrivateKey();
+    generatedPrivateKey.copy(privateKey, privateKey.length - generatedPrivateKey.length);
     return {
         subject: 'mailto:notifications@example.com',
         publicKey: ecdh.getPublicKey(undefined, 'uncompressed').toString('base64url'),
-        privateKey: Buffer.concat([
-            Buffer.alloc(32 - privateKey.length), privateKey
-        ]).toString('base64url')
+        privateKey: privateKey.toString('base64url')
     };
 }
 
@@ -218,8 +222,9 @@ describe('notification routes', () => {
         assert.deepEqual(body(), { error: 'Authentication required' });
     });
 
-    test('returns Web Push capability without exposing private VAPID material', async () => {
-        const vapid = createVapidConfiguration();
+    test('returns Web Push capability for a leading-zero key without exposing private material', async () => {
+        const vapid = createVapidConfiguration(Buffer.from([1]));
+        assert.equal(Buffer.from(vapid.privateKey, 'base64url').length, 32);
         let configurationReads = 0;
         const routes = createNotificationRoutes({
             service: createService(),
