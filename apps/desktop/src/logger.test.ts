@@ -16,11 +16,11 @@ const completePackagedLayout = () => ({
   screen: { height: 1080, width: 1920 },
   viewport: { height: 820, width: 1280 },
   chrome: {
-    dragRegion: bounds(0, 0, 1142, 56),
+    dragRegion: bounds(0, 0, 1142, 44),
     dragRegionStyle: 'drag',
     legacyTitleRowCount: 0,
     nativeControlLabels: ['Minimize window', 'Maximize or restore window', 'Close window'],
-    nativeControlRegion: bounds(1142, 0, 138, 56),
+    nativeControlRegion: bounds(1142, 0, 138, 44),
     nativeControlRegionStyle: 'no-drag',
     overlayRect: bounds(0, 0, 0, 0),
     overlayVisible: false,
