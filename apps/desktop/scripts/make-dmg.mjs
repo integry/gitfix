@@ -4,6 +4,7 @@ import { access, cp, mkdir, mkdtemp, open, readFile, rename, rm, symlink } from 
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { basename, join, resolve } from 'node:path';
+import { verifyDarwinLocalPackage } from './sign-darwin-local-package.mjs';
 
 const execFileAsync = promisify(execFile);
 const HDIUTIL = '/usr/bin/hdiutil';
@@ -29,6 +30,9 @@ for (let attempt = 0; attempt < 2 && !created; attempt += 1) {
   const temporaryOutput = join(outputDirectory, `.propr-dmg-${randomUUID()}.partial.dmg`);
   try {
     await cp(appPath, join(stagingDirectory, basename(appPath)), { recursive: true, verbatimSymlinks: true });
+    if (arch === 'arm64' && !process.env.PROPR_DESKTOP_MAC_SIGNING_IDENTITY?.trim()) {
+      await verifyDarwinLocalPackage({ application: join(stagingDirectory, basename(appPath)) });
+    }
     await symlink('/Applications', join(stagingDirectory, 'Applications'));
     await execFileAsync(HDIUTIL, [
       'create',

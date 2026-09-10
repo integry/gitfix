@@ -283,6 +283,13 @@ jobs:
           npm run make -w @propr/desktop -- --arch=${{ matrix.arch }}
           npm run make:dmg -w @propr/desktop -- --arch=${{ matrix.arch }}
 
+      - name: Verify final local ARM64 signatures and tamper rejection
+        if: matrix.platform == 'darwin' && matrix.arch == 'arm64'
+        shell: bash
+        env:
+          PROPR_DESKTOP_TEST_LOCAL_SIGNATURE_APP: apps/desktop/out/propr-desktop-darwin-arm64/propr-desktop.app
+        run: node --test apps/desktop/scripts/sign-darwin-local-package.test.mjs
+
       - name: Make Windows validation installer
         if: matrix.platform == 'win32'
         shell: pwsh

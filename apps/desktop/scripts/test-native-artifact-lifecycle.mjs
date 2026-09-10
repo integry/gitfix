@@ -32,6 +32,7 @@ import {
   removePrivateSmokeProfile,
 } from './packaged-smoke-support.mjs';
 import { signDarwinPackagedConnectApplication } from './sign-darwin-packaged-connect.mjs';
+import { verifyDarwinLocalPackage } from './sign-darwin-local-package.mjs';
 import { verifyDarwinPackagedConnectSignature } from './verify-darwin-packaged-connect-signature.mjs';
 import {
   DESKTOP_ICON_FILE,
@@ -1347,6 +1348,12 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
     await validateIdentity({ target, kind, application });
     let darwinSignatureProof;
     if (target.platform === 'darwin') {
+      // Check the actual extracted ZIP/DMG payload before the acceptance identity
+      // can repair a broken distributable signature and hide a packaging regression.
+      if (target.arch === 'arm64' && !process.env.PROPR_DESKTOP_MAC_SIGNING_IDENTITY?.trim()) {
+        operationStage = 'VERIFY_DARWIN_LOCAL_PACKAGE_SIGNATURE';
+        await verifyDarwinLocalPackage({ application: application.applicationRoot });
+      }
       operationStage = 'PREPARE_DARWIN_ACCEPTANCE_SIGNATURE';
       const keychain = process.env.PROPR_DESKTOP_NATIVE_SIGNING_KEYCHAIN;
       const certificateSha1 = process.env.PROPR_DESKTOP_NATIVE_SIGNING_CERTIFICATE_SHA1;
