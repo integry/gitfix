@@ -12,6 +12,7 @@ import { useDemoMode } from '../../contexts/DemoModeContext';
 import { useCurrentUser, userHasPermission } from '../../contexts/AuthContext';
 import NotificationSettingsSection from './NotificationSettingsSection';
 import VisualPreviewAuthSection from './VisualPreviewAuthSection';
+import ManagedPreviewStorageSection from './ManagedPreviewStorageSection';
 import SettingsNavigation, { type SettingsNavigationSection } from './SettingsNavigation';
 
 const AdminSettingsPage: React.FC = () => {
@@ -268,8 +269,8 @@ const AdminSettingsPage: React.FC = () => {
     {
       id: 'visual-preview-uploads',
       category: 'integrations',
-      searchText: 'visual preview upload screenshots videos GitHub login personal access token PAT credential authentication connect',
-      content: <VisualPreviewAuthSection />
+      searchText: 'visual preview upload screenshots videos GitHub login personal access token PAT credential authentication connect managed storage quota retention Plus originals',
+      content: <><VisualPreviewAuthSection /><ManagedPreviewStorageSection /></>
     },
     {
       id: 'personal-notifications',

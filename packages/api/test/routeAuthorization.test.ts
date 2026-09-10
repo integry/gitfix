@@ -83,6 +83,7 @@ const managementRequests = [
   ['POST', '/api/config/synthetic-agents'],
   ['GET', '/api/config/agent-tank/usage'],
   ['GET', '/api/admin/members'],
+  ['GET', '/api/config/preview-storage'],
   ['GET', '/api/config/visual-preview-auth'],
   ['POST', '/api/config/visual-preview-auth'],
   ['PUT', '/api/config/visual-preview-auth/token'],
