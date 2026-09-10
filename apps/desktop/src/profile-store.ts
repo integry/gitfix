@@ -1,3 +1,4 @@
+import { parseDesktopGitHubAccount, type DesktopGitHubAccount } from './shared/github-account';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import {
@@ -211,6 +212,7 @@ const validProfile = (value: unknown): value is DesktopProfile => {
     && profile.label.length <= 80
     && typeof profile.apiBaseUrl === 'string'
     && normalizeApiBaseUrl(profile.apiBaseUrl) === profile.apiBaseUrl
+    && (profile.account === undefined || parseDesktopGitHubAccount(profile.account) !== null)
     && validDate(profile.createdAt)
     && validDate(profile.updatedAt);
 };
@@ -434,6 +436,7 @@ export class ProfileStore {
       const now = new Date().toISOString();
       const profile: DesktopProfile = {
         ...normalized,
+        ...(existing?.account ? { account: existing.account } : {}),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
@@ -451,8 +454,10 @@ export class ProfileStore {
     beginPublish?: () => (() => void) | null,
     onPublished?: () => void,
     pendingRevocationId?: string,
+    account?: DesktopGitHubAccount,
   ): Promise<PairedProfileTransaction | null | { stored: false; reason: 'encryption-unavailable' }> {
     const normalized = normalizedProfileInput(input);
+    if (account && !parseDesktopGitHubAccount(account)) throw new Error('Invalid approved GitHub identity');
     if (credential.version !== 2
       || credential.profileId !== normalized.id
       || credential.origin !== normalized.apiBaseUrl
@@ -478,6 +483,7 @@ export class ProfileStore {
       const now = new Date().toISOString();
       const profile: DesktopProfile = {
         ...normalized,
+        ...(account ? { account } : {}),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };

@@ -541,3 +541,6 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
     padding-top: var(--desktop-titlebar-height);
   }
 }
+
+.desktop-account-scope-note { margin: 0 0 .75rem; color: #657474; font-size: .82rem; line-height: 1.5; }
+.desktop-account-add { align-self: center; margin: .4rem; padding: .45rem .6rem; font-size: .75rem; white-space: nowrap; }

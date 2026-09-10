@@ -7,6 +7,67 @@ title: Desktop application
 ProPR Desktop runs the existing Web UI inside a sandboxed Electron application and connects it to one or more ProPR
 instances. The first release supports Linux and macOS. It does not change browser Web UI, CLI, API, or self-hosted behavior.
 
+## Saved GitHub accounts
+
+Desktop supports multiple saved GitHub accounts, including two accounts at the same instance URL.
+Open the instance manager or chooser and select **Add account** beside that instance. Approve in the
+browser, then confirm the actual **@username** in the native desktop dialog. If the browser selected
+the wrong identity, cancel and open the approval link in a separate browser profile signed in to the
+intended GitHub account. ProPR does not collect GitHub passwords or sign the browser out of GitHub.
+The account name and public avatar appear beside the instance after confirmation.
+
+A saved connection has an opaque binding ID, instance endpoint, and a separate GitHub account ID.
+The binding ID is deliberately different for each account, even at the same endpoint. GitHub IDs,
+not editable labels or usernames, identify accounts; roles and permissions are checked by the server.
+Reauthorizing a saved binding cannot replace it with another browser identity. Removing a binding
+revokes only its credential; an expired credential retains its account identity for reauthorization.
+Existing connections keep their credentials and receive saved identity labels on their next browser
+approval. No credential reset or server deployment is required.
+
+There is one active account in the existing desktop window. Switching unmounts the connected app,
+invalidates REST work, disconnects the scoped socket, and clears the persisted active selection
+before probing the next binding. A failed switch or reload during switching leaves the chooser or
+connection error instead of restoring the previous account. Activation clears renderer storage and
+publishes a new transport generation; late responses and body reads are rejected. Native work counts,
+notifications, pending pairing, and revocation continue to use the binding and transport generation.
+Bearer tokens remain in main-owned OS-encrypted storage and never enter account display props.
+Switching does not cancel server jobs already committed under the previous user's authorization.
+
+### Follow-up: independent desktop windows
+
+[Issue #2269](https://github.com/integry/propr/issues/2269) delivers switching in the existing window.
+Independent accounts in separate windows remain deferred. That expansion needs a credential service,
+active selection, renderer session/partition, IPC ownership, and navigation/notification routing per
+window. Validate simultaneous same-origin sockets, window close/reload, and delayed notification
+clicks before exposing a new-window account action. The current process-wide active binding cannot
+provide that behavior.
+
+### Follow-up: browser account switching
+
+Browser switching remains deferred under [#2269](https://github.com/integry/propr/issues/2269).
+The browser still uses its existing server session and CSRF protections. The shared account display
+on the browser approval page is informational; it does not change authorization. A browser account
+picker needs server-managed, independently revocable session namespaces plus account-scoped CSRF,
+Socket.IO authentication, caches, and background/push work. This requires a coordinated server/client
+rollout. Until then, use separate browser profiles for independent web logins.
+
+### Validation and logout integration
+
+The account regression suite covers two users at one and different endpoints, interruption during
+confirmation, reload with no active selection, wrong-user reauthorization, permission denial, expiry,
+removal, stale transport generations, and bounded identity responses. Renderer tests cover the
+account chooser, teardown, rapid A/B/A switching, and late response bodies. Existing credential,
+profile durability, tray, notification, and socket security tests remain applicable.
+
+Before release, exercise two real GitHub identities on Linux and macOS with OS secure storage and
+confirm the native identity dialog, revocation, reload, tray counts, and notification clicks. Native
+approval is deliberate and has no automated acceptance-mode bypass. The independent logout fix is
+an integration dependency: this change does not edit the logout endpoint, cookie/CSRF protocol, or
+logout handlers. After combining that work on
+[the desktop epic #1970](https://github.com/integry/propr/issues/1970), verify that logging out of one
+binding leaves the other saved account usable. Web and independent-window scope must remain explicit
+when closing the initial desktop delivery.
+
 ## Platform and runtime matrix
 
 | Desktop target | Packages | Existing instance | Guided local setup |

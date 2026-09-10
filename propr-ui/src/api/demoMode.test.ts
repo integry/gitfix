@@ -143,7 +143,7 @@ describe('demo mode API helpers', () => {
     });
     releaseParsing();
 
-    await expect(pending).resolves.toBe(refreshed);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -312,7 +312,7 @@ describe('demo mode API helpers', () => {
 
     const scopedResponse = await apiFetch('/api/tasks');
     setDesktopConnectionScope(scopeB);
-    await expect(handleApiResponse(scopedResponse)).rejects.toThrow('Forbidden');
+    await expect(handleApiResponse(scopedResponse)).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(listener).not.toHaveBeenCalled();

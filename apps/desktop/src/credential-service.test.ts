@@ -136,8 +136,18 @@ const createCredentialService = (
 ): DesktopCredentialService => {
   const suppliedFetch = dependencies.fetch;
   const service = new DesktopCredentialService({
+    confirmAccount: async () => true,
     ...dependencies,
     fetch: async (input, init) => {
+      if (input.toString().endsWith('/api/auth/user?desktop_account_confirmation=1')) {
+        return json({ id: '1', username: 'octocat', avatarUrl: null });
+      }
+      if (input.toString().endsWith('/api/auth/user')) {
+        const response = await suppliedFetch(input, init);
+        const body = await response.clone().json().catch(() => null);
+        return response.ok && body?.username && !body.id
+          ? json({ ...body, id: '1' }, response.status) : response;
+      }
       if (!input.toString().endsWith('/api/desktop/discovery')) return suppliedFetch(input, init);
       try {
         const response = await suppliedFetch(input, init);

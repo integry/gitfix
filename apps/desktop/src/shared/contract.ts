@@ -106,6 +106,8 @@ export interface DesktopAppMetadata {
 }
 
 export interface DesktopProfile {
+  /** Main-verified account bound to this connection; absent for legacy/unpaired profiles. */
+  account?: import('./github-account').DesktopGitHubAccount;
   id: string;
   label: string;
   apiBaseUrl: string;
@@ -123,6 +125,7 @@ export type DesktopPairingFailureCode =
   | 'APPROVAL_EXPIRED'
   | 'SECURE_STORAGE_FAILED'
   | 'PAIRING_REJECTED'
+  | 'ACCOUNT_MISMATCH'
   | 'PAIRING_UNREACHABLE'
   | 'PAIRING_CANCELLED';
 

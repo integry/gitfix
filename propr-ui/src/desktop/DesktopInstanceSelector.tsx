@@ -1,3 +1,4 @@
+import { GitHubAccountIdentity } from '../components/GitHubAccountIdentity';
 import React, { useEffect } from 'react';
 import { parseProprConnectEndpoint } from '@propr/shared';
 import {
@@ -58,6 +59,7 @@ export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = (
         <span className="desktop-instance-copy">
           <strong>{desktop.profile.name}</strong>
           <small>{instanceLabel}</small>
+          {desktop.profile.account && <small><GitHubAccountIdentity account={desktop.profile.account} /></small>}
           <small className="desktop-instance-status">
             <span className="desktop-connection-dot" aria-hidden="true" />
             {statusLabel}

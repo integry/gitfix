@@ -34,6 +34,12 @@ const authenticationFailureMessage = (
     if (error.code === 'PAIRING_UNREACHABLE') {
       return 'The instance became unreachable while waiting for browser approval. Check the connection and try again.';
     }
+    if (error.code === 'ACCOUNT_MISMATCH') {
+      return 'Your browser approved a different GitHub account. Open the approval link in a browser profile signed in to this saved account, or use Add account to save a different user.';
+    }
+    if (error.code === 'PAIRING_CANCELLED') {
+      return 'Account confirmation was cancelled. Start sign in again when you are ready.';
+    }
     if (error.code === 'PAIRING_REJECTED') {
       return 'ProPR Desktop could not verify the pairing response for this endpoint. Confirm the instance is up to date, then try again.';
     }

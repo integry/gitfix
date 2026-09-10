@@ -1627,6 +1627,21 @@ if (!hasSingleInstanceLock) {
             }),
       copyPairingApproval: request => copyApprovedDesktopPairingUrl(request, clipboard),
       clientName: `ProPR Desktop (${process.platform})`,
+      confirmAccount: async (account, origin, signal) => {
+        if (!mainWindow || mainWindow.isDestroyed() || signal.aborted) return false;
+        const result = await dialog.showMessageBox(mainWindow, {
+          signal,
+          type: 'question',
+          title: 'Confirm GitHub account',
+          message: `Save @${account.username} for this instance?`,
+          detail: `${origin}\n\nThis is the identity approved by your browser. If it is the wrong account, cancel and open the approval link in a browser profile signed in to the intended GitHub account.`,
+          buttons: ['Cancel', `Save @${account.username}`],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        return result.response === 1;
+      },
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
       },
