@@ -5,6 +5,7 @@ import express, { type Express, type RequestHandler } from 'express';
 import { z } from 'zod';
 import packageInfo from '../package.json' with { type: 'json' };
 import { isDemoMode } from '../demoMode.js';
+import { createAuthRequestRateLimiter } from '../requestRateLimits.js';
 import { loadMcpConfig, MCP_SCOPES, McpError } from './config.js';
 import { MCP_CONNECT_CONTRACT } from './connect.js';
 import { McpStore } from './store.js';
@@ -92,7 +93,10 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
   app.get('/.well-known/oauth-authorization-server', (_req, res) => res.set('Cache-Control', 'no-store').json({ ...createOAuthMetadata(authOptions), token_endpoint_auth_methods_supported: ['none'], revocation_endpoint_auth_methods_supported: ['none'], client_id_metadata_document_supported: true, authorization_response_iss_parameter_supported: true }));
   // The SDK's RFC 8252 helper relaxes loopback ports. This installation's
   // contract requires byte-for-byte redirect matching, including loopback.
-  app.use('/authorize', express.urlencoded({ extended: false, limit: '16kb' }), async (req, res, next) => {
+  // Protect the client lookup before the SDK router, using the same explicit
+  // trusted-proxy policy and configurable quota as other authentication routes.
+  app.use('/authorize', createAuthRequestRateLimiter(), express.urlencoded({ extended: false, limit: '16kb' }), async (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'POST') { next(); return; }
     const args = req.method === 'POST' ? req.body : req.query;
     if (typeof args.client_id !== 'string') { next(); return; }
     try {
