@@ -76,7 +76,7 @@ export function mountMcpBrowser(app: Express, oauth: McpOAuthProvider, overrides
     const authorization = await resolveInstanceAuthorization(req.user!, oauth.store.db);
     const selectedScopes = typeof req.body.scopes === 'string' ? [req.body.scopes] : req.body.scopes ?? [];
     let redirect: string;
-    try { redirect = await oauth.approve(req.body.request, req.user!, [...new Set(selected)] as string[], authorization.source, selectedScopes); }
+    try { redirect = await oauth.approve(req.body.request, req.user!, [...new Set(selected)] as string[], { membershipSource: authorization.source, selectedScopes }); }
     catch { res.status(400).send('Request expired or invalid permission selection. Select only requested permissions, including read.'); return; }
     res.set('Content-Security-Policy', `default-src 'none'; form-action 'self' ${new URL(redirect).origin}; frame-ancestors 'none'; base-uri 'none'`);
     res.redirect(redirect);

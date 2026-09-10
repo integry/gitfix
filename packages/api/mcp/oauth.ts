@@ -35,11 +35,11 @@ export class McpOAuthProvider implements OAuthServerProvider {
     const scopes = params.scopes?.length ? params.scopes : ['read'];
     if (!Array.isArray(scopes) || !scopes.includes('read') || scopes.length > MCP_SCOPES.length || scopes.some(scope => typeof scope !== 'string' || !MCP_SCOPES.includes(scope as McpScope))) throw new InvalidScopeError('Unknown scope');
     const id = secret();
-    await this.store.put('pending', digest(id), { client, params: { ...params, scopes, resource: this.config.resource } }, Date.now() + 600_000);
+    await this.store.put('pending', digest(id), { client, params: { ...params, scopes, resource: this.config.resource } }, { expiresAt: Date.now() + 600_000 });
     res.redirect(`${this.config.origin}/mcp/consent?request=${encodeURIComponent(id)}`);
   }
 
-  async approve(pendingId: string, user: GitHubUser, repositories: string[], membershipSource: string, selectedScopes?: unknown): Promise<string> {
+  async approve(pendingId: string, user: GitHubUser, repositories: string[], { membershipSource, selectedScopes }: { membershipSource: string; selectedScopes?: unknown }): Promise<string> {
     return this.store.db.transaction(async tx => {
       const pending = await this.store.take<PendingAuthorization>('pending', digest(pendingId), tx);
       if (!pending || !user.accessToken || !/^\d+$/.test(user.id)) throw new InvalidGrantError('Authorization expired or GitHub credential unavailable');
@@ -56,12 +56,12 @@ export class McpOAuthProvider implements OAuthServerProvider {
         createdAt: Date.now(), expiresAt: Date.now() + 30 * 86400_000, revoked: false, membershipSource,
       };
       const code = secret();
-      await this.store.put('grant', grant.id, grant, undefined, tx);
-      await this.store.put('credential', user.id, user, undefined, tx);
+      await this.store.put('grant', grant.id, grant, { database: tx });
+      await this.store.put('credential', user.id, user, { database: tx });
       await this.store.put('code', digest(code), {
         grantId: grant.id, clientId: grant.clientId, challenge: pending.params.codeChallenge,
         redirect: pending.params.redirectUri, resource: grant.resource,
-      }, Date.now() + 60_000, tx);
+      }, { expiresAt: Date.now() + 60_000, database: tx });
       const redirect = new URL(pending.params.redirectUri);
       redirect.searchParams.set('code', code);
       redirect.searchParams.set('iss', `${this.config.origin}/`);
@@ -76,6 +76,8 @@ export class McpOAuthProvider implements OAuthServerProvider {
     return record.challenge;
   }
 
+  // The OAuth SDK requires this positional provider signature.
+  // eslint-disable-next-line max-params
   async exchangeAuthorizationCode(client: OAuthClientInformationFull, code: string, verifier?: string, redirect?: string, resource?: URL): Promise<OAuthTokens> {
     return this.store.db.transaction(async tx => {
       const record = await this.store.get<Code>('code', digest(code), tx);
@@ -96,9 +98,9 @@ export class McpOAuthProvider implements OAuthServerProvider {
   private async issue(grant: McpGrant, tx: Knex, scopes = grant.scopes): Promise<OAuthTokens> {
     const access = `propr_mcp_${secret()}`;
     const refresh = secret();
-    await this.store.put('access', digest(access), { grantId: grant.id, clientId: grant.clientId, scopes, expiresAt: Date.now() + 300_000 }, Date.now() + 300_000, tx);
+    await this.store.put('access', digest(access), { grantId: grant.id, clientId: grant.clientId, scopes, expiresAt: Date.now() + 300_000 }, { expiresAt: Date.now() + 300_000, database: tx });
     // Retain spent refresh tokens until the grant expires, to detect reuse.
-    await this.store.put('refresh', digest(refresh), { grantId: grant.id, clientId: grant.clientId, scopes, expiresAt: grant.expiresAt, used: false }, grant.expiresAt, tx);
+    await this.store.put('refresh', digest(refresh), { grantId: grant.id, clientId: grant.clientId, scopes, expiresAt: grant.expiresAt, used: false }, { expiresAt: grant.expiresAt, database: tx });
     return { access_token: access, token_type: 'Bearer', expires_in: 300, refresh_token: refresh, scope: scopes.join(' ') };
   }
 
@@ -108,11 +110,11 @@ export class McpOAuthProvider implements OAuthServerProvider {
       if (!token || token.clientId !== client.client_id || resource?.href !== this.config.resource) throw new InvalidGrantError('Invalid refresh token or resource');
       const grant = await this.grant(token.grantId, tx);
       if (token.used) {
-        await this.store.put('grant', grant.id, { ...grant, revoked: true }, undefined, tx);
+        await this.store.put('grant', grant.id, { ...grant, revoked: true }, { database: tx });
         return null; // Commit revocation before reporting the error.
       }
       if (scopes !== undefined && (!Array.isArray(scopes) || !scopes.length || !scopes.includes('read') || scopes.length > MCP_SCOPES.length || scopes.some(scope => typeof scope !== 'string' || !token.scopes.includes(scope as McpScope)))) throw new InvalidScopeError('Scope escalation is forbidden');
-      await this.store.put('refresh', digest(refresh), { ...token, used: true }, token.expiresAt, tx);
+      await this.store.put('refresh', digest(refresh), { ...token, used: true }, { expiresAt: token.expiresAt, database: tx });
       return this.issue(grant, tx, scopes?.length ? scopes as McpScope[] : token.scopes);
     });
     if (!result) throw new InvalidGrantError('Refresh reuse detected; grant revoked');
@@ -134,7 +136,7 @@ export class McpOAuthProvider implements OAuthServerProvider {
   async revokeGrant(id: string, ownerId?: string): Promise<void> {
     await this.store.db.transaction(async tx => {
       const grant = await this.store.get<McpGrant>('grant', id, tx);
-      if (grant && (!ownerId || grant.ownerId === ownerId)) await this.store.put('grant', id, { ...grant, revoked: true }, undefined, tx);
+      if (grant && (!ownerId || grant.ownerId === ownerId)) await this.store.put('grant', id, { ...grant, revoked: true }, { database: tx });
     });
   }
 }

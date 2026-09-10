@@ -103,7 +103,7 @@ export async function registerMcpInstance(config: McpConfig, store: McpStore): P
       return;
     }
     const pair = await generateKeyPair('ES256', { extractable: true });
-    await store.put('connect_identity', 'instance', { instanceId: config.instanceId, privateJwk: await exportJWK(pair.privateKey) }, undefined, tx);
+    await store.put('connect_identity', 'instance', { instanceId: config.instanceId, privateJwk: await exportJWK(pair.privateKey) }, { database: tx });
   });
   await new McpConnect(config, store).register();
 }

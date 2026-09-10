@@ -84,6 +84,13 @@ test('pinned actual Connect Worker -> actual core registration, OAuth, SDK eras,
   let onlineUnavailable = false;
   let onlineResponse: 'normal' | 'malformed' | 'mismatched' = 'normal';
   let githubExpired = false;
+  function githubResponse(request: Request, url: URL): Response {
+    assert.ok(request.headers.get('authorization')?.includes('github-member'), 'Only a GitHub credential can reach GitHub');
+    if (githubExpired && request.headers.get('authorization')?.includes('github-member-expired')) return Response.json({ message: 'Expired' }, { status: 401 });
+    if (url.pathname === '/user') return Response.json({ id: 777, login: 'member', avatar_url: null });
+    if (url.pathname === '/repos/acme/allowed') return Response.json({ permissions: { push: true } });
+    return Response.json({ message: 'Not found' }, { status: 404 });
+  }
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
@@ -111,11 +118,7 @@ test('pinned actual Connect Worker -> actual core registration, OAuth, SDK eras,
       return response;
     }
     if (url.hostname === 'api.github.com') {
-      assert.ok(request.headers.get('authorization')?.includes('github-member'), 'Only a GitHub credential can reach GitHub');
-      if (githubExpired && request.headers.get('authorization')?.includes('github-member-expired')) return Response.json({ message: 'Expired' }, { status: 401 });
-      if (url.pathname === '/user') return Response.json({ id: 777, login: 'member', avatar_url: null });
-      if (url.pathname === '/repos/acme/allowed') return Response.json({ permissions: { push: true } });
-      return Response.json({ message: 'Not found' }, { status: 404 });
+      return githubResponse(request, url);
     }
     throw new Error(`External network forbidden: ${url.origin}`);
   };

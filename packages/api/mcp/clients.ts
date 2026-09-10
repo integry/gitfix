@@ -96,7 +96,7 @@ export function createClientsStore(store: McpStore): OAuthRegisteredClientsStore
       if (cached) return cached;
       const document = await fetchMetadata(url) as Record<string, unknown>;
       const client = parseClientMetadataDocument(document, id);
-      await store.put('cimd', id, client, Date.now() + 300_000);
+      await store.put('cimd', id, client, { expiresAt: Date.now() + 300_000 });
       return client;
     },
     async registerClient(metadata) {

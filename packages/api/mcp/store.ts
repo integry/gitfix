@@ -28,7 +28,7 @@ export class McpStore {
     return this.unseal<T>(row.value);
   }
 
-  async put(kind: string, id: string, value: unknown, expiresAt?: number, database: Knex = this.db): Promise<void> {
+  async put(kind: string, id: string, value: unknown, { expiresAt, database = this.db }: { expiresAt?: number; database?: Knex } = {}): Promise<void> {
     const owner = value && typeof value === 'object' && 'ownerId' in value && typeof value.ownerId === 'string' ? value.ownerId : null;
     await database('mcp_records').insert({ kind, id, value: this.seal(value), owner_id: owner, expires_at: expiresAt ?? null })
       .onConflict(['kind', 'id']).merge();

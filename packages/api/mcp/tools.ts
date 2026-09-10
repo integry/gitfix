@@ -17,7 +17,7 @@ import { createConfigRoutes } from '../routes/configRoutes.js';
 import { createAgentRuntimeRoutes } from '../routes/agentRuntimeRoutes.js';
 import { McpError, type McpScope } from './config.js';
 import { McpPolicy, type McpPrincipal } from './policy.js';
-import { McpOperations, type OperationResult } from './operations.js';
+import { McpOperations, type OperationResult, type Operation } from './operations.js';
 import { callWorkflow, redact, type WorkflowHandler } from './adapter.js';
 import { addPlanningTools } from './toolsPlanning.js';
 import { addPullRequestTools } from './toolsPullRequests.js';
@@ -153,14 +153,7 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
     if (continuation.planId) receipt.targetState = await db('task_drafts').where({ draft_id: continuation.planId, user_id: principal.user.id }).first('status', 'paused', 'mcp_revision');
     if (continuation.goalId) receipt.targetState = await db('goals').where({ goal_id: continuation.goalId, owner_id: principal.user.id }).first('desired_state', 'result_state', 'current_task_id');
     if (continuation.taskId) receipt.targetState = await db('task_history').where({ task_id: continuation.taskId }).orderBy('history_id', 'desc').first('state', 'timestamp');
-    const target = receipt.targetState as Record<string, unknown> | undefined;
-    if (row.state === 'accepted' && target) {
-      if (['generate_plan', 'refine_plan'].includes(row.tool) && target.status === 'review') receipt.state = 'completed';
-      if (['generate_plan', 'refine_plan'].includes(row.tool) && target.status === 'failed') receipt.state = 'failed';
-      if (row.tool === 'create_goal' && target.result_state) receipt.state = target.result_state;
-      if (row.tool === 'cancel_goal' && target.result_state === 'cancelled') receipt.state = 'completed';
-      if (row.tool === 'cancel_task' && ['cancelled', 'completed', 'failed'].includes(String(target.state))) receipt.state = 'completed';
-    }
+    updateReceiptState(row, receipt);
     if (row.state === 'accepted' && row.tool === 'implement_plan' && Array.isArray(result.issues)) {
       const issues = await db('plan_issues').where({ draft_id: result.planId }).whereIn('issue_number', result.issues).select('issue_number', 'status', 'task_id', 'pr_number');
       receipt.targetState = { issues };
@@ -191,6 +184,17 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
   return tools;
 }
 
+function updateReceiptState(row: Operation, receipt: Record<string, unknown>): void {
+  const target = receipt.targetState as Record<string, unknown> | undefined;
+  if (row.state === 'accepted' && target) {
+    if (['generate_plan', 'refine_plan'].includes(row.tool) && target.status === 'review') receipt.state = 'completed';
+    if (['generate_plan', 'refine_plan'].includes(row.tool) && target.status === 'failed') receipt.state = 'failed';
+    if (row.tool === 'create_goal' && target.result_state) receipt.state = target.result_state;
+    if (row.tool === 'cancel_goal' && target.result_state === 'cancelled') receipt.state = 'completed';
+    if (row.tool === 'cancel_task' && ['cancelled', 'completed', 'failed'].includes(String(target.state))) receipt.state = 'completed';
+  }
+}
+
 export function workflow(tools: McpTool[], definition: Omit<McpTool, 'run'>, handler: WorkflowHandler, input: (args: Args) => Parameters<typeof callWorkflow>[2]): void {
   tools.push({ ...definition, run: async ({ principal, args }) => {
     const response = await callWorkflow(handler, principal, input(args));
@@ -203,6 +207,30 @@ export function workflow(tools: McpTool[], definition: Omit<McpTool, 'run'>, han
   } });
 }
 
+async function authorizePlanContext(row: Args, principal: McpPrincipal, policy: McpPolicy): Promise<void> {
+  const context = typeof row.context_config === 'string' ? JSON.parse(row.context_config || '{}') : row.context_config;
+  const repositories = context?.contextRepositories;
+  if (Array.isArray(repositories)) {
+    if (repositories.length > 20) throw new McpError('CONTEXT_LIMIT', 'Plan has too many context repositories. Update it in the browser.');
+    for (const repository of repositories) {
+      if (typeof repository?.repository !== 'string') throw new McpError('INVALID_CONTEXT', 'Invalid plan context repository.');
+      await policy.repository(principal, repository.repository);
+    }
+  }
+}
+
+async function authorizeTarget(tool: McpTool, args: Args, principal: McpPrincipal, deps: ToolDeps): Promise<void> {
+  const target = tool.target!;
+  const row = await deps.db(target.table).where({ [target.column]: args[target.arg] }).first();
+  if (!row || row.repository !== args.repository || (target.owner && row[target.owner] !== principal.user.id)) throw new McpError('NOT_FOUND', 'Target not found in your authorized repository.', 404);
+  if (target.table === 'task_drafts') await authorizePlanContext(row, principal, deps.policy);
+  if (target.table === 'tasks') {
+    const owner = await deps.db('goals').where({ current_task_id: args.taskId }).first('owner_id');
+    if ((row.task_type === 'goal' && !owner) || (owner && owner.owner_id !== principal.user.id)) throw new McpError('NOT_FOUND', 'Task not found.', 404);
+    if (owner && !tool.readOnly) throw new McpError('USE_GOAL_CONTROLS', 'Use the owning goal’s input and cancellation controls.', 409);
+  }
+}
+
 export async function executeTool(tool: McpTool, raw: unknown, principal: McpPrincipal, deps: ToolDeps): Promise<Record<string, unknown>> {
   const args = tool.schema.parse(raw) as Args;
   deps.policy.requireScope(principal, tool.scope);
@@ -213,31 +241,11 @@ export async function executeTool(tool: McpTool, raw: unknown, principal: McpPri
   const deletedReplay = !tool.readOnly && tool.name.startsWith('delete_')
     ? await new McpOperations(deps.db).replay(principal, tool.name, args) : undefined;
   if (tool.name === 'send_task_followup' && /^\s*\/(?:merge|review|fix|ultrafix|deploy)\b/im.test(args.message)) throw new McpError('USE_EXPLICIT_TOOL', 'Use the dedicated PR lifecycle tool for slash commands so its scope and head preconditions can be checked.');
-  if (tool.target && !deletedReplay) {
-    const target = tool.target;
-    const row = await deps.db(target.table).where({ [target.column]: args[target.arg] }).first();
-    if (!row || row.repository !== args.repository || (target.owner && row[target.owner] !== principal.user.id)) throw new McpError('NOT_FOUND', 'Target not found in your authorized repository.', 404);
-    if (target.table === 'task_drafts') {
-      const context = typeof row.context_config === 'string' ? JSON.parse(row.context_config || '{}') : row.context_config;
-      const repositories = context?.contextRepositories;
-      if (Array.isArray(repositories)) {
-        if (repositories.length > 20) throw new McpError('CONTEXT_LIMIT', 'Plan has too many context repositories. Update it in the browser.');
-        for (const repository of repositories) {
-          if (typeof repository?.repository !== 'string') throw new McpError('INVALID_CONTEXT', 'Invalid plan context repository.');
-          await deps.policy.repository(principal, repository.repository);
-        }
-      }
-    }
-    if (target.table === 'tasks') {
-      const owner = await deps.db('goals').where({ current_task_id: args.taskId }).first('owner_id');
-      if ((row.task_type === 'goal' && !owner) || (owner && owner.owner_id !== principal.user.id)) throw new McpError('NOT_FOUND', 'Task not found.', 404);
-      if (owner && !tool.readOnly) throw new McpError('USE_GOAL_CONTROLS', 'Use the owning goal’s input and cancellation controls.', 409);
-    }
-  }
+  if (tool.target && !deletedReplay) await authorizeTarget(tool, args, principal, deps);
   const result = deletedReplay ?? (tool.readOnly
     ? (await tool.run({ principal, args })).data
-    : await new McpOperations(deps.db).run(principal, tool.name, args, args.repository, operationId => tool.run({ principal, args, operationId })));
+    : await new McpOperations(deps.db).run(principal, { tool: tool.name, args, repository: args.repository }, operationId => tool.run({ principal, args, operationId })));
   const data = redact(result) as Record<string, unknown>;
   if (Buffer.byteLength(JSON.stringify(data)) > 256 * 1024) throw new McpError('RESULT_TOO_LARGE', 'Request a smaller page or narrower target.');
-  return { ...presentResult(tool, args, data, deps.policy.config.instanceId, deps.policy.config.origin), data };
+  return { ...presentResult(tool, args, data, deps.policy.config), data };
 }

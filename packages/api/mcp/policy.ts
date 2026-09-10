@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/core';
-import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from 'jose';
+import { createRemoteJWKSet, jwtVerify, errors as joseErrors, type JWTPayload, type JWTHeaderParameters } from 'jose';
 import { loadMonitoredReposRaw } from '@propr/core';
 import type { GitHubUser } from '../authTypes.js';
 import { resolveInstanceAuthorization, type InstanceAuthorization, type InstancePermission } from '../authorization.js';
@@ -52,21 +52,7 @@ export class McpPolicy {
       if (grant.membershipSource !== 'connect' || (error as { status?: number }).status !== 401) {
         throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'GitHub authorization is unavailable; sign in again.', 401);
       }
-      // Connect handoffs omit expiry/refresh metadata. A renewed browser consent
-      // can replace an expired credential; never replace a concurrently refreshed one.
-      const previous = user.accessToken;
-      const renewed = await new McpConnect(this.config, this.oauth.store).credential(bearer, grant.ownerId);
-      const candidate = new Octokit({ auth: renewed.accessToken, request: { timeout: 10_000 } });
-      let verified;
-      try { verified = (await candidate.request('GET /user')).data; }
-      catch { throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'Reconnect the app in Connect to renew GitHub authorization.', 401); }
-      if (String(verified.id) !== grant.ownerId) throw new McpError('ACCESS_REVOKED', 'Credential identity mismatch.', 403);
-      user = await this.oauth.store.db.transaction(async tx => {
-        const current = await this.oauth.store.get<GitHubUser>('credential', grant.ownerId, tx);
-        if (current?.accessToken && current.accessToken !== previous) return current;
-        await this.oauth.store.put('credential', renewed.id, renewed, undefined, tx);
-        return renewed;
-      });
+      user = await this.renewConnectCredential(bearer, grant, user);
       github = new Octokit({ auth: user.accessToken, request: { timeout: 10_000 } });
       try { identity = (await github.request('GET /user')).data; }
       catch { throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'GitHub authorization is unavailable; reconnect the app.', 401); }
@@ -78,6 +64,24 @@ export class McpPolicy {
       throw new McpError('ACCESS_REVOKED', 'Instance membership was revoked.', 403);
     }
     return { user, authorization, grant, scopes, github };
+  }
+
+  private async renewConnectCredential(bearer: string, grant: McpGrant, user: GitHubUser): Promise<GitHubUser> {
+    // Connect handoffs omit expiry/refresh metadata. A renewed browser consent
+    // can replace an expired credential; never replace a concurrently refreshed one.
+    const previous = user.accessToken;
+    const renewed = await new McpConnect(this.config, this.oauth.store).credential(bearer, grant.ownerId);
+    const candidate = new Octokit({ auth: renewed.accessToken, request: { timeout: 10_000 } });
+    let verified;
+    try { verified = (await candidate.request('GET /user')).data; }
+    catch { throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'Reconnect the app in Connect to renew GitHub authorization.', 401); }
+    if (String(verified.id) !== grant.ownerId) throw new McpError('ACCESS_REVOKED', 'Credential identity mismatch.', 403);
+    return this.oauth.store.db.transaction(async tx => {
+      const current = await this.oauth.store.get<GitHubUser>('credential', grant.ownerId, tx);
+      if (current?.accessToken && current.accessToken !== previous) return current;
+      await this.oauth.store.put('credential', renewed.id, renewed, { database: tx });
+      return renewed;
+    });
   }
 
   private async refreshCredential(user: GitHubUser): Promise<GitHubUser> {
@@ -100,7 +104,7 @@ export class McpPolicy {
       return await store.db.transaction(async tx => {
         const latest = await store.get<GitHubUser>('credential', user.id, tx);
         if (latest?.accessToken !== originalToken) return latest || current;
-        await store.put('credential', user.id, current, undefined, tx);
+        await store.put('credential', user.id, current, { database: tx });
         return current;
       });
     } catch (error) {
@@ -119,23 +123,9 @@ export class McpPolicy {
       clockTolerance: 5, maxTokenAge: '65s', requiredClaims: ['sub', 'iat', 'exp', 'jti', 'grant_id', 'instance_id', 'installation_id', 'scopes', 'repositories', 'contract_version', 'resource', 'instance_key_thumbprint'],
     });
     if (payload.contract_version !== MCP_CONNECT_CONTRACT) throw new McpError('INSTANCE_VERSION_MISMATCH', 'This instance does not support the signed Connect contract version.', 409);
-    const scopes = payload.scopes;
-    const repositories = payload.repositories;
-    if (protectedHeader.typ !== 'propr-mcp-delegation+jwt' || typeof protectedHeader.kid !== 'string' || !protectedHeader.kid
-      || payload.aud !== instanceAudience(this.config.instanceId) || payload.instance_id !== this.config.instanceId
-      || payload.installation_id !== connect.installationId || payload.instance_key_thumbprint !== thumbprint
-      || payload.resource !== connect.resource || (resourceHint !== undefined && resourceHint !== payload.resource)
-      || typeof payload.sub !== 'string' || !/^[1-9][0-9]*$/.test(payload.sub)
-      || typeof payload.grant_id !== 'string' || !payload.grant_id || typeof payload.jti !== 'string' || !payload.jti || payload.jti.length > 128
-      || !Number.isInteger(payload.iat) || !Number.isInteger(payload.exp) || payload.exp! <= payload.iat!
-      || payload.exp! - payload.iat! > 60 || payload.iat! > Date.now() / 1000 + 5
-      || !Array.isArray(scopes) || !scopes.includes('read') || scopes.length > MCP_SCOPES.length
-      || scopes.some(scope => typeof scope !== 'string' || !MCP_SCOPES.includes(scope as McpScope))
-      || !Array.isArray(repositories) || !repositories.length || repositories.length > 100 || JSON.stringify(repositories).length > 4096
-      || repositories.some(repo => typeof repo !== 'string' || repo.length > 200 || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(repo))
-      || JSON.stringify(repositories) !== JSON.stringify([...new Set(repositories)].sort())) {
-      throw new McpError('INVALID_DELEGATION', 'Invalid Connect delegation binding.', 401);
-    }
+    this.validateDelegationBinding(payload, protectedHeader, { thumbprint, resourceHint });
+    validateDelegationClaims(payload);
+    const { scopes, repositories } = payload;
     // Validate every invocation, even when the same JWT reaches the instance directly.
     const state = await proof.online('/v1/mcp/delegations/validate', token);
     if (state.active !== true || Object.keys(payload).some(key => JSON.stringify(state[key]) !== JSON.stringify(payload[key]))) {
@@ -145,12 +135,22 @@ export class McpPolicy {
       const user = await proof.credential(token, payload.sub);
       // Never overwrite a newer browser credential or a concurrent refresh.
       await this.oauth.store.db.transaction(async tx => {
-        if (!await this.oauth.store.get('credential', payload.sub!, tx)) await this.oauth.store.put('credential', user.id, user, undefined, tx);
+        if (!await this.oauth.store.get('credential', payload.sub!, tx)) await this.oauth.store.put('credential', user.id, user, { database: tx });
       });
     }
     return { id: payload.grant_id, ownerId: payload.sub, clientId: 'connect', clientName: 'ProPR Connect',
       instanceId: this.config.instanceId, resource: connect.resource, scopes: scopes as McpScope[], repositories: repositories as string[],
       createdAt: payload.iat! * 1000, expiresAt: payload.exp! * 1000, revoked: false, membershipSource: 'connect' };
+  }
+
+  private validateDelegationBinding(payload: JWTPayload, header: JWTHeaderParameters, binding: { thumbprint: string; resourceHint?: string }): void {
+    const connect = this.config.connect!;
+    if (header.typ !== 'propr-mcp-delegation+jwt' || typeof header.kid !== 'string' || !header.kid
+      || payload.aud !== instanceAudience(this.config.instanceId) || payload.instance_id !== this.config.instanceId
+      || payload.installation_id !== connect.installationId || payload.instance_key_thumbprint !== binding.thumbprint
+      || payload.resource !== connect.resource || (binding.resourceHint !== undefined && binding.resourceHint !== payload.resource)) {
+      throw new McpError('INVALID_DELEGATION', 'Invalid Connect delegation binding.', 401);
+    }
   }
 
   requireScope(principal: McpPrincipal, scope: McpScope): void {
@@ -169,5 +169,27 @@ export class McpPolicy {
     try { data = (await principal.github.request('GET /repos/{owner}/{repo}', { owner, repo })).data; }
     catch { throw new McpError('REPOSITORY_FORBIDDEN', 'Current GitHub repository access denied.', 403); }
     if (write && data.permissions?.push !== true && data.permissions?.admin !== true) throw new McpError('REPOSITORY_FORBIDDEN', 'Current GitHub write permission required.', 403);
+  }
+}
+
+function validDelegationScopes(scopes: unknown): scopes is McpScope[] {
+  return Array.isArray(scopes) && scopes.includes('read') && scopes.length <= MCP_SCOPES.length
+    && !scopes.some(scope => typeof scope !== 'string' || !MCP_SCOPES.includes(scope as McpScope));
+}
+
+function validDelegationRepositories(repositories: unknown): repositories is string[] {
+  return Array.isArray(repositories) && repositories.length > 0 && repositories.length <= 100
+    && JSON.stringify(repositories).length <= 4096
+    && !repositories.some(repo => typeof repo !== 'string' || repo.length > 200 || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(repo))
+    && JSON.stringify(repositories) === JSON.stringify([...new Set(repositories)].sort());
+}
+
+function validateDelegationClaims(payload: JWTPayload): asserts payload is JWTPayload & { sub: string; grant_id: string; scopes: McpScope[]; repositories: string[] } {
+  if (typeof payload.sub !== 'string' || !/^[1-9][0-9]*$/.test(payload.sub)
+    || typeof payload.grant_id !== 'string' || !payload.grant_id || typeof payload.jti !== 'string' || !payload.jti || payload.jti.length > 128
+    || !Number.isInteger(payload.iat) || !Number.isInteger(payload.exp) || payload.exp! <= payload.iat!
+    || payload.exp! - payload.iat! > 60 || payload.iat! > Date.now() / 1000 + 5
+    || !validDelegationScopes(payload.scopes) || !validDelegationRepositories(payload.repositories)) {
+    throw new McpError('INVALID_DELEGATION', 'Invalid Connect delegation binding.', 401);
   }
 }

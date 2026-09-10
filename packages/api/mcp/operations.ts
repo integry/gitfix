@@ -26,7 +26,7 @@ export class McpOperations {
     return this.project(previous);
   }
 
-  async run(principal: McpPrincipal, tool: string, args: Record<string, unknown>, repository: string | undefined, invoke: (operationId: string) => Promise<OperationResult>): Promise<Record<string, unknown>> {
+  async run(principal: McpPrincipal, { tool, args, repository }: { tool: string; args: Record<string, unknown>; repository?: string }, invoke: (operationId: string) => Promise<OperationResult>): Promise<Record<string, unknown>> {
     const key = String(args.idempotencyKey || '');
     if (!/^[\w.-]{8,128}$/.test(key)) throw new McpError('IDEMPOTENCY_KEY_REQUIRED', 'Provide a stable 8–128 character idempotencyKey for this action.');
     const identity = { owner_id: principal.user.id, grant_id: principal.grant.id, idempotency_key: key };

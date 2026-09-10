@@ -82,7 +82,7 @@ test('signed hosted delegation enforces issuer/audience/instance, current grant 
     assert.ok(calls.every(call => call.auth !== `Bearer ${token}`), 'Delegation must never be forwarded to GitHub or introspection');
     const direct = 'propr_mcp_direct-fixture';
     await store.put('grant', 'direct-grant', { ...principal.grant, id: 'direct-grant', membershipSource: 'local', resource: config.resource });
-    await store.put('access', digest(direct), { grantId: 'direct-grant', clientId: 'fixture', scopes: ['read'], expiresAt: Date.now() + 60000 }, Date.now() + 60000);
+    await store.put('access', digest(direct), { grantId: 'direct-grant', clientId: 'fixture', scopes: ['read'], expiresAt: Date.now() + 60000 }, { expiresAt: Date.now() + 60000 });
     const beforeDirect = checks;
     await new McpPolicy(oauth, { ...config, connect: undefined }).authenticate(direct);
     assert.equal(checks, beforeDirect, 'Direct OAuth does not require Connect');

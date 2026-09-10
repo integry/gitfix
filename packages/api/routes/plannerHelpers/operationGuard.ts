@@ -111,8 +111,7 @@ export async function claimDraftOperation(
   db: Knex,
   draftId: string,
   status: 'generating' | 'refining',
-  updates: Record<string, unknown> = {},
-  expectedRevision?: number
+  { updates = {}, expectedRevision }: { updates?: Record<string, unknown>; expectedRevision?: number } = {}
 ): Promise<boolean> {
   const updated = await db('task_drafts')
     .where({ draft_id: draftId })

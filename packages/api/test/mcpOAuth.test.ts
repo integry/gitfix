@@ -31,7 +31,7 @@ async function fixture() {
     let url = '';
     await oauth.authorize(client, { redirectUri: client.redirect_uris[0], codeChallenge: challenge, resource: new URL(config.resource), scopes: ['read', 'plan'], state: 'client-state' }, { redirect(value: string) { url = value; } } as never);
     const pending = new URL(url).searchParams.get('request')!;
-    const redirect = new URL(await oauth.approve(pending, user, ['acme/repo'], 'local'));
+    const redirect = new URL(await oauth.approve(pending, user, ['acme/repo'], { membershipSource: 'local' }));
     assert.equal(redirect.searchParams.get('state'), 'client-state');
     assert.equal(redirect.searchParams.get('iss'), `${config.origin}/`);
     return redirect.searchParams.get('code')!;
@@ -132,9 +132,9 @@ test('direct consent selects a bounded subset, rejects malformed selections and 
       resource: new URL(f.config.resource), scopes: ['read', 'plan', 'execute'] }, { redirect(value: string) { url = value; } } as never);
     const pending = new URL(url).searchParams.get('request')!;
     for (const scopes of [[], ['merge'], ['read', 'merge'], ['read', 3], ['read', {}], 'read', null]) {
-      await assert.rejects(f.oauth.approve(pending, f.user, ['acme/repo'], 'local', scopes));
+      await assert.rejects(f.oauth.approve(pending, f.user, ['acme/repo'], { membershipSource: 'local', selectedScopes: scopes }));
     }
-    const redirect = new URL(await f.oauth.approve(pending, f.user, ['acme/repo'], 'local', ['read', 'plan']));
+    const redirect = new URL(await f.oauth.approve(pending, f.user, ['acme/repo'], { membershipSource: 'local', selectedScopes: ['read', 'plan'] }));
     const tokens = await f.exchange(redirect.searchParams.get('code')!);
     assert.equal(tokens.scope, 'read plan');
     await assert.rejects(f.oauth.exchangeRefreshToken(f.client, tokens.refresh_token!, ['read', 'execute'], new URL(f.config.resource)));
