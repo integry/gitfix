@@ -332,7 +332,7 @@ function CreateGoalForm({ onCancel, onCreated, onDirtyChange, onSubmittingChange
           markDirty();
           void addGoalFiles(files, pasted, setFiles, setError);
         }} rows={5} className="mt-1 w-full rounded-md border border-slate-300 p-2" required />
-        <GoalAttachmentInput files={files} onChange={nextFiles => { markDirty(); setFiles(nextFiles); }} onError={setError} disabled={submitting} />
+        <GoalAttachmentInput files={files} onFilesSelected={markDirty} onChange={nextFiles => { markDirty(); setFiles(nextFiles); }} onError={setError} disabled={submitting} />
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={ultrafix} onChange={event => { markDirty(); setUltrafix(event.target.checked); }} /> Ask the coding agent to use Ultrafix</label>
       </fieldset>
@@ -354,12 +354,11 @@ interface CreateGoalDialogProps {
 function CreateGoalDialog({ isOpen, onClose, onCreated }: CreateGoalDialogProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const [dirty, setDirty] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const dirtyRef = useRef(dirty);
+  const dirtyRef = useRef(false);
   const submittingRef = useRef(submitting);
-  dirtyRef.current = dirty;
   submittingRef.current = submitting;
+  const setDirty = useCallback((dirty: boolean) => { dirtyRef.current = dirty; }, []);
 
   const requestClose = useCallback(() => {
     if (submittingRef.current) return;
@@ -369,7 +368,7 @@ function CreateGoalDialog({ isOpen, onClose, onCreated }: CreateGoalDialogProps)
 
   useEffect(() => {
     if (!isOpen) return;
-    setDirty(false);
+    dirtyRef.current = false;
     setSubmitting(false);
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;

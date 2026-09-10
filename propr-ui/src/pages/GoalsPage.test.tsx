@@ -7,12 +7,15 @@ import * as goalsApi from '../api/goals';
 import { getInstanceCatalog, getTaskLiveDetails } from '../api/proprApi';
 import ThinkingLog from '../components/TaskDetails/ThinkingLog';
 
+const resizeImage = vi.hoisted(() => vi.fn());
+
 vi.mock('../api/goals', () => ({
   getGoalCapabilities: vi.fn(), listGoals: vi.fn(), getGoal: vi.fn(), createGoal: vi.fn(),
   getGoalVisualPreviews: vi.fn(),
   pauseGoal: vi.fn(), resumeGoal: vi.fn(), cancelGoal: vi.fn(), deleteGoal: vi.fn(), requestGoalModel: vi.fn(), sendGoalInput: vi.fn(),
 }));
 vi.mock('../api/proprApi', () => ({ getInstanceCatalog: vi.fn(), getTaskLiveDetails: vi.fn() }));
+vi.mock('../components/TaskPlanner/imageUtils', () => ({ resizeImage }));
 const demoState = { isDemoMode: false };
 vi.mock('../contexts/DemoModeContext', () => ({ useDemoMode: () => demoState }));
 const socket = vi.hoisted(() => ({
@@ -56,6 +59,7 @@ describe('GoalsPage', () => {
     socket.isConnected = false;
     socket.onTaskUpdate.mockImplementation(() => vi.fn());
     socket.onTaskLiveUpdate.mockImplementation(() => vi.fn());
+    resizeImage.mockImplementation((file: File) => Promise.resolve(file));
     vi.mocked(goalsApi.getGoalCapabilities).mockResolvedValue({ agents: [capability] });
     vi.mocked(getInstanceCatalog).mockResolvedValue({ agents: [], repositories: [{ name: 'acme/web', enabled: true }] });
     vi.mocked(goalsApi.listGoals).mockResolvedValue({ goals: [] });
@@ -284,6 +288,31 @@ describe('GoalsPage', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Start a goal' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+    confirm.mockRestore();
+  });
+
+  it('guards every dismissal path while a selected attachment is still processing', async () => {
+    let finishProcessing: (file: File) => void = () => undefined;
+    resizeImage.mockImplementation(() => new Promise<File>(resolve => { finishProcessing = resolve; }));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    openGoalCreator();
+
+    const dialog = await screen.findByRole('dialog', { name: 'Start a goal' });
+    const selectedImage = new File(['image'], 'pending.png', { type: 'image/png' });
+    fireEvent.change(within(dialog).getByLabelText('Attach files'), { target: { files: [selectedImage] } });
+    expect(within(dialog).getByText('Preparing files…')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(dialog).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.mouseDown(dialog.parentElement!);
+    expect(dialog).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledTimes(3);
+
+    await act(async () => { finishProcessing(selectedImage); });
+    expect(await within(dialog).findByText('pending.png')).toBeInTheDocument();
     confirm.mockRestore();
   });
 

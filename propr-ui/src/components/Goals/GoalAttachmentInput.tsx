@@ -8,6 +8,7 @@ const goalAttachmentAccept = 'image/*,.txt,.md,.csv,.json,.log';
 interface GoalAttachmentInputProps {
   files: File[];
   onChange: (files: File[]) => void;
+  onFilesSelected?: () => void;
   onError: (message: string) => void;
   disabled?: boolean;
   compact?: boolean;
@@ -30,7 +31,7 @@ function SelectedFile({ file, onRemove, disabled }: { file: File; onRemove: () =
   </div>;
 }
 
-export function GoalAttachmentInput({ files, onChange, onError, disabled = false, compact = false }: GoalAttachmentInputProps) {
+export function GoalAttachmentInput({ files, onChange, onFilesSelected, onError, disabled = false, compact = false }: GoalAttachmentInputProps) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [processing, setProcessing] = useState(false);
@@ -41,6 +42,8 @@ export function GoalAttachmentInput({ files, onChange, onError, disabled = false
       onError(`Attach up to ${MAX_FILES} files to each prompt.`);
       return;
     }
+    if (incoming.length === 0) return;
+    onFilesSelected?.();
     setProcessing(true);
     try {
       onChange([...files, ...await Promise.all(incoming.map(resizeImage))]);
@@ -50,7 +53,7 @@ export function GoalAttachmentInput({ files, onChange, onError, disabled = false
       setProcessing(false);
       if (inputRef.current) inputRef.current.value = '';
     }
-  }, [files, onChange, onError]);
+  }, [files, onChange, onError, onFilesSelected]);
 
   const chooseFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     void addFiles(Array.from(event.target.files || []));
