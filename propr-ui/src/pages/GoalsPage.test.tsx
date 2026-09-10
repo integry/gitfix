@@ -46,6 +46,8 @@ const goal: goalsApi.Goal = {
   startedAt: new Date().toISOString(), pausedAt: null, completedAt: null, elapsedMs: 1000, activeMs: 1000, pausedMs: 0,
 };
 
+const openGoalCreator = () => fireEvent.click(screen.getByRole('button', { name: 'New goal' }));
+
 describe('GoalsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -70,6 +72,8 @@ describe('GoalsPage', () => {
   it('creates exactly one native goal from repository, agent, model and objective', async () => {
     vi.mocked(goalsApi.createGoal).mockResolvedValue({ goal });
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /><Route path="/goals/:goalId" element={<div>Goal detail</div>} /></Routes></MemoryRouter>);
+    expect(screen.queryByLabelText('Objective')).not.toBeInTheDocument();
+    openGoalCreator();
     await screen.findByRole('option', { name: 'Codex' });
     expect(screen.getByRole('button', { name: /acme.*web/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'GPT-5.6 Sol' })).toHaveValue('gpt-5.6-sol');
@@ -83,6 +87,7 @@ describe('GoalsPage', () => {
   it('keeps goal creation read-only in demo mode', async () => {
     demoState.isDemoMode = true;
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    openGoalCreator();
 
     expect(await screen.findByText('Demo mode is read-only. You can inspect existing goals, but cannot start a new one.')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Goal creation controls' })).toBeDisabled();
@@ -119,6 +124,7 @@ describe('GoalsPage', () => {
     vi.mocked(goalsApi.createGoal).mockResolvedValue({ goal });
 
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /><Route path="/goals/:goalId" element={<div>Goal detail</div>} /></Routes></MemoryRouter>);
+    openGoalCreator();
 
     expect(await screen.findByRole('option', { name: 'Claude' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /acme.*api/ })).toBeInTheDocument();
@@ -149,6 +155,7 @@ describe('GoalsPage', () => {
   it('configures worker checkpoints only for direct goals', async () => {
     vi.mocked(goalsApi.createGoal).mockResolvedValue({ goal: { ...goal, launchStrategy: 'direct' } });
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /><Route path="/goals/:goalId" element={<div>Goal detail</div>} /></Routes></MemoryRouter>);
+    openGoalCreator();
     await screen.findByRole('option', { name: 'Codex' });
     fireEvent.change(screen.getByLabelText('Objective'), { target: { value: 'Ship the dashboard' } });
     const checkpointSlider = screen.getByRole('slider', { name: 'Checkpoint target cadence' });
@@ -168,6 +175,7 @@ describe('GoalsPage', () => {
   it('starts a goal with selected files and supports pasted images in the objective', async () => {
     vi.mocked(goalsApi.createGoal).mockResolvedValue({ goal });
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /><Route path="/goals/:goalId" element={<div>Goal detail</div>} /></Routes></MemoryRouter>);
+    openGoalCreator();
     await screen.findByRole('option', { name: 'Codex' });
     const objective = screen.getByLabelText('Objective');
     fireEvent.change(objective, { target: { value: 'Implement the attached design' } });
@@ -192,6 +200,7 @@ describe('GoalsPage', () => {
       { ...capability, agentId: 'agent-2', agentAlias: 'opencode', agentType: 'opencode', goalCapable: false, reason: 'OpenCode does not support goal sessions' },
     ] });
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    openGoalCreator();
 
     await screen.findByRole('option', { name: 'Codex' });
     expect(screen.getByRole('option', { name: 'Opencode — unsupported' })).toBeDisabled();
@@ -207,6 +216,7 @@ describe('GoalsPage', () => {
       ] })
       .mockResolvedValueOnce({ agents: [capability] });
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    openGoalCreator();
     expect(await screen.findByText('No configured coding-agent runtime currently supports goals.')).toBeInTheDocument();
     expect(screen.getByText('Codex schema lacks thread/goal/clear')).toBeInTheDocument();
     expect(screen.getByText('Antigravity lacks --conversation')).toBeInTheDocument();
@@ -216,6 +226,65 @@ describe('GoalsPage', () => {
     await waitFor(() => expect(screen.queryByText('Codex schema lacks thread/goal/clear')).not.toBeInTheDocument());
     fireEvent.change(screen.getByLabelText('Objective'), { target: { value: 'Ship the dashboard' } });
     expect(screen.getByRole('button', { name: 'Start goal' })).toBeEnabled();
+  });
+
+  it('keeps existing work first in a compact responsive queue with bounded row content', async () => {
+    const longTodo = 'A very long follow-up task that should not be rendered as an unbounded nested checklist inside the work queue row';
+    const queueGoals = Array.from({ length: 4 }, (_, index) => ({
+      ...goal,
+      id: `goal-${index + 1}`,
+      title: `${goal.title} ${index + 1}`,
+      objective: `${goal.objective} ${index + 1} with a long explanation that must remain visually bounded in the compact queue`,
+      liveSummary: {
+        ...goal.liveSummary,
+        todos: [...goal.liveSummary.todos, { id: `todo-${index + 2}`, content: longTodo, status: 'pending' as const }],
+      },
+    }));
+    vi.mocked(goalsApi.listGoals).mockResolvedValue({ goals: queueGoals });
+
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    const queue = await screen.findByRole('list', { name: 'Goal work queue' });
+    expect(screen.getByRole('heading', { name: 'Work queue' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Objective')).not.toBeInTheDocument();
+    expect(within(queue).getAllByRole('link')).toHaveLength(4);
+    expect(screen.getByText('4 of 4')).toBeInTheDocument();
+    expect(screen.queryByText(longTodo)).not.toBeInTheDocument();
+    expect(screen.getAllByText('2 open of 2 steps')).toHaveLength(4);
+
+    const firstLink = within(queue).getAllByRole('link')[0];
+    expect(firstLink).toHaveClass('grid', 'grid-cols-2', 'lg:items-center');
+    expect(firstLink.className).toContain('lg:grid-cols-[');
+    expect(queue.parentElement).toHaveClass('border-y');
+    expect(queue.parentElement).not.toHaveClass('rounded-lg', 'shadow-sm');
+    expect(screen.getByText(queueGoals[0].objective)).toHaveClass('line-clamp-2');
+  });
+
+  it('confirms discarding unsaved creation input and restores focus on cancel or Escape', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    const trigger = screen.getByRole('button', { name: 'New goal' });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    expect(await screen.findByRole('dialog', { name: 'Start a goal' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Objective'), { target: { value: 'Unsaved goal details' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('dialog', { name: 'Start a goal' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Objective')).toHaveValue('Unsaved goal details');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Start a goal' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(confirm).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('dialog', { name: 'Start a goal' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Start a goal' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    confirm.mockRestore();
   });
 
   it('projects native checklist, time, token, and repository artifact stats in the goal list', async () => {
@@ -234,8 +303,8 @@ describe('GoalsPage', () => {
     expect(screen.getByText('Implement API')).toBeInTheDocument();
     expect(screen.getByText(goal.title)).toHaveClass('line-clamp-2');
     expect(screen.getByText(goal.objective)).toHaveClass('line-clamp-2');
-    expect(screen.getAllByText('Codex')).toHaveLength(2);
-    expect(screen.getAllByText('GPT-5.6 Sol')).toHaveLength(2);
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+    expect(screen.getByText('GPT-5.6 Sol')).toBeInTheDocument();
   });
 
   it('filters goals by repository and stores the selection in the URL', async () => {
@@ -261,6 +330,18 @@ describe('GoalsPage', () => {
     expect(await screen.findByText(goal.title)).toBeInTheDocument();
     expect(screen.getByText(apiGoal.title)).toBeInTheDocument();
     expect(within(filter).getByRole('button', { name: /All Repos/ })).toBeInTheDocument();
+  });
+
+  it('explains a filtered-empty queue and provides a direct reset', async () => {
+    vi.mocked(goalsApi.listGoals).mockResolvedValue({ goals: [goal] });
+    render(<MemoryRouter initialEntries={['/goals?repository=acme/missing']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText('No goals in acme/missing')).toBeInTheDocument();
+    expect(screen.getByText('0 of 1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all goals' }));
+
+    expect(await screen.findByText(goal.title)).toBeInTheDocument();
+    expect(screen.getByText('1 of 1')).toBeInTheDocument();
   });
 
   it('renders existing task live details and sends canned status input through the same session', async () => {
