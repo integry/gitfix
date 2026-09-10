@@ -144,7 +144,7 @@ describe('demo mode API helpers', () => {
     });
     releaseParsing();
 
-    await expect(pending).resolves.toBe(refreshed);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(fetchMock).toHaveBeenCalledOnce();
     await expect(refreshed.json()).rejects.toMatchObject({ name: 'AbortError' });
   });

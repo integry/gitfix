@@ -24,6 +24,7 @@ interface DesktopConnectedExperienceProps {
   closeManager(): void;
   closeEditor(): void;
   openEditor(profile: DesktopProfile | 'new'): void;
+  addAccount?(profile: DesktopProfile): void;
   connect(profile: DesktopProfile): Promise<void>;
   removeProfile(profile: DesktopProfile): Promise<void>;
   saveProfile(profile: DesktopProfile, shouldConnect?: boolean): Promise<void>;
@@ -36,7 +37,7 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
   adapters, profile, result, profiles, managerOpen, managerRef, editing,
   operationError, deepLinkError, editorNotice, hasPendingConnectCandidate, onConnectCandidatePresented,
   children, openManager, closeManager, closeEditor, openEditor, connect,
-  removeProfile, saveProfile, retry, setManagerOpen,
+  addAccount, removeProfile, saveProfile, retry, setManagerOpen,
   windowControls,
 }) => {
   const [networkOffline, setNetworkOffline] = useState(!navigator.onLine);
@@ -92,7 +93,7 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
             ) : (
               <>
                 {operationError && <div className="desktop-inline-error" role="alert">{operationError}</div>}
-                <ProfileList profiles={profiles} onConnect={nextProfile => { setManagerOpen(false); void connect(nextProfile); }} onEdit={openEditor} onRemove={nextProfile => void removeProfile(nextProfile)} />
+                <ProfileList activeProfileId={profile.id} onAddAccount={addAccount} profiles={profiles} onConnect={nextProfile => { setManagerOpen(false); void connect(nextProfile); }} onEdit={openEditor} onRemove={nextProfile => void removeProfile(nextProfile)} />
                 <button type="button" className="desktop-secondary-button desktop-add-instance" onClick={() => openEditor('new')}><Plus /> Add instance</button>
               </>
             )}

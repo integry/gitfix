@@ -314,11 +314,17 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     const previous = current.profiles.find(profile => profile.id === current.activeProfileId);
     const next = current.profiles.find(profile => profile.id === profileId);
     if (profileId !== null && !next) throw new Error('Desktop profile does not exist');
+    // Account switching clears the durable selection before asynchronous cookie cleanup.
+    // A reload or cleanup failure must not silently select the previous account.
+    if (profileId === null) {
+      await options.credentials.setActiveProfile(null);
+      options.onActiveWorkConnectionUnavailable?.('profile-changed');
+    }
     await clearDesktopInstanceCookies(options.desktopSession, [
       ...(previous ? [previous.apiBaseUrl] : []),
       ...(next ? [next.apiBaseUrl] : []),
     ]);
-    await options.credentials.setActiveProfile(profileId);
+    if (profileId !== null) await options.credentials.setActiveProfile(profileId);
     await reconcileRendererActiveProfile();
     options.onActiveWorkConnectionUnavailable?.('profile-changed');
   });

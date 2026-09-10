@@ -1,5 +1,6 @@
+import { parseProprConnectEndpoint } from '@propr/shared';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
-import { settleAuthenticationCancellation, type ExperienceState } from './desktopExperienceState';
+import { recoverableError, settleAuthenticationCancellation, type ExperienceState } from './desktopExperienceState';
 import {
   DesktopAuthenticationError,
   type DesktopAdapters,
@@ -33,6 +34,12 @@ const authenticationFailureMessage = (
     }
     if (error.code === 'PAIRING_UNREACHABLE') {
       return 'The instance became unreachable while waiting for browser approval. Check the connection and try again.';
+    }
+    if (error.code === 'ACCOUNT_MISMATCH') {
+      return 'Your browser approved a different GitHub account. Open the approval link in a browser profile signed in to this saved account, or use Add account to save a different user.';
+    }
+    if (error.code === 'PAIRING_CANCELLED') {
+      return 'Account confirmation was cancelled. Start sign in again when you are ready.';
     }
     if (error.code === 'PAIRING_REJECTED') {
       return 'ProPR Desktop could not verify the pairing response for this endpoint. Confirm the instance is up to date, then try again.';
@@ -86,5 +93,30 @@ export const createDesktopAuthenticationActions = ({
     setState({ phase: 'blocked', profile: current.profile, result: current.result });
   };
 
-  return { authenticate, cancelAuthentication };
+  const runBlockedAction = async (
+    profile: DesktopProfile,
+    action: () => Promise<void>,
+    failureMessage: string,
+    connectFailureMessage?: string,
+    onSuccess?: () => Promise<void>,
+  ) => {
+    cancelDiscovery();
+    const attempt = connectionAttempt.current;
+    try {
+      await action();
+      if (connectionAttempt.current === attempt) await onSuccess?.();
+    } catch {
+      const message = recoverableError(failureMessage);
+      setState(current => current.phase === 'blocked' && current.profile.id === profile.id
+        ? {
+          ...current,
+          result: parseProprConnectEndpoint(profile.baseUrl) && connectFailureMessage
+            ? { status: 'offline', message: recoverableError(connectFailureMessage) }
+            : { ...current.result, message },
+        }
+        : current);
+    }
+  };
+
+  return { authenticate, cancelAuthentication, runBlockedAction };
 };

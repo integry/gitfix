@@ -1,3 +1,5 @@
+import { readAccountResponse } from './account-response';
+import { type DesktopGitHubAccount } from './shared/github-account';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   DESKTOP_DISCOVERY_AUTHENTICATION_REQUIRED,
@@ -49,6 +51,8 @@ export interface CredentialServiceDependencies {
   openPairingBrowser(request: DesktopPairingBrowserRequest): Promise<void>;
   copyPairingApproval?(request: DesktopPairingBrowserRequest): void | Promise<void>;
   clientName: string;
+  /** Trusted host confirmation, never a renderer-provided identity. Missing hosts fail closed. */
+  confirmAccount?(account: DesktopGitHubAccount, origin: string, signal: AbortSignal): Promise<boolean>;
   /** Deterministic pairing timing for protocol tests. Production uses the client defaults. */
   pairingTiming?: Pick<ProprDesktopPairingOptions, 'sleep' | 'now'>;
   /** Deterministic service/native lifecycle proof; production uses fixed protocol defaults. */
@@ -464,6 +468,7 @@ export class DesktopCredentialService {
   readonly #fetch: typeof globalThis.fetch;
   readonly #openPairingBrowser: (request: DesktopPairingBrowserRequest) => Promise<void>;
   readonly #copyPairingApproval: (request: DesktopPairingBrowserRequest) => void | Promise<void>;
+  readonly #confirmAccount: NonNullable<CredentialServiceDependencies['confirmAccount']>;
   readonly #clientName: string;
   readonly #pairingTiming: Pick<ProprDesktopPairingOptions, 'sleep' | 'now'>;
   readonly #pairingProtocol: PairingProtocolRequestOptions;
@@ -501,6 +506,7 @@ export class DesktopCredentialService {
     this.#copyPairingApproval = dependencies.copyPairingApproval ?? (() => {
       throw new Error('Desktop pairing approval clipboard is unavailable');
     });
+    this.#confirmAccount = dependencies.confirmAccount ?? (async () => false);
     this.#clientName = dependencies.clientName;
     this.#pairingTiming = dependencies.pairingTiming ?? {};
     this.#pairingProtocol = dependencies.pairingProtocol ?? {};
@@ -850,6 +856,24 @@ export class DesktopCredentialService {
       this.#assertPairingCurrent(
         proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
       );
+      const userResponse = await this.#authenticatedFetch(
+        transient, '/api/auth/user?desktop_account_confirmation=1', { cache: 'no-store', signal: controller.signal }, 8_000,
+      );
+      const account = await readAccountResponse(userResponse, controller.signal);
+      if (!account) throw new DesktopPairingFailureError('PAIRING_REJECTED');
+      this.#assertPairingCurrent(
+        proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
+      );
+      // Reauthorization must never replace a saved account with the browser's other user.
+      if (baseline.profile?.account && baseline.profile.account.id !== account.id) {
+        throw new DesktopPairingFailureError('ACCOUNT_MISMATCH');
+      }
+      if (!await this.#confirmAccount(account, proposed.apiBaseUrl, controller.signal)) {
+        throw new DesktopPairingFailureError('PAIRING_CANCELLED');
+      }
+      this.#assertPairingCurrent(
+        proposed.id, proposed.apiBaseUrl, profileGeneration, selectionGeneration, controller.signal, connectClaim,
+      );
       let committed: Awaited<ReturnType<CredentialServiceDependencies['profiles']['commitPairedProfile']>>;
       try {
         committed = await this.#profiles.commitPairedProfile(
@@ -868,6 +892,7 @@ export class DesktopCredentialService {
             if (this.#active?.profileId === proposed.id) this.#active = null;
           },
           transientRevocation.id,
+          account,
         );
       } catch (error) {
         throw new DesktopPairingFailureError('SECURE_STORAGE_FAILED', error);
@@ -1120,6 +1145,12 @@ export class DesktopCredentialService {
       return { status: 'offline', message: 'The instance was discovered but authentication could not be checked.' };
     }
     if (response.ok) {
+      if (initial.profile?.account) {
+        const account = await readAccountResponse(response, operation.signal);
+        if (!account || account.id !== initial.profile.account.id) {
+          return { status: 'authentication-required', message: 'The saved GitHub identity could not be verified. Approve this account again.' };
+        }
+      }
       const current = await this.#profiles.readProfileCredential(input.id);
       if (this.#generation(input.id) !== operationGeneration
         || this.#selectionGeneration !== operationSelection
@@ -1258,7 +1289,7 @@ export class DesktopCredentialService {
       this.#pairingControllers.delete(active.profileId);
       this.#pendingPairingApprovals.delete(active.profileId);
       const removed = await this.#profiles.removeCredentialIfCurrent(
-        active, active.origin, () => this.#generation(active!.profileId) === generation,
+        active, active.origin, () => this.#generation(active!.profileId) === generation, true,
       );
       if (!removed) throw new Error('Desktop credential changed before logout completed');
       if (this.#active === active) this.#active = null;

@@ -1263,3 +1263,38 @@ describe('desktop IPC shutdown gate', () => {
     });
   }
 });
+
+it('clears the selected account and tray before cookie cleanup can fail during switching', async () => {
+  const handlers = new Map<string, (...args: any[]) => unknown>();
+  let activeProfileId: string | null = 'account-a';
+  let unavailable = false;
+  const credentials = {
+    listProfiles: async () => ({ activeProfileId, profiles: [{
+      id: 'account-a', label: 'Team', apiBaseUrl: 'https://team.test',
+      createdAt: '2026-09-10T00:00:00.000Z', updatedAt: '2026-09-10T00:00:00.000Z',
+    }] }),
+    setActiveProfile: async (id: string | null) => { activeProfileId = id; },
+  } as unknown as DesktopCredentialService;
+  registerIpcHandlers({
+    app: { getName: () => 'ProPR', getVersion: () => '0.8.15', isPackaged: true } as unknown as App,
+    ipcMain: {
+      handle: (channel: string, handler: (...args: any[]) => unknown) => { handlers.set(channel, handler); },
+      removeHandler: (channel: string) => { handlers.delete(channel); },
+    } as unknown as IpcMain,
+    profiles: {} as ProfileStore, credentials, connectDiscovery,
+    lifecycle: {} as LocalLifecycleController,
+    logger: { log: () => undefined } as unknown as DesktopLogger,
+    desktopSession: { clearStorageData: async () => {
+      assert.equal(activeProfileId, null);
+      assert.equal(unavailable, true);
+      throw new Error('Cookie cleanup failed');
+    } } as unknown as Session,
+    devServerUrl: undefined, packagedRendererUrl: 'propr-renderer://app/index.html',
+    openExternal: async () => undefined,
+    onActiveWorkConnectionUnavailable: () => { unavailable = true; },
+  });
+  const event = { senderFrame: { url: 'propr-renderer://app/index.html' } } as unknown as IpcMainInvokeEvent;
+  await assert.rejects(Promise.resolve(handlers.get(IPC_CHANNELS.profilesSetActive)!(event, null)));
+  assert.equal(activeProfileId, null);
+  assert.equal(unavailable, true);
+});

@@ -136,8 +136,18 @@ const createCredentialService = (
 ): DesktopCredentialService => {
   const suppliedFetch = dependencies.fetch;
   const service = new DesktopCredentialService({
+    confirmAccount: async () => true,
     ...dependencies,
     fetch: async (input, init) => {
+      if (input.toString().endsWith('/api/auth/user?desktop_account_confirmation=1')) {
+        return json({ id: '1', username: 'octocat', avatarUrl: null });
+      }
+      if (input.toString().endsWith('/api/auth/user')) {
+        const response = await suppliedFetch(input, init);
+        const body = await response.clone().json().catch(() => null);
+        return response.ok && body?.username && !body.id
+          ? json({ ...body, id: '1' }, response.status) : response;
+      }
       if (!input.toString().endsWith('/api/desktop/discovery')) return suppliedFetch(input, init);
       try {
         const response = await suppliedFetch(input, init);
@@ -198,11 +208,12 @@ describe('main-process desktop credential service', () => {
       assert.equal(await store.readCredential(a.id), null);
       assert.equal((await store.readCredential(b.id))?.token, token('B'));
       assert.equal((await store.list()).profiles.length, 2);
-      assert.equal((await store.list()).activeProfileId, a.id);
+      assert.equal((await store.list()).activeProfileId, null);
       assert.equal((await store.pendingRevocations()).length, offline ? 1 : 0);
       assert.deepEqual(revoked, offline ? [] : [`Bearer ${token('A')}`]);
       await service.dispose();
       const reloadedStore = new ProfileStore(directory, encryption);
+      assert.equal((await reloadedStore.list()).activeProfileId, null);
       assert.equal(await reloadedStore.readCredential(a.id), null);
       assert.equal((await reloadedStore.readCredential(b.id))?.token, token('B'));
       unreachable = false;
