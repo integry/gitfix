@@ -12,6 +12,7 @@ export interface DesktopConnectionScope {
 }
 
 let desktopConnectionScope: DesktopConnectionScope | null = null;
+let desktopRequestController = new AbortController();
 const desktopScopeListeners = new Set<() => void>();
 const responseScopes = new WeakMap<Response, DesktopConnectionScope | null>();
 const DEFINITIVE_INSTANCE_TOKEN_CODES = new Set([
@@ -66,6 +67,8 @@ export const setDesktopConnectionScope = (
   const nextApiBaseUrl = apiBaseUrl === undefined ? API_BASE_URL : normalizeApiBaseUrl(apiBaseUrl);
   const nextProprClient = createProprClient(nextApiBaseUrl);
   API_BASE_URL = nextApiBaseUrl;
+  desktopRequestController.abort();
+  desktopRequestController = new AbortController();
   desktopConnectionScope = scope;
   proprClient = nextProprClient;
   desktopScopeListeners.forEach(listener => listener());
@@ -261,7 +264,41 @@ const scopedRequestInit = (
     : undefined);
   new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
   headers.set(DESKTOP_TRANSPORT_SCOPE_HEADER, scope.transportScope);
-  return { ...init, headers };
+  const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  const signal = callerSignal
+    ? AbortSignal.any([callerSignal, desktopRequestController.signal])
+    : desktopRequestController.signal;
+  return { ...init, headers, signal };
+};
+
+const trackResponse = (
+  response: Response,
+  scope: DesktopConnectionScope | null,
+  signal?: AbortSignal | null,
+): Response => {
+  const assertCurrent = () => {
+    if (scope && (!isCurrentDesktopScope(scope) || signal?.aborted)) {
+      throw new DOMException('Desktop connection changed', 'AbortError');
+    }
+  };
+  assertCurrent();
+  responseScopes.set(response, scope);
+  if (scope) {
+    // A response may already be buffered when logout occurs. Fence body reads
+    // too, so late JSON cannot repopulate the signed-out account UI.
+    for (const method of ['json', 'text', 'blob', 'arrayBuffer', 'formData'] as const) {
+      const read = response[method].bind(response);
+      Object.defineProperty(response, method, { value: async () => {
+        assertCurrent();
+        const body = await read();
+        assertCurrent();
+        return body;
+      } });
+    }
+    const clone = response.clone.bind(response);
+    Object.defineProperty(response, 'clone', { value: () => trackResponse(clone(), scope, signal) });
+  }
+  return response;
 };
 
 export const apiFetch = async (
@@ -270,21 +307,25 @@ export const apiFetch = async (
   options: ApiFetchOptions = {}
 ): Promise<Response> => {
   const requestScope = desktopConnectionScope;
+  if (isDesktopRuntime() && !requestScope) throw new Error('Desktop authentication is required.');
   const requestClient = getProprClient();
   const requestInit = scopedRequestInit(input, init, requestScope);
   const response = await requestClient.fetch(input, requestInit);
-  responseScopes.set(response, requestScope);
+  trackResponse(response, requestScope, requestInit?.signal);
   if (isReplayableApiRequest(input, init, options)
     && await shouldRetryAfterTokenRefresh(response)
     && isCurrentDesktopScope(requestScope)) {
     const retried = await requestClient.fetch(input, requestInit);
-    responseScopes.set(retried, requestScope);
-    return retried;
+    return trackResponse(retried, requestScope, requestInit?.signal);
   }
   return response;
 };
 
 export const handleApiResponse = async (response: Response): Promise<Response> => {
+  if (responseScopes.has(response) && scopeForResponse(response)
+    && !isCurrentDesktopScope(scopeForResponse(response))) {
+    throw new DOMException('Desktop connection changed', 'AbortError');
+  }
   if (response.ok) return response;
 
   const data = await parseApiErrorBody(response);

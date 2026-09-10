@@ -18,6 +18,7 @@ type MemoryStorage = ReturnType<typeof memoryStorage>;
 interface TestWindow {
   __PROPR_CONFIG__?: { apiBaseUrl?: string };
   alert: ReturnType<typeof vi.fn>;
+  dispatchEvent: ReturnType<typeof vi.fn>;
   history: { replaceState: ReturnType<typeof vi.fn> };
   localStorage: MemoryStorage;
   location: {
@@ -61,6 +62,7 @@ const stubTestWindow = ({
   const testWindow: TestWindow = {
     __PROPR_CONFIG__: apiBaseUrl ? { apiBaseUrl } : undefined,
     alert: vi.fn(),
+    dispatchEvent: vi.fn(),
     history: { replaceState: vi.fn() },
     localStorage: memoryStorage(),
     location: { hash: '', hostname, href, pathname, search },
@@ -180,7 +182,7 @@ describe('logout', () => {
     expect(testWindow.location.href).toBe('http://localhost:4000/api/auth/logout');
   });
 
-  it('logs out the active Electron session and uses hash-aware login navigation', async () => {
+  it('logs out the active Electron bearer scope and resets the account route', async () => {
     const testWindow = stubTestWindow({
       apiBaseUrl: 'http://localhost:4000',
       hostname: 'renderer',
@@ -194,13 +196,95 @@ describe('logout', () => {
       auth: { logout: sessionLogout },
       external: { open: openExternal },
     };
-    const { logout } = await importProprApi();
+    const { logout, setDesktopConnectionScope } = await importProprApi();
+    setDesktopConnectionScope({ bridge: testWindow.proprDesktop as never, profileId: 'profile-a', transportScope: 'scope-a' });
 
     await Promise.resolve(logout());
 
-    expect(sessionLogout).toHaveBeenCalledWith('http://localhost:4000');
+    expect(sessionLogout).toHaveBeenCalledWith({ profileId: 'profile-a', transportScope: 'scope-a' });
+    expect(testWindow.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'propr:desktop-logged-out' }));
     expect(openExternal).not.toHaveBeenCalled();
     expect(testWindow.location.href).toBe('propr-app://renderer/renderer.html#/tasks');
-    expect(testWindow.location.hash).toBe('/login?logged_out=true');
+    expect(testWindow.location.hash).toBe('/');
   });
+  it('cancels stale requests, removes account cache and retains configuration on offline logout', async () => {
+    const testWindow = stubTestWindow({ apiBaseUrl: 'https://propr.example.test', hostname: 'renderer', href: 'propr-app://renderer/renderer.html#/tasks' });
+    let complete!: () => void;
+    const nativeLogout = vi.fn(() => new Promise<void>(resolve => { complete = resolve; }));
+    testWindow.proprDesktop = { auth: { logout: nativeLogout }, external: { open: vi.fn() } };
+    testWindow.localStorage.setItem('plannerSettings', 'account-a');
+    testWindow.localStorage.setItem('propr.desktop.profiles', 'saved-instances');
+    testWindow.localStorage.setItem('profile-b:cache', 'other-account');
+    let finishFetch!: (response: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(resolve => { finishFetch = resolve; }));
+    const api = await importProprApi();
+    api.setDesktopConnectionScope({ bridge: testWindow.proprDesktop as never, profileId: 'a', transportScope: 'scope-a' });
+    const oldRequest = api.apiFetch('https://propr.example.test/api/tasks');
+    const rejectedRequest = expect(oldRequest).rejects.toMatchObject({ name: 'AbortError' });
+    const first = api.logout();
+    const second = api.logout();
+    expect(nativeLogout).toHaveBeenCalledTimes(1);
+    expect(api.getDesktopConnectionScope()).toBeNull();
+    expect(fetchSpy.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(testWindow.location.hash).toBe('');
+    expect(testWindow.dispatchEvent).not.toHaveBeenCalled();
+    finishFetch(new Response('[]'));
+    await rejectedRequest;
+    complete();
+    await Promise.all([first, second]);
+    expect(testWindow.location.hash).toBe('/');
+    expect(testWindow.localStorage.getItem('plannerSettings')).toBeNull();
+    expect(testWindow.localStorage.getItem('propr.desktop.profiles')).toBe('saved-instances');
+    expect(testWindow.localStorage.getItem('profile-b:cache')).toBe('other-account');
+  });
+
+  it('rejects buffered account response bodies after logout', async () => {
+    const testWindow = stubTestWindow({ apiBaseUrl: 'https://propr.example.test', hostname: 'renderer', href: 'propr-app://renderer/renderer.html#/tasks' });
+    testWindow.proprDesktop = { auth: { logout: vi.fn().mockResolvedValue(undefined) }, external: { open: vi.fn() } };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"private":"account-a"}'));
+    const api = await importProprApi();
+    api.setDesktopConnectionScope({ bridge: testWindow.proprDesktop as never, profileId: 'a', transportScope: 'scope-a' });
+    const response = await api.apiFetch('https://propr.example.test/api/tasks');
+    const clone = response.clone();
+    await api.logout();
+    await expect(response.json()).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(clone.text()).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('visibly fails local logout without claiming success and allows retry', async () => {
+    const testWindow = stubTestWindow({ apiBaseUrl: 'https://propr.example.test', hostname: 'renderer', href: 'propr-app://renderer/renderer.html#/tasks' });
+    const nativeLogout = vi.fn().mockRejectedValueOnce(new Error('disk failure')).mockResolvedValue(undefined);
+    testWindow.proprDesktop = { auth: { logout: nativeLogout }, external: { open: vi.fn() } };
+    const api = await importProprApi();
+    const scope = { bridge: testWindow.proprDesktop as never, profileId: 'a', transportScope: 'scope-a' };
+    api.setDesktopConnectionScope(scope);
+    await api.logout();
+    expect(api.getDesktopConnectionScope()).toEqual(scope);
+    expect(testWindow.alert).toHaveBeenCalledWith(expect.stringContaining('local credential could not be removed'));
+    expect(testWindow.location.hash).toBe('');
+    expect(testWindow.dispatchEvent).not.toHaveBeenCalled();
+    await api.logout();
+    expect(api.getDesktopConnectionScope()).toBeNull();
+    expect(testWindow.location.hash).toBe('/');
+  });
+
+  it('does not clear a new profile when an old logout finishes', async () => {
+    const testWindow = stubTestWindow({ apiBaseUrl: 'https://propr.example.test', hostname: 'renderer', href: 'propr-app://renderer/renderer.html#/tasks' });
+    let complete!: () => void;
+    const nativeLogout = vi.fn(() => new Promise<void>(resolve => { complete = resolve; }));
+    testWindow.proprDesktop = { auth: { logout: nativeLogout }, external: { open: vi.fn() } };
+    const api = await importProprApi();
+    api.setDesktopConnectionScope({ bridge: testWindow.proprDesktop as never, profileId: 'a', transportScope: 'scope-a' });
+    const pending = api.logout();
+    const next = { bridge: testWindow.proprDesktop as never, profileId: 'b', transportScope: 'scope-b' };
+    api.setDesktopConnectionScope(next);
+    testWindow.localStorage.setItem('plannerSettings', 'account-b');
+    complete();
+    await pending;
+    expect(api.getDesktopConnectionScope()).toEqual(next);
+    expect(testWindow.localStorage.getItem('plannerSettings')).toBe('account-b');
+    expect(testWindow.dispatchEvent).not.toHaveBeenCalled();
+    expect(testWindow.location.hash).toBe('');
+  });
+
 });

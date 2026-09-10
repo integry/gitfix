@@ -1,5 +1,6 @@
+import { DESKTOP_LOGGED_OUT_EVENT } from '../desktop/types';
 import type { Task as ApiTask } from './tasks';
-import { API_BASE_URL, apiFetch, handleApiResponse } from './apiClient';
+import { API_BASE_URL, apiFetch, handleApiResponse, getDesktopConnectionScope, setDesktopConnectionScope } from './apiClient';
 import { isHostedUiOrigin, pathWithActiveHostedTunnelFlow } from '../config/runtimeConfig';
 import { isAccountStatusTimestamp, isProprProxyUrl } from '@propr/shared';
 import {
@@ -373,11 +374,46 @@ const hostedLogout = async (): Promise<void> => {
   }
 };
 
+let desktopLogoutInFlight: Promise<void> | null = null;
+
+const desktopLogout = async (): Promise<void> => {
+  const scope = getDesktopConnectionScope();
+  if (!scope) {
+    window.alert('Unable to log out: the active desktop connection changed. Reconnect and try again.');
+    return;
+  }
+  // Cancels REST and disconnects the scoped socket before invoking main.
+  setDesktopConnectionScope(null);
+  try {
+    await scope.bridge.auth.logout({ profileId: scope.profileId, transportScope: scope.transportScope });
+  } catch {
+    if (!getDesktopConnectionScope()) setDesktopConnectionScope(scope);
+    window.alert('Unable to log out from ProPR Desktop. The local credential could not be removed. Try again.');
+    return;
+  }
+  // A late logout must never clear a newer profile's renderer state.
+  if (getDesktopConnectionScope()) return;
+  window.dispatchEvent(new CustomEvent(DESKTOP_LOGGED_OUT_EVENT, { detail: scope }));
+  // The desktop shell now owns sign-in. Reset account-specific routes so a
+  // later successful pairing boots the dashboard and validates its new user.
+  window.location.hash = '/';
+  try {
+    // These legacy keys belong to the mounted account UI. Keep instance
+    // configuration, device preferences and any other profile namespaces.
+    for (const key of [
+      'dismissed_plan_ids', 'dismissed_task_ids', 'dismissed_task_timestamps',
+      'plannerSettings', 'propr.goalFormSettings', 'propr:push-subscription-owner',
+    ]) window.localStorage.removeItem(key);
+    window.sessionStorage.removeItem('agent-tank-banner-dismissed');
+  } catch {
+    window.alert('You are signed out, but ProPR could not clear the account display cache. Restart ProPR Desktop before signing in again.');
+  }
+};
+
 export const logout = (): void | Promise<void> => {
   if (typeof window !== 'undefined' && window.proprDesktop) {
-    return window.proprDesktop.auth.logout(API_BASE_URL).then(() => {
-      window.location.hash = '/login?logged_out=true';
-    });
+    desktopLogoutInFlight ??= desktopLogout().finally(() => { desktopLogoutInFlight = null; });
+    return desktopLogoutInFlight;
   }
   if (typeof window !== 'undefined' && isHostedUiOrigin(window.location.hostname) && isProprProxyUrl(API_BASE_URL)) {
     hostedLogoutInFlight ??= hostedLogout();

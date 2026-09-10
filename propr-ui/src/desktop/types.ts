@@ -177,3 +177,5 @@ declare global {
     __PROPR_DESKTOP__?: ProprDesktopBridge;
   }
 }
+
+export const DESKTOP_LOGGED_OUT_EVENT = 'propr:desktop-logged-out';
