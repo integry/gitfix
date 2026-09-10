@@ -190,7 +190,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       key={item.name}
       to={item.href}
       className={`flex items-center text-sm font-medium transition-colors duration-150 ${
-        desktop ? 'mx-2 rounded-lg px-3 py-2.5' : 'border-r-2 px-4 py-3'
+        desktop ? 'mx-2 rounded-lg border-0 px-3 py-2.5' : 'border-r-2 px-4 py-3'
       } ${
         isActive(item.href)
           ? desktop

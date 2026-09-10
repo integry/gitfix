@@ -2,6 +2,7 @@
   --desktop-focus: #0f766e;
   --desktop-titlebar-height: 3.5rem;
   --desktop-window-controls-end-inset: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+  --desktop-window-controls-gap: 0px;
 }
 
 .desktop-entry {
@@ -32,6 +33,7 @@
 
 .desktop-platform-linux {
   --desktop-window-controls-end-inset: 8.625rem;
+  --desktop-window-controls-gap: 1.25rem;
   --desktop-titlebar-height: 44px;
 }
 
@@ -47,7 +49,7 @@ html[data-desktop-window="linux"] {
   --desktop-frame-radius: 6px 6px 0 0;
   --desktop-frame-shadow: 0 1px 3px rgb(30 41 59 / 22%);
   height: 100%;
-  padding: 0 var(--desktop-frame-inset) var(--desktop-frame-inset);
+  padding: 0 0 var(--desktop-frame-inset) var(--desktop-frame-inset);
   background: transparent;
 }
 
@@ -83,7 +85,7 @@ html[data-desktop-window="linux"] .desktop-app {
 html[data-desktop-window="linux"]::after {
   content: '';
   position: fixed;
-  inset: 0 var(--desktop-frame-inset) var(--desktop-frame-inset);
+  inset: 0 0 var(--desktop-frame-inset) var(--desktop-frame-inset);
   z-index: 2147483647;
   border: 1px solid var(--desktop-frame-edge);
   border-radius: var(--desktop-frame-radius);
@@ -128,6 +130,8 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
   display: grid;
   width: 8.625rem;
   height: var(--desktop-titlebar-height);
+  margin: 0;
+  padding: 0;
   grid-template-columns: repeat(3, 1fr);
   border-bottom: 1px solid #e2e8f0;
   color: #475569;
@@ -183,7 +187,7 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
 .desktop-entry *,
 .desktop-app *,
 .desktop-modal-backdrop * {
-  scrollbar-color: #64748b transparent;
+  scrollbar-color: #cbd5e1 transparent;
   scrollbar-width: thin;
 }
 
@@ -193,8 +197,8 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
 .desktop-entry *::-webkit-scrollbar,
 .desktop-app *::-webkit-scrollbar,
 .desktop-modal-backdrop *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 .desktop-entry::-webkit-scrollbar-track,
@@ -213,7 +217,7 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
 .desktop-app *::-webkit-scrollbar-thumb,
 .desktop-modal-backdrop *::-webkit-scrollbar-thumb {
   border-radius: 4px;
-  background: #64748b;
+  background: #cbd5e1;
 }
 
 .desktop-entry::-webkit-scrollbar-thumb:hover,
@@ -222,7 +226,7 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
 .desktop-entry *::-webkit-scrollbar-thumb:hover,
 .desktop-app *::-webkit-scrollbar-thumb:hover,
 .desktop-modal-backdrop *::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #94a3b8;
 }
 
 .desktop-brand {
@@ -431,7 +435,7 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
   -webkit-app-region: drag;
 }
 .desktop-app .desktop-content-toolbar {
-  padding-right: var(--desktop-window-controls-end-inset);
+  padding-right: calc(var(--desktop-window-controls-end-inset) + var(--desktop-window-controls-gap));
 }
 .desktop-app.desktop-platform-darwin .desktop-sidebar-header {
   padding-left: max(1rem, env(titlebar-area-x, 5rem));
