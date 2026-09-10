@@ -11,6 +11,7 @@ export const DEFAULT_SPEECH_RECOGNITION_TIMEOUT_MS = 10_000;
 export type BrowserSpeechErrorCategory =
   | 'unsupported'
   | 'permission-denied'
+  | 'service-unavailable'
   | 'no-speech'
   | 'microphone-unavailable'
   | 'network'
@@ -23,6 +24,7 @@ export type BrowserSpeechErrorCategory =
 const ERROR_MESSAGES: Record<BrowserSpeechErrorCategory, string> = {
   unsupported: 'Speech is not supported by this browser.',
   'permission-denied': 'Microphone access was not allowed.',
+  'service-unavailable': 'The speech recognition service is unavailable or disallowed in this app. This does not mean microphone permission was denied. You can still use Catch me up for a text briefing.',
   'no-speech': 'No speech was detected. Please try again.',
   'microphone-unavailable': 'No available microphone was found.',
   network: 'The browser speech service could not be reached.',
@@ -37,7 +39,7 @@ const ERROR_CATEGORIES_BY_TOKEN: Readonly<Record<string, BrowserSpeechErrorCateg
   notallowederror: 'permission-denied',
   securityerror: 'permission-denied',
   'not-allowed': 'permission-denied',
-  'service-not-allowed': 'permission-denied',
+  'service-not-allowed': 'service-unavailable',
   'no-speech': 'no-speech',
   'audio-capture': 'microphone-unavailable',
   'audio-busy': 'microphone-unavailable',
@@ -72,6 +74,7 @@ export class BrowserSpeechError extends Error {
 
 export interface BrowserSpeechCapabilities {
   speechSynthesis: boolean;
+  /** API availability only; permission and a working recognition service are not guaranteed. */
   speechRecognition: boolean;
 }
 

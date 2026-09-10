@@ -57,6 +57,20 @@ The grammar is intentionally closed. Voice Briefings do **not** execute arbitrar
 
 Speech synthesis and recognition support varies by browser, OS version, language, permissions, policy, and PWA installation mode. The text briefing remains usable when either speech API is missing: unsupported playback leaves the text on screen, and unsupported recognition disables **Listen**. ProPR cannot make the platform grant microphone access or restore a permission the user denied.
 
+The presence of `SpeechRecognition` or `webkitSpeechRecognition` only means the API can be attempted. It does not establish that the packaged Electron runtime has a working recognition service. `service-not-allowed` reports an unavailable or disallowed speech service; it is separate from `not-allowed` (access denied), `audio-capture` (microphone unavailable), and `network` (service unreachable). Granting microphone access does not fix an unavailable recognition service.
+
+### Desktop routing diagnosis (#2260, epic #1970)
+
+Source inspection of the reported runtime revision `6b8ebe96` shows no `/api/voice/capabilities` or `/api/voice/briefing` registration. Both are registered in desktop revision `03f78868`. This confirms a backend version mismatch can account for a 404; it does **not** verify which process is currently deployed. Updating only the desktop client cannot add routes to an older runtime.
+
+There is also a client routing defect: the desktop API client updates its API base URL during activation and profile switching, but the voice module captured the initial URL at import. Voice requests now resolve that live URL at request time, retaining the existing authenticated transport. Neither a failure nor a profile switch triggers a fallback request to a different instance. The browser continues to make one authenticated GET for each briefing.
+
+To verify the running installation, inspect the destination of the failing request and compare it with the selected instance. On that **same authenticated endpoint**, check `/api/compatibility`, `/api/voice/capabilities`, and `/api/voice/briefing?scope=all`. Compare the running image/build revision with its route registrations; a product version alone need not distinguish development builds. A 404 or 501 means the endpoint does not expose the requested route (an older backend or proxy configuration may be responsible). A successful HTML response indicates a web-shell/proxy routing problem. Resolve the selected endpoint or proxy first; if the runtime lacks the routes, a separately authorized runtime update is required. No deployment is performed by this change.
+
+The inspected desktop revision denies media requests. Browser disclosure acknowledgement must not be treated as an Electron microphone grant. Native consent needs an explicit Listen action, microphone-only access in the live trusted main renderer, and cancellation and revocation support. Camera, subframes and remote approval windows must remain denied. The shared voice-client changes do not modify that native permission policy.
+
+Packaged Electron 44 recognition is **unverified**, and these browser tests do not certify it. Upstream [Electron recognition code](https://github.com/electron/electron/blob/main/shell/browser/electron_speech_recognition_manager_delegate.cc) has a separate recognition delegate; changing session permission policy alone is not evidence of a working service. Safe interim options are text briefings and a browser whose recognition works after the existing disclosure and microphone consent. An explicitly designed local/offline recognition adapter is a possible follow-up if packaged recognition cannot work. No provider, credentials, recording, or new audio transmission is introduced here; a cloud audio implementation requires separate approval.
+
 Voice Briefings are not designed or supported for:
 
 - background auto-play or speaking in response to a Push notification;

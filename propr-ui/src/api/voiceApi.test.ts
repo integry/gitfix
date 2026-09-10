@@ -2,6 +2,15 @@ import { voiceBriefingResponseSchema } from '@propr/shared';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { getVoiceBriefing, getVoiceCapabilities } from './voiceApi';
 
+const selectedBackend = vi.hoisted(() => ({ url: '' }));
+
+vi.mock('./apiClient', async importOriginal => ({
+  ...await importOriginal<typeof import('./apiClient')>(),
+  // Model the epic desktop client's live API_BASE_URL export without replacing
+  // its authenticated fetch/response behavior in these regressions.
+  get API_BASE_URL() { return selectedBackend.url; },
+}));
+
 const capabilities = {
   mode: 'on_demand',
   serverAudio: false,
@@ -40,7 +49,72 @@ function jsonResponse(value: unknown): Response {
 }
 
 describe('voice API', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    selectedBackend.url = '';
+    vi.restoreAllMocks();
+  });
+
+  test('resolves the selected backend after import and again after a profile switch', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(capabilities))
+      .mockResolvedValueOnce(jsonResponse(briefing))
+      .mockResolvedValueOnce(jsonResponse(capabilities))
+      .mockResolvedValueOnce(jsonResponse(briefing));
+
+    for (const url of ['http://127.0.0.1:3131', 'https://instance.example.test']) {
+      selectedBackend.url = url;
+      await getVoiceCapabilities();
+      await getVoiceBriefing('attention');
+    }
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'http://127.0.0.1:3131/api/voice/capabilities',
+      'http://127.0.0.1:3131/api/voice/briefing?scope=attention',
+      'https://instance.example.test/api/voice/capabilities',
+      'https://instance.example.test/api/voice/briefing?scope=attention',
+    ]);
+  });
+
+  test.each([404, 501])('identifies unavailable routes (HTTP %i) without using another backend', async status => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response('Cannot GET /api/voice', { status }));
+
+    for (const request of [getVoiceCapabilities, getVoiceBriefing]) {
+      await expect(request()).rejects.toMatchObject({
+        code: 'VOICE_ROUTES_UNAVAILABLE', status,
+        message: expect.stringContaining('updating the desktop app alone is not enough'),
+      });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('identifies a proxy/static-shell response instead of reporting a JSON parse error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<html>App shell</html>', {
+      headers: { 'Content-Type': 'text/html' },
+    }));
+    await expect(getVoiceBriefing()).rejects.toMatchObject({
+      code: 'VOICE_RESPONSE_NOT_JSON', status: 200,
+    });
+  });
+
+  test('preserves authorization and server failures instead of treating them as absent routes', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Access denied' }), { status: 403 }))
+      .mockResolvedValueOnce(new Response('private server detail', { status: 500 }));
+
+    await expect(getVoiceBriefing()).rejects.toThrow('Access denied');
+    await expect(getVoiceBriefing()).rejects.toThrow('The server ran into a problem (HTTP 500)');
+  });
+
+  test('preserves authenticated GET retry after token refresh', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'TOKEN_REFRESHED' }), { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse(briefing));
+
+    await expect(getVoiceBriefing('attention')).resolves.toEqual(briefing);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]).toEqual(fetchMock.mock.calls[1]);
+  });
 
   test('uses only the fixed authenticated GET routes and validates both responses', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')

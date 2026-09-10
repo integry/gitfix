@@ -144,6 +144,33 @@ describe('browser speech adapters', () => {
     expect(recognition.abort).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['not-allowed', 'permission-denied'],
+    ['service-not-allowed', 'service-unavailable'],
+    ['network', 'network'],
+    ['audio-capture', 'microphone-unavailable'],
+  ])('keeps %s distinct from other recognition failures', async (error, category) => {
+    const recognitionPromise = listenOnce();
+    const recognition = MockSpeechRecognition.instances[0];
+    recognition.onerror?.({ error });
+
+    await expect(recognitionPromise).rejects.toMatchObject({ category });
+    if (category === 'service-unavailable') {
+      await expect(recognitionPromise).rejects.toThrow('This does not mean microphone permission was denied');
+    }
+    expect(recognition.abort).toHaveBeenCalledOnce();
+    expect(recognition.onresult).toBeNull();
+    expect(recognition.onerror).toBeNull();
+    expect(recognition.onend).toBeNull();
+  });
+
+  it('does not start recognition for an already cancelled request', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(listenOnce({ signal: controller.signal })).rejects.toMatchObject({ category: 'cancelled' });
+    expect(MockSpeechRecognition.instances).toHaveLength(0);
+  });
+
   it('reports synthesis support without recognition and never constructs recognition', async () => {
     setWindowProperty('SpeechRecognition', undefined);
     setWindowProperty('webkitSpeechRecognition', undefined);
