@@ -254,8 +254,8 @@ describe('GoalsPage', () => {
     expect(screen.getAllByText('2 open of 2 steps')).toHaveLength(4);
 
     const firstLink = within(queue).getAllByRole('link')[0];
-    expect(firstLink).toHaveClass('grid', 'grid-cols-2', 'lg:items-center');
-    expect(firstLink.className).toContain('lg:grid-cols-[');
+    expect(firstLink).toHaveClass('grid', 'grid-cols-2', 'xl:items-center');
+    expect(firstLink.className).toContain('xl:grid-cols-[');
     expect(queue.parentElement).toHaveClass('border-y');
     expect(queue.parentElement).not.toHaveClass('rounded-lg', 'shadow-sm');
     expect(screen.getByText(queueGoals[0].objective)).toHaveClass('line-clamp-2');
@@ -284,6 +284,33 @@ describe('GoalsPage', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Start a goal' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+    confirm.mockRestore();
+  });
+
+  it('dismisses the open repository picker before handling Escape in the goal creator', async () => {
+    vi.mocked(getInstanceCatalog).mockResolvedValue({
+      agents: [],
+      repositories: [
+        { name: 'acme/web', enabled: true },
+        { name: 'acme/api', enabled: true },
+      ],
+    });
+    const confirm = vi.spyOn(window, 'confirm');
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    openGoalCreator();
+
+    const dialog = await screen.findByRole('dialog', { name: 'Start a goal' });
+    fireEvent.change(within(dialog).getByLabelText('Objective'), { target: { value: 'Keep this draft' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /acme.*web/ }));
+    const repositoryFilter = within(dialog).getByPlaceholderText('Filter repositories...');
+    expect(repositoryFilter).toHaveFocus();
+
+    fireEvent.keyDown(repositoryFilter, { key: 'Escape' });
+
+    expect(screen.queryByPlaceholderText('Filter repositories...')).not.toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Objective')).toHaveValue('Keep this draft');
+    expect(confirm).not.toHaveBeenCalled();
     confirm.mockRestore();
   });
 

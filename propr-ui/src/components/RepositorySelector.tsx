@@ -366,6 +366,8 @@ export const RepositorySelector: React.FC<RepositorySelectorProps> = ({
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
       setIsOpen(false);
       setFilter('');
     } else if (e.key === 'Enter' && starredRepos.length + otherRepos.length === 1) {

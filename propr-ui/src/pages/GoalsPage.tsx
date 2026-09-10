@@ -379,6 +379,7 @@ function CreateGoalDialog({ isOpen, onClose, onCreated }: CreateGoalDialogProps)
     });
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (event.defaultPrevented) return;
         event.preventDefault();
         requestClose();
         return;
@@ -438,13 +439,13 @@ function GoalQueueRow({ goal, goalAgents }: { goal: Goal; goalAgents: Array<{ ty
   const tokens = goal.liveSummary.nativeGoal?.tokensUsed ?? tokenTotal(goal.liveSummary.tokenUsage);
   const activeMs = goal.liveSummary.nativeGoal ? goal.liveSummary.nativeGoal.timeUsedSeconds * 1000 : goal.activeMs;
   return <li className="border-b border-slate-200 last:border-b-0">
-    <Link to={`/goals/${goal.id}`} className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-4 px-4 py-4 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 sm:px-5 lg:grid-cols-[minmax(240px,2fr)_120px_minmax(140px,1fr)_minmax(180px,1.4fr)_160px] lg:items-center lg:gap-x-5 lg:gap-y-0 lg:py-3.5">
-      <div className="col-span-2 min-w-0 lg:col-span-1">
+    <Link to={`/goals/${goal.id}`} className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-4 px-4 py-4 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 sm:px-5 xl:grid-cols-[minmax(240px,2fr)_120px_minmax(140px,1fr)_minmax(180px,1.4fr)_160px] xl:items-center xl:gap-x-5 xl:gap-y-0 xl:py-3.5">
+      <div className="col-span-2 min-w-0 xl:col-span-1">
         <h3 className="line-clamp-2 font-semibold leading-5 text-slate-900" title={goal.title}>{goal.title}</h3>
         <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-500" title={goal.objective}>{goal.objective}</p>
       </div>
       <div className="min-w-0">
-        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 lg:hidden">Status</span>
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Status</span>
         <GoalState goal={goal} />
         <span className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
           <ProviderLogo provider={goal.agent.type} className="h-3.5 w-3.5 flex-none" />
@@ -453,16 +454,16 @@ function GoalQueueRow({ goal, goalAgents }: { goal: Goal; goalAgents: Array<{ ty
         <span className="mt-0.5 block truncate text-xs text-slate-500" title={getModelDisplayName(goal.requestedModel)}>{getModelDisplayName(goal.requestedModel)}</span>
       </div>
       <div className="min-w-0">
-        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 lg:hidden">Repository</span>
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Repository</span>
         <span className="flex min-w-0 items-center gap-1.5 text-sm text-slate-700"><Github className="h-3.5 w-3.5 flex-none text-slate-400" /><span className="truncate" title={goal.repository}>{goal.repository}</span></span>
       </div>
-      <div className="col-span-2 min-w-0 lg:col-span-1">
-        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 lg:hidden">Current activity</span>
+      <div className="col-span-2 min-w-0 xl:col-span-1">
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Current activity</span>
         <span className="flex min-w-0 items-start gap-1.5 text-sm text-slate-700"><Activity className="mt-0.5 h-3.5 w-3.5 flex-none text-blue-500" /><span className="line-clamp-2" title={activity}>{activity}</span></span>
         {goal.liveSummary.todos.length > 0 && <span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><ListTodo className="h-3.5 w-3.5" />{openTodos} open of {goal.liveSummary.todos.length} steps</span>}
       </div>
-      <div className="col-span-2 min-w-0 lg:col-span-1">
-        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 lg:hidden">Usage</span>
+      <div className="col-span-2 min-w-0 xl:col-span-1">
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Usage</span>
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
           <span className="inline-flex items-center gap-1"><Coins className="h-3.5 w-3.5 text-amber-500" />{tokens.toLocaleString()} tokens</span>
           <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5 text-indigo-500" />{duration(activeMs)} active</span>
@@ -540,7 +541,7 @@ function GoalList() {
         : visibleGoals.length === 0
           ? <div className="border-y border-dashed border-slate-300 py-10 text-center"><p className="text-sm font-medium text-slate-700">No goals in {repositoryFilter}</p><button type="button" onClick={() => setRepositoryFilter('all')} className="mt-2 text-sm font-medium text-primary-700 hover:underline">Show all goals</button></div>
           : <div className="border-y border-slate-200 bg-white">
-            <div aria-hidden="true" className="hidden grid-cols-[minmax(240px,2fr)_120px_minmax(140px,1fr)_minmax(180px,1.4fr)_160px] gap-x-5 border-b border-slate-200 bg-slate-50 px-5 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 lg:grid">
+            <div aria-hidden="true" className="hidden grid-cols-[minmax(240px,2fr)_120px_minmax(140px,1fr)_minmax(180px,1.4fr)_160px] gap-x-5 border-b border-slate-200 bg-slate-50 px-5 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 xl:grid">
               <span>Goal</span><span>Status / runtime</span><span>Repository</span><span>Current activity</span><span>Usage</span>
             </div>
             <ul aria-label="Goal work queue">{visibleGoals.map(goal => <GoalQueueRow key={goal.id} goal={goal} goalAgents={goalAgents} />)}</ul>
