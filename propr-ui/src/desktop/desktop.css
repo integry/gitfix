@@ -1,5 +1,7 @@
 :root {
   --desktop-focus: #0f766e;
+  --desktop-titlebar-height: 3.5rem;
+  --desktop-window-controls-end-inset: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
 }
 
 .desktop-entry {
@@ -7,7 +9,7 @@
   display: grid;
   place-items: center;
   overflow: auto;
-  padding: max(2.5rem, env(safe-area-inset-top)) 1.5rem 2.5rem;
+  padding: max(calc(var(--desktop-titlebar-height) + 1rem), env(safe-area-inset-top)) 1.5rem 2.5rem;
   color: #17212b;
   background:
     radial-gradient(circle at 10% 0%, rgba(36, 163, 163, 0.16), transparent 35rem),
@@ -15,16 +17,61 @@
     #f4f7f7;
 }
 
-.desktop-entry::before {
-  content: '';
+.desktop-entry-drag-region {
   position: fixed;
-  inset: 0 0 auto;
+  top: 0;
+  left: env(titlebar-area-x, 0px);
   z-index: 50;
-  height: 36px;
+  width: env(titlebar-area-width, 100%);
+  height: max(var(--desktop-titlebar-height), env(titlebar-area-height, 0px));
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
+  user-select: none;
   -webkit-app-region: drag;
 }
+
+.desktop-platform-linux {
+  --desktop-window-controls-end-inset: 8.625rem;
+}
+
+.desktop-platform-linux .desktop-entry-drag-region,
+.desktop-platform-linux .desktop-connected-drag-region {
+  width: calc(100% - var(--desktop-window-controls-end-inset));
+}
+
+.desktop-window-controls {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 110;
+  display: grid;
+  width: 8.625rem;
+  height: var(--desktop-titlebar-height);
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid #e2e8f0;
+  color: #475569;
+  background: #f8fafc;
+  -webkit-app-region: no-drag;
+}
+
+.desktop-window-controls button {
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+
+.desktop-window-controls button:hover { background: #e2e8f0; }
+.desktop-window-controls button:active { background: #cbd5e1; }
+.desktop-window-controls button:focus-visible { outline: 2px solid var(--desktop-focus); outline-offset: -2px; }
+.desktop-window-controls .desktop-window-close:hover { color: #fff; background: #dc2626; }
+.desktop-window-controls .desktop-window-close:active { color: #fff; background: #b91c1c; }
+.desktop-window-controls svg { width: .9rem; height: .9rem; stroke-width: 1.75; }
 
 .desktop-app {
   height: 100vh;
@@ -36,26 +83,17 @@
   height: 100%;
 }
 
-.desktop-native-titlebar {
-  position: relative;
-  z-index: 50;
-  display: flex;
-  height: 36px;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
+.desktop-connected-drag-region {
+  position: absolute;
+  top: 0;
+  left: env(titlebar-area-x, 0px);
+  z-index: 20;
+  width: env(titlebar-area-width, 100%);
+  height: max(var(--desktop-titlebar-height), env(titlebar-area-height, 0px));
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
-  color: #64748b;
-  font-size: .6875rem;
-  font-weight: 600;
-  letter-spacing: .01em;
   user-select: none;
   -webkit-app-region: drag;
-}
-
-.desktop-native-titlebar > span {
-  pointer-events: none;
 }
 
 .desktop-entry,
@@ -303,7 +341,24 @@
 .desktop-add-instance { width: 100%; margin-top: .8rem; }
 
 .desktop-app .desktop-shell-content > aside { box-shadow: none; background: #fbfdfd; }
-.desktop-app .desktop-shell-content header { box-shadow: none; }
+.desktop-app .desktop-sidebar-header,
+.desktop-app .desktop-content-toolbar {
+  height: var(--desktop-titlebar-height);
+  min-height: var(--desktop-titlebar-height);
+  box-shadow: none;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+.desktop-app .desktop-content-toolbar {
+  padding-right: var(--desktop-window-controls-end-inset);
+}
+.desktop-app.desktop-platform-darwin .desktop-sidebar-header {
+  padding-left: max(1rem, env(titlebar-area-x, 5rem));
+}
+.desktop-app .desktop-sidebar-header :is(a, button, input, select, textarea, [role="button"]),
+.desktop-app .desktop-content-toolbar :is(a, button, input, select, textarea, [role="button"]) {
+  -webkit-app-region: no-drag;
+}
 .desktop-app .desktop-toolbar-popover { -webkit-app-region: no-drag; }
 
 .desktop-setup-wizard { width: min(100%, 46rem); border: 1px solid #d7e3e2; border-radius: 1.2rem; padding: 2rem; color: #263938; background: rgba(255,255,255,.97); box-shadow: 0 24px 70px rgba(25,48,48,.12); }
@@ -377,11 +432,17 @@
 }
 
 @media (max-width: 640px) {
-  .desktop-entry { align-items: start; padding: 1rem; }
+  .desktop-entry { align-items: start; padding: calc(var(--desktop-titlebar-height) + 1rem) 1rem 1rem; }
   .desktop-welcome-card,
   .desktop-connection-card { border-radius: .9rem; padding: 1.25rem; }
   .desktop-welcome-copy { padding: 1.8rem 0 1.25rem; }
   .desktop-setup-wizard { padding: 1.25rem; }
   .desktop-agent-options, .desktop-setup-grid { grid-template-columns: 1fr; }
   .desktop-setup-wide { grid-column: auto; }
+}
+
+@media (max-width: 767.98px) {
+  .desktop-app .desktop-main-content {
+    padding-top: var(--desktop-titlebar-height);
+  }
 }

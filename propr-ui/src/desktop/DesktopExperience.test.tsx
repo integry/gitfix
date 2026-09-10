@@ -38,6 +38,7 @@ describe('DesktopExperience', () => {
     incapable.discovery.supported = false;
     render(<DesktopExperience adapters={incapable}><div>Incapable app</div></DesktopExperience>);
     expect(await screen.findByRole('heading', { name: 'Let’s set up this computer' })).toBeInTheDocument();
+    expect(document.querySelector('.desktop-entry-drag-region')).toHaveAttribute('aria-hidden', 'true');
     expect(screen.queryByRole('button', { name: /Search for instances on this network/i })).not.toBeInTheDocument();
     expect(incapable.discovery.discover).not.toHaveBeenCalled();
   });

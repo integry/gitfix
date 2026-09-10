@@ -4,6 +4,7 @@ import { Plus, X } from 'lucide-react';
 import { DesktopContext } from './DesktopContext';
 import { ProfileEditor, ProfileList } from './DesktopExperiencePanels';
 import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
+import { DesktopWindowControls, type DesktopWindowControlActions } from './DesktopWindowControls';
 
 interface DesktopConnectedExperienceProps {
   adapters: DesktopAdapters;
@@ -28,6 +29,7 @@ interface DesktopConnectedExperienceProps {
   saveProfile(profile: DesktopProfile, shouldConnect?: boolean): Promise<void>;
   retry(): void;
   setManagerOpen(open: boolean): void;
+  windowControls?: Partial<DesktopWindowControlActions>;
 }
 
 export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProps> = ({
@@ -35,6 +37,7 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
   operationError, deepLinkError, editorNotice, hasPendingConnectCandidate, onConnectCandidatePresented,
   children, openManager, closeManager, closeEditor, openEditor, connect,
   removeProfile, saveProfile, retry, setManagerOpen,
+  windowControls,
 }) => {
   const [networkOffline, setNetworkOffline] = useState(!navigator.onLine);
 
@@ -78,6 +81,7 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
 
   return (
     <DesktopContext.Provider value={contextValue}>
+      <DesktopWindowControls actions={windowControls} />
       {deepLinkError && <div className="desktop-inline-error" role="alert">{deepLinkError}</div>}
       <div className={`desktop-app desktop-platform-${adapters.platform}`} inert={managerOpen} aria-hidden={managerOpen || undefined}>{children}</div>
       {managerOpen && (

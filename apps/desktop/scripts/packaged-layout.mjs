@@ -93,8 +93,45 @@ export const assertPackagedLayout = (layout, platform = process.platform) => {
   if (layout.viewport.width > layout.windowBounds.width || layout.viewport.height > layout.windowBounds.height) {
     fail(`Packaged renderer viewport extends outside the window: ${JSON.stringify(layout.viewport)}`);
   }
-  if (platform === 'linux' && (layout.viewport.width < 1200 || layout.viewport.height < 740)) {
-    fail(`Packaged Linux renderer viewport is unexpectedly small: ${JSON.stringify(layout.viewport)}`);
+  if (platform === 'linux') {
+    const capabilities = layout.nativeChrome;
+    if (!capabilities
+      || capabilities.closable !== true
+      || capabilities.maximizable !== true
+      || capabilities.minimizable !== true
+      || capabilities.resizable !== true) {
+      fail(`Packaged Linux native window capabilities were reduced: ${JSON.stringify(capabilities)}`);
+    }
+    assertPositiveDimensions('content', layout.contentBounds);
+    if (layout.viewport.width !== layout.windowBounds.width
+      || layout.viewport.height !== layout.windowBounds.height
+      || layout.contentBounds.width !== layout.windowBounds.width
+      || layout.contentBounds.height !== layout.windowBounds.height) {
+      fail(`Packaged Linux client decoration changed the requested window boundary: ${JSON.stringify({
+        contentBounds: layout.contentBounds,
+        viewport: layout.viewport,
+        windowBounds: layout.windowBounds,
+      })}`);
+    }
+    assertElementBounds('desktop drag region', layout.chrome?.dragRegion);
+    assertElementBounds('native window control region', layout.chrome?.nativeControlRegion);
+    if (layout.chrome.overlayVisible !== false
+      || layout.chrome.dragRegionStyle !== 'drag'
+      || layout.chrome.legacyTitleRowCount !== 0
+      || layout.chrome.nativeControlRegionStyle !== 'no-drag'
+      || JSON.stringify(layout.chrome.nativeControlLabels) !== JSON.stringify([
+        'Minimize window',
+        'Maximize or restore window',
+        'Close window',
+      ])
+      || layout.chrome.dragRegion.top !== 0
+      || layout.chrome.dragRegion.height !== 56
+      || layout.chrome.nativeControlRegion.top !== 0
+      || layout.chrome.nativeControlRegion.height !== 56
+      || layout.chrome.dragRegion.right !== layout.chrome.nativeControlRegion.left
+      || layout.chrome.nativeControlRegion.right !== layout.viewport.width) {
+      fail(`Packaged Linux window chrome is not one safe native-control band: ${JSON.stringify(layout.chrome)}`);
+    }
   }
 
   const elementNames = ['entry', 'card', 'logo', 'heading', 'connectButton', 'connectDescription'];

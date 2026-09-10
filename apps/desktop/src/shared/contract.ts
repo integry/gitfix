@@ -4,6 +4,9 @@ export const IPC_CHANNELS = Object.freeze({
   appMetadata: 'desktop:app-metadata',
   appQuit: 'desktop:app-quit',
   activeWorkRefresh: 'desktop:active-work-refresh',
+  windowMinimize: 'desktop:window-minimize',
+  windowToggleMaximize: 'desktop:window-toggle-maximize',
+  windowClose: 'desktop:window-close',
   authLogout: 'desktop:auth-logout',
   openExternal: 'desktop:open-external',
   storageSecurity: 'desktop:storage-security',
@@ -361,6 +364,10 @@ export interface DesktopBridge {
     refreshActiveWork(): Promise<void>;
     /** Complete a renderer-confirmed quit through the main-owned shutdown lifecycle. */
     quit(): Promise<void>;
+    /** Fixed native window operations; no geometry or arbitrary command crosses IPC. */
+    minimize(): Promise<void>;
+    toggleMaximize(): Promise<void>;
+    closeWindow(): Promise<void>;
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;

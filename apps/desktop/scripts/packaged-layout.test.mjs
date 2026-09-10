@@ -15,13 +15,30 @@ const layout = ({
   windowWidth = 1280,
   windowHeight = 820,
   viewportWidth = 1280,
-  viewportHeight = 780,
+  viewportHeight = 820,
   workAreaWidth = 1280,
   workAreaHeight = 900,
 } = {}) => ({
   windowBounds: { x: 0, y: 0, width: windowWidth, height: windowHeight },
+  contentBounds: { x: 0, y: 0, width: viewportWidth, height: viewportHeight },
   workArea: { x: 0, y: 0, width: workAreaWidth, height: workAreaHeight },
   viewport: { width: viewportWidth, height: viewportHeight },
+  chrome: {
+    dragRegion: bounds(0, 0, viewportWidth - 138, 56),
+    dragRegionStyle: 'drag',
+    legacyTitleRowCount: 0,
+    nativeControlLabels: ['Minimize window', 'Maximize or restore window', 'Close window'],
+    nativeControlRegion: bounds(viewportWidth - 138, 0, 138, 56),
+    nativeControlRegionStyle: 'no-drag',
+    overlayRect: bounds(0, 0, 0, 0),
+    overlayVisible: false,
+  },
+  nativeChrome: {
+    closable: true,
+    maximizable: true,
+    minimizable: true,
+    resizable: true,
+  },
   entry: bounds(0, 0, viewportWidth, viewportHeight),
   card: bounds((viewportWidth - 580) / 2, 40, 580, 640),
   logo: bounds((viewportWidth - 32) / 2, 72, 32, 32),
@@ -66,6 +83,32 @@ describe('packaged desktop layout assertions', () => {
     assert.throws(
       () => assertPackagedLayout(layout({ windowWidth: 1279 }), 'linux'),
       /Linux window was not 1280x820/,
+    );
+  });
+
+  it('rejects Linux client decoration and duplicated or unsafe title-bar rows', () => {
+    assert.throws(
+      () => assertPackagedLayout(layout({ viewportWidth: 1272, viewportHeight: 816 }), 'linux'),
+      /client decoration changed the requested window boundary/,
+    );
+    const duplicated = layout();
+    duplicated.chrome.legacyTitleRowCount = 1;
+    assert.throws(
+      () => assertPackagedLayout(duplicated, 'linux'),
+      /not one safe native-control band/,
+    );
+    const overlapping = layout();
+    overlapping.chrome.dragRegion.width += 1;
+    overlapping.chrome.dragRegion.right += 1;
+    assert.throws(
+      () => assertPackagedLayout(overlapping, 'linux'),
+      /not one safe native-control band/,
+    );
+    const unresizable = layout();
+    unresizable.nativeChrome.resizable = false;
+    assert.throws(
+      () => assertPackagedLayout(unresizable, 'linux'),
+      /native window capabilities were reduced/,
     );
   });
 

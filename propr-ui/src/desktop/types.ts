@@ -146,6 +146,9 @@ export interface DesktopAdapters {
       delivery: import('../../../apps/desktop/src/shared/contract').DesktopNativeCommandDelivery,
     ) => void): () => void;
     quit?(): Promise<void>;
+    minimize?(): Promise<void>;
+    toggleMaximize?(): Promise<void>;
+    closeWindow?(): Promise<void>;
   };
   profiles: DesktopProfileAdapter;
   discovery: DesktopDiscoveryAdapter;

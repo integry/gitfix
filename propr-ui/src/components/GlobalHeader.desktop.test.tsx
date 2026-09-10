@@ -90,6 +90,7 @@ describe('GlobalHeader desktop toolbar', () => {
     );
 
     const toolbar = container.querySelector<HTMLElement>('header.desktop-content-toolbar');
+    expect(toolbar).toHaveAccessibleName('Application toolbar');
     expect(toolbar).toHaveClass('bg-slate-50', 'grid-cols-[minmax(0,1fr)_16rem_minmax(0,1fr)]');
     expect(toolbar?.children).toHaveLength(3);
 

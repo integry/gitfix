@@ -5,6 +5,7 @@ import { setApiBaseUrl } from '../api/apiClient';
 import * as runtimeConfig from '../config/runtimeConfig';
 import type { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopConnectedExperience } from './DesktopConnectedExperience';
+import { DesktopWindowControls } from './DesktopWindowControls';
 import { LocalSetupWizard } from './LocalSetupWizard';
 import { createDesktopAuthenticationActions } from './desktopAuthenticationActions';
 import { useAttemptFence, useDesktopAccessInvalidation, useDesktopModal, useSerializedMutationQueue } from './desktopExperienceHooks';
@@ -412,7 +413,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     return <InstanceChooser profiles={profiles} busy={busy} error={operationError} localSetupSupported={adapters.platform === 'linux' && adapters.localSetup.supported} networkDiscoverySupported={adapters.discovery.supported} onLocalSetup={() => void setupLocal()} onConnectNew={() => openEditor('new')} onDiscover={() => void discover()} onConnect={profile => void connect(profile)} onEdit={openEditor} onRemove={profile => void removeProfile(profile)} />;
   };
 
-  if (state.phase !== 'connected') return <div className={`desktop-entry desktop-platform-${adapters.platform}`}>{deepLinkError && <div className="desktop-inline-error" role="alert">{deepLinkError}</div>}{content()}</div>;
+  if (state.phase !== 'connected') return <div className={`desktop-entry desktop-platform-${adapters.platform}`}><div className="desktop-entry-drag-region" aria-hidden="true" />{adapters.platform === 'linux' && <DesktopWindowControls actions={adapters.app} />}{deepLinkError && <div className="desktop-inline-error" role="alert">{deepLinkError}</div>}{content()}</div>;
 
   return (
     <DesktopConnectedExperience
@@ -424,6 +425,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       closeManager={closeManager} closeEditor={closeEditor} openEditor={openEditor}
       connect={connect} removeProfile={removeProfile} saveProfile={saveProfile} retry={retry}
       setManagerOpen={setManagerOpen}
+      windowControls={adapters.platform === 'linux' ? adapters.app : undefined}
     >{children}</DesktopConnectedExperience>
   );
 };

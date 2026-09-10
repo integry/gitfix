@@ -4,6 +4,7 @@ import type { NativeImage } from 'electron';
 import {
   clampBrowserWindowSizing,
   createBrowserWindowOptions,
+  DESKTOP_TITLE_BAR_HEIGHT,
   MINIMUM_BROWSER_WINDOW_SIZE,
   PREFERRED_BROWSER_WINDOW_SIZE,
   selectInitialWindowWorkArea,
@@ -24,6 +25,8 @@ describe('desktop BrowserWindow security', () => {
   it('isolates and sandboxes the renderer without Node or webviews', () => {
     const options = createBrowserWindowOptions('/app/preload.cjs', true, normalWorkArea, 'linux', desktopIcon);
     assert.equal(options.icon, desktopIcon);
+    assert.equal(options.backgroundColor, '#00000000');
+    assert.equal(options.transparent, true);
     assert.deepEqual(options.webPreferences, {
       preload: '/app/preload.cjs',
       contextIsolation: true,
@@ -40,24 +43,35 @@ describe('desktop BrowserWindow security', () => {
   it('integrates native window controls into the application shell', () => {
     const macOptions = createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'darwin');
     assert.equal(macOptions.titleBarStyle, 'hiddenInset');
-    assert.equal(macOptions.titleBarOverlay, undefined);
+    assert.deepEqual(macOptions.titleBarOverlay, { height: DESKTOP_TITLE_BAR_HEIGHT });
+    assert.equal(macOptions.frame, undefined);
+    assert.equal(macOptions.transparent, undefined);
 
-    for (const platform of ['win32', 'linux'] as const) {
-      const options = createBrowserWindowOptions(
-        '/preload.cjs',
-        false,
-        normalWorkArea,
-        platform,
-        platform === 'linux' ? desktopIcon : undefined,
-      );
-      assert.equal(options.titleBarStyle, 'hidden');
-      assert.deepEqual(options.titleBarOverlay, {
-        color: '#f8fafc',
-        symbolColor: '#475569',
-        height: 36,
-      });
-      assert.equal(options.autoHideMenuBar, true);
-    }
+    const linuxOptions = createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'linux', desktopIcon);
+    assert.equal(linuxOptions.frame, false);
+    assert.equal(linuxOptions.titleBarStyle, 'hidden');
+    assert.deepEqual(linuxOptions.titleBarOverlay, {
+      color: '#f8fafc',
+      symbolColor: '#475569',
+      height: DESKTOP_TITLE_BAR_HEIGHT,
+    });
+    assert.equal(linuxOptions.autoHideMenuBar, true);
+    assert.equal(linuxOptions.resizable, undefined);
+    assert.equal(linuxOptions.minimizable, undefined);
+    assert.equal(linuxOptions.maximizable, undefined);
+    assert.equal(linuxOptions.closable, undefined);
+    assert.equal(linuxOptions.thickFrame, undefined);
+
+    const windowsOptions = createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'win32');
+    assert.equal(windowsOptions.frame, undefined);
+    assert.equal(windowsOptions.transparent, undefined);
+    assert.equal(windowsOptions.titleBarStyle, 'hidden');
+    assert.deepEqual(windowsOptions.titleBarOverlay, {
+      color: '#f8fafc',
+      symbolColor: '#475569',
+      height: 36,
+    });
+    assert.equal(windowsOptions.autoHideMenuBar, true);
   });
 
   it('retains the preferred and minimum responsive window sizes', () => {

@@ -14,15 +14,31 @@ const bounds = (left: number, top: number, width: number, height: number) => ({
 
 const completePackagedLayout = () => ({
   screen: { height: 1080, width: 1920 },
-  viewport: { height: 780, width: 1280 },
-  entry: bounds(0, 0, 1280, 780),
+  viewport: { height: 820, width: 1280 },
+  chrome: {
+    dragRegion: bounds(0, 0, 1142, 56),
+    dragRegionStyle: 'drag',
+    legacyTitleRowCount: 0,
+    nativeControlLabels: ['Minimize window', 'Maximize or restore window', 'Close window'],
+    nativeControlRegion: bounds(1142, 0, 138, 56),
+    nativeControlRegionStyle: 'no-drag',
+    overlayRect: bounds(0, 0, 0, 0),
+    overlayVisible: false,
+  },
+  nativeChrome: {
+    closable: true,
+    maximizable: true,
+    minimizable: true,
+    resizable: true,
+  },
+  entry: bounds(0, 0, 1280, 820),
   card: bounds(350, 40, 580, 640),
   logo: bounds(624, 72, 32, 32),
   heading: bounds(430, 132, 420, 58),
   connectButton: bounds(380, 230, 520, 76),
   connectDescription: bounds(490, 270, 300, 18),
   windowBounds: { x: 0, y: 0, width: 1280, height: 820 },
-  contentBounds: { x: 0, y: 0, width: 1280, height: 780 },
+  contentBounds: { x: 0, y: 0, width: 1280, height: 820 },
   minimumSize: { width: 880, height: 620 },
   workArea: { x: 0, y: 0, width: 1920, height: 1040 },
 });
@@ -64,6 +80,25 @@ describe('desktop logger field schemas', () => {
     assert.deepEqual(sanitizeDesktopLogFields('desktop.native.reduced_window.ready', { layout }), { layout });
   });
 
+  it('accepts native overlay controls without inventing a renderer control region', () => {
+    const base = completePackagedLayout();
+    const layout = {
+      ...base,
+      chrome: {
+        ...base.chrome,
+        nativeControlLabels: [],
+        nativeControlRegion: null,
+        nativeControlRegionStyle: null,
+        overlayRect: bounds(1050, 0, 230, 56),
+        overlayVisible: true,
+      },
+    };
+    assert.deepEqual(
+      sanitizeDesktopLogFields('desktop.renderer.layout.ready', { layout }),
+      { layout },
+    );
+  });
+
   it('requires own layout and geometry keys despite inherited keys and a shadowed hasOwnProperty', () => {
     const valid = completePackagedLayout();
     const { workArea, ...layoutWithoutOwnWorkArea } = valid;
@@ -97,6 +132,7 @@ describe('desktop logger field schemas', () => {
       { ...valid, windowBounds: { ...valid.windowBounds, path: '/private/path-SENTINEL' } },
       { ...valid, windowBounds: new Error('/private/path-SENTINEL') },
       { ...valid, windowBounds: { width: 1280, height: 820 } },
+      { ...valid, chrome: { ...valid.chrome, nativeControlLabels: [{ token: 'secret-SENTINEL' }] } },
       { ...valid, missing: ['connectDescription'] },
       Object.fromEntries(Array.from({ length: 64 }, (_, index) => [
         `geometry${index}`,

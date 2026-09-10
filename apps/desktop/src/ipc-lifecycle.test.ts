@@ -28,6 +28,57 @@ const connectDiscovery = {
 };
 
 describe('desktop IPC shutdown gate', () => {
+  it('authorizes only fixed no-argument controls for the IPC sender owning the window', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const acceptedSender = {};
+    const calls = { close: 0, maximize: 0, minimize: 0, unmaximize: 0 };
+    let maximized = false;
+    const target = {
+      close: () => { calls.close += 1; },
+      isDestroyed: () => false,
+      isMaximized: () => maximized,
+      maximize: () => { calls.maximize += 1; maximized = true; },
+      minimize: () => { calls.minimize += 1; },
+      unmaximize: () => { calls.unmaximize += 1; maximized = false; },
+    };
+    registerIpcHandlers({
+      app: { getName: () => 'ProPR', getVersion: () => '0.8.15', isPackaged: true } as unknown as App,
+      ipcMain: {
+        handle: (channel: string, handler: (...args: any[]) => unknown) => { handlers.set(channel, handler); },
+        removeHandler: (channel: string) => { handlers.delete(channel); },
+      } as unknown as IpcMain,
+      profiles: {} as ProfileStore,
+      credentials: {} as DesktopCredentialService,
+      connectDiscovery,
+      lifecycle: {} as LocalLifecycleController,
+      logger: { log: () => undefined } as unknown as DesktopLogger,
+      desktopSession: {} as Session,
+      devServerUrl: undefined,
+      packagedRendererUrl: 'propr-renderer://app/index.html',
+      openExternal: async () => undefined,
+      windowForSender: event => event.sender === acceptedSender ? target : null,
+    });
+    const event = {
+      sender: acceptedSender,
+      senderFrame: { url: 'propr-renderer://app/index.html' },
+    } as unknown as IpcMainInvokeEvent;
+
+    await Promise.resolve(handlers.get(IPC_CHANNELS.windowMinimize)!(event));
+    await Promise.resolve(handlers.get(IPC_CHANNELS.windowToggleMaximize)!(event));
+    await Promise.resolve(handlers.get(IPC_CHANNELS.windowToggleMaximize)!(event));
+    await Promise.resolve(handlers.get(IPC_CHANNELS.windowClose)!(event));
+    assert.deepEqual(calls, { close: 1, maximize: 1, minimize: 1, unmaximize: 1 });
+    await assert.rejects(
+      Promise.resolve(handlers.get(IPC_CHANNELS.windowMinimize)!(event, 'unexpected')),
+      /Desktop operation failed \[IPC_OPERATION_FAILED\]/,
+    );
+    await assert.rejects(
+      Promise.resolve(handlers.get(IPC_CHANNELS.windowClose)!({ ...event, sender: {} })),
+      /Desktop operation failed \[IPC_OPERATION_FAILED\]/,
+    );
+    assert.deepEqual(calls, { close: 1, maximize: 1, minimize: 1, unmaximize: 1 });
+  });
+
   it('clears old and new origin storage through the real save IPC before a same-ID URL commit', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const cleared: Array<Parameters<Session['clearStorageData']>[0]> = [];

@@ -677,6 +677,14 @@ const inspectPackagedLayout = async (window: BrowserWindow): Promise<Record<stri
     const missing = Object.entries(elements).filter(([, element]) => !element).map(([name]) => name);
     if (missing.length > 0) return { missing };
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const rectangle = rect => ({
+      bottom: rect.bottom,
+      height: rect.height,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      width: rect.width,
+    });
     const bounds = element => {
       const rect = element.getBoundingClientRect();
       return {
@@ -692,6 +700,24 @@ const inspectPackagedLayout = async (window: BrowserWindow): Promise<Record<stri
       screen: { height: window.screen.height, width: window.screen.width },
       workArea: { height: window.screen.availHeight, width: window.screen.availWidth },
       viewport: { height: window.innerHeight, width: window.innerWidth },
+      chrome: (() => {
+        const dragRegion = document.querySelector('.desktop-entry-drag-region');
+        const windowControls = document.querySelector('.desktop-window-controls');
+        const controlButtons = windowControls ? [...windowControls.querySelectorAll('button')] : [];
+        const overlay = navigator.windowControlsOverlay;
+        return {
+          dragRegion: dragRegion ? bounds(dragRegion) : null,
+          dragRegionStyle: dragRegion ? getComputedStyle(dragRegion).getPropertyValue('-webkit-app-region') : null,
+          legacyTitleRowCount: document.querySelectorAll('.desktop-native-titlebar').length,
+          nativeControlLabels: controlButtons.map(button => button.getAttribute('aria-label')),
+          nativeControlRegion: windowControls ? bounds(windowControls) : null,
+          nativeControlRegionStyle: windowControls
+            ? getComputedStyle(windowControls).getPropertyValue('-webkit-app-region')
+            : null,
+          overlayRect: overlay?.getTitlebarAreaRect ? rectangle(overlay.getTitlebarAreaRect()) : null,
+          overlayVisible: overlay?.visible ?? false,
+        };
+      })(),
       ...Object.fromEntries(Object.entries(elements).map(([name, element]) => [name, bounds(element)])),
     };
   })()`);
@@ -702,6 +728,12 @@ const inspectPackagedLayout = async (window: BrowserWindow): Promise<Record<stri
     windowBounds,
     contentBounds: window.getContentBounds(),
     minimumSize: { width: minimumWidth, height: minimumHeight },
+    nativeChrome: {
+      closable: window.isClosable(),
+      maximizable: window.isMaximizable(),
+      minimizable: window.isMinimizable(),
+      resizable: window.isResizable(),
+    },
     workArea: screen.getDisplayMatching(windowBounds).workArea,
   };
 };
@@ -1799,6 +1831,7 @@ if (!hasSingleInstanceLock) {
       packagedRendererUrl,
       openExternal: openAllowedExternalUrl,
       platform: process.platform,
+      windowForSender: event => mainWindow?.webContents === event.sender ? mainWindow : null,
       rendererConsumerReady: event => {
         const ready = deepLinkDelivery.rendererConsumerReady(event.sender, event.senderFrame);
         if (ready) recordNativeEvent('desktop.deeplink.consumer_ready');

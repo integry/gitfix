@@ -45,6 +45,7 @@ interface RegisterIpcOptions {
   packagedRendererUrl: string;
   openExternal(url: string): Promise<void>;
   platform?: NodeJS.Platform;
+  windowForSender?(event: IpcMainInvokeEvent): DesktopWindowControlTarget | null;
   rendererConsumerReady?(event: IpcMainInvokeEvent): boolean;
   acknowledgeDeepLink?(event: IpcMainInvokeEvent, acknowledgement: DesktopDeepLinkAcknowledgement): boolean;
   onRendererActiveProfileChanged?(origin: string | null): void;
@@ -60,6 +61,15 @@ interface RegisterIpcOptions {
     operation: DesktopAcceptanceOperation,
     status: DesktopAcceptanceOperationStatus,
   ): void;
+}
+
+interface DesktopWindowControlTarget {
+  close(): void;
+  isDestroyed(): boolean;
+  isMaximized(): boolean;
+  maximize(): void;
+  minimize(): void;
+  unmaximize(): void;
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: any[]) => unknown;
@@ -201,6 +211,25 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     if (args.length) throw new Error('Invalid app quit request');
     options.app.quit();
   });
+  const windowControlTarget = (event: IpcMainInvokeEvent, args: unknown[]): DesktopWindowControlTarget => {
+    if (args.length) throw new Error('Invalid native window control request');
+    const target = options.windowForSender?.(event);
+    if (!target || target.isDestroyed()) throw new Error('Native window control target is unavailable');
+    return target;
+  };
+  if (options.windowForSender) {
+    handle(IPC_CHANNELS.windowMinimize, (event, ...args) => {
+      windowControlTarget(event, args).minimize();
+    });
+    handle(IPC_CHANNELS.windowToggleMaximize, (event, ...args) => {
+      const target = windowControlTarget(event, args);
+      if (target.isMaximized()) target.unmaximize();
+      else target.maximize();
+    });
+    handle(IPC_CHANNELS.windowClose, (event, ...args) => {
+      windowControlTarget(event, args).close();
+    });
+  }
   handle(IPC_CHANNELS.deepLinkAcknowledgement, (event, acknowledgement, ...args) => {
     if (args.length || !isValidDesktopDeepLinkAcknowledgement(acknowledgement)) {
       throw new Error('Invalid desktop deep-link acknowledgement');

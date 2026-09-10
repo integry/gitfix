@@ -99,6 +99,9 @@ describe('desktop preload bridge', () => {
     const bridge = createDesktopBridge(ipc);
     await bridge.app.quit();
     await bridge.app.refreshActiveWork();
+    await bridge.app.minimize();
+    await bridge.app.toggleMaximize();
+    await bridge.app.closeWindow();
     await bridge.auth.logout('http://localhost:4000');
     await bridge.profiles.save({ label: 'Local', apiBaseUrl: 'http://localhost:4000' });
     const admission = await bridge.authentication.admit('profile-1');
@@ -116,6 +119,9 @@ describe('desktop preload bridge', () => {
     assert.deepEqual(ipc.invocations, [
       { channel: IPC_CHANNELS.appQuit, args: [] },
       { channel: IPC_CHANNELS.activeWorkRefresh, args: [] },
+      { channel: IPC_CHANNELS.windowMinimize, args: [] },
+      { channel: IPC_CHANNELS.windowToggleMaximize, args: [] },
+      { channel: IPC_CHANNELS.windowClose, args: [] },
       { channel: IPC_CHANNELS.authLogout, args: ['http://localhost:4000'] },
       {
         channel: IPC_CHANNELS.profilesSave,

@@ -85,7 +85,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggl
     <>
     {/* Global navigation owns app-wide dropdowns, so its stacking context must stay
         above route-level sticky headers such as task details summaries. */}
-    <header className="desktop-content-toolbar sticky top-0 z-40 hidden h-14 grid-cols-[minmax(0,1fr)_16rem_minmax(0,1fr)] items-stretch border-b border-slate-200 bg-slate-50 md:grid xl:grid-cols-[minmax(0,1fr)_20rem_minmax(0,1fr)]">
+    <header aria-label="Application toolbar" className="desktop-content-toolbar sticky top-0 z-40 hidden h-14 grid-cols-[minmax(0,1fr)_16rem_minmax(0,1fr)] items-stretch border-b border-slate-200 bg-slate-50 md:grid xl:grid-cols-[minmax(0,1fr)_20rem_minmax(0,1fr)]">
       <div className="flex min-w-0 items-stretch justify-self-start">
         <div className="flex items-center px-2 lg:hidden">
           <button

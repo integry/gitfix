@@ -27,7 +27,7 @@ vi.mock('../hooks/useSystemReadiness', () => ({
   useSystemReadiness: () => ({ hasAgents: true, hasRepos: true, hasTasks: true }),
 }));
 vi.mock('./ui/useToast', () => ({ useToast: () => ({ addToast: vi.fn() }) }));
-vi.mock('./GlobalHeader', () => ({ default: () => <header data-testid="global-header">GitHub user</header> }));
+vi.mock('./GlobalHeader', () => ({ default: () => <header className="desktop-content-toolbar" aria-label="Application toolbar" data-testid="global-header">GitHub user</header> }));
 vi.mock('./AgentTankSidebar', () => ({ default: () => null }));
 vi.mock('../contexts/useSocket', () => ({ useSocket: () => mocks.socket }));
 vi.mock('../contexts/DemoModeContext', () => ({ useDemoMode: () => ({ isDemoMode: false }) }));
@@ -72,12 +72,16 @@ describe('Layout desktop instance selector', () => {
     mocks.socket.isConnected = true;
   });
 
-  it('places the labelled selector below dedicated native desktop chrome', async () => {
+  it('integrates the desktop drag surface into the application toolbar without a duplicate title row', async () => {
     renderLayout(desktopValue());
 
-    const titlebar = document.querySelector('.desktop-native-titlebar');
-    expect(titlebar).toHaveTextContent('ProPR Desktop');
-    expect(titlebar?.nextElementSibling).toHaveClass('desktop-shell-content');
+    expect(document.querySelector('.desktop-native-titlebar')).toBeNull();
+    const shell = document.querySelector('.desktop-shell');
+    expect(shell?.firstElementChild).toHaveClass('desktop-shell-content');
+    expect(document.querySelector('.desktop-connected-drag-region')).toHaveAttribute('aria-hidden', 'true');
+    const toolbar = screen.getByRole('banner', { name: 'Application toolbar' });
+    expect(toolbar).toHaveClass('desktop-content-toolbar');
+    expect(toolbar.closest('.desktop-main-content')).not.toBeNull();
     const selector = screen.getByRole('button', { name: 'Connected: This computer' });
     expect(selector.closest('aside')).not.toBeNull();
     expect(screen.getByText('Instance')).toBeInTheDocument();
