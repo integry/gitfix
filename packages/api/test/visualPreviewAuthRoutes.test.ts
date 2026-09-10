@@ -215,3 +215,21 @@ test('reports a token rejected by GitHub without storing it', async () => {
   assert.equal((recorder.getBody() as { code: string }).code, 'VISUAL_PREVIEW_TOKEN_INVALID');
   assert.equal(replaced, false);
 });
+
+test('managed storage status exposes effective limits and handles offline without breaking settings', async () => {
+  const status = {
+    version: 1 as const, enabled: true, state: 'enabled' as const,
+    effective: {
+      version: 1 as const, installationId: 42, enabled: true, quotaBytes: 40 * 1024 ** 3,
+      maxObjectBytes: 250 * 1024 ** 2, retentionDays: 30, usedBytes: 0, reservedBytes: 0,
+      allowedContentTypes: ['image/png'], deleteSupported: false,
+    },
+  };
+  const routes = createVisualPreviewAuthRoutes({ managedStorage: { getStatus: async () => status } });
+  const recorder = responseRecorder();
+  await routes.getManagedStorageStatus({} as Request, recorder.response);
+  assert.deepEqual(recorder.getBody(), status);
+  const offline = createVisualPreviewAuthRoutes({ managedStorage: { getStatus: async () => { throw new Error('relay-secret https://signed.example/?token=secret'); } } });
+  await offline.getManagedStorageStatus({} as Request, recorder.response);
+  assert.deepEqual(recorder.getBody(), { version: 1, state: 'unavailable', enabled: false, effective: null });
+});

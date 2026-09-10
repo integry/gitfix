@@ -43,6 +43,8 @@ export interface VisualPreviewToolSuggestion {
 export interface VisualPreviewEvidence {
   githubAttachmentCapacity?: GitHubAttachmentCapacity;
   originalCapacity?: VisualPreviewOriginalCapacity;
+  /** Populated when evidence is staged for a task; used to authorize managed originals. */
+  taskId?: string;
   assets: VisualPreviewAsset[];
   toolSuggestions: VisualPreviewToolSuggestion[];
 }
@@ -283,7 +285,7 @@ async function copyEvidenceToTemporaryDirectory(
         githubInline: githubInlineEligibility(VISUAL_PREVIEW_CONTENT_TYPES[path.extname(destination).toLowerCase()], sizeBytes, evidence.githubAttachmentCapacity),
       });
     }
-    return { evidence: { ...evidence, assets }, temporaryDirectory };
+    return { evidence: { ...evidence, taskId, assets }, temporaryDirectory };
   } catch (error) {
     await rm(temporaryDirectory, { recursive: true, force: true });
     throw error;

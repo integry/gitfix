@@ -3,6 +3,8 @@ import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import type { PreviewArtifactV1 } from '@propr/shared';
+import { storeManagedVisualPreviewOriginals } from '../src/github/managedVisualPreviewStorage.js';
 
 process.env.PROPR_DEMO_MODE = 'true';
 
@@ -282,7 +284,7 @@ test('GitHub CLI PR upload enforces the capacity policy before starting gh', asy
   }
 });
 
-test('prepared originals remain available to a managed publisher while GitHub-only publishers fail before network access', async t => {
+test('publishers store prepared originals before rejecting GitHub-ineligible attachments', async t => {
   const { prepareVisualPreviewEvidence, cleanupPreparedVisualPreviewEvidence } = await import('@propr/core');
   const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
   const { simpleGit } = await import('simple-git');
@@ -313,13 +315,17 @@ test('prepared originals remain available to a managed publisher while GitHub-on
   await assert.rejects(access(originalPath));
   assert.equal((await git.status()).files.length, 0);
 
-  // A managed publisher receives the complete original after worktree cleanup.
-  // Its storage client and authenticated viewer URL creation belong to #2281.
-  const managedPublisher = async (evidence: typeof prepared.evidence) => {
-    assert.equal(evidence.originalCapacity?.source, 'managed-storage');
-    return readFile(evidence.assets[0].absolutePath);
-  };
-  assert.deepEqual(await managedPublisher(prepared.evidence), originalBytes);
+  // Both publishers pass the complete staged original and task context to storage
+  // before rejecting it for GitHub inline publication.
+  const storeOriginals = t.mock.fn(async (
+    originals: typeof prepared.evidence,
+    context: { taskId: string; repository: string; pullRequestNumber?: number },
+  ) => {
+    assert.equal(originals.originalCapacity?.source, 'managed-storage');
+    assert.deepEqual(context, { taskId: 'managed-original', repository: 'integry/propr', pullRequestNumber: 42 });
+    assert.deepEqual(await readFile(originals.assets[0].absolutePath), originalBytes);
+    return [];
+  });
 
   const network = t.mock.method(globalThis, 'fetch', async () => { assert.fail('must not fetch'); });
   const request = t.mock.fn(async <T>(): Promise<T> => { assert.fail('must not call GitHub'); });
@@ -330,16 +336,18 @@ test('prepared originals remain available to a managed publisher while GitHub-on
       owner: 'integry', repo: 'propr', pullRequestNumber: 42, startingCommentId: 100,
       body: 'Complete', worktreePath: worktree,
       evidence: { ...prepared.evidence, githubAttachmentCapacity: resolveGitHubAttachmentCapacity(plan) },
-      octokit: { request }, uploadAsset, runCommand,
+      octokit: { request }, uploadAsset, runCommand, storeOriginals,
     };
     await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
     await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
   }
   assert.equal(network.mock.callCount(), 0);
+  assert.equal(storeOriginals.mock.callCount(), 6);
+  await Promise.all(storeOriginals.mock.calls.map(call => call.result));
   assert.equal(request.mock.callCount(), 0);
   assert.equal(uploadAsset.mock.callCount(), 0);
   assert.equal(runCommand.mock.callCount(), 0);
-  assert.deepEqual(await managedPublisher(prepared.evidence), originalBytes, 'GitHub rejection does not consume the original');
+  assert.deepEqual(await readFile(asset.absolutePath), originalBytes, 'GitHub rejection does not consume the original');
   await cleanupPreparedVisualPreviewEvidence(prepared);
   await assert.rejects(access(asset.absolutePath));
 });
@@ -367,4 +375,76 @@ test('GitHub publishers revalidate files despite stale eligible metadata before 
   };
   await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
   await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
+});
+
+test('managed storage failure still publishes GitHub attachments without exposing its error', async () => {
+  let attempted = false;
+  let published = false;
+  await publishPullRequestVisualPreviews({
+    owner: 'integry', repo: 'propr', pullRequestNumber: 42, taskId: 'task-2285', body: 'Summary', evidence,
+    authToken: 'gho_test', worktreePath: '/worktree',
+    storeOriginals: async (originals, repository) => {
+      assert.equal(originals, evidence);
+      assert.deepEqual(repository, { taskId: 'task-2285', repository: 'integry/propr', pullRequestNumber: 42 });
+      attempted = true;
+      throw new Error('https://signed.example/?token=secret');
+    },
+    runCommand: async ({ args }) => {
+      assert.equal(attempted, true);
+      assert.ok(args.includes('--attach'));
+      assert.ok(!args.join(' ').includes('signed.example'));
+      published = true;
+      return { stdout: '' };
+    },
+    octokit: { request: async <T>() => ({ data: { body: '![Preview](https://github.com/user-attachments/assets/1)' } }) as T },
+  });
+  assert.equal(published, true);
+});
+
+
+test('managed originals return ordered per-asset finalized metadata and bounded independent failures', async () => {
+  const assets = ['first.png', 'broken.png', 'quota.mp4', 'unsupported.txt', 'last.webp'].map((name, index) => ({
+    relativePath: `.propr/previews/${name}`, absolutePath: `/staged/${name}`, type: 'image' as const, title: `Asset ${index}`,
+  }));
+  const context = { taskId: 'task-2285', repository: 'integry/propr', pullRequestNumber: 2285 };
+  const artifactFor = (displayFilename: string): PreviewArtifactV1 => ({
+    version: 1, artifactId: displayFilename, state: 'ready', ...context, displayFilename,
+    sizeBytes: 123, contentType: displayFilename.endsWith('webp') ? 'image/webp' : 'image/png', sha256: 'a'.repeat(64),
+    viewerUrl: `https://connect.example.test/previews/${displayFilename}`, retentionExpiresAt: '2099-01-01T00:00:00Z',
+  });
+  const requests: string[] = [];
+  const result = await storeManagedVisualPreviewOriginals({ assets, toolSuggestions: [] }, context, {
+    createClient: () => ({ uploadOriginal: async input => {
+      assert.equal(input.taskId, context.taskId);
+      assert.equal(input.repository, context.repository);
+      assert.equal(input.pullRequestNumber, context.pullRequestNumber);
+      assert.equal('bytes' in input, false);
+      assert.equal('installationId' in input, false);
+      requests.push(input.filePath);
+      if (input.displayFilename === 'broken.png') throw new Error('raw token=secret https://objects.example/?signed=secret');
+      if (input.displayFilename === 'quota.mp4') return { stored: false, code: 'quota_exceeded' };
+      return { stored: true, artifact: artifactFor(input.displayFilename) };
+    } }),
+  });
+  assert.deepEqual(requests, ['/staged/first.png', '/staged/broken.png', '/staged/quota.mp4', '/staged/last.webp']);
+  assert.deepEqual(result, assets.map((asset, assetIndex) => ({
+    version: 1, assetIndex, relativePath: asset.relativePath,
+    ...([0, 4].includes(assetIndex)
+      ? { stored: true, artifact: artifactFor(assetIndex === 0 ? 'first.png' : 'last.webp') }
+      : { stored: false, code: ['unavailable', 'quota_exceeded', 'content_type_not_allowed'][assetIndex - 1] }),
+  })));
+  assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.ok(!JSON.stringify(result).includes('/staged/'));
+  // Duplicate source paths remain independently addressable by index.
+  const duplicates = await storeManagedVisualPreviewOriginals({ assets: [assets[0], assets[0]], toolSuggestions: [] }, context, {
+    createClient: () => ({ uploadOriginal: async () => ({ stored: false, code: 'disabled' }) }),
+  });
+  assert.deepEqual(duplicates.map(result => result.assetIndex), [0, 1]);
+});
+
+test('managed client setup failure preserves a safe result for every asset', async () => {
+  const result = await storeManagedVisualPreviewOriginals(evidence, { taskId: 'task-2285', repository: 'integry/propr' }, {
+    createClient: () => { throw new Error('relay-token-secret'); },
+  });
+  assert.deepEqual(result, [{ version: 1, assetIndex: 0, relativePath: evidence.assets[0].relativePath, stored: false, code: 'unavailable' }]);
 });

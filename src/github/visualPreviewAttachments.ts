@@ -1,6 +1,7 @@
 import { githubInlineEligibility, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity } from '@propr/shared';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { storeManagedVisualPreviewOriginals } from './managedVisualPreviewStorage.js';
 import { execa } from 'execa';
 import {
   appendVisualPreviewSection,
@@ -90,7 +91,7 @@ async function validateAttachmentFile(absolutePath: string, capacity?: GitHubAtt
   return eligibility.limitBytes;
 }
 
-/** Validate every original before credential lookup, repository lookup, or any upload. */
+/** Validate every original before GitHub credential lookup, repository lookup, or attachment upload. */
 async function validateInlineEvidence(evidence: VisualPreviewEvidence): Promise<void> {
   for (const asset of evidence.assets) {
     await validateAttachmentFile(asset.absolutePath, evidence.githubAttachmentCapacity);
@@ -218,6 +219,8 @@ export const uploadVisualPreviewAsset: VisualPreviewAssetUploader = async ({
 };
 
 interface BaseVisualPreviewPublicationOptions {
+  taskId?: string;
+  pullRequestNumber: number;
   owner: string;
   repo: string;
   body: string;
@@ -227,6 +230,19 @@ interface BaseVisualPreviewPublicationOptions {
   worktreePath: string;
   runCommand?: AttachmentCommandRunner;
   uploadAsset?: VisualPreviewAssetUploader;
+  storeOriginals?: typeof storeManagedVisualPreviewOriginals;
+}
+
+async function storeOriginalsSafely(options: BaseVisualPreviewPublicationOptions): Promise<void> {
+  try {
+    await (options.storeOriginals ?? storeManagedVisualPreviewOriginals)(options.evidence, {
+      taskId: options.taskId ?? options.evidence.taskId ?? '',
+      repository: `${options.owner}/${options.repo}`,
+      pullRequestNumber: options.pullRequestNumber,
+    });
+  } catch {
+    // Optional original storage must never interrupt GitHub attachment publication.
+  }
 }
 
 function attachmentArguments(evidence: VisualPreviewEvidence): string[] {
@@ -291,6 +307,7 @@ export interface PublishPullRequestVisualPreviewOptions extends BaseVisualPrevie
 
 export async function publishPullRequestVisualPreviews(options: PublishPullRequestVisualPreviewOptions): Promise<void> {
   if (options.evidence.assets.length === 0) return;
+  await storeOriginalsSafely(options);
   await validateInlineEvidence(options.evidence);
   const runner = options.runCommand || runAttachmentCommand;
   await runner({
@@ -331,6 +348,7 @@ export async function publishPullRequestCommentVisualPreviews(
   if (options.evidence.assets.length === 0) {
     throw new Error('Cannot publish an attachment comment without preview assets');
   }
+  await storeOriginalsSafely(options);
   await validateInlineEvidence(options.evidence);
   const authToken = options.authToken ?? await resolveVisualPreviewUploadToken();
   const repositoryId = await resolveRepositoryId(options);
