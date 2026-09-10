@@ -5,7 +5,8 @@ import {
   parsePreviewStorageStatusV1, parsePreviewUploadV1, parsePreviewArtifactV1, validateRoutingUrl,
   parsePreviewUploadRequestV1, sanitizePreviewDisplayFilename, type PreviewAssetMetadataV1,
   type ManagedPreviewStorageStatus, type PreviewArtifactV1, type PreviewObjectV1,
-  type PreviewFinalizeRequestV1, type PreviewStorageErrorCodeV1,
+  type PreviewFinalizeRequestV1, type PreviewStorageErrorCodeV1, type PreviewStorageStatusV1,
+  type PreviewUploadRequestV1, type PreviewUploadV1,
 } from '@propr/shared';
 
 export interface PreviewStorageConnectContext {
@@ -44,6 +45,29 @@ function matchesMetadata(left: PreviewAssetMetadataV1, right: PreviewAssetMetada
 
 function matches(left: PreviewObjectV1, right: PreviewObjectV1): boolean {
   return left.sizeBytes === right.sizeBytes && left.contentType === right.contentType && left.sha256 === right.sha256;
+}
+
+async function prepareOriginal(file: FileHandle, input: ManagedPreviewOriginalInput, limits: PreviewStorageStatusV1) {
+  const initial = await file.stat();
+  if (!initial.isFile() || !initial.size) throw new PreviewStorageError('source_unavailable');
+  if (initial.size > limits.maxObjectBytes) throw new PreviewStorageError('object_too_large');
+  if (initial.size > limits.quotaBytes - limits.usedBytes - limits.reservedBytes) throw new PreviewStorageError('quota_exceeded');
+  if (!limits.allowedContentTypes.includes(input.contentType)) throw new PreviewStorageError('content_type_not_allowed');
+  const hash = createHash('sha256');
+  let hashedBytes = 0;
+  for await (const chunk of file.createReadStream({ start: 0, end: initial.size - 1, autoClose: false })) {
+    hash.update(chunk);
+    hashedBytes += chunk.length;
+  }
+  if (hashedBytes !== initial.size) throw new PreviewStorageError('object_mismatch');
+  const original = parsePreviewUploadRequestV1({
+    version: 1, taskId: input.taskId, repository: input.repository,
+    pullRequestNumber: input.pullRequestNumber,
+    displayFilename: sanitizePreviewDisplayFilename(input.displayFilename),
+    sizeBytes: initial.size, contentType: input.contentType, sha256: hash.digest('hex'),
+  });
+  if (!original) throw new PreviewStorageError('invalid_contract');
+  return { initial, original };
 }
 
 /** Isolated v1 transport; no billing decisions, no cached entitlement, no automatic mutation retries. */
@@ -96,6 +120,20 @@ export class ManagedPreviewStorageClientV1 {
     throw new PreviewStorageError(fallback);
   }
 
+  private async finalizeUpload(original: PreviewUploadRequestV1, upload: PreviewUploadV1): Promise<PreviewArtifactV1> {
+    const finalize: PreviewFinalizeRequestV1 = {
+      version: 1, objectKey: upload.objectKey, sizeBytes: original.sizeBytes,
+      contentType: original.contentType, sha256: original.sha256,
+    };
+    const finalized = await this.relay(`/v1/preview-artifacts/${upload.artifactId}/finalize`, 'POST', finalize);
+    await this.checkResponse(finalized, 'finalize_failed');
+    const artifact = parsePreviewArtifactV1(await finalized.json(), this.options.trustedConnectOrigin);
+    if (!artifact || artifact.artifactId !== upload.artifactId
+      || !matches(original, artifact) || !matchesMetadata(original, artifact)
+      || Date.parse(artifact.retentionExpiresAt) <= Date.now()) throw new PreviewStorageError('object_mismatch');
+    return artifact;
+  }
+
   /** Hash and replay one open file with bounded buffers; verify the PUT stream again before finalize. */
   async uploadOriginal(input: ManagedPreviewOriginalInput): Promise<ManagedPreviewUploadResult> {
     let file: FileHandle | undefined;
@@ -103,28 +141,9 @@ export class ManagedPreviewStorageClientV1 {
       const status = await this.getStatus();
       if (status.state !== 'enabled') return { stored: false, code: status.state };
       if (!status.effective) throw new PreviewStorageError('invalid_contract');
-      const limits = status.effective;
       try { file = await open(input.filePath, 'r'); }
       catch { throw new PreviewStorageError('source_unavailable'); }
-      const initial = await file.stat();
-      if (!initial.isFile() || !initial.size) throw new PreviewStorageError('source_unavailable');
-      if (initial.size > limits.maxObjectBytes) throw new PreviewStorageError('object_too_large');
-      if (initial.size > limits.quotaBytes - limits.usedBytes - limits.reservedBytes) throw new PreviewStorageError('quota_exceeded');
-      if (!limits.allowedContentTypes.includes(input.contentType)) throw new PreviewStorageError('content_type_not_allowed');
-      const hash = createHash('sha256');
-      let hashedBytes = 0;
-      for await (const chunk of file.createReadStream({ start: 0, end: initial.size - 1, autoClose: false })) {
-        hash.update(chunk);
-        hashedBytes += chunk.length;
-      }
-      if (hashedBytes !== initial.size) throw new PreviewStorageError('object_mismatch');
-      const original = parsePreviewUploadRequestV1({
-        version: 1, taskId: input.taskId, repository: input.repository,
-        pullRequestNumber: input.pullRequestNumber,
-        displayFilename: sanitizePreviewDisplayFilename(input.displayFilename),
-        sizeBytes: initial.size, contentType: input.contentType, sha256: hash.digest('hex'),
-      });
-      if (!original) throw new PreviewStorageError('invalid_contract');
+      const { initial, original } = await prepareOriginal(file, input, status.effective);
       const response = await this.relay('/v1/preview-artifacts/uploads', 'POST', original);
       await this.checkResponse(response, 'upload_failed');
       const upload = parsePreviewUploadV1(await response.json());
@@ -167,16 +186,7 @@ export class ManagedPreviewStorageClientV1 {
       const current = await file.stat();
       if (!verified || current.size !== initial.size || current.mtimeMs !== initial.mtimeMs
         || current.ctimeMs !== initial.ctimeMs) throw new PreviewStorageError('object_mismatch');
-      const finalize: PreviewFinalizeRequestV1 = {
-        version: 1, objectKey: upload.objectKey, sizeBytes: original.sizeBytes,
-        contentType: original.contentType, sha256: original.sha256,
-      };
-      const finalized = await this.relay(`/v1/preview-artifacts/${upload.artifactId}/finalize`, 'POST', finalize);
-      await this.checkResponse(finalized, 'finalize_failed');
-      const artifact = parsePreviewArtifactV1(await finalized.json(), this.options.trustedConnectOrigin);
-      if (!artifact || artifact.artifactId !== upload.artifactId
-        || !matches(original, artifact) || !matchesMetadata(original, artifact)
-        || Date.parse(artifact.retentionExpiresAt) <= Date.now()) throw new PreviewStorageError('object_mismatch');
+      const artifact = await this.finalizeUpload(original, upload);
       return { stored: true, artifact };
     } catch (error) {
       return { stored: false, code: error instanceof PreviewStorageError ? error.code : 'invalid_contract' };
