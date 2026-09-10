@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { after, describe, test } from 'node:test';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, describe, test } from 'node:test';
 import {
   CODEX_GOAL_OBJECTIVE_MAX_LENGTH,
   buildGoalPolicyEnvironment,
@@ -23,13 +25,22 @@ import { buildCodexAppServerDockerArgs, buildCodexDockerArgs } from '../packages
 import { AntigravityAgent } from '../packages/core/src/agents/impl/AntigravityAgent.ts';
 import type { Agent, AgentConfig } from '../packages/core/src/agents/types.ts';
 
+let configRoot: string;
+before(() => {
+  configRoot = mkdtempSync(join(tmpdir(), 'propr-goal-config-'));
+  mkdirSync(join(configRoot, 'codex'));
+});
+after(() => {
+  if (configRoot) rmSync(configRoot, { recursive: true, force: true });
+});
+
 const baseConfig = (type: AgentConfig['type']): AgentConfig => ({
   id: `${type}-id`,
   type,
   alias: `${type}-test`,
   enabled: true,
   dockerImage: 'propr/agent:test',
-  configPath: `/tmp/${type}-config`,
+  configPath: type === 'codex' ? join(configRoot, 'codex') : `/tmp/${type}-config`,
   supportedModels: ['test-model'],
   defaultModel: 'test-model',
 });
