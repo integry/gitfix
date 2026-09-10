@@ -391,9 +391,7 @@ export function renderVisualPreviewSection(
   return parts.join('\n\n');
 }
 
-export interface RenderVisualPreviewUploadFailureOptions {
-  authenticationFailure?: boolean;
-}
+export interface RenderVisualPreviewUploadFailureOptions { authenticationFailure?: boolean; }
 
 export function renderVisualPreviewUploadFailureSection(
   evidence: VisualPreviewEvidence,
