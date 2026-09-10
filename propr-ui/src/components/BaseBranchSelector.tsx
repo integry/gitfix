@@ -97,6 +97,12 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
     setFilter('');
   };
 
+  const handleFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+    }
+  };
+
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
     onChange('');
@@ -154,6 +160,7 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={handleFilterKeyDown}
           placeholder="Filter branches..."
           aria-labelledby={labelledBy}
           aria-describedby={describedBy}

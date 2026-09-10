@@ -12,7 +12,11 @@ const admin = {
   authorizationSource: 'local',
 };
 
-async function stubRepositoryApis(page: Page, onConfigWrite?: () => void): Promise<void> {
+interface ConfigWrite {
+  repos_to_monitor: Array<{ name: string; baseBranch?: string }>;
+}
+
+async function stubRepositoryApis(page: Page, onConfigWrite?: (body: ConfigWrite) => void): Promise<void> {
   await page.route('**/api/**', async route => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
@@ -21,7 +25,7 @@ async function stubRepositoryApis(page: Page, onConfigWrite?: () => void): Promi
     if (pathname === '/api/auth/user') return route.fulfill({ json: admin });
     if (pathname === '/api/config/repos') {
       if (request.method() === 'POST') {
-        onConfigWrite?.();
+        onConfigWrite?.(request.postDataJSON() as ConfigWrite);
         return route.fulfill({ json: { success: true, repos_to_monitor: [] } });
       }
       return route.fulfill({ json: { repos_to_monitor: [] } });
@@ -137,4 +141,35 @@ test('bounds the dialog and keeps every control keyboard-reachable at 900x500 wi
   await submit.press('Enter');
   await expect(dialog).toBeHidden();
   await expect.poll(() => configWrites).toBe(1);
+});
+
+test('does not add the repository when Enter is pressed directly in the branch filter', async ({ page }) => {
+  const configWrites: ConfigWrite[] = [];
+  await stubRepositoryApis(page, body => { configWrites.push(body); });
+  await page.goto('/repositories');
+
+  await page.getByRole('button', { name: '+ Add Repository' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add Repository' });
+  await dialog.getByLabel('Repository *').fill('integry/propr');
+  await dialog.getByRole('button', { name: 'Base Branch (optional)' }).click();
+
+  const branchFilter = dialog.getByRole('combobox', { name: 'Base Branch (optional)' });
+  const releaseBranch = dialog.getByRole('option', { name: 'release/2026.09' });
+  await branchFilter.fill('release');
+  await expect(releaseBranch).toBeVisible();
+  await branchFilter.press('Enter');
+
+  await expect(branchFilter).toBeFocused();
+  await expect(dialog).toBeVisible();
+  expect(configWrites).toHaveLength(0);
+
+  await releaseBranch.click();
+  await expect(dialog.getByRole('button', { name: 'Base Branch (optional)' })).toContainText('release/2026.09');
+  await dialog.getByRole('button', { name: 'Add Repository', exact: true }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect.poll(() => configWrites.length).toBe(1);
+  expect(configWrites[0]).toMatchObject({
+    repos_to_monitor: [{ name: 'integry/propr', baseBranch: 'release/2026.09' }],
+  });
 });
