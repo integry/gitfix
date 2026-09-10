@@ -60,6 +60,7 @@ import {
   createPackagedApprovalTaskTracker,
   packagedApprovalPartition,
 } from './packaged-approval-session';
+import { assertPackagedConnectProfileIsolation, createPackagedConnectAccountConfirmation } from './packaged-connect-account-confirmation';
 import { createDesktopShutdownCoordinator } from './shutdown';
 import { createDesktopTrayController } from './system-tray';
 import { createMainWindowRestorer } from './main-window-restoration';
@@ -271,6 +272,7 @@ const packagedConnectSmoke = (): PackagedConnectSmoke | null => {
       || (suppliedJourneyPhase !== 'pair' && suppliedJourneyPhase !== 'reprobe')) {
       throw new Error('Packaged Connect journey requires a bounded non-Windows loopback fixture');
     }
+    assertPackagedConnectProfileIsolation(configRoot, app.getPath('userData'));
     journeyEndpoint = normalized;
     journeyPhase = suppliedJourneyPhase;
   }
@@ -1616,6 +1618,9 @@ if (!hasSingleInstanceLock) {
     const packagedJourneyApprovals = connectSmoke?.journeyEndpoint
       ? createPackagedApprovalTaskTracker(openPackagedJourneyApproval)
       : null;
+    const packagedJourneyAccountConfirmation = connectSmoke?.journeyEndpoint && connectSmoke.journeyPhase
+      ? createPackagedConnectAccountConfirmation(connectSmoke.journeyEndpoint, connectSmoke.journeyPhase)
+      : null;
     const credentials = new DesktopCredentialService({
       profiles,
       fetch: session.defaultSession.fetch.bind(session.defaultSession) as typeof globalThis.fetch,
@@ -1630,6 +1635,9 @@ if (!hasSingleInstanceLock) {
       clientName: `ProPR Desktop (${process.platform})`,
       confirmAccount: async (account, origin, signal) => {
         if (!mainWindow || mainWindow.isDestroyed() || signal.aborted) return false;
+        if (packagedJourneyAccountConfirmation) {
+          return packagedJourneyAccountConfirmation.confirm(account, origin, signal);
+        }
         const result = await dialog.showMessageBox(mainWindow, {
           signal,
           type: 'question',
@@ -1965,6 +1973,7 @@ if (!hasSingleInstanceLock) {
           journeyStages,
         );
       }
+      packagedJourneyAccountConfirmation?.assertComplete();
       await publishPackagedConnectReady(readyFields);
       packagedConnectJourneyDiagnosticState = null;
       app.quit();

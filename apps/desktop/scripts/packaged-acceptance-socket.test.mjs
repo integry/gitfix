@@ -21,6 +21,37 @@ const sourceBetween = (source, startMarker, endMarker) => {
 
 const occurrences = (source, value) => source.split(value).length - 1;
 
+// Bound each contract to its own top-level function, independent of startup statements.
+const assertExactSocketCounts = source => {
+  const waitSource = sourceBetween(
+    source,
+    'const waitForAuthenticatedSocket = async journey => {',
+    '\n};',
+  );
+  const summarySource = sourceBetween(
+    source,
+    'const observedServiceSummary = () => {',
+    '\n};',
+  );
+
+  assert.match(waitSource, /mainAccepted\.length === 1 && fixtureAccepted\.length === 1/);
+  assert.match(waitSource, /connected\.length === 1 && applicationSubscriptions\.length === 1/);
+  assert.match(waitSource, /applicationEvents\.length === 1 && rendererObservedApplicationEvents\.length === 1/);
+  assert.match(waitSource, /record\.event === QUEUE_STATS_SUBSCRIBE_EVENT && record\.authenticated/);
+  assert.match(waitSource, /record\.event === QUEUE_STATS_UPDATE && record\.authenticated/);
+  assert.match(source, /if \(subscriptions\.length > 1\) return 'duplicate-application-subscription';/);
+  assert.match(source, /if \(applicationEvents\.length > 1\) return 'duplicate-application-event';/);
+  assert.match(source, /return 'application-subscription-not-observed';/);
+  assert.match(source, /return 'renderer-application-event-not-observed';/);
+  assert.match(summarySource, /services\.socketIo\.authenticatedConnections !== 1/);
+  assert.match(summarySource, /services\.socketIo\.handshake\.mainAttempts !== 1/);
+  assert.match(summarySource, /services\.socketIo\.handshake\.fixtureAttempts !== 1/);
+  assert.match(summarySource, /socketSubscriptions\.length !== 1/);
+  assert.match(summarySource, /services\.socketIo\.events !== 1/);
+  assert.match(summarySource, /rendererObservedApplicationEvents\.length !== 1/);
+  assert.doesNotMatch(waitSource, /applicationEvents\.length >= 1/);
+};
+
 describe('packaged acceptance Socket.IO application synchronization', () => {
   it('uses the exact production subscription event and emits only from its one-shot handler', () => {
     assert.match(socketProviderSource, /socket\.emit\('subscribe:queue:stats'\)/);
@@ -81,29 +112,48 @@ describe('packaged acceptance Socket.IO application synchronization', () => {
   });
 
   it('requires exact connection, subscription, emit, and renderer-observation counts', () => {
-    const waitSource = sourceBetween(
-      runnerSource,
-      'const waitForAuthenticatedSocket = async journey => {',
-      '\nconst observedServiceSummary = () => {',
-    );
-    const summarySource = sourceBetween(
-      runnerSource,
-      'const observedServiceSummary = () => {',
-      '\ntry {\n  readyOrigin = await createFixture',
+    assertExactSocketCounts(runnerSource);
+  });
+
+  it('keeps checking the summary when startup work precedes fixture creation', () => {
+    const startupMarker = '\ntry {';
+    assert.ok(runnerSource.includes(startupMarker));
+    const withStartupWork = runnerSource.replace(
+      startupMarker,
+      '\ntry {\n  await prepareAcceptance();',
     );
 
-    assert.match(waitSource, /connected\.length === 1 && applicationSubscriptions\.length === 1/);
-    assert.match(waitSource, /applicationEvents\.length === 1 && rendererObservedApplicationEvents\.length === 1/);
-    assert.match(waitSource, /record\.event === QUEUE_STATS_SUBSCRIBE_EVENT && record\.authenticated/);
-    assert.match(waitSource, /record\.event === QUEUE_STATS_UPDATE && record\.authenticated/);
-    assert.match(runnerSource, /if \(subscriptions\.length > 1\) return 'duplicate-application-subscription';/);
-    assert.match(runnerSource, /if \(applicationEvents\.length > 1\) return 'duplicate-application-event';/);
-    assert.match(runnerSource, /return 'application-subscription-not-observed';/);
-    assert.match(runnerSource, /return 'renderer-application-event-not-observed';/);
-    assert.match(summarySource, /socketSubscriptions\.length !== 1/);
-    assert.match(summarySource, /services\.socketIo\.events !== 1/);
-    assert.match(summarySource, /rendererObservedApplicationEvents\.length !== 1/);
-    assert.doesNotMatch(waitSource, /applicationEvents\.length >= 1/);
+    assertExactSocketCounts(withStartupWork);
+    assert.throws(
+      () => assertExactSocketCounts(withStartupWork.replace(
+        'services.socketIo.events !== 1', 'services.socketIo.events < 1',
+      )),
+      { code: 'ERR_ASSERTION' },
+    );
+  });
+
+  it('rejects weakened exact counts in both the wait and final summary', () => {
+    for (const predicate of [
+      'mainAccepted.length === 1',
+      'fixtureAccepted.length === 1',
+      'connected.length === 1',
+      'applicationSubscriptions.length === 1',
+      'applicationEvents.length === 1',
+      'rendererObservedApplicationEvents.length === 1',
+      'services.socketIo.authenticatedConnections !== 1',
+      'socketSubscriptions.length !== 1',
+      'services.socketIo.events !== 1',
+      'rendererObservedApplicationEvents.length !== 1',
+      'services.socketIo.handshake.mainAttempts !== 1',
+      'services.socketIo.handshake.fixtureAttempts !== 1',
+    ]) {
+      const weakened = predicate.replace('=== 1', '>= 1').replace('!== 1', '< 1');
+      assert.ok(runnerSource.includes(predicate), `Missing count predicate: ${predicate}`);
+      assert.throws(
+        () => assertExactSocketCounts(runnerSource.replaceAll(predicate, weakened)),
+        { code: 'ERR_ASSERTION' },
+        `Must reject weakened count: ${predicate}`,
+      );
+    }
   });
 });
-
