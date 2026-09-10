@@ -106,7 +106,7 @@ const LeftPaneBody: React.FC<LeftPaneBodyProps> = ({
       {consumedReviewCommentIds && consumedReviewCommentIds.length > 0 && (
         <div className="bg-amber-50 border border-amber-100 rounded-md px-3 py-2 text-xs text-amber-700">
           Addressed {consumedReviewCommentIds.length} review comment{consumedReviewCommentIds.length > 1 ? 's' : ''}{' '}
-          <span className="font-mono text-[10px] text-amber-600">
+          <span className="break-all font-mono text-[10px] text-amber-600">
             (IDs: {consumedReviewCommentIds.join(', ')})
           </span>
         </div>
