@@ -167,12 +167,16 @@ describe('DesktopExperience', () => {
   });
 
   it('keeps Open deep-link navigation separate and bound to the active profile', async () => {
-    const adapters = adaptersFor([localProfile], localProfile.id);
+    const probe = deferred<DesktopConnectionResult>();
+    const adapters = adaptersFor([localProfile], localProfile.id, () => probe.promise);
     const deepLinks = new DesktopDeepLinkInbox();
     window.location.hash = '';
     render(<DesktopExperience adapters={adapters} deepLinks={deepLinks}><div>Connected app</div></DesktopExperience>);
 
-    expect(await screen.findByText('Connected app')).toBeInTheDocument();
+    await waitFor(() => expect(adapters.connection.probe).toHaveBeenCalledWith(localProfile));
+    // Flush connection readiness effects before delivering an already-connected Open link.
+    await act(async () => { probe.resolve({ status: 'ready', version: '0.8.15' }); });
+    expect(screen.getByText('Connected app')).toBeInTheDocument();
     let consumption: ReturnType<DesktopDeepLinkInbox['receive']> = null;
     act(() => {
       consumption = deepLinks.receive('propr://open?path=%2Ftasks%3Fstatus%3Dopen');
