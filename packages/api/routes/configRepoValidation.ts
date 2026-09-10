@@ -90,6 +90,14 @@ export function preserveRepoAutoFollowup(
   });
 }
 
+function visualPreviewSettingsEqual(left: VisualPreviewSettings, right: VisualPreviewSettings): boolean {
+  // GET materializes legacy missing plans as auto; that alone is not an edit.
+  return (left.githubAttachmentPlan ?? 'auto') === (right.githubAttachmentPlan ?? 'auto')
+    && left.enabled === right.enabled
+    && JSON.stringify(left.types) === JSON.stringify(right.types)
+    && left.instructions === right.instructions;
+}
+
 export function preserveRepoVisualPreview(
   previousRepos: RepoToMonitor[],
   normalizedRepos: RepoToMonitor[],
@@ -104,7 +112,7 @@ export function preserveRepoVisualPreview(
       const normalized = normalizeStoredVisualPreviewSettings(repo.visualPreview);
       if (!explicitByRepository.has(repositoryKey)) explicitByRepository.set(repositoryKey, normalized);
       const previous = previousRepos.find(candidate => candidate.id === repo.id);
-      if (JSON.stringify(normalized) !== JSON.stringify(normalizeStoredVisualPreviewSettings(previous?.visualPreview))) {
+      if (!visualPreviewSettingsEqual(normalized, normalizeStoredVisualPreviewSettings(previous?.visualPreview))) {
         changedByRepository.set(repositoryKey, normalized);
       }
     }

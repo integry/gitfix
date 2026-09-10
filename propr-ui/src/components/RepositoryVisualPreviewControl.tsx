@@ -82,10 +82,14 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
               <select
                 aria-label={`GitHub attachment plan for ${repo.name}`}
                 value={settings.githubAttachmentPlan ?? 'auto'}
-                onChange={event => onUpdate(repo.id, {
-                  ...settingsWithCurrentInstructions(),
-                  githubAttachmentPlan: event.target.value as GitHubAttachmentPlanOverride,
-                })}
+                disabled={isReadOnly}
+                onChange={event => {
+                  if (isReadOnly) return;
+                  onUpdate(repo.id, {
+                    ...settingsWithCurrentInstructions(),
+                    githubAttachmentPlan: event.target.value as GitHubAttachmentPlanOverride,
+                  });
+                }}
                 className="rounded border border-slate-200 bg-white px-2 py-1 text-slate-700 focus:border-teal-400"
               >
                 <option value="auto">Auto (default)</option>

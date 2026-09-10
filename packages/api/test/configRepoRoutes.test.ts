@@ -1,4 +1,5 @@
 import { resolveGitHubAttachmentCapacity } from '@propr/shared';
+import type { RepoToMonitor } from '@propr/core';
 import assert from 'node:assert/strict';
 import { after, mock, test } from 'node:test';
 
@@ -170,6 +171,54 @@ test('POST repository config synchronizes changed visual previews across branch 
     [visualPreview, visualPreview]
   );
 });
+
+for (const githubAttachmentPlan of ['paid', 'free'] as const) {
+  test(`GET/POST legacy branch entries preserves a ${githubAttachmentPlan} override on the first entry`, async () => {
+    const saveMonitoredRepos = mock.fn<(repos: RepoToMonitor[]) => Promise<boolean>>(async () => true);
+    const routes = createConfigRoutes({
+      redisClient: {
+        set: mock.fn(async () => 'OK'),
+        eval: mock.fn(async () => 1),
+        publish: mock.fn(async () => 1),
+        lPush: mock.fn(async () => 1),
+        lTrim: mock.fn(async () => 'OK')
+      } as never,
+      configStore: {
+        loadMonitoredReposRaw: async () => ['main', 'release'].map(baseBranch => ({
+          id: `repo-${baseBranch}`,
+          name: 'integry/propr',
+          enabled: true,
+          baseBranch,
+          visualPreview: { enabled: true, types: ['image'] }
+        })),
+        loadGitHubAttachmentCapacity: async () => resolveGitHubAttachmentCapacity(),
+        saveMonitoredRepos,
+        clearRemovedRepositoryIndexData: async () => {}
+      },
+      database: {
+        transaction: async (callback: (transaction: never) => Promise<unknown>) => callback({} as never)
+      } as never
+    });
+    const getResponse = createResponse();
+    await routes.getRepos({} as never, getResponse as never);
+    const repos = getResponse.body?.repos_to_monitor as RepoToMonitor[];
+    assert.deepEqual(repos.map(repo => repo.visualPreview?.githubAttachmentPlan), ['auto', 'auto']);
+    repos[0].visualPreview!.githubAttachmentPlan = githubAttachmentPlan;
+
+    const postResponse = createResponse();
+    await routes.postRepos({ body: { repos_to_monitor: repos } } as never, postResponse as never);
+
+    assert.equal(postResponse.statusCode, 200);
+    assert.equal(saveMonitoredRepos.mock.calls.length, 1);
+    assert.deepEqual(
+      saveMonitoredRepos.mock.calls[0].arguments[0].map(repo => repo.visualPreview),
+      [
+        { enabled: true, types: ['image'], githubAttachmentPlan },
+        { enabled: true, types: ['image'], githubAttachmentPlan }
+      ]
+    );
+  });
+}
 
 test('POST repository config preserves an omitted option for existing repositories', async () => {
   const saveMonitoredRepos = mock.fn(async () => true);

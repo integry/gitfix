@@ -11,6 +11,27 @@ const repo: MonitoredRepo = {
 };
 
 describe('RepositoryVisualPreviewControl', () => {
+  it('hides the plan selector and does not update configuration in read-only mode', () => {
+    const onUpdate = vi.fn();
+    render(<RepositoryVisualPreviewControl repo={repo} onUpdate={onUpdate} isReadOnly />);
+
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('removes the editable plan selector when switching to read-only mode', () => {
+    const onUpdate = vi.fn();
+    const { rerender } = render(<RepositoryVisualPreviewControl repo={repo} onUpdate={onUpdate} isReadOnly={false} />);
+    const selector = screen.getByRole('combobox');
+    expect(selector).toBeEnabled();
+
+    rerender(<RepositoryVisualPreviewControl repo={repo} onUpdate={onUpdate} isReadOnly />);
+
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    fireEvent.change(selector, { target: { value: 'paid' } });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it('updates preview types and preserves edited instructions', () => {
     const onUpdate = vi.fn();
     render(<RepositoryVisualPreviewControl repo={repo} onUpdate={onUpdate} isReadOnly={false} />);
