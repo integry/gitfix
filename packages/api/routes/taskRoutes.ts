@@ -113,6 +113,11 @@ export function createTaskRoutes(deps: TaskRoutesDeps) {
       }
       const { prData, octokit } = prLookup;
 
+      if (req.body.expectedHead !== undefined && req.body.expectedHead !== prData.head.sha) {
+        res.status(409).json({ error: 'Pull request head changed before revert could be queued' });
+        return;
+      }
+
       // Scope validation: verify the commit actually belongs to this PR and resolve to full SHA
       const commitCheck = await verifyCommitBelongsToPr({ octokit, owner, repo, prNumber, commit });
       if (!commitCheck.valid) {

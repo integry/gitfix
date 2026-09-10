@@ -111,10 +111,12 @@ export async function claimDraftOperation(
   db: Knex,
   draftId: string,
   status: 'generating' | 'refining',
-  updates: Record<string, unknown> = {}
+  updates: Record<string, unknown> = {},
+  expectedRevision?: number
 ): Promise<boolean> {
   const updated = await db('task_drafts')
     .where({ draft_id: draftId })
+    .modify(query => { if (expectedRevision !== undefined) query.where('mcp_revision', expectedRevision); })
     .where((builder) => {
       builder
         .whereNotIn('status', ACTIVE_DRAFT_OPERATION_STATUSES)

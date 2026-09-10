@@ -130,7 +130,10 @@ export function createRefineHandler(db: Knex) {
     const check = checkDbAndAuth(db, req.user?.id);
     if (!check.valid) { sendCheckError(res, check); return; }
 
-    const { draftId, plan: currentPlan, instruction, generationModel: requestedModel } = req.body;
+    const { draftId, plan: currentPlan, instruction, generationModel: requestedModel, expectedRevision } = req.body;
+    if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) {
+      res.status(400).json({ error: 'expectedRevision must be a nonnegative integer' }); return;
+    }
     const inputCheck = validateRefineInput(req.body);
     if (!inputCheck.valid) { res.status(400).json({ error: inputCheck.error }); return; }
 
@@ -199,7 +202,7 @@ export function createRefineHandler(db: Knex) {
 
       refinementClaimed = await claimDraftOperation(db, draftId, 'refining', {
         refinement_result: JSON.stringify(initialRefinementMeta),
-      });
+      }, expectedRevision);
       if (!refinementClaimed) {
         res.status(409).json({ error: 'Another operation is already running for this draft' });
         return;
