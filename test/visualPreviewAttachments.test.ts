@@ -152,6 +152,41 @@ test('uploads media before updating the existing work comment without creating a
   }]);
 });
 
+test('uploads comment attachments serially to bound in-memory upload buffers', async () => {
+  let activeUploads = 0;
+  let maximumActiveUploads = 0;
+  const assets = Array.from({ length: 8 }, (_, index) => ({
+    ...evidence.assets[0],
+    relativePath: `.propr/previews/preview-${index}.png`,
+    title: `Preview ${index}`,
+  }));
+
+  await publishPullRequestCommentVisualPreviews({
+    owner: 'integry',
+    repo: 'propr',
+    pullRequestNumber: 42,
+    body: 'Follow-up complete',
+    evidence: { assets, toolSuggestions: [] },
+    authToken: 'installation-token',
+    worktreePath: '/worktree',
+    startingCommentId: 100,
+    octokit: {
+      request: async <T>(endpoint: string, options: Record<string, unknown>) => endpoint === 'GET /repos/{owner}/{repo}'
+        ? { data: { id: 987 } } as T
+        : { data: { html_url: 'https://github.com/integry/propr/pull/42#issuecomment-100', body: options.body } } as T,
+    },
+    uploadAsset: async ({ absolutePath }) => {
+      activeUploads += 1;
+      maximumActiveUploads = Math.max(maximumActiveUploads, activeUploads);
+      await new Promise(resolve => setTimeout(resolve, 1));
+      activeUploads -= 1;
+      return `https://github.com/user-attachments/assets/${path.basename(absolutePath)}`;
+    },
+  });
+
+  assert.equal(maximumActiveUploads, 1);
+});
+
 test('does not update the work comment when a direct attachment upload fails', async () => {
   const requests: string[] = [];
   await assert.rejects(() => publishPullRequestCommentVisualPreviews({
