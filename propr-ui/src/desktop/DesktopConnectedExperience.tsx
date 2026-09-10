@@ -81,7 +81,6 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
 
   return (
     <DesktopContext.Provider value={contextValue}>
-      <DesktopWindowControls actions={windowControls} />
       {deepLinkError && <div className="desktop-inline-error" role="alert">{deepLinkError}</div>}
       <div className={`desktop-app desktop-platform-${adapters.platform}`} inert={managerOpen} aria-hidden={managerOpen || undefined}>{children}</div>
       {managerOpen && (
@@ -100,6 +99,10 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
           </section>
         </div>
       )}
+      {/* Electron collects drag/no-drag regions in DOM order, independently of
+          z-index. Exclude these buttons after the connected toolbar's drag
+          region, and keep them outside the app made inert by the manager. */}
+      <DesktopWindowControls actions={windowControls} />
     </DesktopContext.Provider>
   );
 };

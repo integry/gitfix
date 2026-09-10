@@ -49,12 +49,10 @@ describe('desktop BrowserWindow security', () => {
 
     const linuxOptions = createBrowserWindowOptions('/preload.cjs', false, normalWorkArea, 'linux', desktopIcon);
     assert.equal(linuxOptions.frame, false);
-    assert.equal(linuxOptions.titleBarStyle, 'hidden');
-    assert.deepEqual(linuxOptions.titleBarOverlay, {
-      color: '#f8fafc',
-      symbolColor: '#475569',
-      height: DESKTOP_TITLE_BAR_HEIGHT,
-    });
+    // Linux renders its own accessible controls; WCO would duplicate them and
+    // reintroduce GTK's padded frame on an opaque window.
+    assert.equal(linuxOptions.titleBarStyle, undefined);
+    assert.equal(linuxOptions.titleBarOverlay, undefined);
     assert.equal(linuxOptions.autoHideMenuBar, true);
     assert.equal(linuxOptions.resizable, undefined);
     assert.equal(linuxOptions.minimizable, undefined);

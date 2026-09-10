@@ -62,6 +62,7 @@ import {
 import { createDesktopShutdownCoordinator } from './shutdown';
 import { createDesktopTrayController } from './system-tray';
 import { createMainWindowRestorer } from './main-window-restoration';
+import { synchronizeLinuxWindowFrame } from './linux-window-frame';
 import { DesktopSetupController } from './setup-controller';
 import { promptForWebhookSecret } from './secure-secret-prompt';
 import {
@@ -1291,6 +1292,7 @@ const createMainWindow = async (
       desktopWindowIcon?.image,
     ),
   );
+  if (process.platform === 'linux') synchronizeLinuxWindowFrame(window);
   if (packagedSmokeTest && desktopWindowIcon) {
     log('info', PACKAGED_NATIVE_ICON_READY_EVENT, {
       asset: basename(desktopWindowIcon.path),
