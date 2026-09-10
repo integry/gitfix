@@ -45,10 +45,27 @@ async function findExecutionTask(deps: ToolDeps, row: Operation, result: Executi
   const continuation = result.continuation || {};
   const query = db('tasks').where({ repository: row.repository }).whereNot('task_type', 'goal');
   if (commentTools.includes(row.tool)) {
-    query.where({ issue_number: result.pullRequest }).whereRaw(`EXISTS (
-      SELECT 1 FROM json_each(CASE WHEN json_valid(initial_job_data) THEN initial_job_data ELSE '{}' END, '$.comments')
-      WHERE json_extract(json_each.value, '$.id') = ?
-    )`, [result.commentId]);
+    if (!result.commentId || !result.pullRequest) return undefined;
+    const data = `CASE WHEN json_valid(initial_job_data) THEN initial_job_data ELSE '{}' END`;
+    // The selected command owns the execution. Batch membership alone must not
+    // attach an older, superseded command to the new command's outcome.
+    query.where({ issue_number: result.pullRequest }).whereRaw(`CASE
+      WHEN json_extract(${data}, '$.commandCommentId') IS NOT NULL THEN
+        json_extract(${data}, '$.commandCommentId') = ?
+        AND COALESCE(json_extract(${data}, '$.commandCommentType'), 'issue') = 'issue'
+      WHEN json_type(${data}, '$.comments') = 'array' THEN EXISTS (
+        SELECT 1 FROM json_each(${data}, '$.comments')
+        WHERE json_extract(json_each.value, '$.id') = ?
+          AND COALESCE(json_extract(json_each.value, '$.type'), 'issue') = 'issue'
+      )
+      ELSE json_extract(${data}, '$.commentId') = ?
+    END`, [result.commentId, result.commentId, result.commentId]);
+    if (row.tool === 'run_ultrafix') {
+      // Ultrafix starts as either a review or fix and is bound to its work epoch.
+      query.whereRaw(`json_extract(${data}, '$.ultrafixMeta.workEpoch') IS NOT NULL`);
+    } else {
+      query.whereRaw(`json_extract(${data}, '$.commandMode') = ?`, [row.tool === 'review_pull_request' ? 'review' : 'fix']);
+    }
   } else {
     query.andWhere(builder => builder.where('task_id', result.jobId || continuation.taskId).orWhere('job_id', result.jobId || continuation.jobId));
   }

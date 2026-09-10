@@ -13,6 +13,7 @@ import { StreamableHTTPClientTransport as LegacyTransport } from '@modelcontextp
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { McpPrincipal } from '../mcp/policy.js';
+import type { CommentJobData, UnprocessedComment } from '@propr/core';
 import type { ToolDeps } from '../mcp/tools.js';
 
 test('both SDK eras drive persisted goal, TODO, notification, settings and guarded PR workflows', async () => {
@@ -87,11 +88,51 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
       scopes: [...scopes], github, grant: { id: 'workflow-grant', ownerId: '123', clientId: 'fixture-client', clientName: 'Fixture', instanceId: config.instanceId, resource: config.resource, scopes: [...scopes], repositories: ['acme/repo'], createdAt: Date.now(), expiresAt: Date.now() + 60000, revoked: false, membershipSource: 'local' } } as McpPrincipal;
     const jobs: Array<Record<string, unknown>> = [];
     const redisValues = new Map<string, string>();
+    const pendingComments = new Map<string, string[]>();
+    const { cleanupJob } = await import('../../../src/jobs/prCommentJobUtils.js');
+    const { pickUpPendingCommentsWithClaim, applyPendingCommentCommandContext } = await import('../../../src/jobs/prPendingComments.js');
+    const { updateTaskTitleForPR } = await import('../../../src/jobs/prCommentJobHelpers.js');
+    const correlatedLogger = core.logger.withCorrelation('mcp-pending-regression');
+    const stateManager = { updateIssueRef: async () => {} } as unknown as InstanceType<typeof core.WorkerStateManager>;
     const deps: ToolDeps = { db, policy, taskQueue: { add: async (_name: string, data: Record<string, unknown>) => { jobs.push(data); return { id: String(jobs.length) }; }, getJobs: async () => [] } as never,
-      redisClient: { lPush: async () => 1, lTrim: async () => 'OK', sMembers: async () => [], get: async (key: string) => redisValues.get(key) || null, del: async () => 1, publish: async () => 1, set: async () => 'OK', eval: async () => 1 } as never, runtimeBuildQueue: {} as never,
+      redisClient: { lPush: async () => 1, lTrim: async () => 'OK', sMembers: async () => [], get: async (key: string) => redisValues.get(key) || null, llen: async (key: string) => pendingComments.get(key)?.length || 0, lrange: async (key: string) => pendingComments.get(key) || [], del: async (key: string) => { pendingComments.delete(key); return 1; }, publish: async () => 1, set: async () => 'OK', eval: async () => 1 } as never, runtimeBuildQueue: {} as never,
       goalServices: { generateTitle: async () => 'Fixture goal', loadVisualPreviewSettings: async () => ({ enabled: false, types: ['image'] }), getOctokit: async () => github as never,
         stopExecution: async () => ({ success: true, containerStopped: true, removedQueuedJobs: 1 }) as never,
         getCapabilities: async () => [{ agentId: agent.config.id, agentAlias: 'claude', agentType: 'claude', goalCapable: true, lifecycle: { launch: 'goal-prompt', resume: 'whole-session', runningInput: 'safe-boundary-resume' }, controls: { liveInput: false, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true } }] } };
+    // Exercise the worker's Redis pickup, command normalization and durable title update.
+    // Only Redis/queue transport and the Redis issue-ref update are fixtures.
+    const persistCommentTask = async (taskId: string, jobData: CommentJobData, pending: UnprocessedComment[] = []) => {
+      const key = core.getPendingPrCommentsKey(jobData.repoOwner, jobData.repoName, jobData.pullRequestNumber);
+      pendingComments.set(key, pending.map(comment => JSON.stringify(comment)));
+      const initial = jobData.comments ? [...jobData.comments] : [{ id: jobData.commentId!, body: jobData.commentBody!, author: jobData.commentAuthor!, type: 'issue' as const }];
+      jobData.commandMode ??= 'default';
+      const { commentsToProcess } = await pickUpPendingCommentsWithClaim(initial, {
+        ...jobData, correlatedLogger, redisClient: deps.redisClient as never,
+      });
+      applyPendingCommentCommandContext(jobData, commentsToProcess, correlatedLogger);
+      await db('tasks').insert({ task_id: taskId, repository: `${jobData.repoOwner}/${jobData.repoName}`, issue_number: jobData.pullRequestNumber, task_type: 'pr-comment' });
+      await updateTaskTitleForPR({ taskId, jobData, stateManager, correlatedLogger });
+      const stored = JSON.parse((await db('tasks').where({ task_id: taskId }).first()).initial_job_data);
+      assert.deepEqual(stored, JSON.parse(JSON.stringify(jobData)));
+      assert.equal(pendingComments.has(key), pending.length === 0);
+      return stored;
+    };
+    const pendingTask = async (taskId: string, commentId: number, commandMode: 'review' | 'fix', workEpoch?: number) => {
+      const key = core.getPendingPrCommentsKey('acme', 'repo', 42);
+      const comment: UnprocessedComment = { id: commentId, body: `/${commandMode}`, author: 'fixture-user', type: 'issue',
+        commandMode, ...(workEpoch === undefined ? {} : { ultrafixMeta: { workEpoch } as UnprocessedComment['ultrafixMeta'] }) };
+      pendingComments.set(key, [JSON.stringify(comment)]);
+      await cleanupJob({ stateManager, lockKey: 'lock:pr:acme:repo:42', lockToken: 'fixture-lock',
+        localRepoPath: undefined, worktreeInfo: undefined, repoOwner: 'acme', repoName: 'repo', pullRequestNumber: 42,
+        jobBranchName: 'fixture', jobLlm: undefined, correlatedLogger, redisClient: deps.redisClient as never });
+      const queued = issueJobs.at(-1)!;
+      assert.equal(queued.name, 'processPullRequestComment');
+      assert.deepEqual(queued.data.comments, []);
+      const stored = await persistCommentTask(taskId, queued.data as unknown as CommentJobData, [comment]);
+      assert.deepEqual(stored.comments, []);
+      assert.equal(stored.commandCommentId, commentId);
+      return stored;
+    };
     const catalog = createToolCatalog(deps);
     const app = express(); app.use(express.json());
     app.all('/api/mcp', async (req, res) => {
@@ -210,7 +251,8 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
         const reviewRequest = await call('review_pull_request', pr, true);
         assert.equal(reviewRequest.state, 'posted');
         const reviewTaskId = `review-task-${modern}`;
-        await db('tasks').insert({ task_id: reviewTaskId, repository, issue_number: 42, task_type: 'pr-comment', initial_job_data: JSON.stringify({ comments: [{ id: reviewRequest.result.commentId }], commandMode: 'review' }) });
+        await pendingTask(reviewTaskId, reviewRequest.result.commentId, 'review');
+        assert.equal((await call('get_operation', { operationId: reviewRequest.operationId })).state, 'queued');
         await db('task_history').insert({ task_id: reviewTaskId, state: 'processing' });
         assert.equal((await call('get_operation', { operationId: reviewRequest.operationId })).state, 'running');
         const { buildReviewComment } = await import('../../../src/jobs/reviewCommentFormatter.js');
@@ -230,7 +272,8 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
         const fix = await call('fix_review_findings', { ...pr, reviewCommentId, findingIds: ['F1'] }, true);
         assert.equal(fix.state, 'posted'); assert.ok(comments.at(-1)!.startsWith('/fix F1'));
         const fixTaskId = `fix-task-${modern}`;
-        await db('tasks').insert({ task_id: fixTaskId, repository, issue_number: 42, task_type: 'pr-comment', initial_job_data: JSON.stringify({ comments: [{ id: fix.result.commentId }], commandMode: 'fix' }) });
+        await pendingTask(fixTaskId, fix.result.commentId, 'fix');
+        assert.equal((await call('get_operation', { operationId: fix.operationId })).state, 'queued');
         await db('task_history').insert({ task_id: fixTaskId, state: 'processing' });
         assert.equal((await call('get_operation', { operationId: fix.operationId })).state, 'running');
         head = 'c'.repeat(40);
@@ -241,19 +284,79 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
         assert.equal((await call('fix_review_findings', { ...pr, reviewCommentId, findingIds: ['F1'] }, true)).state, 'failed');
         const ultrafix = await call('run_ultrafix', pr, true); assert.equal(ultrafix.state, 'posted');
         const loopTask = `ultrafix-start-${modern}`, workEpoch = modern ? 1 : 2;
-        await db('tasks').insert({ task_id: loopTask, repository, issue_number: 42, task_type: 'pr-comment', initial_job_data: JSON.stringify({ comments: [{ id: ultrafix.result.commentId }], ultrafixMeta: { workEpoch } }) });
+        await pendingTask(loopTask, ultrafix.result.commentId, modern ? 'review' : 'fix', workEpoch);
         await db('task_history').insert({ task_id: loopTask, state: 'completed' });
         const loop = { active: true, workEpoch, cycleCount: 0, completionStatus: null as string | null, completionReason: null as string | null };
         redisValues.set('ultrafix:state:acme:repo:42', JSON.stringify(loop));
         assert.equal((await call('get_operation', { operationId: ultrafix.operationId })).state, 'running');
         loop.active = false; loop.completionStatus = 'succeeded'; loop.completionReason = 'Goal reached';
         redisValues.set('ultrafix:state:acme:repo:42', JSON.stringify(loop));
-        assert.equal((await call('get_operation', { operationId: ultrafix.operationId })).state, 'completed');
+        const completedLoop = await call('get_operation', { operationId: ultrafix.operationId });
+        assert.equal(completedLoop.state, 'completed');
+        assert.equal(completedLoop.result.loop.workEpoch, workEpoch);
+        assert.equal(completedLoop.result.loop.completionStatus, 'succeeded');
+        assert.equal(completedLoop.result.continuation.sourceTaskId, loopTask);
         redisValues.set('ultrafix:state:acme:repo:42', JSON.stringify({ ...loop, workEpoch: workEpoch + 1, active: true, completionStatus: null }));
         assert.equal((await call('get_operation', { operationId: ultrafix.operationId })).state, 'completed');
         const lostIntake = await call('review_pull_request', pr, true);
         await db('mcp_operations').where({ id: lostIntake.operationId }).update({ created_at: Date.now() - 180000 });
         assert.equal((await call('get_operation', { operationId: lostIntake.operationId })).state, 'unknown');
+        await pendingTask(`late-review-${modern}`, lostIntake.result.commentId, 'review');
+        assert.equal((await call('get_operation', { operationId: lostIntake.operationId })).state, 'queued');
+        await db('task_history').insert({ task_id: `late-review-${modern}`, state: 'processing' });
+        assert.equal((await call('get_operation', { operationId: lostIntake.operationId })).state, 'running');
+        await db('task_history').insert({ task_id: `late-review-${modern}`, state: 'cancelled' });
+        assert.equal((await call('get_operation', { operationId: lostIntake.operationId })).state, 'cancelled');
+        // Legacy direct and populated batch jobs use the same normalization/persistence path.
+        const baseJob = { repoOwner: 'acme', repoName: 'repo', pullRequestNumber: 42, correlationId: 'fixture' };
+        for (const shape of ['direct', 'batch'] as const) {
+          const request = await call('review_pull_request', pr, true);
+          const comment: UnprocessedComment = { id: request.result.commentId, body: '/review', author: 'fixture-user', type: 'issue' };
+          const execution = `review-${shape}-${modern}`;
+          await persistCommentTask(execution, { ...baseJob, commandMode: 'review',
+            ...(shape === 'direct' ? { commentId: comment.id, commentBody: comment.body, commentAuthor: comment.author } : { comments: [comment] }) });
+          assert.equal((await call('get_operation', { operationId: request.operationId })).state, 'queued');
+          await db('task_history').insert({ task_id: execution, state: 'processing' });
+          assert.equal((await call('get_operation', { operationId: request.operationId })).state, 'running');
+          await db('task_history').insert({ task_id: execution, state: 'completed', metadata: JSON.stringify({ reviewResults: [{ success: false }] }) });
+          assert.equal((await call('get_operation', { operationId: request.operationId })).state, 'failed');
+        }
+        // A selected newer command supersedes the original even when it remains in
+        // comments[] or commentId, including when both commands request a review.
+        for (const shape of ['direct', 'batch'] as const) {
+          const superseded = await call('review_pull_request', pr, true);
+          const selected = await call('review_pull_request', pr, true);
+          const previous: UnprocessedComment = { id: superseded.result.commentId, body: '/review', author: 'fixture-user', type: 'issue' };
+          const latest: UnprocessedComment = { ...previous, id: selected.result.commentId, commandMode: 'review' };
+          const execution = `superseded-${shape}-${modern}`;
+          const stored = await persistCommentTask(execution, { ...baseJob, commandMode: 'review',
+            ...(shape === 'direct' ? { commentId: previous.id } : { comments: [previous] }) }, [latest]);
+          assert.equal(stored.commandCommentId, latest.id);
+          await db('task_history').insert({ task_id: execution, state: 'completed' });
+          assert.equal((await call('get_operation', { operationId: selected.operationId })).state, 'completed');
+          assert.equal((await call('get_operation', { operationId: superseded.operationId })).state, 'posted');
+          await db('mcp_operations').where({ id: superseded.operationId }).update({ created_at: Date.now() - 180000 });
+          assert.equal((await call('get_operation', { operationId: superseded.operationId })).state, 'unknown');
+        }
+        const unexecuted = await call('review_pull_request', pr, true);
+        const unexecutedComment: UnprocessedComment = { id: unexecuted.result.commentId, body: '/review', author: 'fixture-user', type: 'issue', commandMode: 'review' };
+        for (const [suffix, overrides, comment] of [
+          ['repository', { repoName: 'other' }, unexecutedComment],
+          ['pr', { pullRequestNumber: 43 }, unexecutedComment],
+          ['type', {}, { ...unexecutedComment, type: 'review' as const }],
+          ['mode', {}, { ...unexecutedComment, commandMode: 'fix' as const }],
+        ] as const) {
+          const execution = `unrelated-${suffix}-${modern}`;
+          await persistCommentTask(execution, { ...baseJob, ...overrides, comments: [] }, [comment]);
+          await db('task_history').insert({ task_id: execution, state: 'completed' });
+        }
+        assert.equal((await call('get_operation', { operationId: unexecuted.operationId })).state, 'posted');
+        await db('mcp_operations').where({ id: unexecuted.operationId }).update({ created_at: Date.now() - 180000 });
+        assert.equal((await call('get_operation', { operationId: unexecuted.operationId })).state, 'unknown');
+        // A loop without a matching durable epoch cannot borrow a later loop's result.
+        const staleLoop = await call('run_ultrafix', pr, true);
+        await pendingTask(`stale-loop-${modern}`, staleLoop.result.commentId, 'review', workEpoch);
+        assert.equal((await call('get_operation', { operationId: staleLoop.operationId })).state, 'unknown');
         assert.ok(comments.some(comment => comment.startsWith('/ultrafix goal=9 max=3')));
         checks = 'FAILURE'; assert.equal((await call('merge_pull_request', pr, true)).result.error.code, 'CHECKS_NOT_PASSED'); assert.equal(merged, false);
         checks = 'SUCCESS'; mergeState = 'BLOCKED'; assert.equal((await call('merge_pull_request', pr, true)).result.error.code, 'CHECKS_NOT_PASSED'); assert.equal(merged, false);
