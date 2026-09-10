@@ -21,6 +21,11 @@ import { classifyCurrentUserRequestShape } from './packaged-acceptance-current-u
 import { PACKAGED_ACCEPTANCE_EPOCH_MILLISECONDS } from './packaged-acceptance-clock.mjs';
 import { FIXED_TIME } from './acceptance-artifacts.mjs';
 
+// These real fixtures bind Linux-only loopback aliases; authorization/current-user unit tests remain cross-platform.
+const linuxFixtureOptions = {
+  skip: process.platform !== 'linux' && 'Packaged acceptance fixtures require Linux loopback aliases',
+};
+
 // Exercise the runner's actual HTTP fixture without launching its top-level Electron journeys.
 // Keep this extraction bounded to fixture construction, as in the stats fixture tests.
 const runner = readFileSync(new URL('./run-packaged-acceptance.mjs', import.meta.url), 'utf8');
@@ -97,7 +102,7 @@ const setup = async (mode, overrides = {}) => {
 };
 
 for (const mode of ['ready', 'revoked']) {
-  test(`acceptance ${mode} fixture pairs, confirms, reprobes and activates through the real credential service`, async () => {
+  test(`acceptance ${mode} fixture pairs, confirms, reprobes and activates through the real credential service`, linuxFixtureOptions, async () => {
     const f = await setup(mode);
     try {
       assert.equal((await f.service.probe(f.profile)).status, 'authentication-required');
@@ -138,7 +143,7 @@ for (const mode of ['ready', 'revoked']) {
 }
 
 for (const failure of ['malformed-account', 'denied-admission', 'cancelled-confirmation', 'missing-confirmation']) {
-  test(`acceptance pairing never commits or activates after ${failure}`, async () => {
+  test(`acceptance pairing never commits or activates after ${failure}`, linuxFixtureOptions, async () => {
     const f = await setup('ready', failure === 'missing-confirmation'
       ? { confirmAccount: undefined }
       : failure === 'cancelled-confirmation'
@@ -160,7 +165,7 @@ for (const failure of ['malformed-account', 'denied-admission', 'cancelled-confi
   });
 }
 
-test('acceptance identity routes reject inactive tokens, wrong custody and malformed confirmation requests', async () => {
+test('acceptance identity routes reject inactive tokens, wrong custody and malformed confirmation requests', linuxFixtureOptions, async () => {
   const f = await setup('ready');
   const bearer = { Authorization: `Bearer ${f.fixture.INSTANCE_TOKEN}` };
   try {
