@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import { after, test } from 'node:test';
+import { detectGitHubAttachmentPlan, githubAttachmentLimitBytes, resolveGitHubAttachmentCapacity, VISUAL_PREVIEW_CONTENT_TYPES, MIB } from '@propr/shared';
+import { loadGitHubAttachmentCapacity } from '../src/services/visualPreviewCapacityService.js';
+import { normalizeStoredVisualPreviewSettings } from '../src/config/configManager.js';
+import { db } from '../src/db/connection.js';
+
+after(async () => { await db.destroy(); });
+
+for (const override of ['auto', 'free', 'paid'] as const) {
+  for (const detected of ['unknown', 'free', 'paid'] as const) {
+    test(`${override} override with ${detected} detection applies media-specific limits`, () => {
+      const capacity = resolveGitHubAttachmentCapacity(override, detected);
+      const paid = override === 'paid' || (override === 'auto' && detected === 'paid');
+      for (const type of Object.values(VISUAL_PREVIEW_CONTENT_TYPES)) {
+        assert.equal(githubAttachmentLimitBytes(type, capacity), (type.startsWith('video/') && paid ? 100 : 10) * MIB);
+      }
+      for (const type of ['application/pdf', 'image/bmp', 'video/avi', 'application/octet-stream', '']) {
+        assert.equal(githubAttachmentLimitBytes(type, capacity), null);
+      }
+      assert.equal(capacity.effectivePlan, paid ? 'paid' : 'free');
+      assert.equal(capacity.source, override !== 'auto' ? 'override' : detected === 'unknown' ? 'conservative-fallback' : 'detected');
+    });
+  }
+}
+
+test('auto recognizes only explicit known plans and defaults conservatively', () => {
+  for (const input of [undefined, null, {}, { plan: 'paid' }, { plan: { name: 'business' } }, { plan: { name: 'unknown', private_repos: 100 } }, { site_admin: true }, { company: 'Paid company' }]) {
+    assert.equal(detectGitHubAttachmentPlan(input), 'unknown');
+  }
+  for (const name of ['pro', 'team', 'enterprise', 'Medium']) assert.equal(detectGitHubAttachmentPlan({ plan: { name } }), 'paid');
+  assert.equal(detectGitHubAttachmentPlan({ plan: { name: 'free' } }), 'free');
+  assert.equal(resolveGitHubAttachmentCapacity().override, 'auto');
+  assert.equal(resolveGitHubAttachmentCapacity('invalid').source, 'conservative-fallback');
+});
+
+test('stored settings retain override but discard client-supplied resolved paid status', () => {
+  const settings = normalizeStoredVisualPreviewSettings({ enabled: true, types: ['video'], githubAttachmentPlan: 'free', githubAttachmentCapacity: resolveGitHubAttachmentCapacity('paid') });
+  assert.equal(settings.githubAttachmentPlan, 'free');
+  assert.equal(settings.githubAttachmentCapacity, undefined);
+});
+
+test('detection uses only GET /user with the existing token, without requesting scopes or permissions', async () => {
+  const requests: Array<{ url: unknown; init: RequestInit | undefined }> = [];
+  const result = await loadGitHubAttachmentCapacity('auto', {
+    resolveToken: async () => 'existing-upload-token',
+    fetch: async (url, init) => {
+      requests.push({ url, init });
+      return new Response(JSON.stringify({ plan: { name: 'pro' } }));
+    },
+  });
+  assert.equal(result.effectivePlan, 'paid');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://api.github.com/user');
+  assert.equal(requests[0].init?.method, 'GET');
+  assert.deepEqual(requests[0].init?.headers, { Accept: 'application/vnd.github+json', Authorization: 'Bearer existing-upload-token', 'User-Agent': 'ProPR' });
+  assert.equal(requests[0].init?.body, undefined);
+});
+
+test('missing, denied, unavailable, ambiguous, and malformed detection falls back without retries or auth changes', async () => {
+  for (const fetcher of [
+    async () => new Response('{}'),
+    async () => new Response('{"plan":{"name":"unrecognized"}}'),
+    async () => new Response('denied', { status: 403 }),
+    async () => new Response('bad credentials', { status: 401 }),
+    async () => new Response('not json'),
+    async () => { throw new Error('network unavailable'); },
+  ]) {
+    let calls = 0;
+    const result = await loadGitHubAttachmentCapacity('auto', {
+      resolveToken: async () => 'existing-token',
+      fetch: async () => { calls++; return fetcher(); },
+    });
+    assert.equal(result.source, 'conservative-fallback');
+    assert.equal(result.videoLimitBytes, 10 * MIB);
+    assert.equal(calls, 1);
+  }
+  const missing = await loadGitHubAttachmentCapacity('auto', { resolveToken: async () => { throw new Error('missing'); }, fetch: async () => { assert.fail('must not fetch without credentials'); } });
+  assert.equal(missing.source, 'conservative-fallback');
+});
+
+test('explicit overrides do not need credentials or additional API access', async () => {
+  for (const override of ['free', 'paid'] as const) {
+    const result = await loadGitHubAttachmentCapacity(override, { resolveToken: async () => { assert.fail('override must not read credentials'); }, fetch: async () => { assert.fail('override must not fetch'); } });
+    assert.equal(result.effectivePlan, override);
+    assert.equal(result.source, 'override');
+  }
+});

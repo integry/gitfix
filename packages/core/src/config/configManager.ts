@@ -1,3 +1,5 @@
+import { normalizeGitHubAttachmentPlanOverride, type GitHubAttachmentCapacity, type GitHubAttachmentPlanOverride } from '@propr/shared';
+import { loadGitHubAttachmentCapacity } from '../services/visualPreviewCapacityService.js';
 import logger from '../utils/logger.js';
 import { invalidateSettingsCache } from '../services/relevance/keywordExtractor.js';
 import { getConfig, saveConfig } from './configStore.js';
@@ -27,6 +29,9 @@ export interface RepoToMonitor {
 export type VisualPreviewType = 'image' | 'video';
 
 export interface VisualPreviewSettings {
+    githubAttachmentPlan?: GitHubAttachmentPlanOverride;
+    /** Computed at runtime; never trusted from stored settings. */
+    githubAttachmentCapacity?: GitHubAttachmentCapacity;
     enabled: boolean;
     types: VisualPreviewType[];
     instructions?: string;
@@ -47,6 +52,7 @@ export function normalizeStoredVisualPreviewSettings(value: unknown): VisualPrev
 
     return {
         enabled: candidate.enabled === true,
+        ...(candidate.githubAttachmentPlan !== undefined ? { githubAttachmentPlan: normalizeGitHubAttachmentPlanOverride(candidate.githubAttachmentPlan) } : {}),
         types: types.length > 0 ? types : ['image'],
         ...(instructions ? { instructions } : {})
     };
@@ -171,7 +177,7 @@ export async function loadRepositoryVisualPreviewSettings(repository: string): P
     try {
         const settings = resolveRepositoryVisualPreviewSettings(await loadMonitoredReposRaw(), repository);
         logger.info({ repository, enabled: settings.enabled, types: settings.types }, 'Loaded repository visual-preview settings');
-        return settings;
+        return { ...settings, githubAttachmentCapacity: await loadGitHubAttachmentCapacity(settings.githubAttachmentPlan) };
     } catch (error) {
         logger.warn({ repository, error: (error as Error).message }, 'Failed to load visual-preview settings; treating previews as disabled');
         return { enabled: false, types: ['image'] };

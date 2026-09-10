@@ -1,3 +1,4 @@
+import { githubAttachmentLimitBytes, resolveGitHubAttachmentCapacity, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity } from '@propr/shared';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -19,7 +20,6 @@ export const VISUAL_PREVIEW_MARKER = '<!-- propr-visual-preview -->';
 export const VISUAL_PREVIEW_SLOT = '<!-- propr-visual-preview-slot -->';
 
 const MAX_MANIFEST_BYTES = 64 * 1024;
-const MAX_GITHUB_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_PREVIEW_ASSETS = 8;
 const IMAGE_EXTENSIONS = new Set(['.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
 const VIDEO_EXTENSIONS = new Set(['.mov', '.mp4', '.webm']);
@@ -38,6 +38,7 @@ export interface VisualPreviewToolSuggestion {
 }
 
 export interface VisualPreviewEvidence {
+  githubAttachmentCapacity?: GitHubAttachmentCapacity;
   assets: VisualPreviewAsset[];
   toolSuggestions: VisualPreviewToolSuggestion[];
 }
@@ -154,7 +155,8 @@ async function collectAsset(
   worktreePath: string,
   relativePath: string,
   type: VisualPreviewType,
-  manifestEntry: VisualPreviewManifestEntry | undefined
+  manifestEntry: VisualPreviewManifestEntry | undefined,
+  capacity: GitHubAttachmentCapacity
 ): Promise<{ asset?: VisualPreviewAsset; oversized?: boolean }> {
   const absolutePath = path.resolve(worktreePath, relativePath);
   const root = path.resolve(worktreePath);
@@ -166,7 +168,7 @@ async function collectAsset(
     const [realRoot, realAsset] = await Promise.all([realpath(root), realpath(absolutePath)]);
     if (realAsset !== realRoot && !realAsset.startsWith(`${realRoot}${path.sep}`)) return {};
     if (stats.size === 0) return {};
-    if (stats.size > MAX_GITHUB_ATTACHMENT_BYTES) return { oversized: true };
+    if (stats.size > (githubAttachmentLimitBytes(VISUAL_PREVIEW_CONTENT_TYPES[path.extname(relativePath).toLowerCase()], capacity) ?? 0)) return { oversized: true };
   } catch {
     return {};
   }
@@ -205,10 +207,11 @@ export async function collectVisualPreviewEvidence({
     .sort((left, right) => left.filePath.localeCompare(right.filePath))
     .slice(0, MAX_PREVIEW_ASSETS);
 
+  const capacity = resolveGitHubAttachmentCapacity(settings.githubAttachmentPlan, settings.githubAttachmentCapacity?.detectedPlan);
   const assets: VisualPreviewAsset[] = [];
   let oversized = false;
   for (const candidate of candidates) {
-    const collected = await collectAsset(worktreePath, candidate.filePath, candidate.type, manifestEntries.get(candidate.filePath));
+    const collected = await collectAsset(worktreePath, candidate.filePath, candidate.type, manifestEntries.get(candidate.filePath), capacity);
     if (collected.asset) assets.push(collected.asset);
     oversized ||= collected.oversized === true;
   }
@@ -216,11 +219,11 @@ export async function collectVisualPreviewEvidence({
   if (oversized) {
     toolSuggestions.push({
       name: 'Media compression tooling',
-      reason: 'At least one generated preview exceeded GitHub’s universal 10 MB attachment limit; install or use an image optimizer or ffmpeg to shrink it.'
+      reason: 'At least one generated preview exceeded the resolved GitHub attachment limit; install or use an image optimizer or ffmpeg to shrink it.'
     });
   }
 
-  return { assets, toolSuggestions: toolSuggestions.slice(0, 5) };
+  return { assets, toolSuggestions: toolSuggestions.slice(0, 5), githubAttachmentCapacity: capacity };
 }
 
 function safeTemporaryName(taskId: string): string {
@@ -412,7 +415,7 @@ Visual previews are enabled for this repository. After implementing and testing,
 - Treat previews as evidence only: never expand the implementation scope. Do not create or update preview files when the current request produces no implementation changes, unless the user explicitly asks to generate or refresh previews for changes already present on the branch.
 - Generate focused ${requestedTypes} preview evidence of the current change using the project’s existing, relevant tooling (for example a headless browser, Storybook, an Android/iOS emulator, or a project-native renderer).
 - Capture the changed state itself, not generic application screens. Use realistic viewport/device states and follow the repository-specific instructions below when present.
-- Store each preview under the transient runtime directory \`${VISUAL_PREVIEW_DIRECTORY}/\`; never commit that directory yourself. Use portable filenames and only these formats: PNG/JPEG/GIF/SVG/WebP for images; MP4/MOV/WebM for videos. Keep every file below 10 MB. For video, prefer H.264 in MP4 for browser compatibility.
+- Store each preview under the transient runtime directory \`${VISUAL_PREVIEW_DIRECTORY}/\`; never commit that directory yourself. Use portable filenames and only these formats: PNG/JPEG/GIF/SVG/WebP for images; MP4/MOV/WebM for videos. Keep images below 10 MiB and videos below ${(resolveGitHubAttachmentCapacity(settings.githubAttachmentPlan, settings.githubAttachmentCapacity?.detectedPlan)).videoLimitBytes / (1024 * 1024)} MiB. For video, prefer H.264 in MP4 for browser compatibility.
 - Write \`${VISUAL_PREVIEW_MANIFEST}\` with this shape: \`{"previews":[{"path":".propr/previews/desktop.png","title":"Desktop dialog","description":"The changed dialog at desktop width"}],"toolSuggestions":[{"name":"Playwright Chromium","reason":"Needed to capture the running web UI"}]}\`. The manifest may contain an empty previews array when capture is blocked.
 - Do not link to local preview or manifest paths in your final response. ProPR reads the manifest and publishes the preview attachments separately.
 - Do not fabricate a preview or hand-draw a substitute. If the project cannot be run or the needed capture tool is unavailable, record concise, actionable \`toolSuggestions\` in the manifest describing what should be installed in the agent image and why.

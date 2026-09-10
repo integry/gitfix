@@ -1,3 +1,4 @@
+import type { GitHubAttachmentCapacity, GitHubAttachmentPlanOverride } from '@propr/shared';
 /**
  * Repository Configuration API
  *
@@ -188,6 +189,8 @@ export interface MonitoredRepo {
 }
 
 export interface VisualPreviewSettings {
+  githubAttachmentPlan?: GitHubAttachmentPlanOverride;
+  githubAttachmentCapacity?: GitHubAttachmentCapacity;
   enabled: boolean;
   types: Array<'image' | 'video'>;
   instructions?: string;
@@ -406,6 +409,8 @@ export async function updateRepo(
     ...(updates.autoFollowupOnFailedCi !== undefined && { autoFollowupOnFailedCi: updates.autoFollowupOnFailedCi }),
     ...(updates.visualPreview !== undefined && {
       visualPreview: {
+        ...((updates.visualPreview.githubAttachmentPlan ?? existingRepo.visualPreview?.githubAttachmentPlan) !== undefined
+          ? { githubAttachmentPlan: updates.visualPreview.githubAttachmentPlan ?? existingRepo.visualPreview?.githubAttachmentPlan } : {}),
         enabled: updates.visualPreview.enabled ?? existingRepo.visualPreview?.enabled ?? false,
         types: updates.visualPreview.types ?? existingRepo.visualPreview?.types ?? ['image'],
         ...(updatedInstructions ? { instructions: updatedInstructions } : {})

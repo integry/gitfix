@@ -374,3 +374,5 @@ export {
   type VoiceCapabilitiesResponse,
   type RuntimeVoiceSchema,
 } from './voice.js';
+
+export * from './visualPreviewCapacity.js';

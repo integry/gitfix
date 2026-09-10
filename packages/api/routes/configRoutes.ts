@@ -184,7 +184,20 @@ export function createConfigRoutes(deps: ConfigRoutesDeps) {
   const postFollowupIgnoreKeywords = createJsonPostHandler({ lockKey: 'config:ignore-keywords:lock', pickValue: body => body.followup_ignore_keywords, validate: followup_ignore_keywords => parseNormalizedStringArrayResult(followup_ignore_keywords, 'followup_ignore_keywords'), save: followup_ignore_keywords => configStore.saveFollowupIgnoreKeywords(followup_ignore_keywords), subtype: 'followup_ignore_keywords_update', body: followup_ignore_keywords => ({ followup_ignore_keywords }), committedErrorMessage: 'Follow-up ignore keywords were saved, but publishing the config update notification failed. Persisted config may require a follow-up check.' });
 
   const getRepos = createJsonGetHandler(
-    async () => (await configStore.loadMonitoredReposRaw()).map(withDefaultRepoOptions),
+    async () => {
+      const repos = (await configStore.loadMonitoredReposRaw()).map(withDefaultRepoOptions);
+      const detected = repos.some(repo => !repo.visualPreview?.githubAttachmentPlan || repo.visualPreview.githubAttachmentPlan === 'auto')
+        ? await configStore.loadGitHubAttachmentCapacity() : undefined;
+      return Promise.all(repos.map(async repo => ({
+        ...repo,
+        visualPreview: {
+          ...repo.visualPreview!,
+          githubAttachmentPlan: repo.visualPreview?.githubAttachmentPlan ?? 'auto',
+          githubAttachmentCapacity: !repo.visualPreview?.githubAttachmentPlan || repo.visualPreview.githubAttachmentPlan === 'auto'
+            ? detected : await configStore.loadGitHubAttachmentCapacity(repo.visualPreview.githubAttachmentPlan),
+        },
+      })));
+    },
     repos_to_monitor => ({ repos_to_monitor }),
     'Failed to load repository configuration',
     '/api/config/repos GET'

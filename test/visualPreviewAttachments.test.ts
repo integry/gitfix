@@ -229,3 +229,50 @@ test('uploads an attachment directly to the repository-scoped GitHub endpoint', 
     repositoryId: 987,
   }), 'https://github.com/user-attachments/assets/direct-asset-id');
 });
+
+test('direct upload rejects oversized images for paid plans and oversized videos for unresolved auto before network access', async () => {
+  const { truncate } = await import('node:fs/promises');
+  const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
+  const directory = await mkdtemp(path.join(tmpdir(), 'propr-upload-capacity-'));
+  const originalFetch = globalThis.fetch;
+  try {
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ url: 'https://github.com/user-attachments/assets/paid-video' }));
+    };
+    for (const extension of ['png', 'jpg', 'gif', 'svg', 'webp', 'mp4', 'mov', 'webm', 'pdf']) {
+      const absolutePath = path.join(directory, `preview.${extension}`);
+      await writeFile(absolutePath, '');
+      await truncate(absolutePath, 10 * MIB + 1);
+      const isVideo = ['mp4', 'mov', 'webm'].includes(extension);
+      await assert.rejects(uploadVisualPreviewAsset({ absolutePath, authToken: 'existing', repositoryId: 1 }), /limit|Unsupported/);
+      if (isVideo) {
+        await uploadVisualPreviewAsset({ absolutePath, authToken: 'existing', repositoryId: 1, capacity: resolveGitHubAttachmentCapacity('auto', 'paid') });
+        await truncate(absolutePath, 100 * MIB + 1);
+      }
+      await assert.rejects(uploadVisualPreviewAsset({ absolutePath, authToken: 'existing', repositoryId: 1, capacity: resolveGitHubAttachmentCapacity('paid') }), /limit|Unsupported/);
+    }
+    assert.equal(requests, 3, 'only eligible paid videos reached the upload endpoint');
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('GitHub CLI PR upload enforces the capacity policy before starting gh', async () => {
+  const { truncate } = await import('node:fs/promises');
+  const directory = await mkdtemp(path.join(tmpdir(), 'propr-pr-capacity-'));
+  try {
+    const absolutePath = path.join(directory, 'preview.mp4');
+    await writeFile(absolutePath, '');
+    await truncate(absolutePath, 11 * 1024 * 1024);
+    await assert.rejects(publishPullRequestVisualPreviews({
+      owner: 'integry', repo: 'propr', pullRequestNumber: 42, body: '', authToken: 'existing', worktreePath: directory,
+      evidence: { assets: [{ relativePath: '.propr/previews/preview.mp4', absolutePath, type: 'video', title: 'Preview' }], toolSuggestions: [] },
+      octokit: { request: async () => { assert.fail('must reject before publication'); } },
+    }), /limit of 10 MiB/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

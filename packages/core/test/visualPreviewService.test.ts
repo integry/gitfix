@@ -265,3 +265,27 @@ test('stages previews even when the repository ignores the transient directory',
   await assert.rejects(access(path.join(worktree, '.propr/previews')));
   await cleanupPreparedVisualPreviewEvidence(prepared);
 });
+
+test('collection enforces image and video byte boundaries with conservative auto fallback', async () => {
+  const { truncate } = await import('node:fs/promises');
+  const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
+  const worktree = await createWorktree();
+  for (const extension of ['png', 'jpeg', 'gif', 'svg', 'webp', 'mp4', 'mov', 'webm', 'pdf']) {
+    const relativePath = `.propr/previews/boundary.${extension}`;
+    await writeFile(path.join(worktree, relativePath), '');
+    for (const override of ['auto', 'free', 'paid'] as const) {
+      const isVideo = ['mp4', 'mov', 'webm'].includes(extension);
+      const limit = (override === 'paid' && isVideo ? 100 : 10) * MIB;
+      for (const size of [10 * MIB, 10 * MIB + 1, limit, limit + 1]) {
+        await truncate(path.join(worktree, relativePath), size);
+        const evidence = await collectVisualPreviewEvidence({ worktreePath: worktree, changedFiles: [relativePath], settings: { enabled: true, types: ['image', 'video'], githubAttachmentPlan: override } });
+        assert.equal(evidence.assets.length, extension !== 'pdf' && size <= limit ? 1 : 0, `${extension}, ${override}, ${size}`);
+      }
+    }
+  }
+  const relativePath = '.propr/previews/boundary.mp4';
+  await truncate(path.join(worktree, relativePath), 20 * MIB);
+  const evidence = await collectVisualPreviewEvidence({ worktreePath: worktree, changedFiles: [relativePath], settings: { enabled: true, types: ['video'], githubAttachmentCapacity: resolveGitHubAttachmentCapacity('auto', 'paid') } });
+  assert.equal(evidence.assets.length, 1);
+  assert.equal(evidence.githubAttachmentCapacity?.videoLimitBytes, 100 * MIB);
+});

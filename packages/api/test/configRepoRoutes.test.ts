@@ -1,3 +1,4 @@
+import { resolveGitHubAttachmentCapacity } from '@propr/shared';
 import assert from 'node:assert/strict';
 import { after, mock, test } from 'node:test';
 
@@ -30,7 +31,8 @@ test('GET repository config returns false for legacy entries with a missing opti
   const routes = createConfigRoutes({
     redisClient: {} as never,
     configStore: {
-      loadMonitoredReposRaw: async () => [{ id: 'repo-1', name: 'integry/propr', enabled: true }]
+      loadMonitoredReposRaw: async () => [{ id: 'repo-1', name: 'integry/propr', enabled: true }],
+      loadGitHubAttachmentCapacity: async () => resolveGitHubAttachmentCapacity()
     }
   });
   const response = createResponse();
@@ -44,7 +46,7 @@ test('GET repository config returns false for legacy entries with a missing opti
       name: 'integry/propr',
       enabled: true,
       autoFollowupOnFailedCi: false,
-      visualPreview: { enabled: false, types: ['image'] }
+      visualPreview: { enabled: false, types: ['image'], githubAttachmentPlan: 'auto', githubAttachmentCapacity: resolveGitHubAttachmentCapacity() }
     }]
   });
 });
@@ -141,6 +143,7 @@ test('POST repository config synchronizes changed visual previews across branch 
   });
   const response = createResponse();
   const visualPreview = {
+    githubAttachmentPlan: 'paid' as const,
     enabled: true,
     types: ['image', 'video'],
     instructions: 'Show desktop and mobile.'
@@ -215,4 +218,29 @@ test('POST repository config preserves an omitted option for existing repositori
       { id: 'repo-3', autoFollowupOnFailedCi: false }
     ]
   );
+});
+
+test('GET settings exposes configured override and effective detection for every repository', async () => {
+  for (const detectedPlan of ['unknown', 'free', 'paid'] as const) {
+    const calls: Array<string | undefined> = [];
+    const routes = createConfigRoutes({
+      redisClient: {} as never,
+      configStore: {
+        loadMonitoredReposRaw: async () => ['auto', 'free', 'paid'].map(plan => ({ id: plan, name: `integry/${plan}`, enabled: true, visualPreview: { enabled: true, types: ['video'], githubAttachmentPlan: plan as 'auto' | 'free' | 'paid' } })),
+        loadGitHubAttachmentCapacity: async override => {
+          calls.push(override);
+          return resolveGitHubAttachmentCapacity(override, override ? 'unknown' : detectedPlan);
+        },
+      },
+    });
+    const response = createResponse();
+    await routes.getRepos({} as never, response as never);
+    const repos = response.body?.repos_to_monitor as Array<{ visualPreview: { githubAttachmentPlan: string; githubAttachmentCapacity: ReturnType<typeof resolveGitHubAttachmentCapacity> } }>;
+    assert.deepEqual(repos.map(repo => repo.visualPreview.githubAttachmentPlan), ['auto', 'free', 'paid']);
+    for (const repo of repos) {
+      const plan = repo.visualPreview.githubAttachmentPlan;
+      assert.deepEqual(repo.visualPreview.githubAttachmentCapacity, resolveGitHubAttachmentCapacity(plan, plan === 'auto' ? detectedPlan : 'unknown'));
+    }
+    assert.deepEqual(calls, [undefined, 'free', 'paid']);
+  }
 });

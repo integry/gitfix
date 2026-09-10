@@ -78,10 +78,31 @@ When enabled, the implementation agent evaluates the completed change:
 
 Agents generate media under the transient `.propr/previews/` runtime directory and may use `.propr/preview-src/` for preview-only source material. Optional titles, descriptions, and tool recommendations are recorded in `.propr/previews/manifest.json`. Before committing, ProPR copies accepted files to worker-owned temporary storage and removes both runtime directories from the worktree. A second safeguard at the commit boundary excludes them from work output, so preview artifacts are never included in the implementation commit.
 
-Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video formats are MP4, MOV, and WebM; H.264 MP4 is the most broadly compatible choice. Each attachment must be smaller than 10 MB.
+Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video formats are MP4, MOV, and WebM; H.264 MP4 is the most broadly compatible choice. Images are capped at 10 MiB; video capacity is determined by the GitHub attachment plan setting described below.
 
 ## Publication And Upload Failures
 
 ProPR publishes previews as [GitHub attachments](https://cli.github.com/manual/gh_pr_edit) so images render inline and videos use GitHub's media presentation. For follow-ups, it uploads the media first and then updates the existing progress comment; it does not create a temporary second comment. ProPR verifies that every temporary local path was replaced with a hosted attachment URL, then deletes the temporary files. If upload or verification fails, ProPR publishes a text-only explanation; preview media is not added to Git as a fallback. When the failure is a missing, unsupported, expired, or rejected user credential, that explanation includes the exact Settings reconnection steps in the affected pull request.
 
 Preview generation is evidence, not a replacement for automated tests. A preview failure does not discard an otherwise valid implementation; the PR explains missing tool support when the agent can identify it.
+
+### GitHub attachment capacity
+
+Each repository has a **GitHub attachment plan** setting under its visual-preview controls:
+
+- `auto` (default): best-effort detection of the attachment uploader's account plan using `GET /user` with the already-configured upload credential. Only recognized, explicit paid plans enable larger videos.
+- `free`: enforce Free limits regardless of detection.
+- `paid`: explicitly enable paid video capacity for this repository.
+
+PNG, JPEG, GIF, SVG, and WebP images always have a **10 MiB** inline attachment limit. MP4, MOV, and WebM videos have a **10 MiB** limit for Free and **100 MiB** for paid. Other content types are unsupported. Collection and upload both enforce the resolved policy; GitHub can still reject an eligible upload.
+
+If credentials are absent, GitHub omits the plan, or the API is ambiguous or unavailable, `auto` reports **Auto unresolved; using conservative Free limits**. Detection does not request broader OAuth scopes, GitHub App permissions, billing access, or changes to Connect. Organization membership and repository visibility do not establish the uploading account's paid status.
+
+The repository settings API exposes `visualPreview.githubAttachmentPlan` and the read-only `visualPreview.githubAttachmentCapacity` (detected/effective plan, resolution source, and byte limits). Only the override is persisted; the server recomputes capacity. `propr repo list` displays the override and resolved limits. To change it:
+
+```sh
+propr repo toggle owner/repo --github-attachment-plan paid
+propr repo toggle owner/repo --github-attachment-plan auto
+```
+
+This policy does not change staging: `.propr/previews` and `.propr/preview-src` remain transient runtime directories and are removed before commit.
