@@ -18,9 +18,9 @@ const root = resolve(desktop, '../..');
 const fixture = join(desktop, 'scripts/fixtures/linux-window-frame');
 
 // Opt in with PROPR_DESKTOP_FRAME_TEST=1 on an isolated X11 DISPLAY with a WM
-// (e.g. Xvfb + Openbox), xdotool, and a compositor (e.g. Picom) for previews.
+// (e.g. Xvfb + Xfwm4/Openbox), xdotool, and a compositor (e.g. Picom) for previews.
 // PROPR_DESKTOP_FRAME_PREVIEWS=.propr/previews also captures real desktop pixels.
-it('Linux frame remains visible over white and supports native window interactions', { timeout: 120_000 }, async context => {
+const exerciseLinuxFrame = async (context, managerOpen) => {
   if (process.env.PROPR_DESKTOP_FRAME_TEST !== '1' || process.platform !== 'linux' || !process.env.DISPLAY) {
     context.skip('Set PROPR_DESKTOP_FRAME_TEST=1 on an isolated Linux DISPLAY with a window manager and xdotool');
     return;
@@ -41,6 +41,8 @@ it('Linux frame remains visible over white and supports native window interactio
     await build({
       entryPoints: [join(fixture, 'renderer.tsx')], outfile: join(directory, 'renderer.js'),
       bundle: true, platform: 'browser', format: 'iife',
+      // Match Vite's TypeScript resolution (TaskList has both utils.ts/.tsx).
+      resolveExtensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'],
       define: { 'import.meta.env': '{}', __APP_VERSION__: '"frame-test"' },
     });
     const baseCss = await readFile(join(root, 'propr-ui/src/index.css'), 'utf8');
@@ -55,16 +57,29 @@ it('Linux frame remains visible over white and supports native window interactio
     await expect.poll(() => application.windows().length).toBe(2);
     const page = application.windows().find(window => window.url().startsWith('frame-fixture:'));
     assert.ok(page);
+    // Production Layout/Dashboard, but never contact a developer's local API.
+    await page.route('http://127.0.0.1:3000/**', route => route.fulfill({ status: 503, json: { error: 'Isolated frame fixture' } }));
     await expect(page.getByRole('heading', { name: 'Choose an instance' })).toBeVisible();
     const html = page.locator('html');
     const native = action => application.evaluate(({ BrowserWindow }, operation) => {
-      const window = BrowserWindow.getAllWindows().find(item => item.getTitle() === 'ProPR Desktop');
+      const window = BrowserWindow.getAllWindows().find(item => item.webContents.getURL().startsWith('frame-fixture:'));
       if (operation === 'restore') { window.restore(); window.show(); window.focus(); }
       if (operation === 'fullscreen') window.setFullScreen(true);
       if (operation === 'leave-fullscreen') window.setFullScreen(false);
       if (operation === 'focus') window.focus();
-      return { bounds: window.getBounds(), maximized: window.isMaximized(), minimized: window.isMinimized() };
+      return { bounds: window.getBounds(), maximized: window.isMaximized(), minimized: window.isMinimized(), nativeId: window.getNativeWindowHandle().readUInt32LE(0).toString() };
     }, action);
+    const pointerClick = async name => {
+      const button = page.getByRole('button', { name, exact: true });
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      assert.ok(box);
+      const { bounds, nativeId } = await native('focus');
+      // XTest input enters through the WM's native drag hit test. Playwright
+      // mouse/DOM clicks bypass that test and missed the connected regression.
+      await expect(html).toHaveAttribute('data-window-focused', 'true');
+      execFileSync('xdotool', ['windowraise', nativeId, 'mousemove', String(Math.round(bounds.x + box.x + box.width / 2)), String(Math.round(bounds.y + box.y + box.height / 2)), 'click', '1'], { timeout: 5_000 });
+    };
     const focusBackground = async () => {
       await application.evaluate(async ({ BrowserWindow }) => {
         const windows = BrowserWindow.getAllWindows();
@@ -87,7 +102,7 @@ it('Linux frame remains visible over white and supports native window interactio
     });
     const previews = [];
     const capture = async (name, title) => {
-      if (!process.env.PROPR_DESKTOP_FRAME_PREVIEWS) return;
+      if (!process.env.PROPR_DESKTOP_FRAME_PREVIEWS || managerOpen) return;
       const output = resolve(root, process.env.PROPR_DESKTOP_FRAME_PREVIEWS);
       await mkdir(output, { recursive: true });
       // Native configure/focus events precede the compositor's painted frame.
@@ -136,7 +151,7 @@ it('Linux frame remains visible over white and supports native window interactio
     await expect.poll(async () => (await native()).bounds.width).toBeLessThan(beforeResize.width);
 
     const resizedWidth = (await native()).bounds.width;
-    await page.getByRole('button', { name: 'Maximize or restore window' }).click();
+    await pointerClick('Maximize or restore window');
     await expect(html).toHaveAttribute('data-window-expanded', 'true');
     const workArea = await application.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea);
     await expect.poll(async () => (await native()).bounds).toEqual(workArea);
@@ -146,7 +161,7 @@ it('Linux frame remains visible over white and supports native window interactio
     await focusBackground();
     await capture('linux-maximized-inactive', 'Linux: maximized, inactive');
     await native('focus');
-    await page.getByRole('button', { name: 'Maximize or restore window' }).click();
+    await pointerClick('Maximize or restore window');
     await expect(html).toHaveAttribute('data-window-expanded', 'false');
     assert.equal((await native()).bounds.width, resizedWidth);
 
@@ -154,7 +169,7 @@ it('Linux frame remains visible over white and supports native window interactio
     const restored = (await native()).bounds;
     execFileSync('xdotool', ['mousemove', '--sync', String(restored.x + 250), String(restored.y + 20), 'click', '--repeat', '2', '--delay', '100', '1']);
     await expect(html).toHaveAttribute('data-window-expanded', 'true');
-    await page.getByRole('button', { name: 'Maximize or restore window' }).click();
+    await pointerClick('Maximize or restore window');
     await native('fullscreen');
     await expect(html).toHaveAttribute('data-window-expanded', 'true');
     await native('leave-fullscreen');
@@ -162,23 +177,66 @@ it('Linux frame remains visible over white and supports native window interactio
     await page.reload();
     await expect(html).toHaveAttribute('data-window-expanded', 'false');
 
-    await page.getByRole('button', { name: 'This computer Local instance' }).click();
-    await page.getByRole('button', { name: 'Connected: This computer' }).click();
-    await expect(page.getByRole('dialog', { name: 'Manage instances' })).toBeVisible();
+    await pointerClick('This computer Local instance');
+    await expect(page.getByRole('heading', { name: 'Recent Activity' })).toBeVisible();
+    // Reload with a saved active profile so the connected shell is also tested
+    // on startup, not only after the chooser-to-Dashboard transition.
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Recent Activity' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Connected: This computer' })).toBeVisible();
+    await pointerClick('0 Plans');
+    await expect(page.getByText('All caught up.', { exact: true })).toBeVisible();
+    await pointerClick('0 Plans');
+    await expect(page.getByText('All caught up.', { exact: true })).not.toBeVisible();
+    await pointerClick('Maximize or restore window');
+    await expect(html).toHaveAttribute('data-window-expanded', 'true');
+    await expect.poll(async () => (await native()).bounds).toEqual(workArea);
+    await pointerClick('Maximize or restore window');
+    await expect(html).toHaveAttribute('data-window-expanded', 'false');
+    assert.equal((await native()).bounds.width, resizedWidth);
+    if (managerOpen) {
+      await pointerClick('Connected: This computer');
+      await expect(page.getByRole('dialog', { name: 'Manage instances' })).toBeVisible();
+      await pointerClick('Close instance manager');
+      await expect(page.getByRole('dialog', { name: 'Manage instances' })).not.toBeVisible();
+      await pointerClick('Connected: This computer');
+      await expect(page.getByRole('dialog', { name: 'Manage instances' })).toBeVisible();
+    }
     assert.equal(await page.getByRole('group', { name: 'Window controls' }).evaluate(element => !!element.closest('[inert]')), false);
-    await page.getByRole('button', { name: 'Minimize window' }).click();
+    await pointerClick('Minimize window');
     await expect.poll(async () => (await native()).minimized).toBe(true);
     await native('restore');
     await expect(html).toHaveAttribute('data-window-focused', 'true');
+    await pointerClick('Maximize or restore window');
+    await expect(html).toHaveAttribute('data-window-expanded', 'true');
+    await expect.poll(async () => (await native()).bounds).toEqual(workArea);
+    await pointerClick('Minimize window');
+    await expect.poll(async () => (await native()).minimized).toBe(true);
+    await native('restore');
+    await expect(html).toHaveAttribute('data-window-focused', 'true');
+    await pointerClick('Maximize or restore window');
+    await expect(html).toHaveAttribute('data-window-expanded', 'false');
+    assert.equal((await native()).bounds.width, resizedWidth);
+    if (managerOpen) await expect(page.getByRole('dialog', { name: 'Manage instances' })).toBeVisible();
+    // Keep keyboard coverage in addition to (never instead of) native clicks.
     const maximize = page.getByRole('button', { name: 'Maximize or restore window' });
     await maximize.focus();
     await page.keyboard.press('Enter');
     await expect(html).toHaveAttribute('data-window-expanded', 'true');
-    await expect(page.getByRole('dialog', { name: 'Manage instances' })).toBeVisible();
-    await page.getByRole('button', { name: 'Close window' }).click();
+    if (managerOpen) await expect(page.getByRole('dialog', { name: 'Manage instances' })).toBeVisible();
+    else {
+      await pointerClick('Maximize or restore window');
+      await expect(html).toHaveAttribute('data-window-expanded', 'false');
+    }
+    await pointerClick('Close window');
     await expect.poll(() => page.isClosed()).toBe(true);
   } finally {
     await application?.close();
     await rm(directory, { recursive: true, force: true });
   }
-});
+};
+
+for (const managerOpen of [false, true]) {
+  it(`Linux frame supports native pointer controls on Dashboard${managerOpen ? ' with a modal' : ''}`,
+    { timeout: 120_000 }, context => exerciseLinuxFrame(context, managerOpen));
+}

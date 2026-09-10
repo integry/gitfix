@@ -7,6 +7,7 @@ import { synchronizeLinuxWindowFrame } from '../../../src/linux-window-frame';
 // Isolated fixture: production window options/state and renderer components,
 // in-memory profiles, no user session, services, authentication or tray.
 app.disableHardwareAcceleration();
+app.setPath('userData', join(__dirname, 'user-data'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'frame-fixture', privileges: { standard: true, secure: true } }]);
 void app.whenReady().then(async () => {
   protocol.handle('frame-fixture', request => {
