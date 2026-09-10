@@ -98,3 +98,76 @@ Use a test account and non-sensitive spoken phrases on a real HTTPS staging orig
 5. Deliver a Web Push while the Home Screen app is closed or backgrounded. Verify the notification is text-only and that opening it does not start voice playback without a new user request.
 
 A release is not verified until the matrix includes a denied microphone permission result, an unsupported-recognition result, background cancellation, and confirmation gating for a mutating command, in addition to the successful text briefing path.
+
+## Desktop diagnosis and consent (#2264, #2260; epic #1970)
+
+The reported Linux runtime pin `6b8ebe96c61e70238041c6366cf89463a5570a1d`
+precedes the voice backend: its `packages/api/server.ts` does not register either
+voice route and its source tree has no `packages/api/routes/voiceRoutes.ts`.
+The reported newer desktop revision `03f78868` registers both authenticated
+`GET /api/voice/capabilities` and `GET /api/voice/briefing` routes. Updating the
+desktop renderer alone cannot add those endpoints to an already running server.
+The implementation must target `1950-epic-cross-platform-dsk`.
+
+`apiFetch` resolves relative paths through the active `ProprClient`, and the
+desktop credential boundary attaches credentials for that selected instance.
+The initially empty API base therefore does **not** cause requests to go to the
+renderer origin. Voice requests now always use relative API paths; this also
+avoids retaining a nonempty base URL from an earlier instance. Regression tests
+cover activation, profile switching, and the desktop transport scope header.
+A missing voice endpoint produces `VOICE_BACKEND_UNAVAILABLE`, without falling
+back to another origin, resetting credentials, or inventing briefing data.
+
+For the affected installation, inspect the selected instance's network responses
+for both voice GET routes and the running runtime image/revision. An authenticated
+JSON capabilities response establishes route availability; a 401/403 requires
+resolving authentication/authorization, while a 404 from the reported older build
+requires updating that **server runtime** to a voice-enabled desktop-epic build
+and reconnecting. Preserve the existing data and credentials. This change does
+not deploy or replace that runtime. Source revisions were checked during this
+fix; no live user instance endpoint was available to independently inspect its
+currently deployed responses.
+
+### Microphone access is separate from recognition
+
+Standard Electron exposes a Web Speech constructor without supplying the
+proprietary recognition service available in Chrome/Edge. Electron maintainers
+[confirm this limitation](https://github.com/electron/electron/issues/46143#issuecomment-3166676214),
+and Electron 44's
+[local recognition context is unimplemented](https://github.com/electron/electron/blob/v44.0.0/shell/browser/electron_speech_recognition_manager_delegate.cc).
+API presence is not evidence of working packaged recognition. Desktop therefore
+shows **Check microphone**, explicitly describing it as an access test, and does
+not invoke Web Speech recognition. Browser **Listen** retains its existing
+user-initiated recognition flow. `service-not-allowed` is a speech-service failure,
+separate from `not-allowed` / an OS microphone denial.
+
+On Linux desktop, the check requires a live user gesture in the isolated preload and a
+native **Allow microphone** decision (default/escape is **Deny**). It opens an
+audio-only stream after approval and immediately stops every track. No recorder,
+transcription provider, upload, or background listener is created. Access is
+restricted to the live trusted main renderer, top frame, and active connection;
+null/foreign web contents, subframes, approval windows, camera/mixed/unknown media,
+and other permissions remain denied. The grant is temporary, ends on completion
+or cancellation, and expires after 30 seconds. Navigation, renderer destruction,
+crash, connection invalidation, and shutdown prevent grant reuse. Cancellation
+also ignores a late native approval and releases a late device stream.
+
+Safe options today are desktop text briefings and voice commands in a supported
+browser with the existing vendor-processing disclosure. A future desktop
+implementation could bundle an explicitly selected local transcription engine
+and model after reviewing resource, licensing, packaging, and privacy requirements.
+Adding a paid/cloud provider or forwarding raw audio requires separate approval;
+this fix adds neither. Physical microphone and native OS prompts still require
+release verification on the packaged target device; mocked tests do not establish
+that hardware or a speech service works.
+
+An isolated Linux Electron 44.0.0 check also exercised the actual preload and
+session-security handlers on a secure `propr-app://renderer` page, with synthetic
+media and an injected native consent decision. Results: microphone denied before
+consent; request without a user gesture rejected; one approved request opened
+and stopped audio; mixed camera/audio denied; microphone denied after revocation.
+This is runtime permission-boundary evidence, not a packaged physical-device or
+native-dialog acceptance result. A separate synthetic Web Speech probe exposed
+the constructor but failed with `audio-capture`; virtual audio cannot validate
+recognition service availability. The unsupported desktop decision relies on
+the Electron implementation and maintainer explanation linked above.

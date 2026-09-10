@@ -13,11 +13,14 @@ import {
   refinePlan,
   stopTaskExecution,
 } from '../api/proprApi';
+import { subscribeDesktopConnectionScope } from '../api/apiClient';
+import { isDesktopRuntime } from '../config/runtimeMode';
 import { getVoiceBriefing } from '../api/voiceApi';
 import {
   BrowserSpeechError,
   getBrowserSpeechCapabilities,
   listenOnce,
+  normalizeBrowserSpeechError,
   speakOnce,
   type BrowserSpeechCapabilities,
   type CancellableSpeech,
@@ -69,6 +72,24 @@ export interface VoiceBriefingController {
 
 function messageFrom(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function desktopVoiceBridge() {
+  return isDesktopRuntime() ? window.proprDesktop?.voice : undefined;
+}
+
+/** Consent and device availability are checked without invoking a transcription service. */
+async function checkDesktopMicrophone(
+  voice: NonNullable<Window['proprDesktop']>['voice'],
+  signal: AbortSignal,
+): Promise<void> {
+  if (!voice) throw new BrowserSpeechError('service-unavailable');
+  const allowed = await voice.requestMicrophone();
+  if (signal.aborted) throw new BrowserSpeechError('cancelled');
+  if (!allowed) throw new BrowserSpeechError('permission-denied');
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  stream.getTracks().forEach(track => track.stop());
+  if (signal.aborted) throw new BrowserSpeechError('cancelled');
 }
 
 function confirmationPrompt(action: PendingVoiceBriefingAction): string {
@@ -427,26 +448,45 @@ export function useVoiceBriefing(
     const controller = new AbortController();
     recognitionRef.current = controller;
 
+    const isCurrentRecognition = () => mountedRef.current && recognitionRef.current === controller;
+    const desktopVoice = desktopVoiceBridge();
+    const revokeMicrophone = () => { void desktopVoice?.revokeMicrophone().catch(() => undefined); };
+    controller.signal.addEventListener('abort', revokeMicrophone, { once: true });
     let spokenText: string;
     try {
+      if (isDesktopRuntime()) {
+        await checkDesktopMicrophone(desktopVoice, controller.signal);
+        if (isCurrentRecognition()) {
+          recognitionRef.current = null;
+          showError('Microphone access is allowed. Voice commands are unavailable in this desktop runtime. Use Catch me up for text, or voice commands in a supported browser.');
+        }
+        return;
+      }
       // listenOnce starts recognition synchronously here, preserving user-gesture activation.
       spokenText = await listenOnce({
         signal: controller.signal,
         lang: optionsRef.current.language,
         timeoutMs: optionsRef.current.recognitionTimeoutMs,
       });
-      if (!mountedRef.current || recognitionRef.current !== controller) return;
+      if (!isCurrentRecognition()) return;
       recognitionRef.current = null;
     } catch (recognitionError) {
-      if (!mountedRef.current || recognitionRef.current !== controller) return;
+      if (!isCurrentRecognition()) return;
       recognitionRef.current = null;
       if (recognitionError instanceof BrowserSpeechError
         && recognitionError.category === 'cancelled') {
         setPhase(pendingActionRef.current ? 'confirming' : 'idle');
         return;
       }
-      showError(messageFrom(recognitionError, 'The voice command could not be recognized.'));
+      showError(isDesktopRuntime()
+        ? normalizeBrowserSpeechError(recognitionError).message
+        : messageFrom(recognitionError, 'The voice command could not be recognized.'));
       return;
+    } finally {
+      controller.signal.removeEventListener('abort', revokeMicrophone);
+      // Cancellation already revoked this grant. A late completion must not
+      // revoke a newer attempt that began after cancellation.
+      if (!controller.signal.aborted) revokeMicrophone();
     }
 
     try {
@@ -475,6 +515,8 @@ export function useVoiceBriefing(
     if (mountedRef.current) setError(null);
     setPhase(pendingActionRef.current ? 'confirming' : 'idle');
   }, [setPhase]);
+
+  useEffect(() => subscribeDesktopConnectionScope(stopAudio), [stopAudio]);
 
   useEffect(() => {
     mountedRef.current = true;

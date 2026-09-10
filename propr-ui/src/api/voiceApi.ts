@@ -7,18 +7,26 @@ import {
   type VoiceBriefingScope,
   type VoiceCapabilitiesResponse,
 } from '@propr/shared';
-import { API_BASE_URL, apiFetch, handleApiResponse } from './apiClient';
+import { apiFetch, handleApiResponse } from './apiClient';
 
-const VOICE_API_URL = `${API_BASE_URL}/api/voice`;
+export class VoiceBackendUnavailableError extends Error {
+  readonly code = 'VOICE_BACKEND_UNAVAILABLE';
+
+  constructor() {
+    super('Voice briefings are unavailable on the connected server (HTTP 404). Update the server runtime to a version with voice briefings, then reconnect. Updating the desktop app alone does not update the server.');
+    this.name = 'VoiceBackendUnavailableError';
+  }
+}
 
 async function getValidatedJson<T>(
   path: string,
   schema: RuntimeVoiceSchema<T>,
 ): Promise<T> {
-  const response = await apiFetch(`${VOICE_API_URL}${path}`, {
+  const response = await apiFetch(`/api/voice${path}`, {
     method: 'GET',
     credentials: 'include',
   });
+  if (response.status === 404) throw new VoiceBackendUnavailableError();
   await handleApiResponse(response);
   return schema.parse(await response.json() as unknown);
 }

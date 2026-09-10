@@ -370,3 +370,166 @@ describe('production desktop session security', () => {
     }
   });
 });
+
+describe('desktop microphone consent', () => {
+  async function fixture() {
+    const { EventEmitter } = await import('node:events');
+    const handlers = new Map<string, (event: any) => any>();
+    let check: any;
+    let request: any;
+    let scopeCurrent = true;
+    let focused = true;
+    let resolveConsent: (allowed: boolean) => void = () => undefined;
+    let consentSignal: AbortSignal | undefined;
+    let prompts = 0;
+    const frame = { detached: false, parent: null, url: RENDERER_URL };
+    const renderer = Object.assign(new EventEmitter(), {
+      mainFrame: frame,
+      getURL: () => frame.url,
+      isDestroyed: () => false,
+      isFocused: () => focused,
+    });
+    const event = { sender: renderer, senderFrame: frame };
+    const security = configureDesktopSessionSecurity({
+      ipcMain: {
+        handle: (channel: string, handler: any) => { handlers.set(channel, handler); },
+        removeHandler: (channel: string) => { handlers.delete(channel); },
+      },
+      desktopSession: {
+        setPermissionCheckHandler: (handler: any) => { check = handler; },
+        setPermissionRequestHandler: (handler: any) => { request = handler; },
+        webRequest: { onBeforeSendHeaders() {}, onHeadersReceived() {} },
+      } as unknown as Session,
+      credentials: {
+        activeConnectionScope: () => scopeCurrent ? { profileId: 'p', transportScope: 's' } : null,
+        isActiveConnectionScope: () => scopeCurrent,
+        hasActiveRendererBinding: () => scopeCurrent,
+      } as unknown as DesktopCredentialService,
+      getMainRenderer: () => renderer as unknown as WebContents,
+      contentSecurityPolicy: () => "default-src 'self'",
+      isTrustedRendererUrl: url => url === RENDERER_URL,
+      requestMicrophoneConsent: (_renderer, signal) => {
+        prompts++;
+        consentSignal = signal;
+        return new Promise(resolve => { resolveConsent = resolve; });
+      },
+    });
+    return {
+      security, renderer, frame, event,
+      start: (sender = event) => handlers.get('desktop:microphone-request')!(sender),
+      revoke: (sender = event) => handlers.get('desktop:microphone-revoke')!(sender),
+      decide: (allowed: boolean) => resolveConsent(allowed),
+      prompts: () => prompts,
+      signal: () => consentSignal,
+      disconnect: () => { scopeCurrent = false; },
+      unfocus: () => { focused = false; },
+      check: (details = {}, sender: unknown = renderer, origin = DESKTOP_RENDERER_ORIGIN, permission = 'media') =>
+        check(sender, permission, origin, { isMainFrame: true, mediaType: 'audio', requestingUrl: RENDERER_URL, ...details }),
+      request: (details = {}, sender: unknown = renderer) => {
+        let allowed: boolean | undefined;
+        request(sender, 'media', (value: boolean) => { allowed = value; }, {
+          isMainFrame: true, mediaTypes: ['audio'], requestingUrl: RENDERER_URL, ...details,
+        });
+        return allowed;
+      },
+    };
+  }
+
+  it('denies by default, prompts once, and grants only audio to the trusted main renderer', async () => {
+    const f = await fixture();
+    try {
+      assert.equal(f.check(), false);
+      assert.equal(f.request(), false);
+      const pending = f.start();
+      assert.equal(f.prompts(), 1);
+      assert.equal(await f.start(), false);
+      assert.equal(f.check(), false);
+      f.decide(true);
+      assert.equal(await pending, true);
+      assert.equal(f.check(), true);
+      assert.equal(f.request(), true);
+      for (const mediaType of ['video', 'unknown', undefined]) assert.equal(f.check({ mediaType }), false);
+      for (const mediaTypes of [['video'], ['audio', 'video'], [], undefined]) {
+        assert.equal(f.request({ mediaTypes }), false);
+      }
+      assert.equal(f.check({ isMainFrame: false }), false);
+      assert.equal(f.request({ isMainFrame: false }), false);
+      assert.equal(f.check({}, null), false);
+      assert.equal(f.request({}, {}), false);
+      assert.equal(f.check({}, f.renderer, 'https://remote.example'), false);
+      assert.equal(f.request({ requestingUrl: 'https://remote.example' }), false);
+      assert.equal(f.request({ requestingUrl: undefined }), false);
+      assert.equal(f.check({}, f.renderer, DESKTOP_RENDERER_ORIGIN, 'display-capture'), false);
+      f.revoke();
+      assert.equal(f.check(), false);
+      assert.equal(f.signal()?.aborted, true);
+    } finally { f.security.dispose(); }
+  });
+
+  it('rejects subframes, remote approval windows, and unfocused or disconnected renderers before prompting', async () => {
+    const f = await fixture();
+    try {
+      assert.equal(await f.start({ ...f.event, senderFrame: { ...f.frame } }), false);
+      assert.equal(await f.start({ ...f.event, sender: {} as any }), false);
+      f.frame.url = 'https://approval.example';
+      assert.equal(await f.start(), false);
+      f.frame.url = RENDERER_URL;
+      f.unfocus();
+      assert.equal(await f.start(), false);
+      assert.equal(f.prompts(), 0);
+    } finally { f.security.dispose(); }
+    const disconnected = await fixture();
+    try {
+      disconnected.disconnect();
+      assert.equal(await disconnected.start(), false);
+      assert.equal(disconnected.prompts(), 0);
+    } finally { disconnected.security.dispose(); }
+  });
+
+  for (const outcome of ['deny', 'cancel', 'navigate', 'destroy', 'crash', 'disconnect', 'close'] as const) {
+    it(`does not retain or resurrect a grant after ${outcome}`, async () => {
+      const f = await fixture();
+      try {
+        const pending = f.start();
+        if (outcome === 'cancel') f.revoke();
+        if (outcome === 'navigate') f.renderer.emit('did-start-navigation');
+        if (outcome === 'destroy') f.renderer.emit('destroyed');
+        if (outcome === 'crash') f.renderer.emit('render-process-gone');
+        if (outcome === 'disconnect') f.disconnect();
+        if (outcome === 'close') f.security.close();
+        f.decide(outcome !== 'deny');
+        assert.equal(await pending, false);
+        assert.equal(f.check(), false);
+        assert.equal(f.request(), false);
+        assert.equal(f.signal()?.aborted, true);
+      } finally { f.security.dispose(); }
+    });
+  }
+
+  it('expires an allowed grant after 30 seconds', async context => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const f = await fixture();
+    try {
+      const pending = f.start();
+      f.decide(true);
+      assert.equal(await pending, true);
+      context.mock.timers.tick(30_000);
+      assert.equal(f.check(), false);
+      assert.equal(f.request(), false);
+      assert.equal(f.signal()?.aborted, true);
+    } finally { f.security.dispose(); }
+  });
+
+  it('revokes an existing grant on connection change and keeps default deny after disposal', async () => {
+    const f = await fixture();
+    const pending = f.start();
+    f.decide(true);
+    assert.equal(await pending, true);
+    f.disconnect();
+    assert.equal(f.check(), false);
+    assert.equal(f.request(), false);
+    f.security.dispose();
+    assert.equal(f.check(), false);
+    assert.equal(f.request(), false);
+  });
+});

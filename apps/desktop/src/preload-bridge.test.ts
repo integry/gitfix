@@ -27,11 +27,32 @@ class FakeIpc implements PreloadIpc {
 describe('desktop preload bridge', () => {
   it('exposes only the narrow frozen namespaces', () => {
     const bridge = createDesktopBridge(new FakeIpc());
-    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'localSetup', 'notifications', 'profiles', 'storage']);
+    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'localSetup', 'notifications', 'profiles', 'storage', ...(process.platform === 'linux' ? ['voice'] : [])]);
     assert.equal(Object.isFrozen(bridge), true);
     assert.equal(Object.values(bridge).every(Object.isFrozen), true);
     assert.equal('fs' in bridge, false);
     assert.equal('exec' in bridge, false);
+  });
+
+  it('requires a live user gesture before microphone consent IPC', { skip: process.platform !== 'linux' }, async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const ipc = new FakeIpc();
+    const voice = createDesktopBridge(ipc).voice!;
+    try {
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userActivation: { isActive: false } } });
+      assert.equal(await voice.requestMicrophone(), false);
+      assert.equal(ipc.invocations.length, 0);
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userActivation: { isActive: true } } });
+      await voice.requestMicrophone();
+      await voice.revokeMicrophone();
+      assert.deepEqual(ipc.invocations, [
+        { channel: IPC_CHANNELS.microphoneRequest, args: [] },
+        { channel: IPC_CHANNELS.microphoneRevoke, args: [] },
+      ]);
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor);
+      else Reflect.deleteProperty(globalThis, 'navigator');
+    }
   });
 
   it('maps notifications to fixed channels and accepts only internal task navigation', async () => {

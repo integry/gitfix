@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- controller lifecycle regressions share one focused fixture */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { voiceBriefingResponseSchema, type VoiceBriefingResponse } from '@propr/shared';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   abortGeneration,
   abortRefinement,
@@ -16,6 +16,7 @@ import {
   listenOnce,
   speakOnce,
 } from '../voice/browserSpeech';
+import * as runtimeMode from '../config/runtimeMode';
 import { useVoiceBriefing } from './useVoiceBriefing';
 
 let currentVisibility: DocumentVisibilityState = 'visible';
@@ -107,9 +108,16 @@ function deferred<T>() {
 }
 
 describe('useVoiceBriefing', () => {
+  const mediaDescriptor = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+  afterEach(() => {
+    delete window.proprDesktop;
+    if (mediaDescriptor) Object.defineProperty(navigator, 'mediaDevices', mediaDescriptor);
+    else Reflect.deleteProperty(navigator, 'mediaDevices');
+  });
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.resetAllMocks();
+    vi.spyOn(runtimeMode, 'isDesktopRuntime').mockReturnValue(false);
     currentVisibility = 'visible';
     vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => currentVisibility);
     vi.mocked(getBrowserSpeechCapabilities).mockReturnValue({
@@ -130,6 +138,111 @@ describe('useVoiceBriefing', () => {
     vi.mocked(abortGeneration).mockResolvedValue();
     vi.mocked(abortRefinement).mockResolvedValue();
     vi.mocked(refinePlan).mockResolvedValue({ plan: [], message: 'Refinement started' });
+  });
+
+  function desktopMicrophone() {
+    vi.mocked(runtimeMode.isDesktopRuntime).mockReturnValue(true);
+    const voice = {
+      requestMicrophone: vi.fn().mockResolvedValue(true),
+      revokeMicrophone: vi.fn().mockResolvedValue(undefined),
+    };
+    window.proprDesktop = { voice } as unknown as NonNullable<Window['proprDesktop']>;
+    const stop = vi.fn();
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } });
+    return { voice, stop, getUserMedia };
+  }
+
+  it('checks desktop microphone only after consent, stops tracks, and never invokes an unavailable speech service', async () => {
+    const { voice, stop, getUserMedia } = desktopMicrophone();
+    const consent = deferred<boolean>();
+    voice.requestMicrophone.mockReturnValue(consent.promise);
+    const { result } = renderHook(() => useVoiceBriefing());
+    let pending: Promise<void>;
+    act(() => { pending = result.current.startListening(); });
+    expect(voice.requestMicrophone).toHaveBeenCalledOnce();
+    expect(getUserMedia).not.toHaveBeenCalled();
+    await act(async () => { consent.resolve(true); await pending; });
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true, video: false });
+    expect(stop).toHaveBeenCalledOnce();
+    expect(voice.revokeMicrophone).toHaveBeenCalledOnce();
+    expect(listenOnce).not.toHaveBeenCalled();
+    expect(result.current.error).toMatch(/Microphone access is allowed.*Voice commands are unavailable/);
+  });
+
+  it('never opens media after desktop consent is denied', async () => {
+    const { voice, getUserMedia } = desktopMicrophone();
+    voice.requestMicrophone.mockResolvedValue(false);
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.startListening());
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(listenOnce).not.toHaveBeenCalled();
+    expect(result.current.error).toBe('Microphone access was not allowed.');
+    expect(voice.revokeMicrophone).toHaveBeenCalled();
+  });
+
+  it('reports actual OS microphone denial separately from recognition support', async () => {
+    const { getUserMedia } = desktopMicrophone();
+    getUserMedia.mockRejectedValue(new DOMException('OS permission denied', 'NotAllowedError'));
+    const { result } = renderHook(() => useVoiceBriefing());
+    await act(async () => result.current.startListening());
+    expect(result.current.error).toBe('Microphone access was not allowed.');
+    expect(listenOnce).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'hidden', 'unmount'] as const)('revokes pending desktop consent on %s and ignores late approval', async reason => {
+    const { voice, getUserMedia } = desktopMicrophone();
+    const consent = deferred<boolean>();
+    voice.requestMicrophone.mockReturnValue(consent.promise);
+    const { result, unmount } = renderHook(() => useVoiceBriefing());
+    let pending: Promise<void>;
+    act(() => { pending = result.current.startListening(); });
+    act(() => {
+      if (reason === 'stop') result.current.stopAudio();
+      if (reason === 'unmount') unmount();
+      if (reason === 'hidden') {
+        currentVisibility = 'hidden';
+        document.dispatchEvent(new Event('visibilitychange'));
+      }
+    });
+    expect(voice.revokeMicrophone).toHaveBeenCalled();
+    await act(async () => { consent.resolve(true); await pending; });
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(listenOnce).not.toHaveBeenCalled();
+  });
+
+  it('releases a microphone stream that arrives after cancellation', async () => {
+    const { stop, getUserMedia } = desktopMicrophone();
+    const stream = deferred<{ getTracks: () => { stop: typeof stop }[] }>();
+    getUserMedia.mockReturnValue(stream.promise);
+    const { result } = renderHook(() => useVoiceBriefing());
+    let pending: Promise<void>;
+    await act(async () => { pending = result.current.startListening(); });
+    act(() => result.current.stopAudio());
+    await act(async () => { stream.resolve({ getTracks: () => [{ stop }] }); await pending; });
+    expect(stop).toHaveBeenCalledOnce();
+    expect(listenOnce).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+  });
+
+  it('does not let a cancelled check revoke a newer pending consent', async () => {
+    const { voice, getUserMedia } = desktopMicrophone();
+    const first = deferred<boolean>();
+    const second = deferred<boolean>();
+    voice.requestMicrophone.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { result } = renderHook(() => useVoiceBriefing());
+    let oldRun: Promise<void>;
+    let newRun: Promise<void>;
+    act(() => { oldRun = result.current.startListening(); });
+    act(() => result.current.stopAudio());
+    expect(voice.revokeMicrophone).toHaveBeenCalledTimes(1);
+    act(() => { newRun = result.current.startListening(); });
+    await act(async () => { first.resolve(true); await oldRun; });
+    expect(voice.revokeMicrophone).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    await act(async () => { second.resolve(true); await newRun; });
+    expect(voice.revokeMicrophone).toHaveBeenCalledTimes(2);
+    expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
   it('fetches a fresh one-shot briefing and retains it when speech output is unavailable', async () => {

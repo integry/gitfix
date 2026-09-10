@@ -1649,6 +1649,24 @@ if (!hasSingleInstanceLock) {
       ...(acceptancePairingTiming ? { pairingTiming: acceptancePairingTiming } : {}),
     });
     const sessionSecurity = configureDesktopSessionSecurity({
+      ipcMain,
+      requestMicrophoneConsent: async (renderer, signal) => {
+        if (process.platform !== 'linux') return false;
+        const owner = BrowserWindow.fromWebContents(renderer);
+        if (!owner || owner.isDestroyed() || signal.aborted) return false;
+        const result = await dialog.showMessageBox(owner, {
+          type: 'question',
+          title: 'Allow microphone access check?',
+          message: 'Allow ProPR to check microphone access?',
+          detail: 'This check opens the microphone and immediately releases it. Audio is not recorded or sent. Voice commands are unavailable in this desktop runtime. No camera access is granted. Permission ends when the check finishes, is cancelled, or after 30 seconds.',
+          buttons: ['Deny', 'Allow microphone'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+          signal,
+        });
+        return !signal.aborted && result.response === 1;
+      },
       contentSecurityPolicy,
       credentials,
       desktopSession: session.defaultSession,
