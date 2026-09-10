@@ -125,6 +125,18 @@ export const createDesktopBridge = (
   });
 
   const bridge: DesktopBridge = {
+    ...((process.platform === 'linux' || process.platform === 'darwin') ? {
+      voice: {
+        requestMicrophone: () => {
+          // Evaluated in the isolated preload world, before crossing IPC.
+          if (typeof navigator === 'undefined' || !navigator.userActivation?.isActive) {
+            return Promise.resolve(false);
+          }
+          return invoke<boolean>(ipc, IPC_CHANNELS.microphoneRequest);
+        },
+        revokeMicrophone: () => invoke<void>(ipc, IPC_CHANNELS.microphoneRevoke),
+      },
+    } : {}),
     app: {
       getMetadata: () => invoke(ipc, IPC_CHANNELS.appMetadata),
       refreshActiveWork: () => invoke(ipc, IPC_CHANNELS.activeWorkRefresh),

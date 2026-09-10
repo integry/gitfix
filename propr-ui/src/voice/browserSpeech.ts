@@ -1,3 +1,5 @@
+import { isDesktopRuntime } from '../config/runtimeMode';
+
 /**
  * One-shot adapters for the browser's built-in speech APIs.
  *
@@ -10,6 +12,7 @@ export const DEFAULT_SPEECH_RECOGNITION_TIMEOUT_MS = 10_000;
 
 export type BrowserSpeechErrorCategory =
   | 'unsupported'
+  | 'service-unavailable'
   | 'permission-denied'
   | 'no-speech'
   | 'microphone-unavailable'
@@ -22,6 +25,7 @@ export type BrowserSpeechErrorCategory =
 
 const ERROR_MESSAGES: Record<BrowserSpeechErrorCategory, string> = {
   unsupported: 'Speech is not supported by this browser.',
+  'service-unavailable': 'The speech recognition service is unavailable in this runtime. Microphone permission does not enable a speech service. Use Catch me up for text, or use voice commands in a supported browser.',
   'permission-denied': 'Microphone access was not allowed.',
   'no-speech': 'No speech was detected. Please try again.',
   'microphone-unavailable': 'No available microphone was found.',
@@ -37,7 +41,7 @@ const ERROR_CATEGORIES_BY_TOKEN: Readonly<Record<string, BrowserSpeechErrorCateg
   notallowederror: 'permission-denied',
   securityerror: 'permission-denied',
   'not-allowed': 'permission-denied',
-  'service-not-allowed': 'permission-denied',
+  'service-not-allowed': 'service-unavailable',
   'no-speech': 'no-speech',
   'audio-capture': 'microphone-unavailable',
   'audio-busy': 'microphone-unavailable',
@@ -159,7 +163,8 @@ export function getBrowserSpeechCapabilities(): BrowserSpeechCapabilities {
   const browser = speechWindow();
   return {
     speechSynthesis: Boolean(browser?.speechSynthesis && browser.SpeechSynthesisUtterance),
-    speechRecognition: recognitionConstructor() !== null,
+    // Standard Electron lacks the proprietary recognition service despite exposing the API.
+    speechRecognition: !isDesktopRuntime() && recognitionConstructor() !== null,
   };
 }
 
@@ -271,6 +276,7 @@ function validTimeout(timeoutMs: number): boolean {
  * Recognition may be processed by the browser, OS, or a vendor service.
  */
 export function listenOnce(options: ListenOnceOptions = {}): Promise<string> {
+  if (isDesktopRuntime()) return Promise.reject(new BrowserSpeechError('service-unavailable'));
   const RecognitionClass = recognitionConstructor();
   if (!RecognitionClass) return Promise.reject(new BrowserSpeechError('unsupported'));
 

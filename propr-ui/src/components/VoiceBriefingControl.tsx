@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- voice disclosure, controls, and briefing text share one panel */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -13,6 +14,8 @@ import {
   X,
 } from 'lucide-react';
 import type { VoiceBriefingItem } from '@propr/shared';
+import { useDesktopVoicePreference } from '../hooks/useDesktopVoicePreference';
+import { isDesktopRuntime } from '../config/runtimeMode';
 import { useVoiceBriefing, type VoiceBriefingPhase } from '../hooks/useVoiceBriefing';
 
 export const VOICE_RECOGNITION_DISCLOSURE_STORAGE_KEY =
@@ -40,7 +43,7 @@ function phaseMessage(phase: VoiceBriefingPhase, hasBriefing: boolean, error: st
   switch (phase) {
     case 'loading': return 'Loading your briefing.';
     case 'speaking': return 'Speaking your briefing.';
-    case 'listening': return 'Listening for one short command.';
+    case 'listening': return isDesktopRuntime() ? 'Checking microphone access.' : 'Listening for one short command.';
     case 'confirming': return 'Action awaiting confirmation.';
     case 'executing': return 'Applying the confirmed action.';
     case 'error': return 'The voice briefing encountered an error.';
@@ -83,9 +86,14 @@ function BriefingItem({ item, onOpen }: { item: VoiceBriefingItem; onOpen: () =>
   );
 }
 
+export default function VoiceBriefingControl() {
+  const { enabled, key, connection } = useDesktopVoicePreference();
+  return enabled ? <EnabledVoiceBriefingControl key={`${key}:${connection?.transportScope}`} /> : null;
+}
+
 // The branching mirrors the controller's finite UI phases and capability fallbacks.
 // eslint-disable-next-line complexity
-export default function VoiceBriefingControl() {
+function EnabledVoiceBriefingControl() {
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [isDisclosureVisible, setIsDisclosureVisible] = useState(false);
@@ -220,9 +228,9 @@ export default function VoiceBriefingControl() {
                 <AudioLines className="h-5 w-5" aria-hidden="true" />
               </div>
               <div className="min-w-0 flex-1">
-                <h2 id="voice-briefing-title" className="text-base font-semibold text-slate-950">Voice briefing</h2>
+                <h2 id="voice-briefing-title" className="text-base font-semibold text-slate-950">Voice briefing{isDesktopRuntime() ? ' · Experimental' : ''}</h2>
                 <p id="voice-briefing-description" className="mt-0.5 text-xs leading-5 text-slate-500">
-                  Review your work or issue one short voice command.
+                  {isDesktopRuntime() ? 'Review a briefing of your work.' : 'Review your work or issue one short voice command.'}
                 </p>
               </div>
               <button
@@ -241,12 +249,16 @@ export default function VoiceBriefingControl() {
                   <div className="flex gap-3">
                     <AlertTriangle className="mt-0.5 h-5 w-5 flex-none text-amber-700" aria-hidden="true" />
                     <div>
-                      <h3 id="voice-privacy-title" className="font-semibold">Before you use voice recognition</h3>
+                      <h3 id="voice-privacy-title" className="font-semibold">{isDesktopRuntime() ? 'Desktop microphone access' : 'Before you use voice recognition'}</h3>
                       <p className="mt-1.5 text-xs leading-5 text-amber-900">
-                        Your browser or operating system may send microphone audio to its speech-recognition vendor. ProPR does not receive raw audio or store the recognition transcript. If you confirm a spoken follow-up, its instruction is sent to ProPR.
+                        {isDesktopRuntime()
+                          ? 'Voice commands are unavailable in this desktop runtime. The microphone check opens the microphone and immediately releases it, without recording or sending audio.'
+                          : 'Your browser or operating system may send microphone audio to its speech-recognition vendor. ProPR does not receive raw audio or store the recognition transcript. If you confirm a spoken follow-up, its instruction is sent to ProPR.'}
                       </p>
                       <p className="mt-1.5 text-xs leading-5 text-amber-900">
-                        A microphone request can only begin after you acknowledge this notice and select Listen.
+                        {isDesktopRuntime()
+                          ? 'Choose Check microphone, then Allow microphone in the desktop prompt. You can deny or cancel; each check requires new consent.'
+                          : 'A microphone request can only begin after you acknowledge this notice and select Listen.'}
                       </p>
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button
@@ -288,12 +300,14 @@ export default function VoiceBriefingControl() {
                 <button
                   type="button"
                   onClick={startListening}
-                  disabled={!voice.capabilities.speechRecognition || busy || voice.phase === 'speaking'}
+                  disabled={(isDesktopRuntime() ? !window.proprDesktop?.voice : !voice.capabilities.speechRecognition) || busy || voice.phase === 'speaking'}
                   aria-describedby={!voice.capabilities.speechRecognition ? 'voice-recognition-unavailable' : undefined}
                   className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                 >
                   <Mic className="h-4 w-4" aria-hidden="true" />
-                  {voice.phase === 'listening' ? 'Listening…' : 'Listen'}
+                  {voice.phase === 'listening'
+                    ? (isDesktopRuntime() ? 'Checking microphone…' : 'Listening…')
+                    : (isDesktopRuntime() ? 'Check microphone' : 'Listen')}
                 </button>
                 {voice.briefing && (
                   <button
@@ -306,21 +320,23 @@ export default function VoiceBriefingControl() {
                     Repeat
                   </button>
                 )}
-                {voice.phase === 'speaking' && (
+                {(voice.phase === 'speaking' || voice.phase === 'listening') && (
                   <button
                     type="button"
                     onClick={voice.stopAudio}
                     className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
                   >
                     <Square className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
-                    Stop speaking
+                    {voice.phase === 'listening' ? 'Cancel' : 'Stop speaking'}
                   </button>
                 )}
               </div>
 
               {!voice.capabilities.speechRecognition && (
                 <p id="voice-recognition-unavailable" className="rounded-lg bg-slate-100 px-3 py-2 text-xs leading-5 text-slate-600">
-                  Voice commands aren’t supported by this browser. You can still use Catch me up and review the briefing as text.
+                  {isDesktopRuntime()
+                    ? 'Voice commands are unavailable in this desktop runtime. Check microphone tests access only; it does not record or send audio. Use Catch me up for text, or voice commands in a supported browser.'
+                    : 'Voice commands aren’t supported by this browser. You can still use Catch me up and review the briefing as text.'}
                 </p>
               )}
               {!voice.capabilities.speechSynthesis && (

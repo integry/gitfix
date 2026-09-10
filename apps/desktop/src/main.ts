@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -18,6 +18,7 @@ import { createDesktopSetupHost } from '@propr/cli/desktop-local-setup';
 import type { SetupActions } from '@propr/local-setup';
 import { launchDesktopAuthentication } from './authentication-handoff';
 import { DesktopConnectDiscoveryService } from './connect-discovery';
+import { requestDesktopMicrophoneConsent } from './microphone-consent';
 import { configureApplicationMenu } from './application-menu';
 import {
   authorizePackagedAcceptanceTest,
@@ -1674,6 +1675,30 @@ if (!hasSingleInstanceLock) {
       ...(acceptancePairingTiming ? { pairingTiming: acceptancePairingTiming } : {}),
     });
     const sessionSecurity = configureDesktopSessionSecurity({
+      ipcMain,
+      requestMicrophoneConsent: async (renderer, signal) => {
+        const owner = BrowserWindow.fromWebContents(renderer);
+        if (!owner || owner.isDestroyed() || signal.aborted) return false;
+        return requestDesktopMicrophoneConsent({
+          platform: process.platform,
+          signal,
+          confirm: async () => {
+            const result = await dialog.showMessageBox(owner, {
+              type: 'question',
+              title: 'Allow microphone access check?',
+              message: 'Allow ProPR to check microphone access?',
+              detail: 'This check opens the microphone and immediately releases it. Audio is not recorded or sent. Voice commands are unavailable in this desktop runtime. No camera access is granted. Permission ends when the check finishes, is cancelled, or after 30 seconds.',
+              buttons: ['Deny', 'Allow microphone'],
+              defaultId: 0,
+              cancelId: 0,
+              noLink: true,
+              signal,
+            });
+            return result.response === 1;
+          },
+          askForMacAccess: () => systemPreferences.askForMediaAccess('microphone'),
+        });
+      },
       contentSecurityPolicy,
       credentials,
       desktopSession: session.defaultSession,

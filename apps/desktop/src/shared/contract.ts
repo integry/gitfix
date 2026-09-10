@@ -3,6 +3,8 @@ import type { DesktopGitHubAccount } from './github-account';
 export const DESKTOP_PROTOCOL = 'propr';
 
 export const IPC_CHANNELS = Object.freeze({
+  microphoneRequest: 'desktop:microphone-request',
+  microphoneRevoke: 'desktop:microphone-revoke',
   appMetadata: 'desktop:app-metadata',
   appQuit: 'desktop:app-quit',
   activeWorkRefresh: 'desktop:active-work-refresh',
@@ -363,6 +365,11 @@ export interface DesktopSetupSnapshot {
 }
 
 export interface DesktopBridge {
+  /** One attempt only; never a persistent device permission. */
+  voice?: {
+    requestMicrophone(): Promise<boolean>;
+    revokeMicrophone(): Promise<void>;
+  };
   app: {
     getMetadata(): Promise<DesktopAppMetadata>;
     /** Request a main-owned reconciliation; the renderer cannot supply counts or native resources. */

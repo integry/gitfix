@@ -1,5 +1,6 @@
-import type { Session, WebContents } from 'electron';
+import type { IpcMain, IpcMainInvokeEvent, Session, WebContents } from 'electron';
 import type { DesktopCredentialService } from './credential-service';
+import { IPC_CHANNELS } from './shared/contract';
 
 const DESKTOP_NETWORK_PERMISSIONS = new Set([
   // Chromium split the original permission into address-space-specific
@@ -124,6 +125,8 @@ export const desktopNetworkPermissionAllowed = ({
     : webContentsPresent && webContentsEqualsMainWindow && requestingUrlPresent);
 
 interface ConfigureDesktopSessionSecurityOptions {
+  ipcMain?: Pick<IpcMain, 'handle' | 'removeHandler'>;
+  requestMicrophoneConsent?(renderer: WebContents, signal: AbortSignal): Promise<boolean>;
   contentSecurityPolicy(): string;
   credentials: DesktopCredentialService;
   desktopSession: Session;
@@ -136,6 +139,8 @@ interface ConfigureDesktopSessionSecurityOptions {
 
 /** Install the production permission, concrete-request, and response boundary on one session. */
 export const configureDesktopSessionSecurity = ({
+  ipcMain,
+  requestMicrophoneConsent,
   contentSecurityPolicy,
   credentials,
   desktopSession,
@@ -148,6 +153,85 @@ export const configureDesktopSessionSecurity = ({
   close(): void;
   dispose(): void;
 } => {
+  let closed = false;
+  let microphone: {
+    renderer: WebContents;
+    document: string;
+    frame: WebContents['mainFrame'];
+    scope: NonNullable<ReturnType<DesktopCredentialService['activeConnectionScope']>>;
+    controller: AbortController;
+    allowed: boolean;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+  const revokeMicrophone = () => {
+    const previous = microphone;
+    microphone = null;
+    if (!previous) return;
+    clearTimeout(previous.timer);
+    previous.renderer.removeListener('did-start-navigation', revokeMicrophone);
+    previous.renderer.removeListener('destroyed', revokeMicrophone);
+    previous.renderer.removeListener('render-process-gone', revokeMicrophone);
+    previous.controller.abort();
+  };
+  const trustedMicrophoneSender = (event: IpcMainInvokeEvent): boolean => {
+    const renderer = getMainRenderer();
+    return !closed && enableRendererNetworkBoundary && renderer !== null
+      && !renderer.isDestroyed() && event.sender === renderer
+      && event.senderFrame === renderer.mainFrame && !renderer.mainFrame.detached
+      && renderer.mainFrame.parent === null
+      && isTrustedRendererUrl(renderer.getURL())
+      && renderer.mainFrame.url === renderer.getURL();
+  };
+  const currentMicrophone = (): boolean => {
+    const grant = microphone;
+    return grant !== null && !closed && !grant.controller.signal.aborted
+      && grant.renderer === getMainRenderer() && !grant.renderer.isDestroyed()
+      && grant.renderer.getURL() === grant.document
+      && grant.renderer.mainFrame === grant.frame && !grant.frame.detached
+      && grant.frame.url === grant.document && isTrustedRendererUrl(grant.document)
+      && credentials.isActiveConnectionScope(grant.scope);
+  };
+  ipcMain?.handle(IPC_CHANNELS.microphoneRequest, async event => {
+    if (!trustedMicrophoneSender(event) || !event.sender.isFocused()
+      || !requestMicrophoneConsent || microphone !== null) return false;
+    const scope = credentials.activeConnectionScope();
+    if (!scope) return false;
+    const renderer = event.sender;
+    const controller = new AbortController();
+    const attempt = {
+      renderer, document: renderer.getURL(), frame: renderer.mainFrame, scope,
+      controller, allowed: false,
+      timer: setTimeout(revokeMicrophone, 30_000),
+    };
+    microphone = attempt;
+    renderer.once('did-start-navigation', revokeMicrophone);
+    renderer.once('destroyed', revokeMicrophone);
+    renderer.once('render-process-gone', revokeMicrophone);
+    try {
+      const allowed = await requestMicrophoneConsent(renderer, controller.signal);
+      if (microphone !== attempt) return false;
+      if (!allowed || !currentMicrophone()) {
+        revokeMicrophone();
+        return false;
+      }
+      attempt.allowed = true;
+      return true;
+    } catch {
+      if (microphone === attempt) revokeMicrophone();
+      return false;
+    }
+  });
+  ipcMain?.handle(IPC_CHANNELS.microphoneRevoke, event => {
+    if (trustedMicrophoneSender(event)) revokeMicrophone();
+  });
+  const allowMicrophone = (
+    renderer: WebContents | null, origin: string, isMainFrame: boolean,
+    requestingUrl: string | undefined, audioOnly: boolean,
+  ): boolean => audioOnly && isMainFrame === true && currentMicrophone()
+    && microphone?.allowed === true && renderer === microphone.renderer
+    && origin === rendererAuthority(microphone.document)
+    && (requestingUrl === undefined || requestingUrl === microphone.document);
+
   const allowNetworkPermission = (
     decision: 'check' | 'request',
     webContents: WebContents | null,
@@ -209,18 +293,28 @@ export const configureDesktopSessionSecurity = ({
 
   if (enableRendererNetworkBoundary) {
     desktopSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) =>
-      allowNetworkPermission(
-        'check',
-        webContents,
-        String(permission),
-        requestingOrigin,
-        details.isMainFrame,
-        details.requestingUrl,
-      ));
+      permission === 'media'
+        ? allowMicrophone(webContents, requestingOrigin, details.isMainFrame,
+          details.requestingUrl, details.mediaType === 'audio')
+        : allowNetworkPermission(
+          'check',
+          webContents,
+          String(permission),
+          requestingOrigin,
+          details.isMainFrame,
+          details.requestingUrl,
+        ));
     desktopSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
       const requestingUrl = 'requestingUrl' in details && typeof details.requestingUrl === 'string'
         ? details.requestingUrl
         : undefined;
+      if (permission === 'media') {
+        const mediaTypes = 'mediaTypes' in details ? details.mediaTypes : undefined;
+        callback(allowMicrophone(webContents, requestingUrl ? rendererAuthority(requestingUrl) ?? '' : '',
+          details.isMainFrame, requestingUrl,
+          Array.isArray(mediaTypes) && mediaTypes.length === 1 && mediaTypes[0] === 'audio'));
+        return;
+      }
       callback(allowNetworkPermission(
         'request',
         webContents,
@@ -311,12 +405,18 @@ export const configureDesktopSessionSecurity = ({
   });
   return {
     close() {
+      closed = true;
+      revokeMicrophone();
       desktopSession.webRequest.onBeforeSendHeaders((_details, callback) => callback({ cancel: true }));
       desktopSession.webRequest.onHeadersReceived((_details, callback) => callback({ cancel: true }));
     },
     dispose() {
-      desktopSession.setPermissionCheckHandler(null);
-      desktopSession.setPermissionRequestHandler(null);
+      closed = true;
+      revokeMicrophone();
+      ipcMain?.removeHandler(IPC_CHANNELS.microphoneRequest);
+      ipcMain?.removeHandler(IPC_CHANNELS.microphoneRevoke);
+      desktopSession.setPermissionCheckHandler(() => false);
+      desktopSession.setPermissionRequestHandler((_renderer, _permission, callback) => callback(false));
       desktopSession.webRequest.onBeforeSendHeaders(null);
       desktopSession.webRequest.onHeadersReceived(null);
     },
