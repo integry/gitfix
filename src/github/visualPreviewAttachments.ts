@@ -1,4 +1,4 @@
-import { githubAttachmentLimitBytes, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity } from '@propr/shared';
+import { githubInlineEligibility, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity } from '@propr/shared';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
@@ -81,10 +81,20 @@ export async function resolveVisualPreviewUploadToken(
 
 async function validateAttachmentFile(absolutePath: string, capacity?: GitHubAttachmentCapacity): Promise<number> {
   const contentType = VISUAL_PREVIEW_CONTENT_TYPES[path.extname(absolutePath).toLowerCase()];
-  const limit = githubAttachmentLimitBytes(contentType, capacity);
-  if (limit === null) throw new Error(`Unsupported visual preview attachment type: ${path.basename(absolutePath)}`);
-  if ((await stat(absolutePath)).size > limit) throw new Error(`Visual preview exceeds the GitHub attachment limit of ${limit / (1024 * 1024)} MiB`);
-  return limit;
+  if (!contentType) throw new Error(`Unsupported visual preview attachment type: ${path.basename(absolutePath)}`);
+  const eligibility = githubInlineEligibility(contentType, (await stat(absolutePath)).size, capacity);
+  if (!eligibility.eligible) {
+    if (eligibility.reason === 'size-limit-exceeded') throw new Error(`Visual preview exceeds the GitHub attachment limit of ${eligibility.limitBytes / (1024 * 1024)} MiB`);
+    throw new Error(`Invalid visual preview attachment: ${eligibility.reason}`);
+  }
+  return eligibility.limitBytes;
+}
+
+/** Validate every original before credential lookup, repository lookup, or any upload. */
+async function validateInlineEvidence(evidence: VisualPreviewEvidence): Promise<void> {
+  for (const asset of evidence.assets) {
+    await validateAttachmentFile(asset.absolutePath, evidence.githubAttachmentCapacity);
+  }
 }
 
 const runAttachmentCommand: AttachmentCommandRunner = async ({ args, authToken, cwd, capacity }) => {
@@ -281,6 +291,7 @@ export interface PublishPullRequestVisualPreviewOptions extends BaseVisualPrevie
 
 export async function publishPullRequestVisualPreviews(options: PublishPullRequestVisualPreviewOptions): Promise<void> {
   if (options.evidence.assets.length === 0) return;
+  await validateInlineEvidence(options.evidence);
   const runner = options.runCommand || runAttachmentCommand;
   await runner({
     args: [
@@ -320,6 +331,7 @@ export async function publishPullRequestCommentVisualPreviews(
   if (options.evidence.assets.length === 0) {
     throw new Error('Cannot publish an attachment comment without preview assets');
   }
+  await validateInlineEvidence(options.evidence);
   const authToken = options.authToken ?? await resolveVisualPreviewUploadToken();
   const repositoryId = await resolveRepositoryId(options);
   const uploader = options.uploadAsset ?? uploadVisualPreviewAsset;

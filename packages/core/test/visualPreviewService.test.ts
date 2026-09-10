@@ -289,3 +289,46 @@ test('collection enforces image and video byte boundaries with conservative auto
   assert.equal(evidence.assets.length, 1);
   assert.equal(evidence.githubAttachmentCapacity?.videoLimitBytes, 100 * MIB);
 });
+
+test('managed collection keeps supported originals beyond inline limits but enforces the independent staging limit', async () => {
+  const { truncate } = await import('node:fs/promises');
+  const { MIB } = await import('@propr/shared');
+  const worktree = await createWorktree();
+  for (const extension of ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'mp4', 'mov', 'webm', 'pdf']) {
+    const relativePath = `.propr/previews/original.${extension}`;
+    const absolutePath = path.join(worktree, relativePath);
+    await writeFile(absolutePath, '');
+    for (const maxBytes of [20 * MIB, 500 * MIB]) {
+      for (const sizeBytes of [maxBytes, maxBytes + 1]) {
+        await truncate(absolutePath, sizeBytes);
+        const evidence = await collectVisualPreviewEvidence({
+          worktreePath: worktree, changedFiles: [relativePath],
+          settings: { enabled: true, types: ['image', 'video'], originalEvidenceCapability: { maxBytes } },
+        });
+        assert.equal(evidence.assets.length, extension !== 'pdf' && sizeBytes <= maxBytes ? 1 : 0, `${extension}, ${maxBytes}, ${sizeBytes}`);
+        if (evidence.assets.length) {
+          assert.equal(evidence.assets[0].sizeBytes, sizeBytes);
+          assert.deepEqual(evidence.assets[0].githubInline, { eligible: false, reason: 'size-limit-exceeded', limitBytes: 10 * MIB });
+          assert.deepEqual(evidence.toolSuggestions, [], 'inline-ineligible originals do not require compression');
+        } else if (extension !== 'pdf') {
+          assert.match(evidence.toolSuggestions[0].reason, /staging safety limit/);
+        }
+      }
+    }
+  }
+});
+
+test('prompt distinguishes managed originals from inline publication without instructing originals to shrink', () => {
+  const prompt = buildVisualPreviewPrompt({
+    enabled: true, types: ['image', 'video'], githubAttachmentPlan: 'paid',
+    originalEvidenceCapability: { maxBytes: 500 * 1024 * 1024 },
+  });
+  assert.match(prompt, /GitHub inline publication limits: images at or below 10 MiB; videos at or below 100 MiB/);
+  assert.match(prompt, /keep each original at or below 500 MiB/);
+  assert.match(prompt, /authenticated viewer links/);
+  assert.match(prompt, /Do not shrink an original solely to fit GitHub inline upload/);
+  const legacy = buildVisualPreviewPrompt({ enabled: true, types: ['video'] });
+  assert.match(legacy, /Managed-original storage is unavailable/);
+  assert.match(legacy, /legacy original-evidence staging safety limits/);
+  assert.doesNotMatch(legacy, /authenticated viewer links/);
+});

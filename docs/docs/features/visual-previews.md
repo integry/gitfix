@@ -78,7 +78,7 @@ When enabled, the implementation agent evaluates the completed change:
 
 Agents generate media under the transient `.propr/previews/` runtime directory and may use `.propr/preview-src/` for preview-only source material. Optional titles, descriptions, and tool recommendations are recorded in `.propr/previews/manifest.json`. Before committing, ProPR copies accepted files to worker-owned temporary storage and removes both runtime directories from the worktree. A second safeguard at the commit boundary excludes them from work output, so preview artifacts are never included in the implementation commit.
 
-Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video formats are MP4, MOV, and WebM; H.264 MP4 is the most broadly compatible choice. Images are capped at 10 MiB; video capacity is determined by the GitHub attachment plan setting described below.
+Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video formats are MP4, MOV, and WebM; H.264 MP4 is the most broadly compatible choice. GitHub inline publication limits and original-evidence staging limits are separate, as described below.
 
 ## Publication And Upload Failures
 
@@ -94,7 +94,9 @@ Each repository has a **GitHub attachment plan** setting under its visual-previe
 - `free`: enforce Free limits regardless of detection.
 - `paid`: explicitly enable paid video capacity for this repository.
 
-PNG, JPEG, GIF, SVG, and WebP images always have a **10 MiB** inline attachment limit. MP4, MOV, and WebM videos have a **10 MiB** limit for Free and **100 MiB** for paid. Other content types are unsupported. Collection and upload both enforce the resolved policy; GitHub can still reject an eligible upload.
+PNG, JPEG, GIF, SVG, and WebP images always have a **10 MiB** inline attachment limit. MP4, MOV, and WebM videos have a **10 MiB** limit for Free and **100 MiB** for paid. Other content types are unsupported. GitHub publishers validate every file against these limits before network access; GitHub can still reject an eligible upload.
+
+Original-evidence staging has its own safety capacity. Without a managed-storage capability, it defaults to the legacy image and video limits above. A trusted runtime resolver can supply `originalEvidenceCapability.maxBytes` from managed storage; staging honors that maximum, capped at **500 MiB** per original, independently of the GitHub plan. This capability is never accepted from stored repository settings. Prepared evidence retains supported originals within that safety limit and includes their size and structured `githubInline` eligibility/reason, even when they cannot be uploaded inline. The agent prompt describes both limits separately. The managed-storage client and authenticated viewer-link publisher are separate follow-up work in issue #2281; this boundary does not enable managed publication by itself.
 
 If credentials are absent, GitHub omits the plan, or the API is ambiguous or unavailable, `auto` reports **Auto unresolved; using conservative Free limits**. Detection does not request broader OAuth scopes, GitHub App permissions, billing access, or changes to Connect. Organization membership and repository visibility do not establish the uploading account's paid status.
 

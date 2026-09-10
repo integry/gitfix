@@ -1,4 +1,4 @@
-import { describeGitHubAttachmentCapacity, resolveGitHubAttachmentCapacity, type GitHubAttachmentPlanOverride } from '@propr/shared';
+import { describeGitHubAttachmentCapacity, resolveGitHubAttachmentCapacity, type GitHubAttachmentPlanOverride } from "@propr/shared";
 /**
  * Repository Management Commands
  *

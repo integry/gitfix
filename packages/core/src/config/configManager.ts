@@ -1,4 +1,4 @@
-import { normalizeGitHubAttachmentPlanOverride, type GitHubAttachmentCapacity, type GitHubAttachmentPlanOverride } from '@propr/shared';
+import { normalizeGitHubAttachmentPlanOverride, type GitHubAttachmentCapacity, type GitHubAttachmentPlanOverride, type VisualPreviewOriginalCapability } from '@propr/shared';
 import { loadGitHubAttachmentCapacity } from '../services/visualPreviewCapacityService.js';
 import logger from '../utils/logger.js';
 import { invalidateSettingsCache } from '../services/relevance/keywordExtractor.js';
@@ -32,6 +32,8 @@ export interface VisualPreviewSettings {
     githubAttachmentPlan?: GitHubAttachmentPlanOverride;
     /** Computed at runtime; never trusted from stored settings. */
     githubAttachmentCapacity?: GitHubAttachmentCapacity;
+    /** Trusted runtime capability supplied by managed storage; never persisted or accepted from repository settings. */
+    originalEvidenceCapability?: VisualPreviewOriginalCapability;
     enabled: boolean;
     types: VisualPreviewType[];
     instructions?: string;

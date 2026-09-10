@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { detectGitHubAttachmentPlan, githubAttachmentLimitBytes, resolveGitHubAttachmentCapacity, VISUAL_PREVIEW_CONTENT_TYPES, MIB } from '@propr/shared';
+import { detectGitHubAttachmentPlan, githubAttachmentLimitBytes, githubInlineEligibility, resolveGitHubAttachmentCapacity, resolveVisualPreviewOriginalCapacity, VISUAL_PREVIEW_CONTENT_TYPES, MIB } from '@propr/shared';
 import { loadGitHubAttachmentCapacity } from '../src/services/visualPreviewCapacityService.js';
 import { normalizeStoredVisualPreviewSettings } from '../src/config/configManager.js';
 import { db } from '../src/db/connection.js';
@@ -35,9 +35,36 @@ test('auto recognizes only explicit known plans and defaults conservatively', ()
 });
 
 test('stored settings retain override but discard client-supplied resolved paid status', () => {
-  const settings = normalizeStoredVisualPreviewSettings({ enabled: true, types: ['video'], githubAttachmentPlan: 'free', githubAttachmentCapacity: resolveGitHubAttachmentCapacity('paid') });
+  const settings = normalizeStoredVisualPreviewSettings({ enabled: true, types: ['video'], githubAttachmentPlan: 'free', githubAttachmentCapacity: resolveGitHubAttachmentCapacity('paid'), originalEvidenceCapability: { maxBytes: 500 * MIB } });
   assert.equal(settings.githubAttachmentPlan, 'free');
   assert.equal(settings.githubAttachmentCapacity, undefined);
+  assert.equal(settings.originalEvidenceCapability, undefined);
+});
+
+test('managed original capacity honors server limits independently of GitHub plans and caps staging at 500 MiB', () => {
+  for (const plan of ['auto', 'free', 'paid'] as const) {
+    for (const maxBytes of [20 * MIB, 500 * MIB, 600 * MIB]) {
+      assert.deepEqual(resolveVisualPreviewOriginalCapacity({ maxBytes }, resolveGitHubAttachmentCapacity(plan)), {
+        source: 'managed-storage', imageLimitBytes: Math.min(maxBytes, 500 * MIB), videoLimitBytes: Math.min(maxBytes, 500 * MIB),
+      });
+    }
+  }
+});
+
+test('missing or invalid original capabilities retain conservative legacy staging', () => {
+  for (const capability of [undefined, ...[0, -1, NaN, Infinity, 0.5].map(maxBytes => ({ maxBytes }))]) {
+    assert.deepEqual(resolveVisualPreviewOriginalCapacity(capability), {
+      source: 'legacy', imageLimitBytes: 10 * MIB, videoLimitBytes: 10 * MIB,
+    });
+    assert.equal(resolveVisualPreviewOriginalCapacity(capability, resolveGitHubAttachmentCapacity('paid')).videoLimitBytes, 100 * MIB);
+  }
+});
+
+test('inline eligibility carries structured reasons independently of original capacity', () => {
+  assert.deepEqual(githubInlineEligibility('image/png', 10 * MIB), { eligible: true, limitBytes: 10 * MIB });
+  assert.deepEqual(githubInlineEligibility('image/png', 10 * MIB + 1), { eligible: false, reason: 'size-limit-exceeded', limitBytes: 10 * MIB });
+  assert.deepEqual(githubInlineEligibility('application/pdf', 1), { eligible: false, reason: 'unsupported-content-type', limitBytes: null });
+  for (const size of [0, -1, NaN, Infinity]) assert.equal(githubInlineEligibility('video/mp4', size).eligible, false);
 });
 
 test('detection uses only GET /user with the existing token, without requesting scopes or permissions', async () => {

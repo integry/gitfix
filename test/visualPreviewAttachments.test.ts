@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
@@ -19,12 +19,17 @@ const [{ db }, {
 
 after(async () => {
   await db.destroy();
+  await rm(fixtureDirectory, { recursive: true, force: true });
 });
+
+const fixtureDirectory = await mkdtemp(path.join(tmpdir(), 'propr-attachment-fixture-'));
+const fixturePath = path.join(fixtureDirectory, 'desktop.png');
+await writeFile(fixturePath, 'preview');
 
 const evidence = {
   assets: [{
     relativePath: '.propr/previews/desktop.png',
-    absolutePath: '/worktree/.propr/previews/desktop.png',
+    absolutePath: fixturePath,
     type: 'image' as const,
     title: 'Desktop settings'
   }],
@@ -74,8 +79,8 @@ test('edits a pull request with uploaded visual preview attachments', async () =
 
   assert.ok(invocation);
   assert.deepEqual(invocation.args.slice(0, 6), ['pr', 'edit', '42', '--repo', 'integry/propr', '--body']);
-  assert.match(invocation.args[6], /!\[Desktop settings\]\(\/worktree\/\.propr\/previews\/desktop\.png\)/);
-  assert.deepEqual(invocation.args.slice(-2), ['--attach', '/worktree/.propr/previews/desktop.png']);
+  assert.ok(invocation.args[6].includes(`![Desktop settings](${fixturePath})`));
+  assert.deepEqual(invocation.args.slice(-2), ['--attach', fixturePath]);
   assert.equal(invocation.authToken, 'installation-token');
   assert.equal(invocation.args.includes('installation-token'), false);
   assert.deepEqual(requests.map(request => request.endpoint), ['GET /repos/{owner}/{repo}/pulls/{pull_number}']);
@@ -91,7 +96,7 @@ test('rejects a pull request upload when GitHub leaves a local path in the body'
     authToken: 'installation-token',
     worktreePath: '/worktree',
     octokit: {
-      request: async <T>() => ({ data: { body: '![Desktop settings](/worktree/.propr/previews/desktop.png)' } }) as T
+      request: async <T>() => ({ data: { body: `![Desktop settings](${fixturePath})` } }) as T
     },
     runCommand: async () => ({ stdout: '' })
   }), /did not replace a local visual preview path/);
@@ -132,14 +137,14 @@ test('uploads media before updating the existing work comment without creating a
 
   assert.equal(published.html_url, 'https://github.com/integry/propr/pull/42#issuecomment-100');
   assert.match(published.body, /https:\/\/github\.com\/user-attachments\/assets\/asset-id/);
-  assert.doesNotMatch(published.body, /\/worktree\/\.propr\/previews/);
+  assert.equal(published.body.includes(fixturePath), false);
   assert.deepEqual(requests.map(request => request.endpoint), [
     'GET /repos/{owner}/{repo}',
     'PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}',
   ]);
   assert.equal(requests[1].options.comment_id, 100);
   assert.deepEqual(uploads, [{
-    absolutePath: '/worktree/.propr/previews/desktop.png',
+    absolutePath: fixturePath,
     authToken: 'installation-token',
     repositoryId: 987,
   }]);
@@ -187,7 +192,7 @@ test('rejects an updated work comment whose response still contains a local path
         }
         return { data: {
           html_url: 'https://github.com/integry/propr/pull/42#issuecomment-100',
-          body: '![Desktop settings](/worktree/.propr/previews/desktop.png)',
+          body: `![Desktop settings](${fixturePath})`,
           comment_id: options.comment_id,
         } } as T;
       }
@@ -275,4 +280,91 @@ test('GitHub CLI PR upload enforces the capacity policy before starting gh', asy
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('prepared originals remain available to a managed publisher while GitHub-only publishers fail before network access', async t => {
+  const { prepareVisualPreviewEvidence, cleanupPreparedVisualPreviewEvidence } = await import('@propr/core');
+  const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
+  const { simpleGit } = await import('simple-git');
+  const worktree = await mkdtemp(path.join(tmpdir(), 'propr-managed-original-'));
+  t.after(async () => rm(worktree, { recursive: true, force: true }));
+  const git = simpleGit(worktree);
+  await git.init();
+  await git.addConfig('user.name', 'ProPR Test');
+  await git.addConfig('user.email', 'test@propr.dev');
+  await writeFile(path.join(worktree, 'README.md'), 'fixture');
+  await git.add('README.md');
+  await git.commit('initial');
+  await mkdir(path.join(worktree, '.propr/previews'), { recursive: true });
+  const relativePath = '.propr/previews/original.png';
+  const originalPath = path.join(worktree, relativePath);
+  await writeFile(originalPath, 'original evidence');
+  await truncate(originalPath, 11 * MIB);
+  const originalBytes = await readFile(originalPath);
+  const prepared = await prepareVisualPreviewEvidence({
+    worktreePath: worktree, taskId: 'managed-original',
+    settings: { enabled: true, types: ['image'], originalEvidenceCapability: { maxBytes: 500 * MIB } },
+  });
+  t.after(async () => cleanupPreparedVisualPreviewEvidence(prepared));
+  assert.equal(prepared.evidence.assets.length, 1);
+  const asset = prepared.evidence.assets[0];
+  assert.equal(asset.sizeBytes, originalBytes.length);
+  assert.deepEqual(asset.githubInline, { eligible: false, reason: 'size-limit-exceeded', limitBytes: 10 * MIB });
+  await assert.rejects(access(originalPath));
+  assert.equal((await git.status()).files.length, 0);
+
+  // A managed publisher receives the complete original after worktree cleanup.
+  // Its storage client and authenticated viewer URL creation belong to #2281.
+  const managedPublisher = async (evidence: typeof prepared.evidence) => {
+    assert.equal(evidence.originalCapacity?.source, 'managed-storage');
+    return readFile(evidence.assets[0].absolutePath);
+  };
+  assert.deepEqual(await managedPublisher(prepared.evidence), originalBytes);
+
+  const network = t.mock.method(globalThis, 'fetch', async () => { assert.fail('must not fetch'); });
+  const request = t.mock.fn(async <T>(): Promise<T> => { assert.fail('must not call GitHub'); });
+  const uploadAsset = t.mock.fn(async (): Promise<string> => { assert.fail('must not upload'); });
+  const runCommand = t.mock.fn(async (): Promise<{ stdout: string }> => { assert.fail('must not start gh'); });
+  for (const plan of ['auto', 'free', 'paid'] as const) {
+    const options = {
+      owner: 'integry', repo: 'propr', pullRequestNumber: 42, startingCommentId: 100,
+      body: 'Complete', worktreePath: worktree,
+      evidence: { ...prepared.evidence, githubAttachmentCapacity: resolveGitHubAttachmentCapacity(plan) },
+      octokit: { request }, uploadAsset, runCommand,
+    };
+    await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
+    await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
+  }
+  assert.equal(network.mock.callCount(), 0);
+  assert.equal(request.mock.callCount(), 0);
+  assert.equal(uploadAsset.mock.callCount(), 0);
+  assert.equal(runCommand.mock.callCount(), 0);
+  assert.deepEqual(await managedPublisher(prepared.evidence), originalBytes, 'GitHub rejection does not consume the original');
+  await cleanupPreparedVisualPreviewEvidence(prepared);
+  await assert.rejects(access(asset.absolutePath));
+});
+
+test('GitHub publishers revalidate files despite stale eligible metadata before publishing any asset', async t => {
+  const { MIB } = await import('@propr/shared');
+  const directory = await mkdtemp(path.join(tmpdir(), 'propr-stale-inline-'));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const absolutePath = path.join(directory, 'grew.mp4');
+  await writeFile(absolutePath, '');
+  await truncate(absolutePath, 11 * MIB);
+  const options = {
+    owner: 'integry', repo: 'propr', pullRequestNumber: 42, startingCommentId: 100,
+    body: '', worktreePath: directory, authToken: 'existing',
+    evidence: {
+      ...evidence,
+      assets: [...evidence.assets, {
+        relativePath: '.propr/previews/grew.mp4', absolutePath, type: 'video' as const, title: 'Grew',
+        sizeBytes: 1, githubInline: { eligible: true as const, limitBytes: 10 * MIB },
+      }],
+    },
+    octokit: { request: async <T>(): Promise<T> => { assert.fail('must not call GitHub'); } },
+    uploadAsset: async (): Promise<string> => { assert.fail('must not upload even the first eligible asset'); },
+    runCommand: async (): Promise<{ stdout: string }> => { assert.fail('must not start gh'); },
+  };
+  await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
+  await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
 });

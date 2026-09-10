@@ -12,6 +12,52 @@ export interface GitHubAttachmentCapacity {
 
 export const MIB = 1024 * 1024;
 
+/** Supplied by a trusted managed-storage capability resolver, never repository configuration. */
+export interface VisualPreviewOriginalCapability {
+  maxBytes: number;
+}
+
+export interface VisualPreviewOriginalCapacity {
+  source: 'legacy' | 'managed-storage';
+  imageLimitBytes: number;
+  videoLimitBytes: number;
+}
+
+export const MAX_VISUAL_PREVIEW_ORIGINAL_BYTES = 500 * MIB;
+
+/** GitHub limits are only the legacy staging fallback, not a managed-original ceiling. */
+export function resolveVisualPreviewOriginalCapacity(
+  capability?: VisualPreviewOriginalCapability,
+  githubCapacity = resolveGitHubAttachmentCapacity(),
+): VisualPreviewOriginalCapacity {
+  if (capability && Number.isSafeInteger(capability.maxBytes) && capability.maxBytes > 0) {
+    const limit = Math.min(capability.maxBytes, MAX_VISUAL_PREVIEW_ORIGINAL_BYTES);
+    return { source: 'managed-storage', imageLimitBytes: limit, videoLimitBytes: limit };
+  }
+  return {
+    source: 'legacy',
+    imageLimitBytes: githubAttachmentLimitBytes('image/png', githubCapacity)!,
+    videoLimitBytes: githubAttachmentLimitBytes('video/mp4', githubCapacity)!,
+  };
+}
+
+export type GitHubInlineEligibility =
+  | { eligible: true; limitBytes: number }
+  | { eligible: false; reason: 'unsupported-content-type' | 'invalid-size'; limitBytes: number | null }
+  | { eligible: false; reason: 'size-limit-exceeded'; limitBytes: number };
+
+export function githubInlineEligibility(
+  contentType: string,
+  sizeBytes: number,
+  capacity = resolveGitHubAttachmentCapacity(),
+): GitHubInlineEligibility {
+  const limitBytes = githubAttachmentLimitBytes(contentType, capacity);
+  if (limitBytes === null) return { eligible: false, reason: 'unsupported-content-type', limitBytes };
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) return { eligible: false, reason: 'invalid-size', limitBytes };
+  if (sizeBytes > limitBytes) return { eligible: false, reason: 'size-limit-exceeded', limitBytes };
+  return { eligible: true, limitBytes };
+}
+
 export function normalizeGitHubAttachmentPlanOverride(value: unknown): GitHubAttachmentPlanOverride {
   return value === 'free' || value === 'paid' ? value : 'auto';
 }
