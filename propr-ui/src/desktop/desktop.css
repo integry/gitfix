@@ -33,7 +33,7 @@
 
 .desktop-platform-linux {
   --desktop-window-controls-end-inset: 8.625rem;
-  --desktop-window-controls-gap: 1.25rem;
+  --desktop-window-controls-gap: 1.5rem;
   --desktop-titlebar-height: 44px;
 }
 
@@ -436,6 +436,16 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
 }
 .desktop-app .desktop-content-toolbar {
   padding-right: calc(var(--desktop-window-controls-end-inset) + var(--desktop-window-controls-gap));
+}
+.desktop-app.desktop-platform-linux .desktop-content-toolbar::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: var(--desktop-window-controls-end-inset);
+  height: 1.5rem;
+  border-left: 1px solid #e2e8f0;
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 .desktop-app.desktop-platform-darwin .desktop-sidebar-header {
   padding-left: max(1rem, env(titlebar-area-x, 5rem));

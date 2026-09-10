@@ -3,6 +3,7 @@ import { getTaskStats, TaskStatsResponse } from '../api/proprApi';
 import { VolumeChart, ProcessingTimeChart, StatusPieChart } from './TaskStatsChartParts';
 import { useSocket } from '../contexts/useSocket';
 import { TaskUpdatePayload } from '@propr/shared';
+import { SystemAlert } from './ui/SystemAlert';
 
 // Color palette matching the dashboard's indigo/purple theme
 const STATUS_COLORS: Record<string, string> = {
@@ -148,10 +149,8 @@ const TaskStatsChart: React.FC<TaskStatsChartProps> = ({ data: externalData, mod
 
   if (error) {
     return (
-      <div>
-        <div className="flex items-center justify-center h-64 text-red-500">
-          <span>Failed to load statistics: {error}</span>
-        </div>
+      <div className="flex h-64 items-center justify-center">
+        <SystemAlert>Failed to load statistics: {error}</SystemAlert>
       </div>
     );
   }

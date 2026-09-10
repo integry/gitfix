@@ -53,7 +53,11 @@ describe('desktop window chrome styles', () => {
     expect(controlsRule).toContain('margin: 0');
     expect(controlsRule).toContain('padding: 0');
     expect(desktopStyles).toContain('padding: 0 0 var(--desktop-frame-inset) var(--desktop-frame-inset)');
-    expect(desktopStyles).toContain('--desktop-window-controls-gap: 1.25rem');
+    expect(desktopStyles).toContain('--desktop-window-controls-gap: 1.5rem');
+    const dividerRule = ruleFor('.desktop-app.desktop-platform-linux .desktop-content-toolbar::after');
+    expect(dividerRule).toContain('right: var(--desktop-window-controls-end-inset)');
+    expect(dividerRule).toContain('height: 1.5rem');
+    expect(dividerRule).toContain('border-left: 1px solid #e2e8f0');
   });
 
   it('uses subtle eight-pixel scrollbars throughout the desktop surface', () => {

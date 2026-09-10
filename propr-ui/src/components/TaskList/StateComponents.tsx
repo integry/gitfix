@@ -2,6 +2,7 @@ import React from 'react';
 import type { TaskGroup } from './types';
 import { ParentTaskRow, ChildTaskRow, CollapseToggleRow } from './TaskRows';
 import { MobileTaskCard } from './MobileTaskCard';
+import { SystemAlert } from '../ui/SystemAlert';
 
 /** Renders a simple loading message for dashboard integration */
 export const DashboardLoadingState: React.FC = () => (
@@ -22,7 +23,7 @@ export const FullPageLoadingState: React.FC = () => (
 
 /** Renders a simple error message for dashboard integration */
 export const DashboardErrorState: React.FC<{ error: string }> = ({ error }) => (
-  <div className="text-red-600 p-4">Error loading tasks: {error}</div>
+  <SystemAlert>Error loading tasks: {error}</SystemAlert>
 );
 
 /** Renders a full-page error state with header for the main Tasks page */
@@ -32,7 +33,7 @@ export const FullPageErrorState: React.FC<{ error: string }> = ({ error }) => (
       <h1 className="text-2xl font-bold text-gray-800">Tasks</h1>
     </div>
     <div className="flex-1 overflow-auto px-6 py-6">
-      <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">Error loading tasks: {error}</div>
+      <SystemAlert>Error loading tasks: {error}</SystemAlert>
     </div>
   </div>
 );
