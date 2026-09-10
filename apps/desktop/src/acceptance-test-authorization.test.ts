@@ -11,6 +11,8 @@ import {
 import {
   authorizePackagedAcceptanceTest,
   packagedAcceptancePairingTiming,
+  packagedAcceptanceAccountConfirmation,
+  PACKAGED_ACCEPTANCE_LOOPBACK_ORIGINS,
 } from './acceptance-test-authorization';
 import { sanitizeDesktopLogFields } from './logger';
 
@@ -25,6 +27,31 @@ const input = {
 };
 
 describe('packaged acceptance authorization', () => {
+  it('confirms only one exact synthetic account at a ready/revoked fixture in an authorized launch', async () => {
+    assert.equal(packagedAcceptanceAccountConfirmation(null), undefined);
+    const account = { id: '2296', username: 'acceptance-admin', avatarUrl: null };
+    const signal = new AbortController().signal;
+    const directory = authorizePackagedAcceptanceTest(input);
+    for (const origin of PACKAGED_ACCEPTANCE_LOOPBACK_ORIGINS.slice(0, 2)) {
+      const confirm = packagedAcceptanceAccountConfirmation(directory)!;
+      for (const wrong of [
+        { ...account, id: '123' }, { ...account, username: 'real-user' },
+        { ...account, avatarUrl: 'https://avatars.githubusercontent.com/u/2296' },
+      ]) assert.equal(await confirm(wrong, origin, signal), false);
+      for (const wrong of [
+        'https://propr.example', 'http://127.0.0.1:41731', `${origin}/`,
+        PACKAGED_ACCEPTANCE_LOOPBACK_ORIGINS[2],
+      ]) assert.equal(await confirm(account, wrong, signal), false);
+      assert.equal(await confirm(account, origin, AbortSignal.abort()), false);
+      assert.equal(await confirm(account, origin, signal), true);
+      assert.equal(await confirm(account, origin, signal), false);
+    }
+    const main = readFileSync(fileURLToPath(new URL('./main.ts', import.meta.url)), 'utf8');
+    assert.match(main, /packagedAcceptanceAccountConfirmation\(packagedAcceptanceUserDataDirectory\)/);
+    assert.match(main, /if \(acceptanceAccountConfirmation\) \{\s*return acceptanceAccountConfirmation\(account, origin, signal\);\s*\}\s*const result = await dialog.showMessageBox/);
+    assert.match(main, /buttons: \['Cancel', `Save @\$\{account.username\}`\]/);
+    assert.match(main, /return result.response === 1/);
+  });
   it('accepts only the dual-trigger packaged Linux launch with an isolated profile', () => {
     assert.equal(authorizePackagedAcceptanceTest(input), acceptanceUserData);
     assert.equal(authorizePackagedAcceptanceTest({ ...input, argv: ['app'], environmentTriggered: false }), null);

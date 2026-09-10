@@ -23,6 +23,7 @@ import { configureApplicationMenu } from './application-menu';
 import {
   authorizePackagedAcceptanceTest,
   packagedAcceptancePairingTiming,
+  packagedAcceptanceAccountConfirmation,
   PACKAGED_ACCEPTANCE_LOOPBACK_ORIGINS,
 } from './acceptance-test-authorization';
 import { registerPackagedAcceptanceZoomIpc } from './acceptance-zoom';
@@ -214,6 +215,7 @@ try {
 const packagedSmokeTest = packagedSmokeUserDataDirectory !== null;
 const packagedAcceptanceTest = packagedAcceptanceUserDataDirectory !== null;
 const acceptancePairingTiming = packagedAcceptancePairingTiming(packagedAcceptanceUserDataDirectory);
+const acceptanceAccountConfirmation = packagedAcceptanceAccountConfirmation(packagedAcceptanceUserDataDirectory);
 let mainWindow: BrowserWindow | null = null;
 let nativeSmokeWindow: BrowserWindow | null = null;
 const initialDeepLink = deepLinkFromArguments(process.argv);
@@ -1637,6 +1639,9 @@ if (!hasSingleInstanceLock) {
         if (!mainWindow || mainWindow.isDestroyed() || signal.aborted) return false;
         if (packagedJourneyAccountConfirmation) {
           return packagedJourneyAccountConfirmation.confirm(account, origin, signal);
+        }
+        if (acceptanceAccountConfirmation) {
+          return acceptanceAccountConfirmation(account, origin, signal);
         }
         const result = await dialog.showMessageBox(mainWindow, {
           signal,

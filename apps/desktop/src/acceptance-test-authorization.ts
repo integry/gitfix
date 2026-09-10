@@ -1,5 +1,6 @@
 import { basename, isAbsolute, resolve } from 'node:path';
 import { PACKAGED_ACCEPTANCE_EPOCH_MILLISECONDS } from '../scripts/packaged-acceptance-clock.mjs';
+import type { DesktopGitHubAccount } from './shared/github-account';
 
 export const PACKAGED_ACCEPTANCE_USER_DATA_PREFIX = 'propr-desktop-acceptance-';
 export const PACKAGED_ACCEPTANCE_LOOPBACK_ORIGINS = Object.freeze([
@@ -69,3 +70,19 @@ export const packagedAcceptancePairingTiming = (
       now: () => PACKAGED_ACCEPTANCE_EPOCH_MILLISECONDS,
       sleep: async (_milliseconds, _signal) => undefined,
     };
+
+/** Only the dual-authorized, isolated acceptance launch may confirm this synthetic identity. */
+export const packagedAcceptanceAccountConfirmation = (
+  authorizedUserDataDirectory: string | null,
+): ((account: DesktopGitHubAccount, origin: string, signal: AbortSignal) => Promise<boolean>) | undefined => {
+  if (authorizedUserDataDirectory === null) return undefined;
+  let confirmed = false;
+  return async (account, origin, signal) => {
+    // One pairing per disposable application process, on the ready/revoked fixtures only.
+    if (confirmed || signal.aborted
+      || !PACKAGED_ACCEPTANCE_LOOPBACK_ORIGINS.slice(0, 2).some(value => value === origin)
+      || account.id !== '2296' || account.username !== 'acceptance-admin' || account.avatarUrl !== null) return false;
+    confirmed = true;
+    return true;
+  };
+};

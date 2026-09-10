@@ -135,6 +135,19 @@ describe('packaged scoped current-user request URL', () => {
 });
 
 describe('packaged current-user fixture request shapes', () => {
+  it('recognizes only the exact main-owned account confirmation without assigning a renderer scope', () => {
+    const path = '/api/auth/user?desktop_account_confirmation=1';
+    assert.deepEqual(classifyCurrentUserRequestShape('GET', path, undefined), {
+      source: 'account-confirmation', scopeGeneration: null,
+    });
+    for (const [method, url, origin] of [
+      ['POST', path, undefined], ['GET', path, 'propr-app://renderer'],
+      ['GET', path, 'https://other.example'], ['GET', `${path}&extra=1`, undefined],
+      ['GET', `${path}&desktop_account_confirmation=1`, undefined],
+      ['GET', '/api/auth/user?desktop_account_confirmation=%31', undefined],
+      ['GET', '/api/auth/user?desktop_account_confirmation=0', undefined],
+    ]) assert.equal(classifyCurrentUserRequestShape(method, url, origin), null);
+  });
   it('distinguishes the exact main probe from renderer-scoped validation', () => {
     assert.deepEqual(classifyCurrentUserRequestShape(
       'GET', '/api/auth/user', undefined,
