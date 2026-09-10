@@ -104,6 +104,14 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     setState({ phase: 'connecting', profile });
     let operation: 'probe' | 'persist' = 'probe';
     try {
+      if (adapters.savedAccounts) {
+        // Drop the old renderer scope immediately; persist no selection before probing.
+        // Reload during a failed or interrupted switch must not restore the old account.
+        adapters.connection.deactivate?.();
+        await enqueueProfileMutation(() => adapters.profiles.setActiveId(null));
+        if (!isCurrentAttempt()) return;
+        activeProfileId.current = null;
+      }
       const probeResult = await adapters.connection.probe(profile);
       if (!isCurrentAttempt()) return;
       if (probeResult.status !== 'ready') {
@@ -120,7 +128,11 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       await reportAcceptanceStage('AUTHENTICATED_REPROBE_READY');
 
       operation = 'persist';
-      const connectedProfile = { ...profile, lastConnectedAt: new Date().toISOString() };
+      const savedProfile = adapters.savedAccounts
+        ? (await adapters.profiles.list()).find(item => item.id === profile.id)
+        : undefined;
+      if (!isCurrentAttempt()) return;
+      const connectedProfile = { ...profile, account: savedProfile?.account ?? profile.account, lastConnectedAt: new Date().toISOString() };
       let result: DesktopConnectionResult = probeResult;
       await enqueueProfileMutation(async () => {
         if (!isCurrentAttempt()) return;
@@ -155,7 +167,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
   }, [adapters, cancelDiscovery, enqueueProfileMutation, reportAcceptanceStage]);
 
-  const { authenticate, cancelAuthentication } = createDesktopAuthenticationActions({
+  const { authenticate, cancelAuthentication, runBlockedAction } = createDesktopAuthenticationActions({
     adapters,
     cancelDiscovery,
     connect,
@@ -213,7 +225,9 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
 
   const removeProfile = async (profile: DesktopProfile) => {
     cancelDiscovery();
-    if (!window.confirm(`Remove “${profile.name}” from this computer?`)) return;
+    if (!window.confirm(profile.account
+      ? `Remove @${profile.account.username} from “${profile.name}” on this computer?`
+      : `Remove “${profile.name}” from this computer?`)) return;
     setOperationError(null);
     try {
       await enqueueProfileMutation(() => adapters.profiles.remove(profile.id));
@@ -317,31 +331,6 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
 
   const retry = () => { if ('profile' in state) void connect(state.profile); };
 
-  const runBlockedAction = async (
-    profile: DesktopProfile,
-    action: () => Promise<void>,
-    failureMessage: string,
-    connectFailureMessage?: string,
-    onSuccess?: () => Promise<void>,
-  ) => {
-    cancelDiscovery();
-    const attempt = connectionAttempt.current;
-    try {
-      await action();
-      if (connectionAttempt.current === attempt) await onSuccess?.();
-    } catch {
-      const message = recoverableError(failureMessage);
-      setState(current => current.phase === 'blocked' && current.profile.id === profile.id
-        ? {
-          ...current,
-          result: parseProprConnectEndpoint(profile.baseUrl) && connectFailureMessage
-            ? { status: 'offline', message: recoverableError(connectFailureMessage) }
-            : { ...current.result, message },
-        }
-        : current);
-    }
-  };
-
   const openEditor = (profile: DesktopProfile | 'new') => {
     cancelDiscovery();
     clearConnectCandidate();
@@ -396,6 +385,12 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
   };
 
+  const addAccount = adapters.savedAccounts ? (instance: DesktopProfile) => {
+    setManagerOpen(false);
+    // A fresh binding id is essential: never overwrite the existing user's credential.
+    void connect({ id: crypto.randomUUID(), name: instance.name, baseUrl: instance.baseUrl, kind: instance.kind });
+  } : undefined;
+
   const content = () => {
     const profileEditor = editing ? <main className="desktop-welcome-card"><DesktopBrand /><ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate()} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate() && editing !== 'new' ? () => connectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={profile => void saveProfile(profile)} /></main> : null;
     const setupLayer = (surface: React.ReactNode) => <DesktopSetupLayer editor={profileEditor} suspended={Boolean(profileEditor && hasPendingConnectCandidate())}>{surface}</DesktopSetupLayer>;
@@ -410,7 +405,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }} onHelp={() => void runBlockedAction(state.profile, () => adapters.externalBrowser.open('https://propr.dev'), 'ProPR Desktop could not open connection help.')} onReenter={() => reenterManagedEndpoint(state.profile)} onRediscover={() => void rediscoverManagedEndpoint(state.profile)} />;
     if (localSetupOpen && isGuidedLocalSetup(adapters.localSetup)) return setupLayer(<LocalSetupWizard adapter={adapters.localSetup} onBack={() => setLocalSetupOpen(false)} onComplete={profile => { setLocalSetupOpen(false); void saveProfile(profile); }} />);
     if (profileEditor) return profileEditor;
-    return <InstanceChooser profiles={profiles} busy={busy} error={operationError} localSetupSupported={adapters.platform === 'linux' && adapters.localSetup.supported} networkDiscoverySupported={adapters.discovery.supported} onLocalSetup={() => void setupLocal()} onConnectNew={() => openEditor('new')} onDiscover={() => void discover()} onConnect={profile => void connect(profile)} onEdit={openEditor} onRemove={profile => void removeProfile(profile)} />;
+    return <InstanceChooser onAddAccount={addAccount} profiles={profiles} busy={busy} error={operationError} localSetupSupported={adapters.platform === 'linux' && adapters.localSetup.supported} networkDiscoverySupported={adapters.discovery.supported} onLocalSetup={() => void setupLocal()} onConnectNew={() => openEditor('new')} onDiscover={() => void discover()} onConnect={profile => void connect(profile)} onEdit={openEditor} onRemove={profile => void removeProfile(profile)} />;
   };
 
   if (state.phase !== 'connected') return <div className={`desktop-entry desktop-platform-${adapters.platform}`}><div className="desktop-entry-drag-region" aria-hidden="true" />{adapters.platform === 'linux' && <DesktopWindowControls actions={adapters.app} />}{deepLinkError && <div className="desktop-inline-error" role="alert">{deepLinkError}</div>}{content()}</div>;
@@ -423,7 +418,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       hasPendingConnectCandidate={hasPendingConnectCandidate()} openManager={openManager}
       onConnectCandidatePresented={connectCandidatePresented}
       closeManager={closeManager} closeEditor={closeEditor} openEditor={openEditor}
-      connect={connect} removeProfile={removeProfile} saveProfile={saveProfile} retry={retry}
+      addAccount={addAccount} connect={connect} removeProfile={removeProfile} saveProfile={saveProfile} retry={retry}
       setManagerOpen={setManagerOpen}
       windowControls={adapters.platform === 'linux' ? adapters.app : undefined}
     >{children}</DesktopConnectedExperience>

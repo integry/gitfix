@@ -18,6 +18,7 @@ const isLocal = (baseUrl: string): boolean => {
 };
 
 const fromStoredProfile = (profile: StoredDesktopProfile): DesktopProfile => ({
+  account: profile.account,
   id: profile.id,
   name: profile.label,
   baseUrl: profile.apiBaseUrl,
@@ -97,6 +98,7 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
   const pairingOperations = new Map<string, string>();
   const desktopPlatform = platform(navigator.platform || navigator.userAgent);
   return {
+  savedAccounts: true,
   platform: desktopPlatform,
   app: {
     onDeepLink: listener => bridge.app.onDeepLink(listener),

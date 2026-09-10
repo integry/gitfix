@@ -136,8 +136,18 @@ const createCredentialService = (
 ): DesktopCredentialService => {
   const suppliedFetch = dependencies.fetch;
   const service = new DesktopCredentialService({
+    confirmAccount: async () => true,
     ...dependencies,
     fetch: async (input, init) => {
+      if (input.toString().endsWith('/api/auth/user?desktop_account_confirmation=1')) {
+        return json({ id: '1', username: 'octocat', avatarUrl: null });
+      }
+      if (input.toString().endsWith('/api/auth/user')) {
+        const response = await suppliedFetch(input, init);
+        const body = await response.clone().json().catch(() => null);
+        return response.ok && body?.username && !body.id
+          ? json({ ...body, id: '1' }, response.status) : response;
+      }
       if (!input.toString().endsWith('/api/desktop/discovery')) return suppliedFetch(input, init);
       try {
         const response = await suppliedFetch(input, init);
@@ -161,6 +171,92 @@ afterEach(async () => {
 });
 
 describe('main-process desktop credential service', () => {
+  for (const offline of [false, true]) {
+    it(`logs out only the active bearer durably with server ${offline ? 'offline' : 'connected'}`, async () => {
+      const store = await createStore();
+      const directory = temporaryDirectories.at(-1)!;
+      const a = await store.save({ id: 'a', label: 'A', apiBaseUrl: 'https://a.example.test' });
+      const b = await store.save({ id: 'b', label: 'B', apiBaseUrl: a.apiBaseUrl });
+      await store.writeCredential(credential(a.id, a.apiBaseUrl, 'A'));
+      await store.writeCredential(credential(b.id, b.apiBaseUrl, 'B'));
+      let unreachable = false;
+      const revoked: string[] = [];
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        if (unreachable) throw new Error('offline');
+        if (input.toString().endsWith('/api/desktop/discovery')) return json(discovery);
+        if (init?.method === 'DELETE') revoked.push(new Headers(init.headers).get('Authorization')!);
+        return json({ username: 'octocat' });
+      };
+      const service = new DesktopCredentialService({ profiles: store, fetch, clientName: 'Logout test', openPairingBrowser: async () => undefined });
+      credentialServices.push(service);
+      const ready = await service.probe({ id: a.id, label: a.label, apiBaseUrl: a.apiBaseUrl });
+      assert.equal(ready.status, 'ready');
+      if (ready.status !== 'ready') return;
+      const active = await service.activate(ready.activationTicket);
+      await assert.rejects(service.logout({ profileId: b.id, transportScope: active.transportScope }));
+      assert.ok(await store.readCredential(a.id));
+      unreachable = offline;
+      await service.logout(active);
+      assert.equal(service.hasActiveRendererBinding(), false);
+      assert.deepEqual(service.prepareRequest(`${a.apiBaseUrl}/api/tasks`, transportHeaders(active.transportScope)), { cancel: true });
+      assert.deepEqual(await service.prepareRequestAsync(
+        `wss://a.example.test/socket.io/?transport=websocket&proprDesktopTransportScope=${active.transportScope}`,
+        {}, { resourceType: 'webSocket' },
+      ), { cancel: true });
+      await assert.rejects(service.activate(ready.activationTicket));
+      await service.awaitIdle();
+      assert.equal(await store.readCredential(a.id), null);
+      assert.equal((await store.readCredential(b.id))?.token, token('B'));
+      assert.equal((await store.list()).profiles.length, 2);
+      assert.equal((await store.list()).activeProfileId, null);
+      assert.equal((await store.pendingRevocations()).length, offline ? 1 : 0);
+      assert.deepEqual(revoked, offline ? [] : [`Bearer ${token('A')}`]);
+      await service.dispose();
+      const reloadedStore = new ProfileStore(directory, encryption);
+      assert.equal((await reloadedStore.list()).activeProfileId, null);
+      assert.equal(await reloadedStore.readCredential(a.id), null);
+      assert.equal((await reloadedStore.readCredential(b.id))?.token, token('B'));
+      unreachable = false;
+      const reloadedService = new DesktopCredentialService({ profiles: reloadedStore, fetch, clientName: 'Reload test', openPairingBrowser: async () => undefined });
+      credentialServices.push(reloadedService);
+      await reloadedService.initialize();
+      assert.equal((await reloadedService.probe({ id: a.id, label: a.label, apiBaseUrl: a.apiBaseUrl })).status, 'authentication-required');
+      await reloadedService.awaitIdle();
+      assert.deepEqual(revoked, [`Bearer ${token('A')}`]);
+      assert.equal((await reloadedStore.pendingRevocations()).length, 0);
+      const other = await reloadedService.probe({ id: b.id, label: b.label, apiBaseUrl: b.apiBaseUrl });
+      assert.equal(other.status, 'ready');
+    });
+  }
+
+  it('fences traffic and pairing during local logout failure, then permits retry without false success', async () => {
+    const store = await createStore();
+    const a = await store.save({ id: 'a', label: 'A', apiBaseUrl: 'https://a.example.test' });
+    await store.writeCredential(credential(a.id, a.apiBaseUrl, 'A'));
+    const service = createCredentialService({ profiles: store, fetch: async input => json(input.toString().endsWith('/api/desktop/discovery') ? discovery : { username: 'octocat' }), clientName: 'Failure test', openPairingBrowser: async () => undefined });
+    const ready = await service.probe({ id: a.id, label: a.label, apiBaseUrl: a.apiBaseUrl });
+    assert.equal(ready.status, 'ready');
+    if (ready.status !== 'ready') return;
+    const active = await service.activate(ready.activationTicket);
+    const remove = store.removeCredentialIfCurrent.bind(store);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    store.removeCredentialIfCurrent = async () => { entered.resolve(); await release.promise; throw new Error('disk unavailable'); };
+    const logout = service.logout(active);
+    const rejected = assert.rejects(logout, /disk unavailable/);
+    await entered.promise;
+    assert.deepEqual(service.prepareRequest(`${a.apiBaseUrl}/api/tasks`, transportHeaders(active.transportScope)), { cancel: true });
+    await assert.rejects(service.probe({ id: a.id, label: a.label, apiBaseUrl: a.apiBaseUrl }), /logout is in progress/);
+    await assert.rejects(service.pair({ id: a.id, label: a.label, apiBaseUrl: a.apiBaseUrl }), /logout is in progress/);
+    release.resolve();
+    await rejected;
+    assert.equal((await store.readCredential(a.id))?.token, token('A'));
+    assert.equal(service.hasActiveRendererBinding(), true);
+    store.removeCredentialIfCurrent = remove;
+    await service.logout(active);
+    assert.equal(await store.readCredential(a.id), null);
+  });
+
   it('fails a relaunched same-origin replacement closed before sending the stored bearer', async () => {
     const store = await createStore();
     const profile = await store.save({ id: 'profile-replaced', label: 'A', apiBaseUrl: 'https://a.example.test' });

@@ -128,6 +128,23 @@ not deploy or replace that runtime. Source revisions were checked during this
 fix; no live user instance endpoint was available to independently inspect its
 currently deployed responses.
 
+### Experimental desktop preference
+
+Desktop voice is **Experimental and off by default**, including installations
+that have already acknowledged the voice disclosure. Enable **Experimental desktop
+voice** in Settings (under **Integrations** for administrators). This explicit
+choice is saved locally for the signed-in account and instance on this device.
+Switching accounts or instances cancels the previous voice session and loads that
+account's own choice. Browser voice behavior is independent of this preference.
+
+Enabling the option does not start audio or ask for microphone permission. While
+off, voice entry points are hidden and the controller cannot request briefings,
+start playback, or request microphone access. Disabling aborts briefing requests,
+cancels active speech and microphone checks, releases tracks (including streams
+that arrive after cancellation), clears pending actions, and rejects late results.
+An already submitted, confirmed task action cannot be undone; disabling prevents
+its follow-on voice refresh or playback.
+
 ### Microphone access is separate from recognition
 
 Standard Electron exposes a Web Speech constructor without supplying the
@@ -141,13 +158,19 @@ not invoke Web Speech recognition. Browser **Listen** retains its existing
 user-initiated recognition flow. `service-not-allowed` is a speech-service failure,
 separate from `not-allowed` / an OS microphone denial.
 
-On Linux desktop, the check requires a live user gesture in the isolated preload and a
+On Linux and macOS desktop, the check requires a live user gesture in the isolated preload and a
 native **Allow microphone** decision (default/escape is **Deny**). It opens an
 audio-only stream after approval and immediately stops every track. No recorder,
 transcription provider, upload, or background listener is created. Access is
 restricted to the live trusted main renderer, top frame, and active connection;
 null/foreign web contents, subframes, approval windows, camera/mixed/unknown media,
-and other permissions remain denied. The grant is temporary, ends on completion
+and other permissions remain denied. On macOS, after the native choice, ProPR
+also [requests the operating system's microphone permission](https://www.electronjs.org/docs/latest/api/system-preferences#systempreferencesaskformediaaccessmediatype-macos). Packaged builds
+include the microphone usage description; the existing Electron signing defaults
+include audio-input entitlement. If macOS has denied access, change the Microphone
+permission in System Settings and restart ProPR. Cancelling invalidates the check
+even if the OS prompt remains open; a late OS approval cannot open a stream.
+The grant is temporary, ends on completion
 or cancellation, and expires after 30 seconds. Navigation, renderer destruction,
 crash, connection invalidation, and shutdown prevent grant reuse. Cancellation
 also ignores a late native approval and releases a late device stream.
@@ -171,3 +194,16 @@ native-dialog acceptance result. A separate synthetic Web Speech probe exposed
 the constructor but failed with `audio-capture`; virtual audio cannot validate
 recognition service availability. The unsupported desktop decision relies on
 the Electron implementation and maintainer explanation linked above.
+
+Follow-up validation used the real Settings and voice components in Chromium:
+default off, keyboard opt-in, full-reload persistence, opt-out, and backend-404
+fallback passed. The browser reported microphone permission `prompt`, no audio
+input devices, and `NotFoundError` on a real microphone request. No permission
+was granted or bypassed and no synthetic device was supplied. The agent image
+has no Electron executable or display server for native-dialog verification.
+
+Follow-up validation in the Linux agent environment cannot establish physical
+microphone capture, macOS TCC prompt behavior, signed-package microphone access,
+or audible speaker output. Verify these on Linux and macOS devices with an
+explicit Settings opt-in and real native/OS consent. No server deployment or
+worker restart is part of this change.

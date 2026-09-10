@@ -27,14 +27,14 @@ class FakeIpc implements PreloadIpc {
 describe('desktop preload bridge', () => {
   it('exposes only the narrow frozen namespaces', () => {
     const bridge = createDesktopBridge(new FakeIpc());
-    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'localSetup', 'notifications', 'profiles', 'storage', ...(process.platform === 'linux' ? ['voice'] : [])]);
+    assert.deepEqual(Object.keys(bridge).sort(), ['app', 'auth', 'authentication', 'connection', 'discovery', 'external', 'lifecycle', 'localSetup', 'notifications', 'profiles', 'storage', ...((process.platform === 'linux' || process.platform === 'darwin') ? ['voice'] : [])]);
     assert.equal(Object.isFrozen(bridge), true);
     assert.equal(Object.values(bridge).every(Object.isFrozen), true);
     assert.equal('fs' in bridge, false);
     assert.equal('exec' in bridge, false);
   });
 
-  it('requires a live user gesture before microphone consent IPC', { skip: process.platform !== 'linux' }, async () => {
+  it('requires a live user gesture before microphone consent IPC', { skip: process.platform !== 'linux' && process.platform !== 'darwin' }, async () => {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
     const ipc = new FakeIpc();
     const voice = createDesktopBridge(ipc).voice!;
@@ -123,7 +123,7 @@ describe('desktop preload bridge', () => {
     await bridge.app.minimize();
     await bridge.app.toggleMaximize();
     await bridge.app.closeWindow();
-    await bridge.auth.logout('http://localhost:4000');
+    await bridge.auth.logout({ profileId: 'profile-1', transportScope: 'transport-scope' });
     await bridge.profiles.save({ label: 'Local', apiBaseUrl: 'http://localhost:4000' });
     const admission = await bridge.authentication.admit('profile-1');
     await bridge.authentication.pair(
@@ -143,7 +143,7 @@ describe('desktop preload bridge', () => {
       { channel: IPC_CHANNELS.windowMinimize, args: [] },
       { channel: IPC_CHANNELS.windowToggleMaximize, args: [] },
       { channel: IPC_CHANNELS.windowClose, args: [] },
-      { channel: IPC_CHANNELS.authLogout, args: ['http://localhost:4000'] },
+      { channel: IPC_CHANNELS.authLogout, args: [{ profileId: 'profile-1', transportScope: 'transport-scope' }] },
       {
         channel: IPC_CHANNELS.profilesSave,
         args: [{ label: 'Local', apiBaseUrl: 'http://localhost:4000' }],

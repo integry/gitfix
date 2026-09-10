@@ -125,7 +125,7 @@ export const createDesktopBridge = (
   });
 
   const bridge: DesktopBridge = {
-    ...(process.platform === 'linux' ? {
+    ...((process.platform === 'linux' || process.platform === 'darwin') ? {
       voice: {
         requestMicrophone: () => {
           // Evaluated in the isolated preload world, before crossing IPC.
@@ -160,7 +160,7 @@ export const createDesktopBridge = (
       },
     },
     auth: {
-      logout: (apiBaseUrl) => invoke(ipc, IPC_CHANNELS.authLogout, apiBaseUrl),
+      logout: (scope) => invoke(ipc, IPC_CHANNELS.authLogout, scope),
     },
     external: {
       open: (url) => invoke(ipc, IPC_CHANNELS.openExternal, url),

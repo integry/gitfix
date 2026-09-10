@@ -66,6 +66,7 @@ const createService = async (
   temporaryDirectories.push(directory);
   let binding: Record<string, unknown> = {};
   const service = new DesktopCredentialService({
+    confirmAccount: async () => true,
     profiles: new ProfileStore(directory, encryption),
     clientName: 'Pairing sink test',
     pairingTiming: {
@@ -107,9 +108,9 @@ const createService = async (
         status: 'active', receipt: 'R'.repeat(22),
         activatedAt: '2026-01-01T00:00:01.000Z', expiresAt: null,
       });
-      if (url === `${origin}/api/auth/user`) {
+      if (url.startsWith(`${origin}/api/auth/user`)) {
         assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${instanceToken}`);
-        return json({ username: 'remote-owner' });
+        return json({ id: '1', username: 'remote-owner' });
       }
       throw new Error('Unexpected pairing request');
     },
@@ -173,11 +174,12 @@ describe('DesktopCredentialService pairing browser sink', () => {
       `${origin}/api/desktop/pairings`,
       `${origin}/api/desktop/pairings/${pairingId}/poll`,
       `${origin}/api/desktop/pairings/${pairingId}/activate`,
+      `${origin}/api/auth/user?desktop_account_confirmation=1`,
       `${origin}/api/desktop/discovery`,
       `${origin}/api/auth/user`,
     ]);
     assert.deepEqual(requests.map(request => request.authorization), [
-      null, null, null, null, null, null, `Bearer ${instanceToken}`,
+      null, null, null, null, null, `Bearer ${instanceToken}`, null, `Bearer ${instanceToken}`,
     ]);
     assert.deepEqual(service.prepareRequest(
       `${origin}/api/tasks`,
@@ -348,6 +350,7 @@ describe('DesktopCredentialService pairing browser sink', () => {
     temporaryDirectories.push(directory);
     let fetched = false;
     const service = new DesktopCredentialService({
+    confirmAccount: async () => true,
       profiles: new ProfileStore(directory, {
         isEncryptionAvailable: () => false,
         backend: () => 'basic_text',

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopExperience } from './DesktopExperience';
 import { DesktopInstanceSelector } from './DesktopInstanceSelector';
-import { DESKTOP_ACCESS_INVALID_EVENT, type DesktopAdapters, type DesktopConnectionResult, type DesktopProfile } from './types';
+import { DESKTOP_ACCESS_INVALID_EVENT, DESKTOP_LOGGED_OUT_EVENT, type DesktopAdapters, type DesktopConnectionResult, type DesktopProfile } from './types';
 
 const apiMock = vi.hoisted(() => ({ setApiBaseUrl: vi.fn() }));
 const runtimeMock = vi.hoisted(() => ({ setDesktopApiBaseUrl: vi.fn() }));
@@ -59,6 +59,30 @@ describe('DesktopExperience transport and fencing', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('unmounts account UI on scoped logout and waits for explicit sign-in', async () => {
+    const adapters = adaptersFor([localProfile, remoteProfile], localProfile.id, async () => ({ status: 'ready', transportScope: 'scope-a' }));
+    adapters.connection.deactivate = vi.fn();
+    const unmounted = vi.fn();
+    const { useEffect } = await import('react');
+    const AccountUi = () => { useEffect(() => unmounted, []); return <div>Private account content</div>; };
+    render(<DesktopExperience adapters={adapters}><AccountUi /></DesktopExperience>);
+    expect(await screen.findByText('Private account content')).toBeInTheDocument();
+    act(() => window.dispatchEvent(new CustomEvent(DESKTOP_LOGGED_OUT_EVENT, { detail: { profileId: remoteProfile.id, transportScope: 'old-scope' } })));
+    expect(screen.getByText('Private account content')).toBeInTheDocument();
+    act(() => window.dispatchEvent(new CustomEvent(DESKTOP_LOGGED_OUT_EVENT, { detail: { profileId: localProfile.id, transportScope: 'scope-a' } })));
+    expect(await screen.findByText('You are signed out of this instance. Sign in again to continue.')).toBeInTheDocument();
+    expect(screen.queryByText('Private account content')).not.toBeInTheDocument();
+    expect(unmounted).toHaveBeenCalledOnce();
+    expect(adapters.connection.deactivate).toHaveBeenCalledOnce();
+    expect(adapters.connection.probe).toHaveBeenCalledTimes(1);
+    expect(adapters.profiles.remove).not.toHaveBeenCalled();
+    expect(adapters.authentication.authenticate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in in browser' }));
+    expect(await screen.findByText('Private account content')).toBeInTheDocument();
+    expect(adapters.authentication.authenticate).toHaveBeenCalledTimes(1);
+    expect(adapters.connection.probe).toHaveBeenCalledTimes(2);
   });
 
   it('shows a retryable offline state and recovers without reloading', async () => {

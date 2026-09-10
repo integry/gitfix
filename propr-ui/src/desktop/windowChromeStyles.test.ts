@@ -37,13 +37,33 @@ describe('desktop window chrome styles', () => {
 
   it('reserves the native controls at the toolbar end and the traffic lights at the macOS start', () => {
     expect(desktopStyles).toContain(
-      '.desktop-app .desktop-content-toolbar {\n  padding-right: var(--desktop-window-controls-end-inset);',
+      '.desktop-app .desktop-content-toolbar {\n  padding-right: calc(var(--desktop-window-controls-end-inset) + var(--desktop-window-controls-gap));',
     );
     expect(ruleFor('.desktop-app.desktop-platform-darwin .desktop-sidebar-header')).toContain(
       'env(titlebar-area-x, 5rem)',
     );
     expect(ruleFor('.desktop-window-controls')).toContain('-webkit-app-region: no-drag');
     expect(ruleFor('.desktop-window-controls')).toContain('height: var(--desktop-titlebar-height)');
+  });
+
+  it('keeps Linux controls and their hit targets flush with the top-right window edge', () => {
+    const controlsRule = ruleFor('.desktop-window-controls');
+    expect(controlsRule).toContain('top: 0');
+    expect(controlsRule).toContain('right: 0');
+    expect(controlsRule).toContain('margin: 0');
+    expect(controlsRule).toContain('padding: 0');
+    expect(desktopStyles).toContain('padding: 0 0 var(--desktop-frame-inset) var(--desktop-frame-inset)');
+    expect(desktopStyles).toContain('--desktop-window-controls-gap: 1.5rem');
+    const dividerRule = ruleFor('.desktop-app.desktop-platform-linux .desktop-content-toolbar::after');
+    expect(dividerRule).toContain('right: var(--desktop-window-controls-end-inset)');
+    expect(dividerRule).toContain('height: 1.5rem');
+    expect(dividerRule).toContain('border-left: 1px solid #e2e8f0');
+  });
+
+  it('uses subtle eight-pixel scrollbars throughout the desktop surface', () => {
+    expect(desktopStyles).toMatch(/::-webkit-scrollbar[^}]+width: 8px;/s);
+    expect(desktopStyles).toMatch(/::-webkit-scrollbar-track[^}]+background: transparent;/s);
+    expect(desktopStyles).toMatch(/::-webkit-scrollbar-thumb[^}]+border-radius: 4px;\s+background: #cbd5e1;/s);
   });
 
   it('keeps Linux window controls above application modal backdrops', () => {

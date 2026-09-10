@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron';
 import type { Rectangle } from 'electron';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -18,6 +18,7 @@ import { createDesktopSetupHost } from '@propr/cli/desktop-local-setup';
 import type { SetupActions } from '@propr/local-setup';
 import { launchDesktopAuthentication } from './authentication-handoff';
 import { DesktopConnectDiscoveryService } from './connect-discovery';
+import { requestDesktopMicrophoneConsent } from './microphone-consent';
 import { configureApplicationMenu } from './application-menu';
 import {
   authorizePackagedAcceptanceTest,
@@ -62,6 +63,7 @@ import {
 import { createDesktopShutdownCoordinator } from './shutdown';
 import { createDesktopTrayController } from './system-tray';
 import { createMainWindowRestorer } from './main-window-restoration';
+import { synchronizeLinuxWindowFrame } from './linux-window-frame';
 import { DesktopSetupController } from './setup-controller';
 import { promptForWebhookSecret } from './secure-secret-prompt';
 import {
@@ -1291,6 +1293,7 @@ const createMainWindow = async (
       desktopWindowIcon?.image,
     ),
   );
+  if (process.platform === 'linux') synchronizeLinuxWindowFrame(window);
   if (packagedSmokeTest && desktopWindowIcon) {
     log('info', PACKAGED_NATIVE_ICON_READY_EVENT, {
       asset: basename(desktopWindowIcon.path),
@@ -1625,6 +1628,21 @@ if (!hasSingleInstanceLock) {
             }),
       copyPairingApproval: request => copyApprovedDesktopPairingUrl(request, clipboard),
       clientName: `ProPR Desktop (${process.platform})`,
+      confirmAccount: async (account, origin, signal) => {
+        if (!mainWindow || mainWindow.isDestroyed() || signal.aborted) return false;
+        const result = await dialog.showMessageBox(mainWindow, {
+          signal,
+          type: 'question',
+          title: 'Confirm GitHub account',
+          message: `Save @${account.username} for this instance?`,
+          detail: `${origin}\n\nThis is the identity approved by your browser. If it is the wrong account, cancel and open the approval link in a browser profile signed in to the intended GitHub account.`,
+          buttons: ['Cancel', `Save @${account.username}`],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        return result.response === 1;
+      },
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
       },
@@ -1651,21 +1669,27 @@ if (!hasSingleInstanceLock) {
     const sessionSecurity = configureDesktopSessionSecurity({
       ipcMain,
       requestMicrophoneConsent: async (renderer, signal) => {
-        if (process.platform !== 'linux') return false;
         const owner = BrowserWindow.fromWebContents(renderer);
         if (!owner || owner.isDestroyed() || signal.aborted) return false;
-        const result = await dialog.showMessageBox(owner, {
-          type: 'question',
-          title: 'Allow microphone access check?',
-          message: 'Allow ProPR to check microphone access?',
-          detail: 'This check opens the microphone and immediately releases it. Audio is not recorded or sent. Voice commands are unavailable in this desktop runtime. No camera access is granted. Permission ends when the check finishes, is cancelled, or after 30 seconds.',
-          buttons: ['Deny', 'Allow microphone'],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true,
+        return requestDesktopMicrophoneConsent({
+          platform: process.platform,
           signal,
+          confirm: async () => {
+            const result = await dialog.showMessageBox(owner, {
+              type: 'question',
+              title: 'Allow microphone access check?',
+              message: 'Allow ProPR to check microphone access?',
+              detail: 'This check opens the microphone and immediately releases it. Audio is not recorded or sent. Voice commands are unavailable in this desktop runtime. No camera access is granted. Permission ends when the check finishes, is cancelled, or after 30 seconds.',
+              buttons: ['Deny', 'Allow microphone'],
+              defaultId: 0,
+              cancelId: 0,
+              noLink: true,
+              signal,
+            });
+            return result.response === 1;
+          },
+          askForMacAccess: () => systemPreferences.askForMediaAccess('microphone'),
         });
-        return !signal.aborted && result.response === 1;
       },
       contentSecurityPolicy,
       credentials,

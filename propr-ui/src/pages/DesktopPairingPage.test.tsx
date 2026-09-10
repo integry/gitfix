@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import DesktopPairingPage from './DesktopPairingPage';
+import { AuthProvider } from '../contexts/AuthContext';
 import { approveDesktopPairing, getDesktopPairingApproval } from '../api/desktopAuth';
 
 vi.mock('../api/desktopAuth', () => ({
@@ -26,11 +27,15 @@ describe('DesktopPairingPage', () => {
     vi.mocked(approveDesktopPairing).mockResolvedValue({ ...pending, status: 'approved' });
     render(
       <MemoryRouter initialEntries={[`/desktop/pairing?pairing_id=${pairingId}`]}>
-        <DesktopPairingPage />
+        <AuthProvider user={{ id: '101', login: 'alice', username: 'alice', displayName: 'Alice', email: null, avatarUrl: null, role: 'admin', permissions: [], authorizationSource: 'local' }}>
+          <DesktopPairingPage />
+        </AuthProvider>
       </MemoryRouter>,
     );
 
     expect(await screen.findByText('Alice’s MacBook')).toBeInTheDocument();
+    expect(screen.getByText('@alice')).toBeInTheDocument();
+    expect(screen.getByText(/separate browser profile/)).toBeInTheDocument();
     expect(approveDesktopPairing).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Approve desktop' }));
 

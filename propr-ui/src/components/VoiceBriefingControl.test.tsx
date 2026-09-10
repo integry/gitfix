@@ -12,6 +12,11 @@ import VoiceBriefingControl, {
   VOICE_RECOGNITION_DISCLOSURE_STORAGE_KEY,
 } from './VoiceBriefingControl';
 
+vi.mock('../hooks/useDesktopVoicePreference', async importOriginal => ({
+  ...await importOriginal<typeof import('../hooks/useDesktopVoicePreference')>(),
+  useDesktopVoicePreference: () => ({ enabled: true, isEnabled: () => true, key: null, connection: null }),
+}));
+
 vi.mock('../hooks/useVoiceBriefing', () => ({
   useVoiceBriefing: vi.fn(),
 }));

@@ -1,3 +1,5 @@
+import type { DesktopGitHubAccount } from './github-account';
+
 export const DESKTOP_PROTOCOL = 'propr';
 
 export const IPC_CHANNELS = Object.freeze({
@@ -108,6 +110,8 @@ export interface DesktopAppMetadata {
 }
 
 export interface DesktopProfile {
+  /** Main-verified account bound to this connection; absent for legacy/unpaired profiles. */
+  account?: DesktopGitHubAccount;
   id: string;
   label: string;
   apiBaseUrl: string;
@@ -125,6 +129,7 @@ export type DesktopPairingFailureCode =
   | 'APPROVAL_EXPIRED'
   | 'SECURE_STORAGE_FAILED'
   | 'PAIRING_REJECTED'
+  | 'ACCOUNT_MISMATCH'
   | 'PAIRING_UNREACHABLE'
   | 'PAIRING_CANCELLED';
 
@@ -381,7 +386,7 @@ export interface DesktopBridge {
     onNativeCommand(listener: (delivery: DesktopNativeCommandDelivery) => void): () => void;
   };
   auth: {
-    logout(apiBaseUrl: string): Promise<void>;
+    logout(scope: DesktopConnectionScope): Promise<void>;
   };
   external: {
     open(url: string): Promise<void>;

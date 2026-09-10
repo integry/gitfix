@@ -190,7 +190,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       key={item.name}
       to={item.href}
       className={`flex items-center text-sm font-medium transition-colors duration-150 ${
-        desktop ? 'mx-2 rounded-lg px-3 py-2.5' : 'border-r-2 px-4 py-3'
+        desktop ? 'mx-2 rounded-lg border-0 px-3 py-2.5' : 'border-r-2 px-4 py-3'
       } ${
         isActive(item.href)
           ? desktop
@@ -247,7 +247,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       `}>
         <div className="desktop-sidebar-header flex flex-none items-center justify-between px-4 py-4 sm:py-6 h-12 sm:h-16">
           <Link to="/" className="flex items-center" aria-label="ProPR dashboard">
-            <img src={publicAssetUrl('/media/logo-and-name.png')} alt="ProPR" className="h-8 w-auto" />
+            <img src={publicAssetUrl(desktop ? '/media/logo-and-name-transparent.png' : '/media/logo-and-name.png')} alt="ProPR" className="h-8 w-auto" />
           </Link>
           <button
             onClick={() => setIsSidebarOpen(false)}

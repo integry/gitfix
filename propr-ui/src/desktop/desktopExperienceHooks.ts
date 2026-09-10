@@ -3,6 +3,7 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { ExperienceState } from './desktopExperienceState';
 import {
   DESKTOP_ACCESS_INVALID_EVENT,
+  DESKTOP_LOGGED_OUT_EVENT,
   type DesktopAccessInvalidEventDetail,
   type DesktopAdapters,
 } from './types';
@@ -56,7 +57,9 @@ export const useDesktopAccessInvalidation = (
           profile: current.profile,
           result: {
             status: 'authentication-required',
-            message: 'Access to this instance was revoked or expired. Pair again to continue.',
+            message: event.type === DESKTOP_LOGGED_OUT_EVENT
+              ? 'You are signed out of this instance. Sign in again to continue.'
+              : 'Access to this instance was revoked or expired. Pair again to continue.',
             version: current.result.version,
             authentication: current.result.authentication,
           },
@@ -64,7 +67,11 @@ export const useDesktopAccessInvalidation = (
       });
     };
     window.addEventListener(DESKTOP_ACCESS_INVALID_EVENT, accessInvalid);
-    return () => window.removeEventListener(DESKTOP_ACCESS_INVALID_EVENT, accessInvalid);
+    window.addEventListener(DESKTOP_LOGGED_OUT_EVENT, accessInvalid);
+    return () => {
+      window.removeEventListener(DESKTOP_ACCESS_INVALID_EVENT, accessInvalid);
+      window.removeEventListener(DESKTOP_LOGGED_OUT_EVENT, accessInvalid);
+    };
   }, [adapters, setState]);
 };
 

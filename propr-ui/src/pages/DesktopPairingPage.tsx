@@ -1,3 +1,5 @@
+import { GitHubAccountIdentity } from '../components/GitHubAccountIdentity';
+import { useCurrentUser } from '../contexts/AuthContext';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -9,6 +11,7 @@ import {
 const PAIRING_ID_PATTERN = /^dpr_[A-Za-z0-9_-]{22}$/;
 
 const DesktopPairingPage = () => {
+  const user = useCurrentUser();
   const [searchParams] = useSearchParams();
   const pairingId = useMemo(() => searchParams.get('pairing_id') ?? '', [searchParams]);
   const [pairing, setPairing] = useState<DesktopPairingApproval | null>(null);
@@ -57,6 +60,8 @@ const DesktopPairingPage = () => {
               Allow <strong className="font-semibold text-gray-900">{pairing.clientName}</strong> to access this ProPR instance as you.
               It receives your current instance role and permissions, but never your GitHub access token.
             </p>
+            {user && <p className="mt-3 text-sm"><GitHubAccountIdentity account={{ id: String(user.id), username: user.username || user.login, avatarUrl: user.avatarUrl ?? null }} /></p>}
+            <p className="mt-3 text-sm text-gray-600">Check the GitHub identity before approving. To use another account, open this link in a separate browser profile signed in to that account. Desktop will ask you to confirm the approved identity before saving it.</p>
             <div className="mt-5 flex gap-3">
               <button
                 type="button"

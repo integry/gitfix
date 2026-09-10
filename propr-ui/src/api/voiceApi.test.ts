@@ -126,6 +126,38 @@ describe('voice API', () => {
     await expect(getVoiceBriefing('attention')).rejects.toThrow(/item\.href/);
   });
 
+  test('validates a complete briefing body with cancellation enabled', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(briefing));
+    await expect(getVoiceBriefing('attention', new AbortController().signal)).resolves.toEqual(briefing);
+  });
+
+  test('aborts a briefing fetch before headers arrive', async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')));
+      }));
+    const request = getVoiceBriefing('all', controller.signal);
+    const rejected = expect(request).rejects.toThrow(/cancelled/i);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    controller.abort();
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    await rejected;
+  });
+
+  test('cancels the response stream when disabled after headers arrive', async () => {
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ cancel }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+    const request = getVoiceBriefing('all', controller.signal);
+    const rejected = expect(request).rejects.toThrow();
+    await vi.waitFor(() => expect(response.body?.locked).toBe(true));
+    controller.abort();
+    await rejected;
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   test('rejects an invalid scope before making a request', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
 

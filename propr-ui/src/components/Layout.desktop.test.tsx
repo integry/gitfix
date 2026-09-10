@@ -90,9 +90,11 @@ describe('Layout desktop instance selector', () => {
     expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveClass(
       'mx-2',
       'rounded-lg',
+      'border-0',
       'bg-teal-50',
       'text-teal-700',
     );
+    expect(screen.getByRole('link', { name: 'Dashboard' }).className).not.toMatch(/\bborder-l(?:-|\b)/);
     expect(screen.getByTestId('global-header')).toHaveTextContent('GitHub user');
     const profile = screen.getByText('@octocat').closest('.desktop-sidebar-profile');
     expect(profile?.closest('aside')).not.toBeNull();

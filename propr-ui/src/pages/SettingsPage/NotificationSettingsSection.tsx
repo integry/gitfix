@@ -76,15 +76,6 @@ const EnrollmentControl: React.FC = () => {
   if (push.isLoading) {
     return <p className="text-xs text-gray-500">Checking this browser...</p>;
   }
-  if (!push.serviceWorkerOriginSupported) {
-    return (
-      <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs leading-5 text-gray-700">
-        Browser Web Push is not available in the ProPR desktop app. Use the Desktop notifications
-        section on this page to configure native task alerts for this device. Your personal
-        notification preferences and inbox notifications still apply.
-      </div>
-    );
-  }
   if (push.requiresIosInstallation) {
     return (
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs leading-5 text-blue-800">
@@ -213,11 +204,13 @@ const NotificationSettingsSection: React.FC = () => {
       </div>
 
       <div className="space-y-5">
-        <div>
-          <p className="mb-2 text-xs font-medium text-gray-700">Browser push</p>
-          <EnrollmentControl />
-          {push.error && <p role="alert" className="mt-2 text-xs text-red-600">{push.error}</p>}
-        </div>
+        {push.serviceWorkerOriginSupported && (
+          <div>
+            <p className="mb-2 text-xs font-medium text-gray-700">Browser push</p>
+            <EnrollmentControl />
+            {push.error && <p role="alert" className="mt-2 text-xs text-red-600">{push.error}</p>}
+          </div>
+        )}
 
         <div>
           <div className="mb-2 grid grid-cols-[1fr_auto_auto] gap-4 border-b border-gray-200 pb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">

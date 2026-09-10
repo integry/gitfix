@@ -279,10 +279,12 @@ describe('desktop pairing service IPC native shutdown lifecycle', () => {
       try {
         const profile = await store.save({ id: profileId, label: scenario.name, apiBaseUrl: origin });
         service = new DesktopCredentialService({
+          confirmAccount: async () => true,
           profiles: store,
           clientName: `Native ${scenario.name}`,
           openPairingBrowser: async () => undefined,
-          fetch: fetchImplementation,
+          fetch: async (input, init) => input.toString().endsWith('/api/auth/user?desktop_account_confirmation=1')
+            ? json({ id: '1', username: 'octocat', avatarUrl: null }) : fetchImplementation(input, init),
           pairingTiming: { now: () => protocolNow, sleep: async () => undefined },
           pairingProtocol: {
             overallTimeoutMs: 1_000,

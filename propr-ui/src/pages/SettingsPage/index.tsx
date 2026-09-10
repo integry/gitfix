@@ -13,6 +13,7 @@ import { useCurrentUser, userHasPermission } from '../../contexts/AuthContext';
 import NotificationSettingsSection from './NotificationSettingsSection';
 import VisualPreviewAuthSection from './VisualPreviewAuthSection';
 import DesktopNotificationSettingsSection from './DesktopNotificationSettingsSection';
+import DesktopVoiceSettingsSection from './DesktopVoiceSettingsSection';
 import { useDesktop } from '../../desktop/DesktopContext';
 import SettingsNavigation, { type SettingsNavigationSection } from './SettingsNavigation';
 
@@ -275,6 +276,11 @@ const AdminSettingsPage: React.FC = () => {
       content: <VisualPreviewAuthSection />
     },
     ...(desktop ? [{
+      id: 'desktop-voice',
+      category: 'integrations' as const,
+      searchText: 'desktop voice experimental microphone speech briefing enable disable',
+      content: <DesktopVoiceSettingsSection />
+    }, {
       id: 'desktop-notifications',
       category: 'notifications' as const,
       searchText: 'desktop native notifications operating system task started completed failed needs attention device test alert',
@@ -374,6 +380,8 @@ const SettingsPage: React.FC = () => {
       >
         <div className="mx-auto max-w-2xl">
           {desktop && <>
+            <DesktopVoiceSettingsSection />
+            <div className="my-6 border-t border-gray-200" />
             <DesktopNotificationSettingsSection />
             <div className="my-6 border-t border-gray-200" />
           </>}

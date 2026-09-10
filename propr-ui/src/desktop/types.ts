@@ -1,3 +1,5 @@
+import type { DesktopGitHubAccount } from '../../../apps/desktop/src/shared/github-account';
+
 export type DesktopPlatform = 'macos' | 'windows' | 'linux';
 
 export type DesktopDeepLinkConsumption = {
@@ -6,6 +8,7 @@ export type DesktopDeepLinkConsumption = {
 };
 
 export interface DesktopProfile {
+  account?: DesktopGitHubAccount;
   id: string;
   name: string;
   baseUrl: string;
@@ -61,6 +64,7 @@ export type DesktopAuthenticationFailureCode =
   | 'APPROVAL_EXPIRED'
   | 'SECURE_STORAGE_FAILED'
   | 'PAIRING_REJECTED'
+  | 'ACCOUNT_MISMATCH'
   | 'PAIRING_UNREACHABLE'
   | 'PAIRING_CANCELLED';
 
@@ -137,6 +141,8 @@ export interface DesktopManagedTunnelRecoveryAdapter {
 }
 
 export interface DesktopAdapters {
+  /** Only hosts with isolated bearer bindings may expose saved account switching. */
+  savedAccounts?: boolean;
   platform: DesktopPlatform;
   app: {
     onDeepLink(listener: (
@@ -177,3 +183,5 @@ declare global {
     __PROPR_DESKTOP__?: ProprDesktopBridge;
   }
 }
+
+export const DESKTOP_LOGGED_OUT_EVENT = 'propr:desktop-logged-out';

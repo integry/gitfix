@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { App, IpcMain, IpcMainInvokeEvent, Session } from 'electron';
-import { clearDesktopInstanceCookies, logoutDesktopSession } from './desktop-session';
+import { clearDesktopInstanceCookies } from './desktop-session';
 import { desktopPairingFailureCode, type DesktopCredentialService } from './credential-service';
 import type { DesktopConnectDiscoveryService } from './connect-discovery';
 import type { DesktopLogger } from './logger';
@@ -38,7 +38,7 @@ interface RegisterIpcOptions {
   connectDiscovery: Pick<DesktopConnectDiscoveryService, 'discover' | 'rediscover'>;
   lifecycle: LocalLifecycleController;
   setup?: DesktopSetupController;
-  notifications?: Pick<NativeNotificationService, 'get' | 'update' | 'test' | 'publish' | 'clear'>;
+  notifications?: Pick<NativeNotificationService, 'get' | 'update' | 'test' | 'publish' | 'clear' | 'activeScope'>;
   logger: DesktopLogger;
   desktopSession: Session;
   devServerUrl: string | undefined;
@@ -243,9 +243,21 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
       throw new Error('Unexpected desktop deep-link consumer readiness');
     }
   });
-  handle(IPC_CHANNELS.authLogout, async (_event, apiBaseUrl) => {
-    await logoutDesktopSession(options.desktopSession, apiBaseUrl);
-    options.onActiveWorkConnectionUnavailable?.('logged-out');
+  handle(IPC_CHANNELS.authLogout, async (_event, scope, ...args) => {
+    if (args.length || !scope || typeof scope !== 'object' || Array.isArray(scope)
+      || Object.keys(scope).length !== 2
+      || typeof scope.profileId !== 'string' || typeof scope.transportScope !== 'string') {
+      throw new Error('Invalid desktop logout scope');
+    }
+    const notificationScope = options.notifications?.activeScope();
+    await options.credentials.logout(scope);
+    if (notificationScope && notificationScope.profileId === scope.profileId
+      && notificationScope.transportScope === scope.transportScope) {
+      options.notifications?.clear(notificationScope);
+    }
+    if (options.onActiveWorkConnectionUnavailable && !options.credentials.hasActiveRendererBinding()) {
+      options.onActiveWorkConnectionUnavailable('logged-out');
+    }
   });
   handle(IPC_CHANNELS.openExternal, async (_event, value: unknown) => {
     if (typeof value !== 'string' || !isSafeExternalUrl(value)) throw new Error('External URL is not allowed');
@@ -302,11 +314,17 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     const previous = current.profiles.find(profile => profile.id === current.activeProfileId);
     const next = current.profiles.find(profile => profile.id === profileId);
     if (profileId !== null && !next) throw new Error('Desktop profile does not exist');
+    // Account switching clears the durable selection before asynchronous cookie cleanup.
+    // A reload or cleanup failure must not silently select the previous account.
+    if (profileId === null) {
+      await options.credentials.setActiveProfile(null);
+      options.onActiveWorkConnectionUnavailable?.('profile-changed');
+    }
     await clearDesktopInstanceCookies(options.desktopSession, [
       ...(previous ? [previous.apiBaseUrl] : []),
       ...(next ? [next.apiBaseUrl] : []),
     ]);
-    await options.credentials.setActiveProfile(profileId);
+    if (profileId !== null) await options.credentials.setActiveProfile(profileId);
     await reconcileRendererActiveProfile();
     options.onActiveWorkConnectionUnavailable?.('profile-changed');
   });

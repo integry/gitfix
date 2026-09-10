@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 import {
   CODEX_GOAL_OBJECTIVE_MAX_LENGTH,
   buildGoalPolicyEnvironment,
@@ -25,9 +25,10 @@ import { buildCodexAppServerDockerArgs, buildCodexDockerArgs } from '../packages
 import { AntigravityAgent } from '../packages/core/src/agents/impl/AntigravityAgent.ts';
 import type { Agent, AgentConfig } from '../packages/core/src/agents/types.ts';
 
-// Codex validates the bind source before building Docker arguments.
-const codexConfigPath = mkdtempSync(join(tmpdir(), 'propr-goal-codex-config-'));
-after(() => rmSync(codexConfigPath, { recursive: true, force: true }));
+let codexConfigPath: string;
+before(() => {
+  codexConfigPath = mkdtempSync(join(tmpdir(), 'propr-goal-codex-config-'));
+});
 
 const baseConfig = (type: AgentConfig['type']): AgentConfig => ({
   id: `${type}-id`,
@@ -49,8 +50,12 @@ const common = {
 };
 
 after(async () => {
-  const { closeConnection } = await import('../packages/core/src/db/connection.ts');
-  await closeConnection();
+  try {
+    const { closeConnection } = await import('../packages/core/src/db/connection.ts');
+    await closeConnection();
+  } finally {
+    if (codexConfigPath) rmSync(codexConfigPath, { recursive: true, force: true });
+  }
 });
 
 describe('native goal provider contract', () => {

@@ -1,3 +1,4 @@
+import { GitHubAccountIdentity } from '../components/GitHubAccountIdentity';
 import React, { useLayoutEffect, useState } from 'react';
 import {
   DEFAULT_LOCAL_API_BASE_URL,
@@ -90,6 +91,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate
       const hostname = new URL(normalizedBaseUrl).hostname;
       onSave({
         id: initial?.id || createProfileId(),
+        account: initial?.account,
         name: name.trim() || 'My ProPR',
         baseUrl: normalizedBaseUrl,
         kind: isProprLoopbackHostname(hostname) ? 'local' : 'remote',
@@ -125,28 +127,33 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate
 };
 
 interface ProfileListProps {
+  activeProfileId?: string;
+  onAddAccount?(profile: DesktopProfile): void;
   profiles: DesktopProfile[];
   onConnect(profile: DesktopProfile): void;
   onEdit(profile: DesktopProfile): void;
   onRemove(profile: DesktopProfile): void;
 }
 
-export const ProfileList: React.FC<ProfileListProps> = ({ profiles, onConnect, onEdit, onRemove }) => (
+export const ProfileList: React.FC<ProfileListProps> = ({ profiles, onConnect, onEdit, onRemove, onAddAccount, activeProfileId }) => (
   <div className="desktop-recents">
-    <h2>Recent instances</h2>
+    <h2>{onAddAccount ? 'Saved accounts and instances' : 'Recent instances'}</h2>
+    {onAddAccount && <p className="desktop-account-scope-note">One active account in this desktop window. Browser accounts are managed separately.</p>}
     <div className="desktop-profile-list">
       {profiles.map(profile => (
         <div className="desktop-profile-row" key={profile.id}>
           <button type="button" className="desktop-profile-connect" onClick={() => onConnect(profile)}>
             <span className="desktop-profile-icon">{profile.kind === 'local' ? <Computer /> : <Cloud />}</span>
             <span>
-              <strong>{profile.name}</strong>
-              <small>{parseProprConnectEndpoint(profile.baseUrl) ? 'ProPR Connect' : profile.kind === 'local' ? 'Local instance' : 'Remote instance'}</small>
+              <strong>{profile.name}{profile.id === activeProfileId ? ' · Current' : ''}</strong>
+              {profile.account && <small><GitHubAccountIdentity account={profile.account} /></small>}
+              <small>{parseProprConnectEndpoint(profile.baseUrl) ? 'ProPR Connect' : profile.account ? profile.baseUrl : profile.kind === 'local' ? 'Local instance' : 'Remote instance'}</small>
             </span>
             <ChevronRight className="desktop-profile-chevron" aria-hidden="true" />
           </button>
-          <button type="button" className="desktop-icon-button" onClick={() => onEdit(profile)} aria-label={`Edit ${profile.name}`}><Pencil /></button>
-          <button type="button" className="desktop-icon-button desktop-danger-button" onClick={() => onRemove(profile)} aria-label={`Remove ${profile.name}`}><Trash2 /></button>
+          {onAddAccount && <button type="button" className="desktop-secondary-button desktop-account-add" onClick={() => onAddAccount(profile)} aria-label={`Add GitHub account to ${profile.name}`}>Add account</button>}
+          <button type="button" className="desktop-icon-button" onClick={() => onEdit(profile)} aria-label={profile.account ? `Edit ${profile.name} for @${profile.account.username}` : `Edit ${profile.name}`}><Pencil /></button>
+          <button type="button" className="desktop-icon-button desktop-danger-button" onClick={() => onRemove(profile)} aria-label={profile.account ? `Remove @${profile.account.username} from ${profile.name}` : `Remove ${profile.name}`}><Trash2 /></button>
         </div>
       ))}
     </div>
@@ -171,7 +178,7 @@ export const InstanceChooser: React.FC<ChooserProps> = ({
     <DesktopBrand />
     <div className="desktop-welcome-copy">
       <span className="desktop-eyebrow">ProPR Desktop</span>
-      <h1>{profiles.length ? 'Choose an instance' : localSetupSupported ? 'Let’s set up this computer' : 'Connect to ProPR'}</h1>
+      <h1>{profiles.length ? (listProps.onAddAccount ? 'Choose an account' : 'Choose an instance') : localSetupSupported ? 'Let’s set up this computer' : 'Connect to ProPR'}</h1>
       <p>{localSetupSupported
         ? 'Keep your repositories and coding agents close, or connect securely to a ProPR instance you already use.'
         : 'Local setup is currently available on Linux. Connect securely to a ProPR instance hosted elsewhere.'}</p>

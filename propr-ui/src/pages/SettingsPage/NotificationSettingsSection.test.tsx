@@ -99,7 +99,7 @@ describe('Notification Settings browser enrollment guidance', () => {
   test.each([
     { configured: false, vapidPublicKey: null },
     { configured: true, vapidPublicKey: 'AQID_v8' },
-  ])('renders truthful desktop guidance when server configured is $configured', async pushCapability => {
+  ])('hides unavailable browser push settings when server configured is $configured', async pushCapability => {
     mocks.push = pushState({
       serviceWorkerOriginSupported: false,
       serviceWorkerSupported: false,
@@ -108,13 +108,12 @@ describe('Notification Settings browser enrollment guidance', () => {
 
     render(<NotificationSettingsSection />);
 
-    expect(await screen.findByText(/Browser Web Push is not available in the ProPR desktop app/))
-      .toBeInTheDocument();
-    expect(screen.getByText(/Use the Desktop notifications section on this page/))
-      .toBeInTheDocument();
+    expect(await screen.findByLabelText('Inbox notifications for Plans')).toBeEnabled();
+    expect(screen.queryByText('Browser push')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Browser Web Push is not available in the ProPR desktop app/))
+      .not.toBeInTheDocument();
     expect(screen.queryByText(/administrator must configure the VAPID keys/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Enable on this browser/ })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Inbox notifications for Plans')).toBeEnabled();
     expect(screen.getByLabelText('Push notifications for Plans')).toBeEnabled();
   });
 

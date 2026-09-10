@@ -21,6 +21,11 @@ import { useVoiceBriefing } from './useVoiceBriefing';
 
 let currentVisibility: DocumentVisibilityState = 'visible';
 
+vi.mock('./useDesktopVoicePreference', async importOriginal => ({
+  ...await importOriginal<typeof import('./useDesktopVoicePreference')>(),
+  useDesktopVoicePreference: () => ({ enabled: true, isEnabled: () => true, key: null, connection: null }),
+}));
+
 vi.mock('../api/proprApi', () => ({
   abortGeneration: vi.fn(),
   abortRefinement: vi.fn(),
@@ -177,7 +182,8 @@ describe('useVoiceBriefing', () => {
     await act(async () => result.current.startListening());
     expect(getUserMedia).not.toHaveBeenCalled();
     expect(listenOnce).not.toHaveBeenCalled();
-    expect(result.current.error).toBe('Microphone access was not allowed.');
+    expect(result.current.error).toContain('Microphone access was not allowed.');
+    expect(result.current.error).toContain('On macOS, restart ProPR');
     expect(voice.revokeMicrophone).toHaveBeenCalled();
   });
 
@@ -186,7 +192,8 @@ describe('useVoiceBriefing', () => {
     getUserMedia.mockRejectedValue(new DOMException('OS permission denied', 'NotAllowedError'));
     const { result } = renderHook(() => useVoiceBriefing());
     await act(async () => result.current.startListening());
-    expect(result.current.error).toBe('Microphone access was not allowed.');
+    expect(result.current.error).toContain('Microphone access was not allowed.');
+    expect(result.current.error).toContain('On macOS, restart ProPR');
     expect(listenOnce).not.toHaveBeenCalled();
   });
 
@@ -257,7 +264,7 @@ describe('useVoiceBriefing', () => {
     await act(async () => result.current.requestBriefing('all'));
 
     expect(getVoiceBriefing).toHaveBeenCalledOnce();
-    expect(getVoiceBriefing).toHaveBeenCalledWith('all');
+    expect(getVoiceBriefing).toHaveBeenCalledWith('all', expect.any(AbortSignal));
     expect(speakOnce).not.toHaveBeenCalled();
     expect(result.current.briefing).toEqual(briefing);
     expect(result.current.phase).toBe('idle');

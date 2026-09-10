@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import type { VoiceBriefingItem } from '@propr/shared';
+import { useDesktopVoicePreference } from '../hooks/useDesktopVoicePreference';
 import { isDesktopRuntime } from '../config/runtimeMode';
 import { useVoiceBriefing, type VoiceBriefingPhase } from '../hooks/useVoiceBriefing';
 
@@ -85,9 +86,14 @@ function BriefingItem({ item, onOpen }: { item: VoiceBriefingItem; onOpen: () =>
   );
 }
 
+export default function VoiceBriefingControl() {
+  const { enabled, key, connection } = useDesktopVoicePreference();
+  return enabled ? <EnabledVoiceBriefingControl key={`${key}:${connection?.transportScope}`} /> : null;
+}
+
 // The branching mirrors the controller's finite UI phases and capability fallbacks.
 // eslint-disable-next-line complexity
-export default function VoiceBriefingControl() {
+function EnabledVoiceBriefingControl() {
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [isDisclosureVisible, setIsDisclosureVisible] = useState(false);
@@ -222,7 +228,7 @@ export default function VoiceBriefingControl() {
                 <AudioLines className="h-5 w-5" aria-hidden="true" />
               </div>
               <div className="min-w-0 flex-1">
-                <h2 id="voice-briefing-title" className="text-base font-semibold text-slate-950">Voice briefing</h2>
+                <h2 id="voice-briefing-title" className="text-base font-semibold text-slate-950">Voice briefing{isDesktopRuntime() ? ' · Experimental' : ''}</h2>
                 <p id="voice-briefing-description" className="mt-0.5 text-xs leading-5 text-slate-500">
                   {isDesktopRuntime() ? 'Review a briefing of your work.' : 'Review your work or issue one short voice command.'}
                 </p>

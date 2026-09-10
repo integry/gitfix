@@ -1,5 +1,7 @@
 const EXPECTED_WINDOW_SIZE = { width: 1280, height: 820 };
 const MINIMUM_WINDOW_SIZE = { width: 880, height: 620 };
+const LINUX_TITLEBAR_HEIGHT = 44;
+const LINUX_CONTROL_REGION_WIDTH = 138;
 
 export const parseEventRecord = (smokeOutput, expectedEvent) => {
   for (const line of smokeOutput.split(/\r?\n/)) {
@@ -93,6 +95,17 @@ export const assertPackagedLayout = (layout, platform = process.platform) => {
   if (layout.viewport.width > layout.windowBounds.width || layout.viewport.height > layout.windowBounds.height) {
     fail(`Packaged renderer viewport extends outside the window: ${JSON.stringify(layout.viewport)}`);
   }
+  const elementNames = ['entry', 'card', 'logo', 'heading', 'connectButton', 'connectDescription'];
+  for (const name of elementNames) assertElementBounds(name, layout[name]);
+  const viewportBounds = {
+    top: 0,
+    left: 0,
+    right: layout.viewport.width,
+    bottom: layout.viewport.height,
+  };
+  if (elementNames.some(name => !contains(viewportBounds, layout[name]))) {
+    fail('Packaged welcome-card content extends outside the renderer viewport');
+  }
   if (platform === 'linux') {
     const capabilities = layout.nativeChrome;
     if (!capabilities
@@ -115,6 +128,10 @@ export const assertPackagedLayout = (layout, platform = process.platform) => {
     }
     assertElementBounds('desktop drag region', layout.chrome?.dragRegion);
     assertElementBounds('native window control region', layout.chrome?.nativeControlRegion);
+    const { dragRegion, nativeControlRegion } = layout.chrome;
+    // Fixed chrome follows the visible entry surface, not necessarily the
+    // viewport: the approved normal frame has a 3px left/bottom allowance,
+    // while expanded windows are flush. Other contained insets are safe too.
     if (layout.chrome.overlayVisible !== false
       || layout.chrome.dragRegionStyle !== 'drag'
       || layout.chrome.legacyTitleRowCount !== 0
@@ -124,27 +141,20 @@ export const assertPackagedLayout = (layout, platform = process.platform) => {
         'Maximize or restore window',
         'Close window',
       ])
-      || layout.chrome.dragRegion.top !== 0
-      || layout.chrome.dragRegion.height !== 56
-      || layout.chrome.nativeControlRegion.top !== 0
-      || layout.chrome.nativeControlRegion.height !== 56
-      || layout.chrome.dragRegion.right !== layout.chrome.nativeControlRegion.left
-      || layout.chrome.nativeControlRegion.right !== layout.viewport.width) {
+      || !contains(layout.entry, dragRegion)
+      || !contains(layout.entry, nativeControlRegion)
+      || dragRegion.left !== layout.entry.left
+      || dragRegion.top !== layout.entry.top
+      || dragRegion.height !== LINUX_TITLEBAR_HEIGHT
+      || nativeControlRegion.top !== dragRegion.top
+      || nativeControlRegion.height !== LINUX_TITLEBAR_HEIGHT
+      || nativeControlRegion.width !== LINUX_CONTROL_REGION_WIDTH
+      || dragRegion.right !== nativeControlRegion.left
+      || nativeControlRegion.right !== layout.entry.right) {
       fail(`Packaged Linux window chrome is not one safe native-control band: ${JSON.stringify(layout.chrome)}`);
     }
   }
 
-  const elementNames = ['entry', 'card', 'logo', 'heading', 'connectButton', 'connectDescription'];
-  for (const name of elementNames) assertElementBounds(name, layout[name]);
-  const viewportBounds = {
-    top: 0,
-    left: 0,
-    right: layout.viewport.width,
-    bottom: layout.viewport.height,
-  };
-  if (elementNames.some(name => !contains(viewportBounds, layout[name]))) {
-    fail('Packaged welcome-card content extends outside the renderer viewport');
-  }
   if (!contains(layout.entry, layout.card)
     || !contains(layout.card, layout.logo)
     || !contains(layout.card, layout.heading)

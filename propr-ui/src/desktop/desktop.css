@@ -2,6 +2,7 @@
   --desktop-focus: #0f766e;
   --desktop-titlebar-height: 3.5rem;
   --desktop-window-controls-end-inset: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+  --desktop-window-controls-gap: 0px;
 }
 
 .desktop-entry {
@@ -32,6 +33,88 @@
 
 .desktop-platform-linux {
   --desktop-window-controls-end-inset: 8.625rem;
+  --desktop-window-controls-gap: 1.5rem;
+  --desktop-titlebar-height: 44px;
+}
+
+/* A three-pixel transparent allowance holds a short shadow, not a solid rim.
+   Keep the top flush and round only the upper corners, like integrated chrome.
+   Electron's native five-pixel resize band includes this allowance. */
+html[data-desktop-window="linux"] {
+  --desktop-titlebar-height: 44px;
+  --desktop-frame-edge: #929eae;
+  --desktop-chrome-background: #e8edf5;
+  --desktop-chrome-divider: #cbd3df;
+  --desktop-frame-inset: 3px;
+  --desktop-frame-radius: 6px 6px 0 0;
+  --desktop-frame-shadow: 0 1px 3px rgb(30 41 59 / 22%);
+  height: 100%;
+  padding: 0 0 var(--desktop-frame-inset) var(--desktop-frame-inset);
+  background: transparent;
+}
+
+html[data-desktop-window="linux"][data-window-focused="false"] {
+  --desktop-frame-edge: #b2bbc7;
+  --desktop-chrome-background: #f0f2f6;
+  --desktop-chrome-divider: #d9dfe7;
+  --desktop-frame-shadow: 0 1px 2px rgb(30 41 59 / 12%);
+}
+
+html[data-desktop-window="linux"] body {
+  height: 100%;
+  background: transparent;
+}
+
+html[data-desktop-window="linux"] #root {
+  height: 100%;
+  /* Contain fixed controls/dialogs within the visible window, including while
+     the app itself is inert. Clip their backgrounds at the upper corners. */
+  transform: translateZ(0);
+  clip-path: inset(0 round var(--desktop-frame-radius));
+}
+
+html[data-desktop-window="linux"] .desktop-entry {
+  min-height: 100%;
+  height: 100%;
+}
+
+html[data-desktop-window="linux"] .desktop-app {
+  height: 100%;
+}
+
+html[data-desktop-window="linux"]::after {
+  content: '';
+  position: fixed;
+  inset: 0 0 var(--desktop-frame-inset) var(--desktop-frame-inset);
+  z-index: 2147483647;
+  border: 1px solid var(--desktop-frame-edge);
+  border-radius: var(--desktop-frame-radius);
+  box-shadow: var(--desktop-frame-shadow);
+  pointer-events: none;
+}
+
+html[data-desktop-window="linux"][data-window-expanded="true"] {
+  --desktop-frame-inset: 0px;
+  --desktop-frame-radius: 0;
+}
+
+html[data-desktop-window="linux"][data-window-expanded="true"]::after {
+  display: none;
+}
+
+html[data-desktop-window="linux"] :is(.desktop-entry-drag-region, .desktop-connected-drag-region, .desktop-window-controls, .desktop-sidebar-header, .desktop-content-toolbar) {
+  background: var(--desktop-chrome-background);
+  border-bottom-color: var(--desktop-chrome-divider);
+}
+
+html[data-desktop-window="linux"][data-window-focused="false"] .desktop-window-controls {
+  color: #687587;
+}
+
+html[data-desktop-window="linux"] .desktop-sidebar-header {
+  /* The shared browser sidebar has 48px of vertical padding at desktop width. */
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .desktop-platform-linux .desktop-entry-drag-region,
@@ -47,6 +130,8 @@
   display: grid;
   width: 8.625rem;
   height: var(--desktop-titlebar-height);
+  margin: 0;
+  padding: 0;
   grid-template-columns: repeat(3, 1fr);
   border-bottom: 1px solid #e2e8f0;
   color: #475569;
@@ -102,7 +187,7 @@
 .desktop-entry *,
 .desktop-app *,
 .desktop-modal-backdrop * {
-  scrollbar-color: #64748b transparent;
+  scrollbar-color: #cbd5e1 transparent;
   scrollbar-width: thin;
 }
 
@@ -112,8 +197,8 @@
 .desktop-entry *::-webkit-scrollbar,
 .desktop-app *::-webkit-scrollbar,
 .desktop-modal-backdrop *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 .desktop-entry::-webkit-scrollbar-track,
@@ -132,7 +217,7 @@
 .desktop-app *::-webkit-scrollbar-thumb,
 .desktop-modal-backdrop *::-webkit-scrollbar-thumb {
   border-radius: 4px;
-  background: #64748b;
+  background: #cbd5e1;
 }
 
 .desktop-entry::-webkit-scrollbar-thumb:hover,
@@ -141,7 +226,7 @@
 .desktop-entry *::-webkit-scrollbar-thumb:hover,
 .desktop-app *::-webkit-scrollbar-thumb:hover,
 .desktop-modal-backdrop *::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #94a3b8;
 }
 
 .desktop-brand {
@@ -350,7 +435,17 @@
   -webkit-app-region: drag;
 }
 .desktop-app .desktop-content-toolbar {
-  padding-right: var(--desktop-window-controls-end-inset);
+  padding-right: calc(var(--desktop-window-controls-end-inset) + var(--desktop-window-controls-gap));
+}
+.desktop-app.desktop-platform-linux .desktop-content-toolbar::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: var(--desktop-window-controls-end-inset);
+  height: 1.5rem;
+  border-left: 1px solid #e2e8f0;
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 .desktop-app.desktop-platform-darwin .desktop-sidebar-header {
   padding-left: max(1rem, env(titlebar-area-x, 5rem));
@@ -446,3 +541,6 @@
     padding-top: var(--desktop-titlebar-height);
   }
 }
+
+.desktop-account-scope-note { margin: 0 0 .75rem; color: #657474; font-size: .82rem; line-height: 1.5; }
+.desktop-account-add { align-self: center; margin: .4rem; padding: .45rem .6rem; font-size: .75rem; white-space: nowrap; }
