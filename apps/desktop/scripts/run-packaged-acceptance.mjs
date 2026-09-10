@@ -401,6 +401,7 @@ const fixtureHandshakeCategory = evidence => {
 const createFixture = async (mode, fixedOrigin) => {
   const expectedUrl = new URL(fixedOrigin);
   let binding = null;
+  let tokenActive = false;
   let authChecks = 0;
   const recordCurrentUserFixture = record => {
     if (fixtureCurrentUserRecords.filter(item => item.journey === activeJourney).length >= 4) {
@@ -444,6 +445,7 @@ const createFixture = async (mode, fixedOrigin) => {
     }
     if (request.method === 'POST' && request.url === '/api/desktop/pairings') {
       binding = body;
+      tokenActive = false;
       return json(response, 200, {
         pairingId: PAIRING_ID,
         deviceSecret: DEVICE_SECRET,
@@ -460,12 +462,20 @@ const createFixture = async (mode, fixedOrigin) => {
       });
     }
     if (request.method === 'POST' && request.url === `/api/desktop/pairings/${PAIRING_ID}/activate`) {
+      if (!binding || body.deviceSecret !== DEVICE_SECRET || body.activationTicket !== ACTIVATION_TICKET) {
+        return json(response, 400, { code: 'INVALID_ACTIVATION' });
+      }
+      tokenActive = true;
       return json(response, 200, { status: 'active', receipt: RECEIPT, activatedAt: FIXED_TIME, expiresAt: null });
     }
     if (request.method === 'POST' && request.url === `/api/desktop/pairings/${PAIRING_ID}/cancel`) {
+      tokenActive = false;
       return json(response, 200, { status: 'cancelled', cancelledAt: FIXED_TIME });
     }
-    if (request.method === 'DELETE' && request.url === '/api/desktop/tokens/current') return json(response, 204, {});
+    if (request.method === 'DELETE' && request.url === '/api/desktop/tokens/current') {
+      tokenActive = false;
+      return json(response, 204, {});
+    }
     const currentUserShape = classifyCurrentUserRequestShape(
       request.method,
       request.url,
@@ -487,26 +497,29 @@ const createFixture = async (mode, fixedOrigin) => {
         responseStatus: 200,
         classification: 'success',
       };
+      if (!tokenActive || request.headers.authorization !== `Bearer ${INSTANCE_TOKEN}`
+        || request.headers.cookie || request.headers['x-propr-desktop-transport-scope']) {
+        record.responseStatus = 401;
+        record.classification = 'unauthenticated';
+        recordCurrentUserFixture(record);
+        return json(response, 401, { code: 'INVALID_INSTANCE_TOKEN' });
+      }
       if (source === 'renderer' && mode === 'revoked' && authChecks >= 1) {
         record.responseStatus = 401;
         record.classification = 'revoked';
         recordCurrentUserFixture(record);
         return json(response, 401, { code: 'INSTANCE_TOKEN_REVOKED' });
       }
-      if (request.headers.authorization !== `Bearer ${INSTANCE_TOKEN}`) {
-        record.responseStatus = 401;
-        record.classification = 'unauthenticated';
-        recordCurrentUserFixture(record);
-        return json(response, 401, { code: 'INVALID_INSTANCE_TOKEN' });
-      }
       recordCurrentUserFixture(record);
       return json(response, 200, {
-        id: 'acceptance-user', login: 'acceptance-admin', username: 'acceptance-admin', displayName: 'Acceptance Admin',
+        id: '2296', login: 'acceptance-admin', username: 'acceptance-admin', displayName: 'Acceptance Admin',
         email: null, avatarUrl: null, role: 'admin',
         permissions: ['instance.manage_agents', 'instance.manage_members', 'instance.manage_runtime', 'instance.manage_settings'],
         authorizationSource: 'local',
       });
     }
+    // Malformed identity/admission requests must never receive the generic API stub.
+    if (requestUrl.pathname === '/api/auth/user') return json(response, 401, { code: 'INVALID_INSTANCE_TOKEN' });
     if (request.url === '/api/compatibility') return json(response, 200, { apiCompatibility: PROPR_API_COMPATIBILITY, uiCompatibility: PROPR_UI_COMPATIBILITY });
     // Socket lifecycle evidence requires the same boolean consumed from the
     // production endpoint; the generic API fixture shape is not compatible.

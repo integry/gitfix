@@ -26,7 +26,7 @@ export const isExpectedScopedCurrentUserRequest = (method, url, expectedGenerati
   && scopedCurrentUserRequestGeneration(method, url) === expectedGeneration
 );
 
-/** Classify only the two authenticated current-user request shapes used by desktop. */
+/** Keep pairing confirmation separate from main reprobes and scoped renderer validation. */
 export const classifyCurrentUserRequestShape = (method, url, origin) => {
   if (method !== 'GET' || typeof url !== 'string') return null;
   let parsed;
@@ -40,6 +40,10 @@ export const classifyCurrentUserRequestShape = (method, url, origin) => {
   if (origin === DESKTOP_RENDERER_ORIGIN) {
     const scopeGeneration = scopedCurrentUserRequestGeneration(method, url);
     return scopeGeneration === null ? null : { source: 'renderer', scopeGeneration };
+  }
+
+  if (!origin && url === '/api/auth/user?desktop_account_confirmation=1') {
+    return { source: 'account-confirmation', scopeGeneration: null };
   }
 
   return url === '/api/auth/user' && parsed.search === '' && [...parsed.searchParams].length === 0
