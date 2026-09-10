@@ -14,7 +14,7 @@ import {
   PROPR_UI_COMPATIBILITY,
 } from '@propr/shared';
 import type { ConnectStatusDocument } from '@propr/cli/desktop-discovery';
-import { DesktopCredentialService } from './credential-service';
+import { DesktopCredentialService, type DesktopCredentialDecision } from './credential-service';
 import { DesktopConnectDiscoveryService } from './connect-discovery';
 import { ProfileStore, type EncryptionProvider, type StoredCredential } from './profile-store';
 
@@ -181,13 +181,15 @@ describe('main-process desktop credential service', () => {
       await store.writeCredential(credential(b.id, b.apiBaseUrl, 'B'));
       let unreachable = false;
       const revoked: string[] = [];
+      const decisions: DesktopCredentialDecision[] = [];
       const fetch: typeof globalThis.fetch = async (input, init) => {
         if (unreachable) throw new Error('offline');
         if (input.toString().endsWith('/api/desktop/discovery')) return json(discovery);
         if (init?.method === 'DELETE') revoked.push(new Headers(init.headers).get('Authorization')!);
         return json({ username: 'octocat' });
       };
-      const service = new DesktopCredentialService({ profiles: store, fetch, clientName: 'Logout test', openPairingBrowser: async () => undefined });
+      const service = new DesktopCredentialService({ profiles: store, fetch, clientName: 'Logout test', openPairingBrowser: async () => undefined,
+        reportCredentialDecision: decision => { decisions.push(decision); throw new Error('Diagnostic sink unavailable'); } });
       credentialServices.push(service);
       const ready = await service.probe({ id: a.id, label: a.label, apiBaseUrl: a.apiBaseUrl });
       assert.equal(ready.status, 'ready');
@@ -197,6 +199,12 @@ describe('main-process desktop credential service', () => {
       assert.ok(await store.readCredential(a.id));
       unreachable = offline;
       await service.logout(active);
+      assert.deepEqual(decisions, [
+        { reason: 'logout', outcome: 'requested' },
+        { reason: 'logout', outcome: 'retained' },
+        { reason: 'logout', outcome: 'requested' },
+        { reason: 'logout', outcome: 'retired' },
+      ]);
       assert.equal(service.hasActiveRendererBinding(), false);
       assert.deepEqual(service.prepareRequest(`${a.apiBaseUrl}/api/tasks`, transportHeaders(active.transportScope)), { cancel: true });
       assert.deepEqual(await service.prepareRequestAsync(
@@ -289,7 +297,7 @@ describe('main-process desktop credential service', () => {
     assert.equal(await store.readCredential(profile.id), null);
   });
 
-  it('fails malformed identity closed and classifies legacy public-discovery 401 safely', async () => {
+  it('preserves credentials while rejecting malformed discovery and classifies legacy public-discovery 401 safely', async () => {
     const store = await createStore();
     const profile = await store.save({ id: 'profile-malformed', label: 'A', apiBaseUrl: 'https://a.example.test' });
     await store.writeCredential(credential(profile.id, profile.apiBaseUrl, 'A'));
@@ -308,9 +316,10 @@ describe('main-process desktop credential service', () => {
 
     const result = await service.probe({ id: profile.id, label: profile.label, apiBaseUrl: profile.apiBaseUrl });
 
-    assert.equal(result.status, 'authentication-required');
+    assert.equal(result.status, 'offline');
     assert.equal(authorizations.some(Boolean), false);
-    assert.equal(await store.readCredential(profile.id), null);
+    assert.ok(await store.readCredential(profile.id));
+    assert.deepEqual(await store.pendingRevocations(), []);
 
     const legacyStore = await createStore();
     const requests: Array<{ url: string; authorization: string | null }> = [];
@@ -372,10 +381,186 @@ describe('main-process desktop credential service', () => {
         apiBaseUrl: `https://rejected-${index}.example.test`,
       });
 
-      assert.equal(rejected.status, 'authentication-required');
+      assert.equal(rejected.status, 'offline');
       assert.equal(adversarialRequests, 1);
       assert.doesNotMatch(JSON.stringify(rejected), /private policy detail|Unauthorized|AUTHENTICATION_REQUIRED/);
     }
+  });
+
+  it('recovers from malformed or unsupported socket discovery without retiring the active credential', async () => {
+    const store = await createStore();
+    const profile = await store.save({ id: 'socket-retry', label: 'A', apiBaseUrl: 'https://a.example.test' });
+    const saved = credential(profile.id, profile.apiBaseUrl, 'A');
+    await store.writeCredential(saved);
+    let discoveryResponse: unknown = discovery;
+    const service = new DesktopCredentialService({
+      profiles: store, clientName: 'Socket retry test', openPairingBrowser: async () => undefined,
+      fetch: async input => input.toString().endsWith('/api/desktop/discovery')
+        ? json(discoveryResponse)
+        : json({ username: 'octocat' }),
+    });
+    credentialServices.push(service);
+    const ready = await service.probe(profile);
+    assert.equal(ready.status, 'ready');
+    if (ready.status !== 'ready') return;
+    const active = await service.activate(ready.activationTicket);
+    const reconnect = () => service.prepareRequestAsync(
+      `wss://a.example.test/socket.io/?transport=websocket&proprDesktopTransportScope=${active.transportScope}`,
+      {}, { resourceType: 'webSocket' },
+    );
+    for (const unavailable of [
+      { product: 'ProPR' },
+      { ...discovery, desktopAuthentication: { ...discovery.desktopAuthentication, socketIoBearerAuthentication: false } },
+    ]) {
+      discoveryResponse = unavailable;
+      assert.deepEqual(await reconnect(), { cancel: true });
+      assert.deepEqual(await store.readCredential(profile.id), saved);
+      assert.equal((await store.list()).activeProfileId, profile.id);
+      assert.deepEqual(await store.pendingRevocations(), []);
+      discoveryResponse = discovery;
+      assert.equal((await reconnect()).requestHeaders?.Authorization, `Bearer ${saved.token}`);
+    }
+  });
+
+  it('does not retire a healthy credential on an unverified renderer invalidation', async () => {
+    const store = await createStore();
+    const profile = await store.save({ id: 'healthy', label: 'A', apiBaseUrl: 'https://a.example.test' });
+    const saved = credential(profile.id, profile.apiBaseUrl, 'A');
+    await store.writeCredential(saved);
+    const service = createCredentialService({
+      profiles: store, clientName: 'Invalidation test', openPairingBrowser: async () => undefined,
+      fetch: async input => json(input.toString().endsWith('/api/desktop/discovery') ? discovery : { username: 'octocat' }),
+    });
+    const ready = await service.probe(profile);
+    assert.equal(ready.status, 'ready');
+    if (ready.status !== 'ready') return;
+    const active = await service.activate(ready.activationTicket);
+    assert.deepEqual(await service.invalidate({ ...active, code: 'INVALID_INSTANCE_TOKEN' }), { invalidated: false });
+    assert.deepEqual(await store.readCredential(profile.id), saved);
+    assert.equal((await store.list()).activeProfileId, profile.id);
+    assert.deepEqual(await store.pendingRevocations(), []);
+    assert.equal(service.isActiveConnectionScope(active), true);
+  });
+
+  for (const [label, response] of [
+    ['network failure', () => { throw new Error('offline'); }],
+    ['server failure', () => json({ code: 'INVALID_INSTANCE_TOKEN' }, 500)],
+    ['authorization failure', () => json({ code: 'INSUFFICIENT_INSTANCE_PERMISSION' }, 403)],
+    ['generic unauthorized', () => json({ error: 'Unauthorized' }, 401)],
+    ['wrong content type', () => new Response('{"code":"INVALID_INSTANCE_TOKEN"}', { status: 401 })],
+    ['malformed body', () => new Response('{', { status: 401, headers: { 'Content-Type': 'application/json' } })],
+    ['oversized body', () => json({ code: 'INVALID_INSTANCE_TOKEN', detail: 'x'.repeat(4096) }, 401)],
+  ] as const) {
+    it(`preserves login when native invalidation verification returns ${label}`, async () => {
+      const store = await createStore();
+      const profile = await store.save({ id: 'verification', label: 'A', apiBaseUrl: 'https://a.example.test' });
+      const saved = credential(profile.id, profile.apiBaseUrl, 'A');
+      await store.writeCredential(saved);
+      let verifying = false;
+      const decisions: DesktopCredentialDecision[] = [];
+      const service = new DesktopCredentialService({
+        profiles: store, clientName: 'Verification test', openPairingBrowser: async () => undefined,
+        reportCredentialDecision: decision => decisions.push(decision),
+        fetch: async (input, init) => {
+          if (input.toString().endsWith('/api/desktop/discovery')) return json(discovery);
+          assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${saved.token}`);
+          return verifying ? response() : json({ username: 'octocat' });
+        },
+      });
+      credentialServices.push(service);
+      const ready = await service.probe(profile);
+      assert.equal(ready.status, 'ready');
+      if (ready.status !== 'ready') return;
+      const active = await service.activate(ready.activationTicket);
+      verifying = true;
+      assert.deepEqual(await service.invalidate({ ...active, code: 'INVALID_INSTANCE_TOKEN' }), { invalidated: false });
+      assert.deepEqual(await store.readCredential(profile.id), saved);
+      assert.deepEqual(await store.pendingRevocations(), []);
+      assert.equal(service.isActiveConnectionScope(active), true);
+      assert.deepEqual(decisions, [
+        { reason: 'renderer-invalidation', outcome: 'requested' },
+        { reason: 'renderer-invalidation', outcome: 'retained' },
+      ]);
+      assert.equal((await service.probe(profile)).status, 'offline');
+      assert.deepEqual(await store.readCredential(profile.id), saved);
+      assert.deepEqual(await store.pendingRevocations(), []);
+    });
+  }
+
+  it('preserves the credential when native invalidation body verification is cancelled', async () => {
+    const store = await createStore();
+    const profile = await store.save({ id: 'cancel-verification', label: 'A', apiBaseUrl: 'https://a.example.test' });
+    const saved = credential(profile.id, profile.apiBaseUrl, 'A');
+    await store.writeCredential(saved);
+    let verifying = false;
+    let cancelled = false;
+    const entered = deferred<void>();
+    const service = new DesktopCredentialService({
+      profiles: store, clientName: 'Verification cancellation', openPairingBrowser: async () => undefined,
+      fetch: async input => {
+        if (input.toString().endsWith('/api/desktop/discovery')) return json(discovery);
+        if (!verifying) return json({ username: 'octocat' });
+        return new Response(new ReadableStream({
+          pull() { entered.resolve(); },
+          cancel() { cancelled = true; },
+        }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      },
+    });
+    credentialServices.push(service);
+    const ready = await service.probe(profile);
+    assert.equal(ready.status, 'ready');
+    if (ready.status !== 'ready') return;
+    const active = await service.activate(ready.activationTicket);
+    verifying = true;
+    const invalidation = service.invalidate({ ...active, code: 'INVALID_INSTANCE_TOKEN' });
+    await entered.promise;
+    await service.dispose();
+    assert.deepEqual(await invalidation, { invalidated: false });
+    assert.equal(cancelled, true);
+    assert.deepEqual(await store.readCredential(profile.id), saved);
+    assert.deepEqual(await store.pendingRevocations(), []);
+  });
+
+  it('fences native invalidation verification across an account switch', async () => {
+    const store = await createStore();
+    const a = await store.save({ id: 'a', label: 'A', apiBaseUrl: 'https://a.example.test' });
+    const b = await store.save({ id: 'b', label: 'B', apiBaseUrl: a.apiBaseUrl });
+    const savedA = credential(a.id, a.apiBaseUrl, 'A');
+    const savedB = credential(b.id, b.apiBaseUrl, 'B');
+    await store.writeCredential(savedA);
+    await store.writeCredential(savedB);
+    let verifying = false;
+    const entered = deferred<void>();
+    const released = deferred<Response>();
+    const service = new DesktopCredentialService({
+      profiles: store, clientName: 'Verification race', openPairingBrowser: async () => undefined,
+      fetch: async (input, init) => {
+        if (input.toString().endsWith('/api/desktop/discovery')) return json(discovery);
+        if (verifying && new Headers(init?.headers).get('Authorization') === `Bearer ${savedA.token}`) {
+          entered.resolve();
+          return released.promise;
+        }
+        return json({ username: 'octocat' });
+      },
+    });
+    credentialServices.push(service);
+    const readyA = await service.probe(a);
+    assert.equal(readyA.status, 'ready');
+    if (readyA.status !== 'ready') return;
+    const activeA = await service.activate(readyA.activationTicket);
+    verifying = true;
+    const invalidation = service.invalidate({ ...activeA, code: 'INSTANCE_TOKEN_REVOKED' });
+    await entered.promise;
+    const readyB = await service.probe(b);
+    assert.equal(readyB.status, 'ready');
+    if (readyB.status !== 'ready') return;
+    const activeB = await service.activate(readyB.activationTicket);
+    released.resolve(json({ code: 'INSTANCE_TOKEN_REVOKED' }, 401));
+    assert.deepEqual(await invalidation, { invalidated: false });
+    assert.equal(service.isActiveConnectionScope(activeB), true);
+    assert.deepEqual(await store.readCredential(a.id), savedA);
+    assert.deepEqual(await store.readCredential(b.id), savedB);
+    assert.deepEqual(await store.pendingRevocations(), []);
   });
 
   it('revalidates an old Socket.IO reconnect and sends zero bearer requests after identity rotation', async () => {
@@ -2231,13 +2416,14 @@ describe('main-process desktop credential service', () => {
     const profileB = await store.save({ id: 'profile-b', label: 'B', apiBaseUrl: 'https://b.example.test' });
     await store.writeCredential(credential(profileA.id, profileA.apiBaseUrl, 'A'));
     await store.writeCredential(credential(profileB.id, profileB.apiBaseUrl, 'B'));
+    let revoked = false;
     const service = createCredentialService({
       profiles: store,
       clientName: 'Test desktop',
       openPairingBrowser: async () => undefined,
       fetch: async input => input.toString().endsWith('/api/desktop/discovery')
         ? json(discovery)
-        : json({ username: 'octocat' }),
+        : revoked ? json({ code: 'INSTANCE_TOKEN_REVOKED' }, 401) : json({ username: 'octocat' }),
     });
     const readyA = await service.probe({ id: profileA.id, label: profileA.label, apiBaseUrl: profileA.apiBaseUrl });
     const activatedA = readyA.status === 'ready' ? await service.activate(readyA.activationTicket) : null;
@@ -2266,6 +2452,7 @@ describe('main-process desktop credential service', () => {
     assert.ok(await store.readCredential(profileA.id));
     assert.ok(await store.readCredential(profileB.id));
 
+    revoked = true;
     assert.deepEqual(await service.invalidate({
       profileId: profileB.id,
       transportScope: activatedB.transportScope,

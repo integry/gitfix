@@ -1,8 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { useContext, useEffect } from 'react';
-import { act, render, waitFor } from '@testing-library/react';
+import { StrictMode, useContext, useEffect } from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { expect, it, vi } from 'vitest';
 import { TASK_UPDATE } from '@propr/shared';
 import { DesktopCredentialService } from '../../../apps/desktop/src/credential-service';
@@ -15,6 +16,12 @@ import { apiFetch, getProprClient, getDesktopConnectionScope, setDesktopConnecti
 import { logout } from '../api/proprApi';
 import { SocketProvider } from '../contexts/SocketProvider';
 import { SocketContext } from '../contexts/SocketContext';
+import { AuthProvider } from '../contexts/AuthContext';
+import type { CurrentUser } from '../api/proprTypes';
+import { DesktopContext, type DesktopContextValue } from './DesktopContext';
+import VoiceBriefingControl from '../components/VoiceBriefingControl';
+import DesktopVoiceSettingsSection from '../pages/SettingsPage/DesktopVoiceSettingsSection';
+import SettingsNavigation from '../pages/SettingsPage/SettingsNavigation';
 import { DESKTOP_LOGGED_OUT_EVENT } from './types';
 
 vi.mock('../config/runtimeMode', async importOriginal => ({
@@ -29,9 +36,11 @@ it('pairs two users through the production bridge, fences late A traffic, logs B
     encrypt: (s: string) => Buffer.from(s), decrypt: (b: Buffer) => b.toString() };
   let store = new ProfileStore(directory, encryption);
   const nativeFetch = globalThis.fetch;
+  let revocationsOffline = false;
   // Node fetch yields bytes from Node's realm; normalize them for jsdom's
   // strict Uint8Array protocol validator without mocking the HTTP exchange.
   const mainFetch: typeof fetch = async (input, init) => {
+    if (revocationsOffline && init?.method === 'DELETE') throw new Error('Synthetic revocation outage');
     const response = await nativeFetch(input, init);
     return new Response(response.body?.pipeThrough(new TransformStream({
       transform(chunk, controller) { controller.enqueue(Uint8Array.from(chunk)); },
@@ -150,7 +159,50 @@ it('pairs two users through the production bridge, fences late A traffic, logs B
     expect(reloaded.activeProfileId).toBeNull();
     expect(reloaded.profiles.map(p => p.account?.id)).toEqual(['101', '202']);
     fixture.offline(false);
-    await activate(a);
+    revocationsOffline = true;
+    const recoveredA = await activate(a);
+    expect(await (await apiFetch('/api/current')).json()).toEqual(accounts[0]);
+    await credentials.awaitIdle();
+    expect((await store.pendingRevocations()).map(p => p.credential.token)).toEqual([credentialB?.token]);
+
+    // Reproduce settings acceptance with the real native credential service and
+    // bridge. StrictMode also exercises subscription cleanup/remounts. All
+    // accounts, storage and HTTP traffic belong to this isolated fixture.
+    const desktop = {
+      isDesktop: true, platform: 'linux',
+      profile: { id: a.id, name: a.label, baseUrl: fixture.endpoint, kind: 'remote' },
+      connection: { status: 'ready', transportScope: recoveredA.transportScope },
+    } as DesktopContextValue;
+    view = render(<StrictMode><DesktopContext.Provider value={desktop}>
+      <AuthProvider user={{ ...accounts[0], permissions: [] } as CurrentUser}><MemoryRouter>
+        <SettingsNavigation sections={[{
+          id: 'desktop-voice', category: 'integrations', searchText: 'desktop voice experimental',
+          content: <DesktopVoiceSettingsSection />,
+        }]} />
+        <VoiceBriefingControl />
+      </MemoryRouter></AuthProvider>
+    </DesktopContext.Provider></StrictMode>);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search settings' }), { target: { value: 'voice' } });
+    const toggle = screen.getByRole('checkbox', { name: 'Enable experimental desktop voice' });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(screen.getByRole('button', { name: /Voice briefing/i })).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole('button', { name: /Voice briefing/i })).not.toBeInTheDocument();
+    expect(getDesktopConnectionScope()?.transportScope).toBe(recoveredA.transportScope);
+    expect((await store.list()).activeProfileId).toBe(a.id);
+    expect(await store.readCredential(a.id)).toEqual(credentialA);
+    expect((await store.pendingRevocations()).map(p => p.credential.token)).toEqual([credentialB?.token]);
+    expect(await (await apiFetch('/api/current')).json()).toEqual(accounts[0]);
+    view.unmount(); view = undefined;
+    expect(loggedOut).toHaveBeenCalledOnce(); // Only the earlier deliberate B logout.
+    revocationsOffline = false;
+    await credentials.retryPendingRevocations();
+    expect(await store.pendingRevocations()).toEqual([]);
+    expect(fixture.revoked.has(credentialB?.token)).toBe(true);
+    expect(fixture.revoked.has(credentialA?.token)).toBe(false);
     expect(await (await apiFetch('/api/current')).json()).toEqual(accounts[0]);
     fixture.account(accounts[0]);
     const { operationId } = await bridge.authentication.admit(b.id);
