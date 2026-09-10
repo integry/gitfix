@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ const fixture = join(desktop, 'scripts/fixtures/linux-window-frame');
 // Opt in with PROPR_DESKTOP_FRAME_TEST=1 on an isolated X11 DISPLAY with a WM
 // (e.g. Xvfb + Xfwm4/Openbox), xdotool, and a compositor (e.g. Picom) for previews.
 // PROPR_DESKTOP_FRAME_PREVIEWS=.propr/previews also captures real desktop pixels.
+// PROPR_DESKTOP_WORDMARK_PREVIEWS=.propr/previews captures the connected header.
 const exerciseLinuxFrame = async (context, managerOpen) => {
   if (process.env.PROPR_DESKTOP_FRAME_TEST !== '1' || process.platform !== 'linux' || !process.env.DISPLAY) {
     context.skip('Set PROPR_DESKTOP_FRAME_TEST=1 on an isolated Linux DISPLAY with a window manager and xdotool');
@@ -43,8 +44,12 @@ const exerciseLinuxFrame = async (context, managerOpen) => {
       bundle: true, platform: 'browser', format: 'iife',
       // Match Vite's TypeScript resolution (TaskList has both utils.ts/.tsx).
       resolveExtensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'],
-      define: { 'import.meta.env': '{}', __APP_VERSION__: '"frame-test"' },
+      define: { 'import.meta.env': '{}', __APP_VERSION__: '"frame-test"', __PROPR_DESKTOP__: 'true' },
     });
+    // Preserve the shipped directory structure: publicAssetUrl must resolve
+    // relative to renderer.html, just as it does in the packaged protocol.
+    await mkdir(join(directory, 'media'));
+    await copyFile(join(root, 'propr-ui/public/media/logo-and-name-transparent.png'), join(directory, 'media/logo-and-name-transparent.png'));
     const baseCss = await readFile(join(root, 'propr-ui/src/index.css'), 'utf8');
     const compiled = await postcss([tailwind({ ...tailwindConfig, content: [join(root, 'propr-ui/src/**/*.{ts,tsx}')] })])
       .process(baseCss, { from: join(root, 'propr-ui/src/index.css') });
@@ -184,6 +189,32 @@ const exerciseLinuxFrame = async (context, managerOpen) => {
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Recent Activity' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Connected: This computer' })).toBeVisible();
+    const wordmark = page.locator('.desktop-sidebar-header img');
+    await expect(wordmark).toHaveAttribute('alt', 'ProPR');
+    await expect(wordmark).toHaveAttribute('src', 'frame-fixture://app/media/logo-and-name-transparent.png');
+    await expect.poll(() => wordmark.evaluate(img => img.complete && img.naturalWidth === 679 && img.naturalHeight === 217)).toBe(true);
+    assert.equal((await wordmark.boundingBox()).height, 32);
+    const wordmarkPreviews = [];
+    for (const focused of [true, false]) {
+      if (focused) await native('focus');
+      else await focusBackground();
+      await expect(html).toHaveAttribute('data-window-focused', String(focused));
+      const tint = focused ? [232, 237, 245] : [240, 242, 246];
+      // Inspect actual rendered pixels inside the image's transparent corner.
+      // An opaque white replacement fails even if its URL/dimensions are right.
+      const pixels = await wordmark.screenshot();
+      assert.deepEqual([...await sharp(pixels).extract({ left: 0, top: 0, width: 1, height: 1 }).removeAlpha().raw().toBuffer()], tint);
+      if (process.env.PROPR_DESKTOP_WORDMARK_PREVIEWS && !managerOpen) {
+        const output = resolve(root, process.env.PROPR_DESKTOP_WORDMARK_PREVIEWS);
+        await mkdir(output, { recursive: true });
+        const name = `linux-wordmark-${focused ? 'active' : 'inactive'}.png`;
+        const box = await page.locator('.desktop-sidebar-header').boundingBox();
+        await page.screenshot({ path: join(output, name), clip: { x: box.x, y: box.y, width: 600, height: 100 } });
+        wordmarkPreviews.push({ path: `.propr/previews/${name}`, title: `Linux header: ${focused ? 'active' : 'inactive'}`, description: 'Existing transparent ProPR wordmark at its unchanged 32px height on the connected Dashboard header; production components and relative packaged asset paths in Electron.' });
+        await writeFile(join(output, 'manifest.json'), JSON.stringify({ previews: wordmarkPreviews, toolSuggestions: [] }, null, 2));
+      }
+    }
+    await native('focus');
     await pointerClick('0 Plans');
     await expect(page.getByText('All caught up.', { exact: true })).toBeVisible();
     await pointerClick('0 Plans');

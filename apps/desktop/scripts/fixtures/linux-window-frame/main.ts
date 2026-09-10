@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, nativeImage, net, protocol, screen } from 'electron';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createBrowserWindowOptions } from '../../../src/window-options';
 import { synchronizeLinuxWindowFrame } from '../../../src/linux-window-frame';
@@ -11,7 +11,7 @@ app.setPath('userData', join(__dirname, 'user-data'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'frame-fixture', privileges: { standard: true, secure: true } }]);
 void app.whenReady().then(async () => {
   protocol.handle('frame-fixture', request => {
-    const asset = basename(new URL(request.url).pathname);
+    const asset = new URL(request.url).pathname.replace(/^\/+/, '');
     return net.fetch(pathToFileURL(asset === 'logo.png'
       ? process.env.PROPR_FRAME_LOGO! : join(__dirname, asset)).href);
   });
