@@ -1,6 +1,8 @@
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createManagedPreviewStorageClient, issueQueue, logger, type VisualPreviewEvidence } from '@propr/core';
+import {
+  createManagedPreviewStorageClient, issueQueue, logger,
+  type ManagedPreviewUploadResult, type ManagedPreviewOriginalInput, type VisualPreviewEvidence,
+} from '@propr/core';
 import { ROUTING_STATUS_REDIS_KEY } from '@propr/shared';
 
 const contentTypes: Record<string, string> = {
@@ -9,18 +11,54 @@ const contentTypes: Record<string, string> = {
   '.mov': 'video/quicktime', '.webm': 'video/webm',
 };
 
-/** Store originals independently of GitHub publication; no managed URLs enter a PR or log. */
-export async function storeManagedVisualPreviewOriginals(evidence: VisualPreviewEvidence, repository: string): Promise<void> {
+export interface ManagedVisualPreviewContext {
+  taskId: string;
+  repository: string;
+  pullRequestNumber?: number;
+}
+
+/** One result per input asset, in input order. Index also disambiguates duplicate paths. */
+export type ManagedVisualPreviewAssetResult = {
+  version: 1;
+  assetIndex: number;
+  relativePath: string;
+} & ManagedPreviewUploadResult;
+
+interface StorageDependencies {
+  createClient?: () => { uploadOriginal(input: ManagedPreviewOriginalInput): Promise<ManagedPreviewUploadResult> };
+}
+
+/** Store independently of GitHub publication. Only finalized, trusted viewer metadata leaves this boundary. */
+export async function storeManagedVisualPreviewOriginals(
+  evidence: VisualPreviewEvidence,
+  context: ManagedVisualPreviewContext,
+  dependencies: StorageDependencies = {},
+): Promise<ManagedVisualPreviewAssetResult[]> {
+  const results: ManagedVisualPreviewAssetResult[] = [];
+  let client: ReturnType<NonNullable<StorageDependencies['createClient']>>;
   try {
-    const client = createManagedPreviewStorageClient(async () => (await issueQueue.client).get(ROUTING_STATUS_REDIS_KEY));
-    if (!(await client.getStatus()).enabled) return;
-    for (const asset of evidence.assets) {
-      const contentType = contentTypes[path.extname(asset.absolutePath).toLowerCase()];
-      if (!contentType) continue;
-      const result = await client.uploadOriginal({ bytes: await readFile(asset.absolutePath), contentType, repository });
-      if (!result.stored) logger.warn({ code: result.code }, 'Managed preview original was not stored; continuing GitHub publication');
-    }
+    client = dependencies.createClient?.()
+      ?? createManagedPreviewStorageClient(async () => (await issueQueue.client).get(ROUTING_STATUS_REDIS_KEY));
   } catch {
-    logger.warn('Managed preview storage unavailable; continuing GitHub publication');
+    return evidence.assets.map((asset, assetIndex) => ({
+      version: 1, assetIndex, relativePath: asset.relativePath, stored: false, code: 'unavailable',
+    }));
   }
+  for (const [assetIndex, asset] of evidence.assets.entries()) {
+    let result: ManagedPreviewUploadResult;
+    try {
+      const contentType = contentTypes[path.extname(asset.absolutePath).toLowerCase()];
+      result = contentType
+        ? await client.uploadOriginal({
+          filePath: asset.absolutePath, contentType, ...context,
+          displayFilename: path.basename(asset.relativePath),
+        })
+        : { stored: false, code: 'content_type_not_allowed' };
+    } catch {
+      result = { stored: false, code: 'unavailable' };
+    }
+    if (!result.stored) logger.warn({ code: result.code }, 'Managed preview original was not stored; continuing GitHub publication');
+    results.push({ version: 1, assetIndex, relativePath: asset.relativePath, ...result });
+  }
+  return results;
 }

@@ -78,7 +78,7 @@ When enabled, the implementation agent evaluates the completed change:
 
 Agents generate media under the transient `.propr/previews/` runtime directory and may use `.propr/preview-src/` for preview-only source material. Optional titles, descriptions, and tool recommendations are recorded in `.propr/previews/manifest.json`. Before committing, ProPR copies accepted files to worker-owned temporary storage and removes both runtime directories from the worktree. A second safeguard at the commit boundary excludes them from work output, so preview artifacts are never included in the implementation commit.
 
-Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video formats are MP4, MOV, and WebM; H.264 MP4 is the most broadly compatible choice. Each attachment must be smaller than 10 MB.
+Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video formats are MP4, MOV, and WebM; H.264 MP4 is the most broadly compatible choice. GitHub inline attachment capacity depends on media type and plan; paid-plan video capacity is handled by #2280. These inline limits do not limit managed originals.
 
 ## Publication And Upload Failures
 
@@ -99,7 +99,9 @@ GitHub publication. Storage failures do not interrupt GitHub uploads. The
 standard installation quota is 25 GiB, maximum original object size is 500 MiB,
 and retention is 90 days. Settings display the server's effective values when
 available; otherwise these standard values are explicitly labeled as defaults.
-The existing GitHub evidence collection and 10 MB attachment limit still apply.
+Managed originals use the server-reported object and quota limits independently of
+GitHub inline capacity. The hybrid publisher in #2282 handles selection of inline
+media and linking to managed originals; #2280 handles paid-plan video inline capacity.
 Managed storage does not replace the GitHub attachment credential.
 
 The administrator-only `GET /api/config/preview-storage` API returns
@@ -119,23 +121,64 @@ provided separately by `integry/propr-routing` and must implement this contract:
   `maxObjectBytes`, `retentionDays`, `allowedContentTypes`, and `deleteSupported`.
   Byte counts are nonnegative safe integers; object size and retention are positive.
 - `POST /v1/preview-artifacts/uploads` accepts `PreviewUploadRequestV1`: version,
-  repository slug, original byte size, content type, and lowercase hex SHA-256.
-  The relay must atomically reserve quota and bind the grant to those constraints.
-  It returns `PreviewUploadV1` with matching size/type/hash, `artifactId`,
+  `taskId`, `repository` (owner/repository full name), optional positive integer
+  `pullRequestNumber`, sanitized `displayFilename`, original `sizeBytes`,
+  `contentType`, and lowercase hex `sha256`. Task IDs are nonempty opaque strings
+  of at most 256 characters, without control characters or surrounding whitespace.
+  Display filenames are portable basenames of at most 128 characters, sanitized by `sanitizePreviewDisplayFilename`.
+  Installation authority comes exclusively from the relay token; callers never
+  supply an installation ID in an upload request. Connect must authorize the
+  repository/task/PR association for that installation, persist the metadata,
+  atomically reserve quota, and bind the grant to all those constraints.
+  It returns `PreviewUploadV1` with matching metadata and size/type/hash, `artifactId`,
   `objectKey`, and `put: { url, headers, expiresAt }`.
-- The client sends the unchanged original with a direct HTTPS `PUT`, using only
-  the returned object-store headers. `Content-Type` is required; a supplied
+- The client accepts a replayable staged `filePath`, hashes it using streaming
+  SHA-256, then sends it with a direct streaming HTTPS `PUT`. Keep the staged file
+  unchanged and available until upload settles. Both passes use bounded buffers;
+  neither requires a full-size `Uint8Array`/`Buffer`. The PUT is re-hashed before
+  finalization to detect changed input. Node fetch uses `duplex: 'half'` and the
+  exact returned object-store headers. `Content-Type` is required; a supplied
   `Content-Length` must match. Redirects are rejected, and the relay bearer
   credential is never forwarded to the object store.
 - `POST /v1/preview-artifacts/:id/finalize` accepts version, object key,
   size/type/hash. The relay verifies the stored object before returning a
-  `PreviewArtifactV1` with the same fields, artifact ID, and `state: 'ready'`.
+  `PreviewArtifactV1`: `version: 1`, `artifactId`, `state: 'ready'`, verified
+  size/type/hash, all persisted task/repository/PR/filename metadata,
+  `viewerUrl`, and `retentionExpiresAt`. The client checks these against the grant
+  and request. Retention must be a parseable future timestamp. The artifact
+  projection excludes object keys, upload URLs, and tokens.
+  `viewerUrl` must be a stable authenticated HTTPS link on the exact configured
+  trusted Connect origin, with no credentials, query string, or fragment. Connect
+  must require viewer authentication and authorize repository access on every
+  request; the URL itself grants no access.
 - `DELETE /v1/preview-artifacts/:id` is used only when `deleteSupported` is true.
   It returns a successful HTTP status. No automatic mutation retries are made;
   the relay must expire abandoned upload reservations.
 
-Relay calls use the configured Connect origin and existing
-`PROPR_GH_RELAY_TOKEN` bearer credential. Known error codes (`quota_exceeded`,
+Relay calls use `PROPR_ROUTING_URL` and the existing `PROPR_GH_RELAY_TOKEN`
+bearer credential. Viewer trust is configured separately by `PROPR_CONNECT_URL`
+(default `https://connect.propr.dev`), passed to the client as
+`trustedConnectOrigin`; it must be an HTTPS origin, not a URL with a path.
+The trusted origin is never taken from a remote upload/finalize response. Known error codes (`quota_exceeded`,
 `object_too_large`, `content_type_not_allowed`, `object_mismatch`) are preserved;
 raw response messages and transport errors are discarded. Unknown versions or
 malformed statuses fail closed. Future v2 support can be added alongside v1.
+
+
+### Boundary for the hybrid publisher (#2282)
+
+`storeManagedVisualPreviewOriginals(evidence, { taskId, repository, pullRequestNumber? })`
+returns one versioned result per input asset, in input order. Each result includes
+`version: 1`, `assetIndex`, and `relativePath` (the index disambiguates duplicate
+paths), plus either `{ stored: true, artifact: PreviewArtifactV1 }` or
+`{ stored: false, code }`. Successful artifacts carry the trusted `viewerUrl` and
+retention metadata, so the dependent publisher can render links without uploading
+again. Staged evidence retains its task ID for existing publication callers.
+
+Failures are isolated per asset, including local file errors and unavailable or
+disabled storage. Codes are a bounded union (`PreviewStorageErrorCodeV1`,
+`plus_required`, or `disabled`); raw remote errors are discarded. A failed asset
+does not discard successful results or stop later uploads or GitHub publication.
+Only these codes may be used for fallback text. Never log or publish upload grants,
+object keys, relay tokens, or raw remote response/error bodies. This boundary does
+not implement PR comment rendering or change inline collection policy.

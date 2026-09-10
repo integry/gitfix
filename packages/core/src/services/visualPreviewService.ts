@@ -38,6 +38,8 @@ export interface VisualPreviewToolSuggestion {
 }
 
 export interface VisualPreviewEvidence {
+  /** Populated when evidence is staged for a task; used to authorize managed originals. */
+  taskId?: string;
   assets: VisualPreviewAsset[];
   toolSuggestions: VisualPreviewToolSuggestion[];
 }
@@ -255,7 +257,7 @@ async function copyEvidenceToTemporaryDirectory(
       await copyFile(asset.absolutePath, destination);
       assets.push({ ...asset, absolutePath: destination });
     }
-    return { evidence: { ...evidence, assets }, temporaryDirectory };
+    return { evidence: { ...evidence, taskId, assets }, temporaryDirectory };
   } catch (error) {
     await rm(temporaryDirectory, { recursive: true, force: true });
     throw error;

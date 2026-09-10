@@ -222,6 +222,7 @@ test('stages changed previews outside the repository and restores the preview di
   });
 
   assert.ok(prepared.temporaryDirectory?.startsWith(path.join(tmpdir(), 'propr-previews', 'task-42-')));
+  assert.equal(prepared.evidence.taskId, 'task/42');
   assert.deepEqual(prepared.evidence.assets.map(asset => asset.title), ['Desktop settings', 'Tracked']);
   assert.equal(await readFile(prepared.evidence.assets[0].absolutePath, 'utf8'), 'desktop');
   assert.equal(await readFile(path.join(worktree, '.propr/previews/tracked.png'), 'utf8'), 'original');

@@ -33,12 +33,17 @@ export interface PreviewObjectV1 {
   /** Lower-case hexadecimal SHA-256 of the exact original bytes. */
   sha256: string;
 }
-export interface PreviewUploadRequestV1 extends PreviewObjectV1 {
-  version: 1;
+/** Installation authority is derived only from the relay token, never caller metadata. */
+export interface PreviewAssetMetadataV1 {
+  taskId: string;
   repository: string;
+  pullRequestNumber?: number;
+  displayFilename: string;
 }
-export interface PreviewUploadV1 extends PreviewObjectV1 {
+export interface PreviewUploadRequestV1 extends PreviewObjectV1, PreviewAssetMetadataV1 {
   version: 1;
+}
+export interface PreviewUploadV1 extends PreviewUploadRequestV1 {
   artifactId: string;
   objectKey: string;
   put: { url: string; headers: Record<string, string>; expiresAt: string };
@@ -47,14 +52,17 @@ export interface PreviewFinalizeRequestV1 extends PreviewObjectV1 {
   version: 1;
   objectKey: string;
 }
-export interface PreviewArtifactV1 extends PreviewFinalizeRequestV1 {
+/** Safe finalized projection for publishers/APIs; contains no object-store credentials or keys. */
+export interface PreviewArtifactV1 extends PreviewUploadRequestV1 {
   artifactId: string;
   state: 'ready';
+  viewerUrl: string;
+  retentionExpiresAt: string;
 }
 export type PreviewStorageErrorCodeV1 =
   | 'quota_exceeded' | 'object_too_large' | 'content_type_not_allowed'
   | 'object_mismatch' | 'invalid_contract' | 'unavailable' | 'upload_failed'
-  | 'finalize_failed' | 'delete_failed' | 'delete_unsupported';
+  | 'source_unavailable' | 'finalize_failed' | 'delete_failed' | 'delete_unsupported';
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -85,15 +93,43 @@ function object(value: Record<string, unknown>): PreviewObjectV1 | undefined {
     || typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256)) return undefined;
   return { sizeBytes: value.sizeBytes, contentType: value.contentType, sha256: value.sha256 };
 }
-function identity(value: Record<string, unknown>): boolean {
+/** Portable basename, bounded and safe for display; callers still escape their output format. */
+export function sanitizePreviewDisplayFilename(value: string): string {
+  return (value.replaceAll('\\', '/').split('/').pop() ?? '')
+    .replace(/[^a-zA-Z0-9._ -]/g, '_').slice(0, 128).replace(/^[. ]+|[. ]+$/g, '') || 'original';
+}
+function assetMetadata(value: Record<string, unknown>): PreviewAssetMetadataV1 | undefined {
+  if (typeof value.taskId !== 'string' || !value.taskId.length || value.taskId.length > 256
+    || value.taskId.trim() !== value.taskId || /[\x00-\x1f\x7f]/.test(value.taskId)
+    || typeof value.repository !== 'string' || value.repository.length > 256
+    || !/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(value.repository)
+    || ['.', '..'].includes(value.repository.split('/')[1])
+    || (value.pullRequestNumber !== undefined && !integer(value.pullRequestNumber, 1))
+    || typeof value.displayFilename !== 'string'
+    || value.displayFilename !== sanitizePreviewDisplayFilename(value.displayFilename)) return undefined;
+  return {
+    taskId: value.taskId, repository: value.repository, displayFilename: value.displayFilename,
+    ...(value.pullRequestNumber === undefined ? {} : { pullRequestNumber: value.pullRequestNumber as number }),
+  };
+}
+export function parsePreviewUploadRequestV1(value: unknown): PreviewUploadRequestV1 | undefined {
+  if (!record(value) || value.version !== 1) return undefined;
+  const original = object(value);
+  const metadata = assetMetadata(value);
+  return original && metadata ? { version: 1, ...original, ...metadata } : undefined;
+}
+function artifactIdentity(value: Record<string, unknown>): boolean {
   return value.version === 1 && typeof value.artifactId === 'string'
-    && /^[a-zA-Z0-9_-]{1,128}$/.test(value.artifactId)
+    && /^[a-zA-Z0-9_-]{1,128}$/.test(value.artifactId);
+}
+function identity(value: Record<string, unknown>): boolean {
+  return artifactIdentity(value)
     && typeof value.objectKey === 'string' && value.objectKey.length > 0 && value.objectKey.length <= 1024
     && !/[\x00-\x1f\x7f]/.test(value.objectKey);
 }
 export function parsePreviewUploadV1(value: unknown): PreviewUploadV1 | undefined {
   if (!record(value) || !identity(value) || !record(value.put)) return undefined;
-  const original = object(value);
+  const original = parsePreviewUploadRequestV1(value);
   const put = value.put;
   if (!original || typeof put.url !== 'string' || !record(put.headers)
     || typeof put.expiresAt !== 'string' || !Number.isFinite(Date.parse(put.expiresAt))) return undefined;
@@ -102,25 +138,39 @@ export function parsePreviewUploadV1(value: unknown): PreviewUploadV1 | undefine
     if (url.protocol !== 'https:' || url.username || url.password || url.hash) return undefined;
   } catch { return undefined; }
   const headers: Record<string, string> = {};
+  const normalized: Record<string, string> = {};
   for (const [key, value] of Object.entries(put.headers)) {
     // Only object-store signed headers. In particular, never forward relay Authorization or cookies.
     if (!/^(content-type|content-length|x-amz-[a-z0-9-]+|x-goog-[a-z0-9-]+)$/i.test(key)
-      || typeof value !== 'string' || /[\r\n]/.test(value) || key.toLowerCase() in headers) return undefined;
-    headers[key.toLowerCase()] = value;
+      || typeof value !== 'string' || /[\r\n]/.test(value) || key.toLowerCase() in normalized) return undefined;
+    normalized[key.toLowerCase()] = value;
+    headers[key] = value;
   }
-  if (headers['content-type'] !== original.contentType
-    || (headers['content-length'] !== undefined && headers['content-length'] !== String(original.sizeBytes))) return undefined;
+  if (normalized['content-type'] !== original.contentType
+    || (normalized['content-length'] !== undefined && normalized['content-length'] !== String(original.sizeBytes))) return undefined;
   return {
-    version: 1, artifactId: value.artifactId as string, objectKey: value.objectKey as string,
-    ...original, put: { url: put.url, headers, expiresAt: put.expiresAt },
+    ...original, artifactId: value.artifactId as string, objectKey: value.objectKey as string,
+    put: { url: put.url, headers, expiresAt: put.expiresAt },
   };
 }
-export function parsePreviewArtifactV1(value: unknown): PreviewArtifactV1 | undefined {
-  if (!record(value) || !identity(value) || value.state !== 'ready') return undefined;
-  const original = object(value);
+export function parsePreviewArtifactV1(value: unknown, trustedConnectOrigin: string): PreviewArtifactV1 | undefined {
+  if (!record(value) || !artifactIdentity(value) || value.state !== 'ready'
+    || typeof value.viewerUrl !== 'string' || value.viewerUrl.length > 2048
+    || typeof value.retentionExpiresAt !== 'string' || !Number.isFinite(Date.parse(value.retentionExpiresAt))) return undefined;
+  try {
+    const trusted = new URL(trustedConnectOrigin);
+    const viewer = new URL(value.viewerUrl);
+    // Stable authenticated links have no bearer/query token, fragment, or embedded credentials.
+    if (trusted.protocol !== 'https:' || trusted.username || trusted.password
+      || trusted.pathname !== '/' || trusted.search || trusted.hash
+      || viewer.protocol !== 'https:' || viewer.origin !== trusted.origin
+      || viewer.username || viewer.password || viewer.search || viewer.hash
+      || /[\s\\]/.test(value.viewerUrl)) return undefined;
+  } catch { return undefined; }
+  const original = parsePreviewUploadRequestV1(value);
   return original ? {
-    version: 1, artifactId: value.artifactId as string, objectKey: value.objectKey as string,
-    state: 'ready', ...original,
+    ...original, artifactId: value.artifactId as string, state: 'ready',
+    viewerUrl: value.viewerUrl, retentionExpiresAt: value.retentionExpiresAt,
   } : undefined;
 }
 export function parseManagedPreviewStorageStatus(value: unknown): ManagedPreviewStorageStatus | undefined {

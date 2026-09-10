@@ -10,6 +10,7 @@ export function createManagedPreviewStorageClient(
 ): ManagedPreviewStorageClientV1 {
   return new ManagedPreviewStorageClientV1({
     routingUrl: (environment.PROPR_ROUTING_URL ?? DEFAULT_PROPR_ROUTING_URL).trim(),
+    trustedConnectOrigin: (environment.PROPR_CONNECT_URL ?? 'https://connect.propr.dev').trim(),
     relayToken: environment.PROPR_GH_RELAY_TOKEN?.trim() ?? '',
     fetchImpl,
     getConnectContext: async () => {

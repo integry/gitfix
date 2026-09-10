@@ -1,17 +1,26 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
+import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { inspect } from 'node:util';
 import { pino } from 'pino';
 import {
   PREVIEW_STORAGE_V1_DEFAULTS, parsePreviewStorageStatusV1, parsePreviewUploadV1,
+  parsePreviewArtifactV1, parsePreviewUploadRequestV1, sanitizePreviewDisplayFilename,
   type PreviewStorageStatusV1,
 } from '@propr/shared';
 import { ManagedPreviewStorageClientV1, type PreviewStorageConnectContext } from '../src/services/previewStorage/v1.js';
 import { createManagedPreviewStorageClient } from '../src/services/previewStorage/runtime.js';
 
 const original = Buffer.from([0, 255, 42, 13, 10, 128]);
-const input = { bytes: original, contentType: 'image/png', repository: 'integry/propr' };
+const directory = await mkdtemp(path.join(tmpdir(), 'managed-preview-test-'));
+after(() => rm(directory, { recursive: true, force: true }));
+const filePath = path.join(directory, 'original.png');
+await writeFile(filePath, original);
+const assetMetadata = { taskId: 'task-2285', repository: 'integry/propr', pullRequestNumber: 2285, displayFilename: 'original.png' };
+const input = { filePath, contentType: 'image/png', ...assetMetadata };
 const metadata = { sizeBytes: original.length, contentType: input.contentType, sha256: createHash('sha256').update(original).digest('hex') };
 const secrets = ['relay-secret-value', 'viewer-secret-value', 'signed-secret-value', 'bearer-secret-value'];
 const signedUrl = `https://objects.example.test/original?X-Amz-Signature=${secrets[2]}`;
@@ -20,10 +29,11 @@ const status: PreviewStorageStatusV1 = {
   usedBytes: 0, reservedBytes: 0, allowedContentTypes: ['image/png'], deleteSupported: true,
 };
 const upload = {
-  version: 1, artifactId: 'artifact-1', objectKey: '42/original', ...metadata,
+  version: 1, artifactId: 'artifact-1', objectKey: '42/original', ...metadata, ...assetMetadata,
   put: { url: signedUrl, headers: { 'Content-Type': 'image/png', 'Content-Length': String(original.length) }, expiresAt: '2099-01-01T00:00:00Z' },
 };
-const artifact = { version: 1, artifactId: upload.artifactId, objectKey: upload.objectKey, state: 'ready', ...metadata };
+const artifact = { version: 1, artifactId: upload.artifactId, state: 'ready', ...metadata, ...assetMetadata,
+  viewerUrl: 'https://connect.example.test/previews/artifact-1', retentionExpiresAt: '2099-01-01T00:00:00Z' };
 function fixture(options: {
   context?: PreviewStorageConnectContext;
   status?: unknown;
@@ -31,11 +41,12 @@ function fixture(options: {
   finalize?: unknown;
   failAt?: number;
   failure?: Response | Error;
+  beforePut?: () => Promise<void>;
 } = {}) {
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const calls: Array<{ url: string; init?: RequestInit; putBytes?: Uint8Array }> = [];
   const context = options.context ?? { connected: true, connectAccount: { installationId: 42, hasPlusAccess: true } };
   const client = new ManagedPreviewStorageClientV1({
-    routingUrl: 'wss://connect.example.test', relayToken: secrets[0], getConnectContext: async () => context,
+    routingUrl: 'wss://connect.example.test', trustedConnectOrigin: 'https://connect.example.test', relayToken: secrets[0], getConnectContext: async () => context,
     fetchImpl: async (url, init) => {
       calls.push({ url: String(url), init });
       if (calls.length === options.failAt) {
@@ -44,6 +55,12 @@ function fixture(options: {
       }
       if (String(url).endsWith('/status')) return Response.json(options.status ?? status);
       if (String(url).endsWith('/uploads')) return Response.json(options.upload ?? upload);
+      if (init?.method === 'PUT') {
+        await options.beforePut?.();
+        // Constructing a real Node Request exercises the duplex requirement.
+        const request = new Request(url, init);
+        calls.at(-1)!.putBytes = new Uint8Array(await request.arrayBuffer());
+      }
       if (init?.method === 'PUT' || init?.method === 'DELETE') return new Response(null, { status: 204 });
       return Response.json(options.finalize ?? artifact);
     },
@@ -84,12 +101,14 @@ test('server disabled, unavailable, mismatched installation and v2 statuses fail
 });
 
 test('Plus uploads the exact original and finalizes the bound object without forwarding relay credentials', async () => {
-  const { client, calls } = fixture({ finalize: { ...artifact, viewerToken: secrets[1] } });
+  const { client, calls } = fixture({ finalize: { ...artifact, viewerToken: secrets[1], objectKey: upload.objectKey, put: upload.put } });
   assert.deepEqual(await client.uploadOriginal(input), { stored: true, artifact });
   assert.deepEqual(calls.map(call => call.init?.method), ['GET', 'POST', 'PUT', 'POST']);
   assert.equal(calls[2].url, signedUrl);
-  assert.deepEqual(calls[2].init?.body, original);
-  assert.deepEqual(JSON.parse(calls[1].init?.body as string), { version: 1, repository: 'integry/propr', ...metadata });
+  assert.deepEqual(calls[2].putBytes, new Uint8Array(original));
+  assert.deepEqual(calls[2].init?.headers, upload.put.headers);
+  assert.equal((calls[2].init as RequestInit & { duplex: string }).duplex, 'half');
+  assert.deepEqual(JSON.parse(calls[1].init?.body as string), { version: 1, ...assetMetadata, ...metadata });
   assert.deepEqual(JSON.parse(calls[3].init?.body as string), { version: 1, objectKey: upload.objectKey, ...metadata });
   assert.equal(new Headers(calls[2].init?.headers).get('authorization'), null);
   assert.equal(new Headers(calls[1].init?.headers).get('authorization'), `Bearer ${secrets[0]}`);
@@ -131,6 +150,8 @@ test('mismatched metadata, expired grants and unsafe signed headers prevent PUT'
     { ...upload, put: { ...upload.put, url: 'http://objects.example.test/file' } },
     { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, Authorization: `Bearer ${secrets[3]}` } } },
     { ...upload, put: { ...upload.put, headers: { 'Content-Type': 'video/mp4' } } },
+    { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, 'content-type': 'image/png' } } },
+    { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, 'Content-Length': '7' } } },
   ]) {
     const { client, calls } = fixture({ upload: value });
     assert.equal((await client.uploadOriginal(input)).stored, false);
@@ -143,7 +164,7 @@ test('failed PUT is never finalized and a mismatched finalize is never accepted'
   const failedPut = fixture({ failAt: 3 });
   assert.deepEqual(await failedPut.client.uploadOriginal(input), { stored: false, code: 'upload_failed' });
   assert.equal(failedPut.calls.length, 3);
-  const badFinalize = fixture({ finalize: { ...artifact, objectKey: 'different' } });
+  const badFinalize = fixture({ finalize: { ...artifact, sha256: 'a'.repeat(64) } });
   assert.deepEqual(await badFinalize.client.uploadOriginal(input), { stored: false, code: 'object_mismatch' });
 });
 
@@ -199,4 +220,133 @@ test('runtime consumes the existing validated account_status and configured inst
   assert.equal(calls, 1);
   const offline = createManagedPreviewStorageClient(async () => { throw new Error(secrets[0]); }, env);
   assert.equal((await offline.getStatus()).state, 'unavailable');
+  snapshot = { connected: true, connectAccount: account };
+  for (const trustedOrigin of ['https://connect.example.test', 'https://different.example.test']) {
+    const configured = createManagedPreviewStorageClient(async () => JSON.stringify(snapshot), {
+      ...env, PROPR_CONNECT_URL: trustedOrigin,
+    }, async (url, init) => {
+      if (String(url).endsWith('/status')) return Response.json(status);
+      if (String(url).endsWith('/uploads')) return Response.json(upload);
+      if (init?.method === 'PUT') {
+        await new Request(url, init).arrayBuffer();
+        return new Response(null, { status: 204 });
+      }
+      return Response.json(artifact);
+    });
+    assert.equal((await configured.uploadOriginal(input)).stored, trustedOrigin === 'https://connect.example.test');
+  }
+});
+
+
+test('request metadata is validated, sanitized, and round-tripped without installation authority', async () => {
+  const { client, calls } = fixture();
+  assert.equal((await client.uploadOriginal({ ...input, displayFilename: '../unsafe\\original.png' })).stored, true);
+  const request = JSON.parse(calls[1].init!.body as string);
+  assert.equal(request.displayFilename, 'original.png');
+  assert.equal('installationId' in request, false);
+  assert.deepEqual(parsePreviewUploadRequestV1({ ...request, installationId: 999 }), request);
+  assert.equal(parsePreviewUploadRequestV1({ ...request, taskId: 'task/42' })?.taskId, 'task/42');
+  for (const override of [
+    { taskId: '' }, { taskId: ' bad ' }, { taskId: 'task\n42' }, { taskId: 'x'.repeat(257) }, { repository: '../repo' }, { repository: 'owner/..' },
+    { pullRequestNumber: 0 }, { pullRequestNumber: 1.5 }, { pullRequestNumber: '2285' },
+    { displayFilename: '../secret.png' }, { displayFilename: 'a\n.png' }, { displayFilename: '' },
+  ]) assert.equal(parsePreviewUploadRequestV1({ ...request, ...override }), undefined);
+  for (const name of ['../../foo.png', 'C:\\temp\\foo.png', 'a\n[link](bad).png', '.'.repeat(150), 'a'.repeat(127) + '.xxx']) {
+    const safe = sanitizePreviewDisplayFilename(name);
+    assert.equal(sanitizePreviewDisplayFilename(safe), safe);
+    assert.ok(safe.length <= 128);
+  }
+  for (const override of [{ taskId: 'other' }, { repository: 'other/repo' }, { pullRequestNumber: 1 }, { displayFilename: 'other.png' }]) {
+    const grant = fixture({ upload: { ...upload, ...override } });
+    assert.equal((await grant.client.uploadOriginal(input)).stored, false);
+    assert.equal(grant.calls.length, 2);
+    const finalized = fixture({ finalize: { ...artifact, ...override } });
+    assert.equal((await finalized.client.uploadOriginal(input)).stored, false);
+  }
+  const { pullRequestNumber: _pr, ...withoutPr } = assetMetadata;
+  const optional = fixture({ upload: { ...upload, pullRequestNumber: undefined }, finalize: { ...artifact, pullRequestNumber: undefined } });
+  assert.equal((await optional.client.uploadOriginal({ filePath, contentType: input.contentType, ...withoutPr })).stored, true);
+});
+
+test('finalized viewer links require the exact configured HTTPS Connect origin and retention', async () => {
+  const trusted = 'https://connect.example.test';
+  assert.deepEqual(parsePreviewArtifactV1(artifact, trusted), artifact);
+  for (const viewerUrl of [
+    'http://connect.example.test/previews/1', 'https://evil.test/previews/1',
+    'https://connect.example.test.evil.test/previews/1', 'https://connect.example.test:444/previews/1',
+    'https://user:secret@connect.example.test/previews/1', '/previews/1',
+    '//connect.example.test/previews/1', 'https://connect.example.test/previews/1?token=secret',
+    'https://connect.example.test/previews/1#secret', 'javascript:alert(1)',
+  ]) {
+    assert.equal(parsePreviewArtifactV1({ ...artifact, viewerUrl }, trusted), undefined);
+    const { client } = fixture({ finalize: { ...artifact, viewerUrl } });
+    assert.deepEqual(await client.uploadOriginal(input), { stored: false, code: 'object_mismatch' });
+  }
+  for (const origin of ['', 'http://connect.example.test', 'https://user@connect.example.test', trusted + '/path']) {
+    assert.equal(parsePreviewArtifactV1(artifact, origin), undefined);
+  }
+  for (const retentionExpiresAt of [undefined, 'nonsense', '2000-01-01T00:00:00Z']) {
+    assert.equal((await fixture({ finalize: { ...artifact, retentionExpiresAt } }).client.uploadOriginal(input)).stored, false);
+  }
+});
+
+test('missing files and changes between hash and PUT fail safely without finalize', async () => {
+  assert.deepEqual(await fixture().client.uploadOriginal({ ...input, filePath: path.join(directory, 'missing') }),
+    { stored: false, code: 'source_unavailable' });
+  const changed = path.join(directory, 'changed.png');
+  await writeFile(changed, original);
+  const { client, calls } = fixture({ beforePut: async () => { await writeFile(changed, Buffer.alloc(original.length, 7)); } });
+  assert.equal((await client.uploadOriginal({ ...input, filePath: changed })).stored, false);
+  assert.equal(calls.length, 3);
+});
+
+test('500 MiB staged original hashes and uploads in bounded chunks without a full-size memory copy', async () => {
+  const sizeBytes = 500 * 1024 ** 2;
+  const largePath = path.join(directory, 'large.png');
+  const file = await open(largePath, 'w');
+  await file.truncate(sizeBytes); // Sparse staged fixture; never allocate the original in memory.
+  await file.close();
+  const zeroChunk = Buffer.alloc(64 * 1024);
+  const expectedHash = createHash('sha256');
+  for (let i = 0; i < sizeBytes; i += zeroChunk.length) expectedHash.update(zeroChunk);
+  const sha256 = expectedHash.digest('hex');
+  let requestMetadata: Record<string, unknown> = {};
+  let sentBytes = 0;
+  let peakBuffers = process.memoryUsage().arrayBuffers;
+  const initialBuffers = peakBuffers;
+  const client = new ManagedPreviewStorageClientV1({
+    routingUrl: 'wss://relay.example.test', trustedConnectOrigin: 'https://connect.example.test', relayToken: secrets[0],
+    getConnectContext: async () => ({ connected: true, connectAccount: { installationId: 42, hasPlusAccess: true } }),
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith('/status')) return Response.json(status);
+      if (String(url).endsWith('/uploads')) {
+        requestMetadata = JSON.parse(init!.body as string);
+        assert.equal(requestMetadata.sizeBytes, sizeBytes);
+        assert.equal(requestMetadata.sha256, sha256);
+        return Response.json({ ...upload, ...requestMetadata, put: { ...upload.put,
+          headers: { ...upload.put.headers, 'Content-Length': String(sizeBytes), 'x-amz-meta-test': 'signed-value' } } });
+      }
+      if (init?.method === 'PUT') {
+        const request = new Request(url, init);
+        assert.equal(request.headers.get('authorization'), null);
+        assert.equal(request.headers.get('content-length'), String(sizeBytes));
+        assert.equal(request.headers.get('x-amz-meta-test'), 'signed-value');
+        assert.equal(request.redirect, 'error');
+        const receivedHash = createHash('sha256');
+        for await (const chunk of request.body!) {
+          assert.ok(chunk.byteLength <= 64 * 1024);
+          sentBytes += chunk.byteLength;
+          receivedHash.update(chunk);
+          peakBuffers = Math.max(peakBuffers, process.memoryUsage().arrayBuffers);
+        }
+        assert.equal(receivedHash.digest('hex'), sha256);
+        return new Response(null, { status: 204 });
+      }
+      assert.equal(sentBytes, sizeBytes);
+      return Response.json({ ...artifact, ...requestMetadata });
+    },
+  });
+  assert.equal((await client.uploadOriginal({ ...input, filePath: largePath })).stored, true);
+  assert.equal(sentBytes, sizeBytes);
+  assert.ok(peakBuffers - initialBuffers < 128 * 1024 ** 2, `Peak additional buffers: ${peakBuffers - initialBuffers}`);
 });

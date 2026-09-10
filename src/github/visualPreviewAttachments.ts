@@ -204,6 +204,8 @@ export const uploadVisualPreviewAsset: VisualPreviewAssetUploader = async ({
 };
 
 interface BaseVisualPreviewPublicationOptions {
+  taskId?: string;
+  pullRequestNumber: number;
   owner: string;
   repo: string;
   body: string;
@@ -218,7 +220,11 @@ interface BaseVisualPreviewPublicationOptions {
 
 async function storeOriginalsSafely(options: BaseVisualPreviewPublicationOptions): Promise<void> {
   try {
-    await (options.storeOriginals ?? storeManagedVisualPreviewOriginals)(options.evidence, `${options.owner}/${options.repo}`);
+    await (options.storeOriginals ?? storeManagedVisualPreviewOriginals)(options.evidence, {
+      taskId: options.taskId ?? options.evidence.taskId ?? '',
+      repository: `${options.owner}/${options.repo}`,
+      pullRequestNumber: options.pullRequestNumber,
+    });
   } catch {
     // Optional original storage must never interrupt GitHub attachment publication.
   }

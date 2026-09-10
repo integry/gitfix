@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
+import { open, type FileHandle } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import {
   parsePreviewStorageStatusV1, parsePreviewUploadV1, parsePreviewArtifactV1, validateRoutingUrl,
+  parsePreviewUploadRequestV1, sanitizePreviewDisplayFilename, type PreviewAssetMetadataV1,
   type ManagedPreviewStorageStatus, type PreviewArtifactV1, type PreviewObjectV1,
-  type PreviewUploadRequestV1, type PreviewFinalizeRequestV1, type PreviewStorageErrorCodeV1,
+  type PreviewFinalizeRequestV1, type PreviewStorageErrorCodeV1,
 } from '@propr/shared';
 
 export interface PreviewStorageConnectContext {
@@ -11,6 +14,8 @@ export interface PreviewStorageConnectContext {
 }
 export interface ManagedPreviewStorageClientV1Options {
   routingUrl: string;
+  /** Explicit trusted HTTPS origin of the authenticated Connect viewer, independent of the relay. */
+  trustedConnectOrigin: string;
   relayToken: string;
   getConnectContext: () => Promise<PreviewStorageConnectContext>;
   fetchImpl?: typeof fetch;
@@ -25,6 +30,17 @@ export class PreviewStorageError extends Error {
 export type ManagedPreviewUploadResult =
   | { stored: true; artifact: PreviewArtifactV1 }
   | { stored: false; code: PreviewStorageErrorCodeV1 | 'plus_required' | 'disabled' };
+
+export interface ManagedPreviewOriginalInput extends PreviewAssetMetadataV1 {
+  /** Replayable staged regular file. Keep it available and unchanged until this call settles. */
+  filePath: string;
+  contentType: string;
+}
+
+function matchesMetadata(left: PreviewAssetMetadataV1, right: PreviewAssetMetadataV1): boolean {
+  return left.taskId === right.taskId && left.repository === right.repository
+    && left.pullRequestNumber === right.pullRequestNumber && left.displayFilename === right.displayFilename;
+}
 
 function matches(left: PreviewObjectV1, right: PreviewObjectV1): boolean {
   return left.sizeBytes === right.sizeBytes && left.contentType === right.contentType && left.sha256 === right.sha256;
@@ -80,49 +96,91 @@ export class ManagedPreviewStorageClientV1 {
     throw new PreviewStorageError(fallback);
   }
 
-  /** A private snapshot is hashed and PUT unchanged, even if the caller later mutates its buffer. */
-  async uploadOriginal(input: { bytes: Uint8Array; contentType: string; repository: string }): Promise<ManagedPreviewUploadResult> {
+  /** Hash and replay one open file with bounded buffers; verify the PUT stream again before finalize. */
+  async uploadOriginal(input: ManagedPreviewOriginalInput): Promise<ManagedPreviewUploadResult> {
+    let file: FileHandle | undefined;
     try {
       const status = await this.getStatus();
       if (status.state !== 'enabled') return { stored: false, code: status.state };
       if (!status.effective) throw new PreviewStorageError('invalid_contract');
       const limits = status.effective;
-      if (input.bytes.byteLength > limits.maxObjectBytes) throw new PreviewStorageError('object_too_large');
-      if (input.bytes.byteLength > limits.quotaBytes - limits.usedBytes - limits.reservedBytes) throw new PreviewStorageError('quota_exceeded');
+      try { file = await open(input.filePath, 'r'); }
+      catch { throw new PreviewStorageError('source_unavailable'); }
+      const initial = await file.stat();
+      if (!initial.isFile() || !initial.size) throw new PreviewStorageError('source_unavailable');
+      if (initial.size > limits.maxObjectBytes) throw new PreviewStorageError('object_too_large');
+      if (initial.size > limits.quotaBytes - limits.usedBytes - limits.reservedBytes) throw new PreviewStorageError('quota_exceeded');
       if (!limits.allowedContentTypes.includes(input.contentType)) throw new PreviewStorageError('content_type_not_allowed');
-      if (!input.bytes.byteLength || !/^[\w.-]+\/[\w.-]+$/.test(input.repository)) throw new PreviewStorageError('object_mismatch');
-      const bytes = Buffer.from(input.bytes);
-      const original: PreviewUploadRequestV1 = {
-        version: 1, repository: input.repository, sizeBytes: bytes.byteLength, contentType: input.contentType,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-      };
+      const hash = createHash('sha256');
+      let hashedBytes = 0;
+      for await (const chunk of file.createReadStream({ start: 0, end: initial.size - 1, autoClose: false })) {
+        hash.update(chunk);
+        hashedBytes += chunk.length;
+      }
+      if (hashedBytes !== initial.size) throw new PreviewStorageError('object_mismatch');
+      const original = parsePreviewUploadRequestV1({
+        version: 1, taskId: input.taskId, repository: input.repository,
+        pullRequestNumber: input.pullRequestNumber,
+        displayFilename: sanitizePreviewDisplayFilename(input.displayFilename),
+        sizeBytes: initial.size, contentType: input.contentType, sha256: hash.digest('hex'),
+      });
+      if (!original) throw new PreviewStorageError('invalid_contract');
       const response = await this.relay('/v1/preview-artifacts/uploads', 'POST', original);
       await this.checkResponse(response, 'upload_failed');
       const upload = parsePreviewUploadV1(await response.json());
       if (!upload) throw new PreviewStorageError('invalid_contract');
-      if (!matches(original, upload) || Date.parse(upload.put.expiresAt) <= Date.now()) throw new PreviewStorageError('object_mismatch');
+      if (!matches(original, upload) || !matchesMetadata(original, upload) || Date.parse(upload.put.expiresAt) <= Date.now()) throw new PreviewStorageError('object_mismatch');
       let put: Response;
+      let verified = false;
+      const source = file.createReadStream({ start: 0, end: original.sizeBytes - 1, autoClose: false });
+      const body = Readable.from((async function* () {
+        const sentHash = createHash('sha256');
+        let sentBytes = 0;
+        for await (const chunk of source) {
+          sentHash.update(chunk);
+          sentBytes += chunk.length;
+          yield chunk;
+        }
+        if (sentBytes !== original.sizeBytes || sentHash.digest('hex') !== original.sha256) {
+          throw new PreviewStorageError('object_mismatch');
+        }
+        verified = true;
+      })(), { objectMode: false, highWaterMark: 64 * 1024 });
       try {
-        put = await this.fetchImpl(upload.put.url, {
-          method: 'PUT', headers: upload.put.headers, body: bytes,
-          redirect: 'error', signal: AbortSignal.timeout(120_000),
-        });
+        // Node fetch requires duplex for a streaming body. Only the signed headers go to storage.
+        const init: RequestInit & { duplex: 'half' } = {
+          method: 'PUT', headers: upload.put.headers,
+          body: Readable.toWeb(body, {
+            strategy: { highWaterMark: 64 * 1024, size: chunk => chunk.byteLength },
+          }) as ReadableStream<Uint8Array>,
+          duplex: 'half', redirect: 'error', signal: AbortSignal.timeout(120_000),
+        };
+        put = await this.fetchImpl(upload.put.url, init);
       } catch { throw new PreviewStorageError('upload_failed'); }
+      finally {
+        body.destroy();
+        // Explicitly destroying an ended file stream would close the shared descriptor before stat.
+        if (!source.readableEnded) source.destroy();
+      }
       // Never read or propagate an object-store error body (it can echo a signed request).
       if (!put.ok) throw new PreviewStorageError(put.status === 413 ? 'object_too_large' : 'upload_failed');
+      const current = await file.stat();
+      if (!verified || current.size !== initial.size || current.mtimeMs !== initial.mtimeMs
+        || current.ctimeMs !== initial.ctimeMs) throw new PreviewStorageError('object_mismatch');
       const finalize: PreviewFinalizeRequestV1 = {
         version: 1, objectKey: upload.objectKey, sizeBytes: original.sizeBytes,
         contentType: original.contentType, sha256: original.sha256,
       };
       const finalized = await this.relay(`/v1/preview-artifacts/${upload.artifactId}/finalize`, 'POST', finalize);
       await this.checkResponse(finalized, 'finalize_failed');
-      const artifact = parsePreviewArtifactV1(await finalized.json());
-      if (!artifact || artifact.artifactId !== upload.artifactId || artifact.objectKey !== upload.objectKey
-        || !matches(original, artifact)) throw new PreviewStorageError('object_mismatch');
+      const artifact = parsePreviewArtifactV1(await finalized.json(), this.options.trustedConnectOrigin);
+      if (!artifact || artifact.artifactId !== upload.artifactId
+        || !matches(original, artifact) || !matchesMetadata(original, artifact)
+        || Date.parse(artifact.retentionExpiresAt) <= Date.now()) throw new PreviewStorageError('object_mismatch');
       return { stored: true, artifact };
     } catch (error) {
       return { stored: false, code: error instanceof PreviewStorageError ? error.code : 'invalid_contract' };
-    }
+    } finally { await file?.close().catch(() => {}); }
   }
 
   async deleteArtifact(artifactId: string): Promise<void> {
