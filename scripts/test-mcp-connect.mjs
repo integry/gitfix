@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 
-const commit = '0c8ca02044c88b181395ca8e15425c0821e588e4';
+const commit = '1fcf82fd1a843fbdf199d79b8f92843dc74a89e0';
 const repository = process.env.MCP_ROUTING_REPOSITORY;
 if (!repository) throw new Error('Set MCP_ROUTING_REPOSITORY to a local integry/propr-routing Git checkout containing the pinned commit.');
 const fixture = mkdtempSync(join(tmpdir(), 'propr-connect-integration-'));

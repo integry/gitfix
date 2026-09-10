@@ -16,7 +16,7 @@ export function redact(value: unknown, depth = 0): unknown {
     .replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi, 'Bearer [redacted]');
   if (Array.isArray(value)) return value.slice(0, 200).map(item => redact(item, depth + 1));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !/(?:token|secret|password|credential|private.?key|api.?key|access.?key|cookie|authorization|worktree.?path|stored.?path|job_data|container_env)/i.test(key))
+    .filter(([key]) => key === 'pr_review_max_context_tokens' || !/(?:token|secret|password|credential|private.?key|api.?key|access.?key|cookie|authorization|worktree.?path|stored.?path|job_data|container_env)/i.test(key))
     .map(([key, item]) => [key, redact(item, depth + 1)]));
   return value;
 }

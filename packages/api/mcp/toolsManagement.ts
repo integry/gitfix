@@ -1,6 +1,8 @@
+import { addConfigurationTools } from './toolsConfiguration.js';
+import { configRevision } from '../routes/configRevision.js';
 import { z } from 'zod';
-import { loadMonitoredReposRaw, loadAgents } from '@propr/core';
-import { NOTIFICATION_KINDS } from '@propr/shared';
+import { loadMonitoredReposRaw } from '@propr/core';
+import { NOTIFICATION_KINDS, REASONING_LEVELS } from '@propr/shared';
 import { createUserRepoPreferencesRoutes } from '../routes/userRepoPreferencesRoutes.js';
 import type { createRepoTodoRoutes } from '../routes/repoTodoRoutes.js';
 import type { createNotificationRoutes } from '../routes/notificationRoutes.js';
@@ -68,13 +70,13 @@ export function addManagementTools(tools: McpTool[], deps: ToolDeps, { todos, no
     return ok({ action: args.action, notificationIds: ids });
   } });
 
-  const settingsShape = { default_agent_alias: idSchema.optional(), planner_generation_model: idSchema.optional(), model_reasoning_level: idSchema.optional(), pr_review_model: idSchema.optional(), ultrafix_rating_goal: z.number().int().min(1).max(10).optional(), ultrafix_max_cycles: z.number().int().min(1).max(10).optional(), ultrafix_pause_seconds: z.number().int().min(0).max(3600).optional(), auto_followup_score_threshold: z.number().int().min(0).max(9).optional(), auto_resolve_merge_conflicts: z.boolean().optional() };
+  const settingsShape = { worker_concurrency: z.number().int().min(1).max(100).optional(), analysis_model_fast: z.string().max(256).optional(), planner_context_model: z.string().max(256).optional(), pr_review_prompt: z.string().max(65536).optional(), pr_review_context_enabled: z.boolean().optional(), pr_review_context_model: z.string().max(256).optional(), pr_review_max_context_tokens: z.union([z.literal(0), z.number().int().min(10000).max(2000000)]).optional(), default_agent_alias: idSchema.optional(), planner_generation_model: idSchema.optional(), model_reasoning_level: z.enum(REASONING_LEVELS).optional(), pr_review_model: z.string().max(256).optional(), ultrafix_rating_goal: z.number().int().min(1).max(10).optional(), ultrafix_max_cycles: z.number().int().min(1).max(10).optional(), ultrafix_pause_seconds: z.number().int().min(0).max(3600).optional(), auto_followup_score_threshold: z.number().int().min(0).max(9).optional(), auto_resolve_merge_conflicts: z.boolean().optional() };
   tools.push({ name: 'get_execution_settings', description: 'Read supported execution/model settings without secrets.', scope: 'read', readOnly: true, schema: z.object({}).strict(), run: async ({ principal }) => {
     const settings = (await callWorkflow(config.getSettings, principal, {})).data as Record<string, unknown>;
     return ok(Object.fromEntries(Object.keys(settingsShape).filter(key => key in settings).map(key => [key, settings[key]])));
   } });
   workflow(tools, { name: 'update_execution_settings', description: 'Update supported execution/model settings. Requires instance.manage_settings.', scope: 'manage', permission: 'instance.manage_settings', schema: z.object({ ...mutationShape, settings: z.object(settingsShape).strict() }).strict() }, config.postSettings, args => ({ body: { settings: args.settings } }));
-  workflow(tools, { name: 'index_repository', description: 'Queue indexing for an explicit repository and branch through the existing indexing workflow.', scope: 'manage', permission: 'instance.manage_settings', schema: z.object({ ...mutationShape, repository: repositorySchema, baseBranch: idSchema, fullReindex: z.boolean().default(false) }).strict() }, config.triggerIndexing, args => ({ body: { repository: args.repository, baseBranch: args.baseBranch, fullReindex: args.fullReindex } }));
+  workflow(tools, { name: 'index_repository', description: 'Queue indexing for an explicit repository and branch through the existing indexing workflow.', scope: 'manage', permission: 'instance.manage_settings', schema: z.object({ ...mutationShape, repository: repositorySchema, baseBranch: idSchema, fullReindex: z.boolean().default(false), ignoreCooldown: z.boolean().default(false) }).strict() }, config.triggerIndexing, args => ({ body: { repository: args.repository, baseBranch: args.baseBranch, fullReindex: args.fullReindex, ignoreCooldown: args.ignoreCooldown } }));
   workflow(tools, { name: 'stop_repository_indexing', description: 'Request cancellation of indexing for an explicit repository and branch.', scope: 'manage', permission: 'instance.manage_settings', schema: z.object({ ...mutationShape, repository: repositorySchema, branch: idSchema }).strict() }, config.stopIndexing, args => ({ body: { repository: args.repository, branch: args.branch } }));
   workflow(tools, { name: 'get_runtime_configuration', description: 'Read supported agent runtime packages and build state.', scope: 'manage', permission: 'instance.manage_runtime', readOnly: true, schema: z.object({}).strict() }, runtime.getRuntimePackages, () => ({}));
   workflow(tools, { name: 'update_runtime_configuration', description: 'Apply validated runtime packages through the existing runtime builder.', scope: 'manage', permission: 'instance.manage_runtime', schema: z.object({ ...mutationShape, packages: z.array(z.string().min(1).max(200)).max(100) }).strict() }, runtime.putRuntimePackages, args => ({ body: { packages: args.packages } }));
@@ -87,16 +89,8 @@ export function addManagementTools(tools: McpTool[], deps: ToolDeps, { todos, no
     const repos = await loadMonitoredReposRaw();
     const patch = Object.fromEntries(['baseBranch', 'alias', 'enabled', 'autoFollowupOnFailedCi', 'visualPreview'].filter(key => args[key] !== undefined).map(key => [key, args[key]]));
     const updated = repos.map(repo => repo.name.toLowerCase() === args.repository.toLowerCase() ? { ...repo, ...patch } : repo);
-    await callWorkflow(config.postRepos, principal, { body: { repos_to_monitor: updated } });
+    await callWorkflow(config.postRepos, principal, { body: { repos_to_monitor: updated, expectedRevision: configRevision(repos) } });
     return ok({ repository: args.repository, updated: true });
   } });
-  tools.push({ name: 'update_agent_configuration', description: 'Enable/disable an existing agent or change its default model. Secret and login entry stays in the browser.', scope: 'manage', permission: 'instance.manage_agents', schema: z.object({ ...mutationShape, agentId: idSchema, enabled: z.boolean().optional(), defaultModel: idSchema.optional() }).strict(), run: async ({ principal, args }) => {
-    const agents = await loadAgents();
-    const agent = agents.find(agent => agent.id === args.agentId);
-    if (!agent) throw new McpError('NOT_FOUND', 'Agent not found.', 404);
-    if (args.defaultModel && !agent.supportedModels.includes(args.defaultModel)) throw new McpError('INVALID_MODEL', 'Model is not supported by this agent.');
-    const updated = agents.map(agent => agent.id === args.agentId ? { ...agent, ...(args.enabled !== undefined ? { enabled: args.enabled } : {}), ...(args.defaultModel ? { defaultModel: args.defaultModel } : {}) } : agent);
-    await callWorkflow(config.postAgents, principal, { body: { agents: updated } });
-    return ok({ agentId: args.agentId, updated: true });
-  } });
+  addConfigurationTools(tools, deps, config);
 }

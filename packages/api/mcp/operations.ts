@@ -41,7 +41,8 @@ export class McpOperations {
     }
     try {
       const result = await invoke(id);
-      const state = result.status === 202 ? 'accepted' : 'completed';
+      const reported = (result.data as { state?: string })?.state;
+      const state = reported === 'browser_required' ? reported : result.status === 202 && ['posted', 'queued', 'unknown', 'failed'].includes(reported || '') ? reported! : result.status === 202 ? 'accepted' : 'completed';
       await this.db('mcp_operations').where({ id }).update({ state, result: JSON.stringify(result.data), updated_at: Date.now() });
     } catch (error) {
       // A transport failure can follow an external side effect. Never replay it
@@ -63,7 +64,7 @@ export class McpOperations {
     const stale = row.state === 'running' && Date.now() - Number(row.updated_at) > 120_000;
     const state = stale ? 'unknown' : row.state;
     return { operationId: row.id, tool: row.tool, state, result: row.result ? JSON.parse(row.result) : null,
-      ...(state === 'accepted' || state === 'running' ? { retryAfterSeconds: 3 } : {}),
+      ...(['accepted', 'posted', 'queued', 'running'].includes(state) ? { retryAfterSeconds: 3 } : {}),
       ...(stale ? { message: 'Execution may have been interrupted. Inspect the target; this action will not be replayed automatically.' } : {}) };
   }
 }

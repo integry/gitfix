@@ -261,6 +261,35 @@ jobs:
           RELEASE_CANDIDATE: 'true'
         run: npm run release:verify
 
+      - name: Check out the merged Connect integration fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: integry/propr-routing
+          ref: 1fcf82fd1a843fbdf199d79b8f92843dc74a89e0
+          path: .mcp-routing-fixture
+          persist-credentials: false
+
+      - name: Build MCP test dependencies
+        run: npm run test:prepare
+
+      - name: Install Chromium for required MCP consent tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify MCP OAuth, policy, workflows and paired Connect
+        id: mcp_tests
+        env:
+          MCP_ROUTING_REPOSITORY: ${{ github.workspace }}/.mcp-routing-fixture
+          DATA_DIR: ${{ runner.temp }}/mcp-ci
+          DB_FILENAME: ${{ runner.temp }}/mcp-ci/isolated.sqlite
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA_DIR"
+          {
+            npm run test:mcp
+            npm run test:mcp:connect
+            npm run test:mcp:browser
+          } > >(tee -a build_log.txt) 2>&1
+
       - name: Run Fast Unit Tests
         id: unit_tests
         run: |
@@ -665,6 +694,7 @@ jobs:
             echo "Node setup: ${{ steps.node.outcome }}"
             echo "Toolchain: ${{ steps.toolchain.outcome }}"
             echo "Dependency install: ${{ steps.install.outcome }}"
+            echo "MCP integration: ${{ steps.mcp_tests.outcome }}"
             echo "Fast tests: ${{ steps.unit_tests.outcome }}"
             echo "Hosted tunnel tests: ${{ steps.tunnel_tests.outcome }}"
             echo "CLI packaging: ${{ steps.cli_pack.outcome }}"

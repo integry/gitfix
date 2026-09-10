@@ -161,9 +161,10 @@ export class McpPolicy {
     if (!principal.authorization.permissions.includes(permission)) throw new McpError('INSUFFICIENT_INSTANCE_PERMISSION', `This operation requires ${permission}.`, 403);
   }
 
-  async repository(principal: McpPrincipal, repository: string, write = false, includeDisabled = false): Promise<void> {
+  async repository(principal: McpPrincipal, repository: string, write = false, options: boolean | { includeDisabled?: boolean; allowUnconfigured?: boolean } = false): Promise<void> {
+    const { includeDisabled, allowUnconfigured } = typeof options === 'boolean' ? { includeDisabled: options, allowUnconfigured: false } : options;
     const configured = (await loadMonitoredReposRaw()).some(repo => (repo.enabled || includeDisabled) && repo.name.toLowerCase() === repository.toLowerCase());
-    if (!configured || !principal.grant.repositories.some(repo => repo.toLowerCase() === repository.toLowerCase())) throw new McpError('REPOSITORY_FORBIDDEN', 'Repository is outside this grant or current instance configuration.', 403);
+    if ((!configured && !allowUnconfigured) || !principal.grant.repositories.some(repo => repo.toLowerCase() === repository.toLowerCase())) throw new McpError('REPOSITORY_FORBIDDEN', 'Repository is outside this grant or current instance configuration.', 403);
     const [owner, repo] = repository.split('/');
     let data;
     try { data = (await principal.github.request('GET /repos/{owner}/{repo}', { owner, repo })).data; }

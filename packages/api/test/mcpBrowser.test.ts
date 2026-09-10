@@ -18,7 +18,9 @@ import { configureDemoMode } from '../demoMode.js';
 
 after(async () => closeConnection());
 
-test('real consent and connected-app routes work at desktop/mobile widths and enforce CSRF and revocation', { skip: !existsSync(process.env.CHROMIUM_PATH || '/usr/bin/chromium') && 'Install Chromium and set CHROMIUM_PATH to exercise browser consent' }, async () => {
+test('real consent and connected-app routes work at desktop/mobile widths and enforce CSRF and revocation', async () => {
+  const executablePath = process.env.CHROMIUM_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : chromium.executablePath());
+  assert.ok(existsSync(executablePath), 'Install Chromium with npx playwright install --with-deps chromium or set CHROMIUM_PATH');
   configureDemoMode(false);
   const db = knex({ client: 'better-sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true });
   await db.schema.createTable('task_drafts', table => table.string('draft_id').primary()); await up(db);
@@ -36,7 +38,7 @@ test('real consent and connected-app routes work at desktop/mobile widths and en
   await oauth.authorize(client, { redirectUri: client.redirect_uris[0], resource: new URL(`${origin}/api/mcp`), codeChallenge: createHash('sha256').update(verifier).digest('base64url'), scopes: ['read', 'plan', 'execute'] }, { redirect: (url: string) => { consent = url; } } as never);
   let browser;
   try {
-    browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
+    browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
     const context = await browser.newContext({ viewport: { width: 1200, height: 1000 } });
     const page = await context.newPage();
     await page.goto(consent);

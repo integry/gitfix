@@ -144,11 +144,17 @@ export async function fetchReviewContext(
         omittedDiffFileCount: omittedDiffFiles.length,
     }, 'Fetched PR diff');
 
-    const fileContentsMap = await fetchPRFileContents({ octokit, repoOwner, repoName, prHeadRef: prData.data.head.ref, files: prFiles });
+    const fileContentsMap = await fetchPRFileContents({ octokit, repoOwner, repoName, prHeadRef: prData.data.head.sha || prData.data.head.ref, files: prFiles });
     const fileContents = formatFileContents(fileContentsMap);
     correlatedLogger.info({ pullRequestNumber, filesWithContent: fileContentsMap.size, contentLength: fileContents.length }, 'Fetched full file contents');
 
     const checkContext = await checkSummaryPromise;
+    // PR file lists are addressed by PR number. Verify the snapshot did not
+    // move while reading them before publishing an exact reviewed-head marker.
+    const { data: currentPr } = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+        owner: repoOwner, repo: repoName, pull_number: pullRequestNumber,
+    });
+    if (currentPr.head.sha !== prData.data.head.sha) throw new Error('Pull request head changed while gathering review context; request a fresh review.');
 
     return {
         allComments,

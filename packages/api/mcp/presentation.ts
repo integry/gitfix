@@ -7,7 +7,7 @@ function resultLinks(tool: McpTool, args: Args, result: Args, config: Pick<McpCo
   const continuation = result.continuation || result;
   const planId = args.planId || continuation.planId;
   const goalId = args.goalId || continuation.goalId;
-  const taskId = args.taskId || continuation.taskId;
+  const taskId = continuation.taskId || args.taskId;
   const { origin, instanceId } = config;
   let resource = 'connection', ui = origin;
   const frontend = (process.env.FRONTEND_URL || origin).replace(/\/$/, '');
@@ -45,9 +45,9 @@ function readSummary(tool: McpTool, args: Args, result: Args): string {
 
 /** Small spoken summaries; the structured result remains authoritative. */
 export function presentResult(tool: McpTool, args: Args, data: Args, config: Pick<McpConfig, 'instanceId' | 'origin'>): { summary: string; links: Record<string, string> } {
-  const result = tool.readOnly ? data : data.result || {};
+  const result = tool.readOnly && tool.name !== 'get_operation' ? data : data.result || {};
   const continuation = result.continuation || result;
-  const targets = { planId: args.planId || continuation.planId, goalId: args.goalId || continuation.goalId, taskId: args.taskId || continuation.taskId };
+  const targets = { planId: args.planId || continuation.planId, goalId: args.goalId || continuation.goalId, taskId: continuation.taskId || args.taskId };
   const summary = tool.readOnly ? readSummary(tool, args, result) : mutationSummary(tool, data, result, targets);
   return { summary, links: resultLinks(tool, args, result, config) };
 }

@@ -4,8 +4,8 @@
 [the epic #2279](https://github.com/integry/propr/issues/2279),
 [routing PR #180](https://github.com/integry/propr-routing/pull/180), and
 [site PR #90](https://github.com/integry/propr-site/pull/90).
-The shared wire contract is the **implemented routing contract at
-[0c8ca02044c88b181395ca8e15425c0821e588e4](https://github.com/integry/propr-routing/blob/0c8ca02044c88b181395ca8e15425c0821e588e4/docs/mcp-connect-contract.md)**.
+The shared wire contract is the **merged routing contract at
+[1fcf82fd1a843fbdf199d79b8f92843dc74a89e0](https://github.com/integry/propr-routing/blob/1fcf82fd1a843fbdf199d79b8f92843dc74a89e0/docs/mcp-connect-contract.md)**.
 Its `src/mcpCommon.ts`, `src/mcpGateway.ts`, `src/mcpOAuth.ts`, and
 `test/fixtures/mcpInstance.ts` were inspected. This document replaces core's
 incompatible proposed introspection contract. No deployment or merge is implied.

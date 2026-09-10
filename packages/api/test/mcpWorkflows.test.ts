@@ -22,14 +22,17 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
   process.env.NODE_ENV = 'test';
   const core = await import('@propr/core');
   const issueJobs: Array<{ name: string; data: Record<string, unknown> }> = [];
-  const issueQueue = { add: async (name: string, data: Record<string, unknown>) => { issueJobs.push({ name, data }); return { id: String(issueJobs.length) }; } };
+  let queueFailure = false;
+  const queueStates = new Map<string, string>();
+  const issueQueue = { getJobs: async () => [], getJob: async (id: string) => queueStates.has(id) ? { getState: async () => queueStates.get(id) } : undefined, add: async (name: string, data: Record<string, unknown>, options?: { jobId?: string }) => { if (queueFailure) throw new Error('Queue connection lost after write'); issueJobs.push({ name, data }); if (options?.jobId) queueStates.set(options.jobId, 'waiting'); return { id: options?.jobId || String(issueJobs.length) }; } };
   const cacheReads: string[] = [];
   let githubBoundary: unknown;
-  // Only outbound GitHub and queue boundaries are fixtures. Catalog, handlers,
+  // Only outbound GitHub, Git transport and queue boundaries are fixtures. Catalog, handlers,
   // label orchestration, authorization and persistence remain the real code.
   const boundary = await mock.module('@propr/core', { namedExports: { ...core,
     getAuthenticatedOctokit: async () => githubBoundary,
-    getIssueQueue: async () => issueQueue, issueQueue,
+    getIssueQueue: async () => issueQueue, getIndexingQueue: async () => issueQueue, issueQueue,
+    ensureRepoCloned: async () => root, fetchLatestChanges: async () => ({ success: true }), publishIndexingStatus: async () => {},
     getStoredFileChanges: async (taskId: string) => { cacheReads.push(taskId); return { taskId, lastUpdated: new Date().toISOString(), files: [{ path: 'src/retry.ts', linesAdded: 1, linesRemoved: 0, status: 'modified', diff: '+Handle transient failures\n' }] }; },
   } });
   const { McpStore } = await import('../mcp/store.js');
@@ -52,8 +55,10 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
     const policy = new McpPolicy(new McpOAuthProvider(new McpStore(db, config.encryptionKey), config), config);
     let head = 'a'.repeat(40), checks = 'SUCCESS', mergeState = 'CLEAN', merged = false;
     const comments: string[] = [];
+    const discussion: Array<{ id: number; body: string; html_url: string; issue_url: string; created_at: string; user: { login: string } }> = [];
     const issues: Array<{ number: number; title: string; labels: string[] }> = [];
     const github = {
+      auth: async () => ({ token: 'fixture-installation' }),
       request: async (route: string, args: Record<string, unknown>) => {
         if (route === 'POST /repos/{owner}/{repo}/issues') { const issue = { number: issues.length + 1, title: String(args.title), labels: args.labels as string[] }; issues.push(issue); return { data: { ...issue, html_url: `https://github.com/acme/repo/issues/${issue.number}` } }; }
         if (route.includes('/labels')) {
@@ -66,6 +71,8 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
         if (route === 'GET /repos/{owner}/{repo}/pulls/{pull_number}') return { data: { number: args.pull_number, title: 'Fixture PR', body: 'Improve reliability', state: 'open', draft: false, merged, head: { sha: head }, base: { ref: 'main' }, html_url: 'https://github.com/acme/repo/pull/42' } };
         if (route.endsWith('/reviews')) return { data: [{ id: 1, state: 'APPROVED', body: 'Reviewed', commit_id: head }] };
         if (route.endsWith('/check-runs')) return { data: { check_runs: [{ name: 'tests', status: 'completed', conclusion: checks.toLowerCase() }] } };
+        if (route === 'GET /repos/{owner}/{repo}/issues/{issue_number}/comments') return { data: discussion.slice((Number(args.page) - 1) * Number(args.per_page), Number(args.page) * Number(args.per_page)) };
+        if (route === 'GET /repos/{owner}/{repo}/issues/comments/{comment_id}') return { data: discussion.find(comment => comment.id === args.comment_id)! };
         if (route === 'POST /repos/{owner}/{repo}/issues/{issue_number}/comments') { comments.push(String(args.body)); return { data: { id: comments.length, html_url: 'https://github.com/acme/repo/pull/42#issuecomment-1' } }; }
         if (route.endsWith('/update-branch')) { assert.equal(args.expected_head_sha, head); head = 'b'.repeat(40); return { data: { message: 'Updated branch', url: 'https://github.com/acme/repo/pull/42' } }; }
         if (route.endsWith('/merge')) { assert.equal(args.sha, head); assert.equal(checks, 'SUCCESS'); assert.equal(mergeState, 'CLEAN'); merged = true; return { data: { merged, sha: head } }; }
@@ -79,8 +86,9 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
     const principal = { user: { id: '123', username: 'fixture-user', login: 'fixture-user', displayName: 'Fixture user', email: null, avatarUrl: null, accessToken: 'fixture-github' }, authorization: { role: 'admin', source: 'local', permissions: [...permissions] },
       scopes: [...scopes], github, grant: { id: 'workflow-grant', ownerId: '123', clientId: 'fixture-client', clientName: 'Fixture', instanceId: config.instanceId, resource: config.resource, scopes: [...scopes], repositories: ['acme/repo'], createdAt: Date.now(), expiresAt: Date.now() + 60000, revoked: false, membershipSource: 'local' } } as McpPrincipal;
     const jobs: Array<Record<string, unknown>> = [];
+    const redisValues = new Map<string, string>();
     const deps: ToolDeps = { db, policy, taskQueue: { add: async (_name: string, data: Record<string, unknown>) => { jobs.push(data); return { id: String(jobs.length) }; }, getJobs: async () => [] } as never,
-      redisClient: { get: async () => null, del: async () => 1, publish: async () => 1, set: async () => 'OK', eval: async () => 1 } as never, runtimeBuildQueue: {} as never,
+      redisClient: { lPush: async () => 1, lTrim: async () => 'OK', sMembers: async () => [], get: async (key: string) => redisValues.get(key) || null, del: async () => 1, publish: async () => 1, set: async () => 'OK', eval: async () => 1 } as never, runtimeBuildQueue: {} as never,
       goalServices: { generateTitle: async () => 'Fixture goal', loadVisualPreviewSettings: async () => ({ enabled: false, types: ['image'] }), getOctokit: async () => github as never,
         stopExecution: async () => ({ success: true, containerStopped: true, removedQueuedJobs: 1 }) as never,
         getCapabilities: async () => [{ agentId: agent.config.id, agentAlias: 'claude', agentType: 'claude', goalCapable: true, lifecycle: { launch: 'goal-prompt', resume: 'whole-session', runningInput: 'safe-boundary-resume' }, controls: { liveInput: false, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true } }] } };
@@ -104,6 +112,19 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
       };
       try {
         const repository = 'acme/repo';
+        await core.saveSummarizationSettings({ enabled: true, agent_alias: 'claude:fixture-model' });
+        const index = await call('index_repository', { repository, baseBranch: 'main', ignoreCooldown: true }, true);
+        assert.equal(index.state, 'queued', JSON.stringify(index));
+        const indexJob = index.result.jobId;
+        assert.equal(index.result.continuation.jobId, indexJob);
+        assert.equal(index.result.continuation.taskId, undefined);
+        assert.equal((await call('get_operation', { operationId: index.operationId })).state, 'queued');
+        queueStates.set(indexJob, 'active');
+        assert.equal((await call('get_operation', { operationId: index.operationId })).state, 'running');
+        await core.updateRepositoryStatus(repository, 'completed', 'main', { hash: head });
+        queueStates.set(indexJob, 'completed');
+        assert.equal((await call('get_operation', { operationId: index.operationId })).state, 'completed');
+        assert.equal((await call('get_repository_context', { repository, branch: 'main' })).freshness.revision, head);
         const plan = await call('create_plan', { repository, name: 'Reliability', prompt: 'Improve reliability', plan: [{ title: 'Handle failures', body: 'Persist results', implementation: 'Use the state machine' }] }, true);
         const planId = plan.result.planId;
         attachmentDirectories.push(path.join(process.cwd(), 'storage', 'drafts', planId));
@@ -130,7 +151,29 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
         await db('task_history').insert({ task_id: taskId, state: 'completed' });
         const changes = await call('get_task_changes', { repository, taskId, detail: 'diff', path: 'src/retry.ts' });
         assert.equal(changes.files[0].diff, '+Handle transient failures\n'); assert.equal(cacheReads.at(-1), taskId);
-        const followup = await call('send_task_followup', { repository, taskId, message: 'Please cover transient errors' }, true); assert.equal(followup.state, 'completed', JSON.stringify(followup));
+        const followup = await call('send_task_followup', { repository, taskId, message: 'Please cover transient errors' }, true); assert.equal(followup.state, 'queued', JSON.stringify(followup));
+        assert.equal((await call('get_operation', { operationId: followup.operationId })).state, 'queued');
+        const nextTask = followup.result.jobId;
+        assert.equal(followup.result.continuation.taskId, nextTask);
+        assert.equal(followup.result.continuation.sourceTaskId, taskId);
+        assert.notEqual(nextTask, taskId);
+        await db('tasks').insert({ task_id: nextTask, repository, issue_number: issueNumber, task_type: 'pr-comment' });
+        await db('task_history').insert({ task_id: nextTask, state: 'processing' });
+        assert.equal((await call('get_operation', { operationId: followup.operationId })).state, 'running');
+        await db('task_history').insert({ task_id: nextTask, state: 'completed' });
+        assert.equal((await call('get_operation', { operationId: followup.operationId })).state, 'completed');
+        assert.equal((await db('task_history').where({ task_id: taskId }).first()).state, 'completed');
+        queueFailure = true;
+        const uncertain = await call('send_task_followup', { repository, taskId, message: 'Queue transport fails' }, true);
+        assert.equal(uncertain.state, 'unknown'); assert.equal(uncertain.result.posted, true); assert.equal(uncertain.result.success, false);
+        assert.equal((await call('get_operation', { operationId: uncertain.operationId })).state, 'unknown');
+        queueStates.set(uncertain.result.jobId, 'failed');
+        assert.equal((await call('get_operation', { operationId: uncertain.operationId })).state, 'failed');
+        queueFailure = false;
+        // A lost queue acknowledgement may still result in a durable worker task.
+        await db('tasks').insert({ task_id: uncertain.result.jobId, repository, issue_number: issueNumber, task_type: 'pr-comment' });
+        await db('task_history').insert({ task_id: uncertain.result.jobId, state: 'failed' });
+        assert.equal((await call('get_operation', { operationId: uncertain.operationId })).state, 'failed');
         assert.ok(issueJobs.some(job => job.name === 'processPullRequestComment'));
         const created = await call('create_goal', { repository, objective: 'Improve reliability', agentId: agent.config.id, model: 'fixture-model', launchStrategy: 'direct' }, true);
         assert.equal(created.state, 'accepted', JSON.stringify(created));
@@ -164,7 +207,53 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
         assert.equal((await call('get_repository_preferences', { repository })).preferences.starred, true);
         assert.equal((await call('resolve_reference', { kind: 'repository', query: 'acme/repo' })).match, 'exact');
         const pr = { repository, pullRequest: 42, expectedHead: head };
-        for (const name of ['review_pull_request', 'fix_review_findings', 'run_ultrafix']) assert.equal((await call(name, pr, true)).state, 'accepted');
+        const reviewRequest = await call('review_pull_request', pr, true);
+        assert.equal(reviewRequest.state, 'posted');
+        const reviewTaskId = `review-task-${modern}`;
+        await db('tasks').insert({ task_id: reviewTaskId, repository, issue_number: 42, task_type: 'pr-comment', initial_job_data: JSON.stringify({ comments: [{ id: reviewRequest.result.commentId }], commandMode: 'review' }) });
+        await db('task_history').insert({ task_id: reviewTaskId, state: 'processing' });
+        assert.equal((await call('get_operation', { operationId: reviewRequest.operationId })).state, 'running');
+        const { buildReviewComment } = await import('../../../src/jobs/reviewCommentFormatter.js');
+        const reviewBody = buildReviewComment({ agentAlias: 'claude', model: 'fixture-model', label: 'Fixture' }, {
+          success: true, executionTimeMs: 10, response: `## Overall Evaluation\nNeeds correction.\n\n## Actionable Findings\n### F1: Preserve concurrent updates\n- violatedRequirement: Preserve unrelated changes\n- evidence: src/config.ts replaces the stale list\n- introducedByPR: true — new adapter writes the snapshot\n- requiredForMerge: true\n- minimumCorrection: Reject stale revisions\n\n## Suggestions and Follow-ups\nNo suggestions.\n\n## Score\nScore: 7/10`,
+        }, undefined, { reviewedHead: head, taskId: reviewTaskId, prDiffTruncated: true });
+        const reviewCommentId = 1000 + discussion.length;
+        discussion.push({ id: reviewCommentId, body: reviewBody, html_url: `https://github.com/acme/repo/pull/42#issuecomment-${reviewCommentId}`, issue_url: 'https://api.github.com/repos/acme/repo/issues/42', created_at: new Date().toISOString(), user: { login: 'propr-dev[bot]' } });
+        await db('task_history').insert({ task_id: reviewTaskId, state: 'completed', metadata: JSON.stringify({ reviewResults: [{ success: true, commentId: reviewCommentId, commentUrl: discussion.at(-1)!.html_url }] }) });
+        const completedReview = await call('get_operation', { operationId: reviewRequest.operationId });
+        assert.equal(completedReview.result.reviewResults[0].commentId, reviewCommentId); assert.equal(completedReview.state, 'completed'); assert.equal(completedReview.result.continuation.taskId, reviewTaskId);
+        const inspected = await call('get_pull_request_discussion', { repository, pullRequest: 42, commentId: reviewCommentId });
+        assert.equal(inspected.comments[0].review.reviewedHead, head);
+        assert.equal(inspected.comments[0].review.partial, true);
+        assert.deepEqual(inspected.comments[0].review.currentFindingIds, ['F1']);
+        assert.equal((await call('get_pull_request_discussion', { repository, pullRequest: 42, limit: 1 })).nextPage, 2);
+        const fix = await call('fix_review_findings', { ...pr, reviewCommentId, findingIds: ['F1'] }, true);
+        assert.equal(fix.state, 'posted'); assert.ok(comments.at(-1)!.startsWith('/fix F1'));
+        const fixTaskId = `fix-task-${modern}`;
+        await db('tasks').insert({ task_id: fixTaskId, repository, issue_number: 42, task_type: 'pr-comment', initial_job_data: JSON.stringify({ comments: [{ id: fix.result.commentId }], commandMode: 'fix' }) });
+        await db('task_history').insert({ task_id: fixTaskId, state: 'processing' });
+        assert.equal((await call('get_operation', { operationId: fix.operationId })).state, 'running');
+        head = 'c'.repeat(40);
+        await db('task_history').insert({ task_id: fixTaskId, state: 'completed' });
+        const fixed = await call('get_operation', { operationId: fix.operationId });
+        assert.equal(fixed.state, 'completed'); assert.equal(fixed.result.currentHead, head); assert.equal(fixed.result.continuation.taskId, fixTaskId);
+        pr.expectedHead = head;
+        assert.equal((await call('fix_review_findings', { ...pr, reviewCommentId, findingIds: ['F1'] }, true)).state, 'failed');
+        const ultrafix = await call('run_ultrafix', pr, true); assert.equal(ultrafix.state, 'posted');
+        const loopTask = `ultrafix-start-${modern}`, workEpoch = modern ? 1 : 2;
+        await db('tasks').insert({ task_id: loopTask, repository, issue_number: 42, task_type: 'pr-comment', initial_job_data: JSON.stringify({ comments: [{ id: ultrafix.result.commentId }], ultrafixMeta: { workEpoch } }) });
+        await db('task_history').insert({ task_id: loopTask, state: 'completed' });
+        const loop = { active: true, workEpoch, cycleCount: 0, completionStatus: null as string | null, completionReason: null as string | null };
+        redisValues.set('ultrafix:state:acme:repo:42', JSON.stringify(loop));
+        assert.equal((await call('get_operation', { operationId: ultrafix.operationId })).state, 'running');
+        loop.active = false; loop.completionStatus = 'succeeded'; loop.completionReason = 'Goal reached';
+        redisValues.set('ultrafix:state:acme:repo:42', JSON.stringify(loop));
+        assert.equal((await call('get_operation', { operationId: ultrafix.operationId })).state, 'completed');
+        redisValues.set('ultrafix:state:acme:repo:42', JSON.stringify({ ...loop, workEpoch: workEpoch + 1, active: true, completionStatus: null }));
+        assert.equal((await call('get_operation', { operationId: ultrafix.operationId })).state, 'completed');
+        const lostIntake = await call('review_pull_request', pr, true);
+        await db('mcp_operations').where({ id: lostIntake.operationId }).update({ created_at: Date.now() - 180000 });
+        assert.equal((await call('get_operation', { operationId: lostIntake.operationId })).state, 'unknown');
         assert.ok(comments.some(comment => comment.startsWith('/ultrafix goal=9 max=3')));
         checks = 'FAILURE'; assert.equal((await call('merge_pull_request', pr, true)).result.error.code, 'CHECKS_NOT_PASSED'); assert.equal(merged, false);
         checks = 'SUCCESS'; mergeState = 'BLOCKED'; assert.equal((await call('merge_pull_request', pr, true)).result.error.code, 'CHECKS_NOT_PASSED'); assert.equal(merged, false);

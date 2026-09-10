@@ -1,3 +1,4 @@
+import { assertConfigRevision } from './configRevision.js';
 import type { Request, Response } from 'express';
 import type { RedisClientType } from 'redis';
 import * as configManager from '@propr/core';
@@ -76,6 +77,7 @@ export function createSyntheticAgentConfigRoutes({
         configStore.loadSyntheticAgents(),
         configStore.loadSettings(),
       ]);
+      assertConfigRevision(req.body.expectedRevision, previousSyntheticAgents);
       const validation = validateSyntheticAgentReferences(parsed.syntheticAgents, directAgents);
       if (validation.errors.length > 0) {
         throw new ConfigRouteError(400, { error: validation.errors.join('; ') });

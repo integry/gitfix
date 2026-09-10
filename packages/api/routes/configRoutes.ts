@@ -1,3 +1,4 @@
+import { assertConfigRevision } from './configRevision.js';
 import { Request, Response } from 'express';
 import { RedisClientType } from 'redis';
 import * as configManager from '@propr/core';
@@ -213,7 +214,7 @@ export function createConfigRoutes(deps: ConfigRoutesDeps) {
       validatedRepos.push(normalized.value);
     }
     const result = await withConfigLock(redisClient, 'config:repos:lock', async lock => {
-      const previousRepos = await configStore.loadMonitoredReposRaw();
+      const previousRepos = await configStore.loadMonitoredReposRaw(); assertConfigRevision(req.body.expectedRevision, previousRepos);
       const withPreservedAutoFollowup = preserveRepoAutoFollowup(previousRepos, validatedRepos, repos_to_monitor);
       const processedRepos = preserveRepoVisualPreview(previousRepos, withPreservedAutoFollowup, repos_to_monitor);
       return saveThenPublishConfigUpdate({

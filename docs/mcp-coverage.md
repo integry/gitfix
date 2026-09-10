@@ -7,10 +7,10 @@ there is no generic REST or shell execution tool.
 
 Core [PR #2291](https://github.com/integry/propr/pull/2291) remains the coordinating
 epic for [routing PR #180](https://github.com/integry/propr-routing/pull/180) and
-[site PR #90](https://github.com/integry/propr-site/pull/90). The Connect integration
-follow-up does **not** complete the full-chat coverage checklist. Root's
-independent tool/configuration inspection and evidence-based follow-ups remain
-open, along with the live/host acceptance gates below.
+[site PR #90](https://github.com/integry/propr-site/pull/90). Routing PR #180 is merged at `1fcf82fd1a843fbdf199d79b8f92843dc74a89e0`.
+The catalog covers the supported backend workflows below, including non-secret
+configuration. Live provider/host acceptance and independent root verification
+remain separate gates.
 
 ## Product-operation mapping
 
@@ -30,7 +30,7 @@ open, along with the live/host acceptance gates below.
 | File changes and followup | `get_task_changes`, `send_task_followup` |
 | Task/operation cancellation and receipts | `cancel_task`, `get_operation`, `cancel_operation` |
 | Delete inactive task history | `delete_task`; bulk cleanup uses explicit individual handles |
-| PR read/review/fix/ultrafix | `get_pull_request`, `review_pull_request`, `fix_review_findings`, `run_ultrafix` |
+| PR read/review/fix/ultrafix | `get_pull_request`, `get_pull_request_discussion`, `review_pull_request`, `fix_review_findings`, `run_ultrafix`; exact comment/F# selection, reviewed head, partial coverage and consumed findings |
 | Update branch (`/merge`) | `update_pull_request_branch` |
 | Guarded PR merge | `merge_pull_request` |
 | Preview/revert a PR commit | `get_pull_request_revert_preview`, `revert_pull_request_commit`; exact commit, comment and head |
@@ -43,8 +43,13 @@ open, along with the live/host acceptance gates below.
 | Notification preferences, categories and quiet hours | `get_notification_preferences`, `update_notification_preferences`, `set_notification_category_preferences` |
 | Bounded plan/goal attachments and owned upload artifacts | `upload_attachment`, `get_artifact`, `get_attachment`; authenticated download links, no remote URL download |
 | Execution/model settings | `get_execution_settings`, `update_execution_settings` |
-| Repository configuration | `get_repository_configuration`, `update_repository_configuration` (branch/alias/enabled/CI followup/visual preview policy) |
-| Existing agent configuration | `update_agent_configuration` (enabled/default model); catalogs for reads |
+| Repository configuration | `get_repository_configuration`, `create_repository_configuration`, `update_repository_configuration`, `remove_repository_configuration` (branch/alias/enabled/CI followup/visual preview policy); instance permission and explicit repository grant required |
+| Direct agent configuration | `get_agent_configuration`, `create_agent_configuration`, `update_agent_configuration`, `remove_agent_configuration`; actual types/models, alias, enablement, model labels/reasoning, CLI versions; new agents start disabled for secure login |
+| Synthetic-agent composition | `create_synthetic_agent`, `update_synthetic_agent`, `remove_synthetic_agent`; pool models/members, strategy, priority and usage thresholds; existing reference/default guards |
+| Advanced indexing policy | `get_indexing_configuration`, `update_indexing_configuration`; primary/fallback alias:model, prompt, enablement and runtime cooldown state |
+| Provider policy | `get_provider_policy`, `update_provider_policy`, `get_provider_status`, `get_provider_usage`, `refresh_provider_usage`, `detect_provider_service`; Agent Tank service origin and enablement, no credential entry |
+| Execution/review/context | `get_execution_settings`, `update_execution_settings`; worker concurrency, analysis/planner models, review model/prompt/context enablement/model/budget, reasoning and bounded ultrafix defaults |
+| Workflow labels and keywords | `get_`/`update_` tools for `followup_keywords`, `followup_ignore_keywords`, `primary_processing_labels`, `pr_label`, `ai_primary_tag` |
 | Runtime package configuration/build | `get_runtime_configuration`, `update_runtime_configuration` |
 | Instance membership administration | `list_instance_members`, `add_instance_member`, `set_instance_member_role`, `remove_instance_member`, `get_instance_role_audit`; existing last-admin guards |
 | Shared repository chat history | `get_repository_chat`, `save_repository_chat_message`, `delete_repository_chat_message` |
@@ -99,21 +104,52 @@ open, along with the live/host acceptance gates below.
   verification against the deployed gateway. The expected mapping is in
   `mcp-connect-contract.md`; the gateway is not part of this checkout.
 
-Setup that enters provider credentials or extends configured repositories and
-grant restrictions stays in browser settings and OAuth consent. Existing agent
-enabled/default-model changes are supported; agent creation, provider login,
-synthetic-agent composition and advanced global indexing/provider policy still
-use their existing settings flows. Raw Docker streaming logs are not exposed;
-bounded persisted execution events are available through `get_task_logs`.
-The tools above cover their named workflows; this document does not label the
-entire epic's live or cross-repository acceptance as complete.
+Only secure setup boundaries remain browser/operator-only: GitHub/provider login,
+agent secrets and environment variables, credential mount paths, custom agent
+images/install sources, push subscriptions, and OAuth consent expansion. These
+configure credentials, host execution or grant boundaries rather than ordinary
+model/workflow preferences. Agent creation uses managed credential paths (Vibe
+uses its supported fixed default path); the tool cannot choose a host path.
+Creation does not authenticate or enable an agent. Repository addition outside
+the current explicit grant returns `browser_required`, `changed: false`, and a
+browser continuation; no repository or grant is silently added. Membership
+administration retains its existing instance permission and last-admin guards.
+Raw Docker streaming logs are not exposed; bounded persisted execution events
+are available through `get_task_logs`. Deployment has no supported backend here.
+
+Repository, direct-agent and synthetic-agent adapters include a revision of the
+snapshot they read. The existing shared persistence lock checks that revision
+before writing. A concurrent REST or MCP change produces a conflict; retry with
+a fresh read and new operation key. No unrelated changes are overwritten. Indexing receipts track their actual indexing
+queue job through completion and expose repository context freshness; they do not
+pretend the indexing job is an implementation task.
+
+Follow-up receipts retain `sourceTaskId` separately from the new durable
+`jobId`/`continuation.taskId`. States distinguish `posted`, `queued`, `running`,
+`completed`, `failed`, and `unknown`. A queue acknowledgement failure keeps the
+posted comment/job handles and reports uncertainty, never success. Polling can
+resolve an uncertain submission when its task appears. PR command receipts link
+to tasks by their exact triggering comment in persisted job data, expose posted
+review result IDs/URLs, and report the resulting current PR head. Ultrafix polls
+the associated work epoch through loop completion; a newer loop cannot satisfy
+an earlier receipt. Missing intake becomes `unknown` after two minutes instead
+of remaining accepted forever; later polling can still find the task.
+
+`get_pull_request_discussion` pages GitHub issue comments (maximum 20 per page),
+returns 4096-character body chunks and parsed F# findings (current IDs honor the
+worker’s seven-day age limit, known head and consumption state), and supports exact
+comment/task lookup. New reviews persist reviewed head and task identity in the
+existing review marker; legacy reviews explicitly report an unknown head.
+`fix_review_findings` requires `reviewCommentId` and explicit `findingIds`, rejects
+consumed IDs and known stale heads, and does not turn optional suggestions into
+fix scope. Comment content remains untrusted data.
 
 Uncertain external side effects remain `unknown` and require inspecting the
 target. They are never reported as rolled back or blindly retried. In
 particular, a partly published plan remains busy with persisted created issue
 links. Cancelling a receipt cannot undo already published issues or comments.
 
-## Connect integration follow-up evidence
+## Prior Connect integration follow-up evidence (at 6147abc)
 
 Run on 2026-09-10 with Node **v22.23.1**. Source identities:
 
@@ -157,9 +193,9 @@ installs with `npm ci --ignore-scripts --workspaces=false --no-audit --no-fund`,
 and bundles `src/index.ts`, including the real relay authenticator, OAuth
 server, MCP gateway and existing credential redemption endpoint. It prints
 source identities and retains a `commits.json` in its temporary fixture directory.
-The standard generic test runner skips this dedicated cross-repository case
-without its fixture environment; **the command above is the required gate**
-and fails if the routing checkout is unavailable. Its recorded run had no skips.
+The generic test runner skips the dedicated cross-repository case without its
+fixture environment. Required PR CI now invokes the dedicated runner explicitly
+as described below; that invocation cannot skip. The historical run had no skips.
 
 The integration traverses actual production core `mountMcp`, `McpPolicy`,
 `McpConnect`, `McpOAuthProvider`, tool catalog, plan handler, operation ledger,
@@ -215,3 +251,44 @@ and the corresponding site PR #90 command returned **HTTP 401**; the linked PRs
 and pinned routing commit came from the supplied request and local Git objects.
 No production configuration was altered; no provider credits were spent; no
 real target was merged; no new companion task, PR, commit or deployment was made.
+
+## Full-chat follow-up verification and required CI
+
+The existing `Build & Lint Check` → `Validate Changes` job now builds the shared,
+core and CLI dependencies, installs Playwright Chromium, and runs `test:mcp`,
+`test:mcp:connect` and `test:mcp:browser`. Any failure fails that existing check.
+Tests use isolated temporary SQLite/data directories and outbound fixtures;
+they do not configure a production instance. Browser tests fail with an
+installation instruction if Chromium is missing. OAuth, policy, both SDK eras,
+real workflow handlers, concurrent configuration persistence, review/fix state
+transitions, and the actual paired Worker/core integration are exercised.
+
+The routing checkout and harness pin are the merged commit
+`1fcf82fd1a843fbdf199d79b8f92843dc74a89e0`, so CI does not require the old PR branch.
+For local paired verification:
+
+```sh
+npm run test:prepare
+npm run test:mcp
+MCP_ROUTING_REPOSITORY=/path/to/propr-routing npm run test:mcp:connect
+npx playwright install --with-deps chromium
+npm run test:mcp:browser
+npm run build
+npm run typecheck -w @propr/api
+```
+
+The new concurrency regression pauses an MCP adapter after loading its snapshot,
+lets a second repository/agent mutation persist, then resumes the first and
+verifies a conflict plus preservation of the second edit. Workflow regressions
+keep the original task completed while the new task advances, exercise queue
+uncertainty/failure, and persist posted reviews/F# findings before selecting and
+observing a fix. No live agent credits, merges, deployments or permission changes
+are part of these tests. Root still owns independent verification and merge.
+
+Local verification of this uncommitted follow-up (2026-09-10): 13 MCP tests,
+the paired Connect scenario and Chromium consent test passed without skips;
+288 fast unit tests and eight related configuration/review/authorization test
+files passed. Full build, API typecheck, changed-code ESLint and workflow
+`actionlint` passed. The previous CI correction at `420aad1bf` and Connect
+implementation at `6147abc9b` are the base of this worktree. The CodeQL workflow is unchanged; its hosted result must be checked on the system’s
+resulting commit (the CodeQL CLI is not installed in this implementation image).

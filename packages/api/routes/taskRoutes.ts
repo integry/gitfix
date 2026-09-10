@@ -376,26 +376,19 @@ export function createTaskRoutes(deps: TaskRoutesDeps) {
       };
 
       const timestamp = Date.now();
-      const jobId = `pr-comments-batch-${repoOwner}-${repoName}-${issueNumber}-${timestamp}`;
+      const jobId = `pr-comments-batch-${repoOwner}-${repoName}-${issueNumber}-${timestamp}-${commentId}`;
 
       try {
         await issueQueue.add('processPullRequestComment', jobData, { jobId, delay: COMMENT_BATCH_DELAY_MS });
-        console.log(`[followup] Queued follow-up comment for processing (jobId: ${jobId}, delay: ${COMMENT_BATCH_DELAY_MS}ms)`);
       } catch (queueErr) {
-        const err = queueErr as Error;
-        if (err.message?.includes('Job already exists')) {
-          console.log(`[followup] Comment job already in queue, skipping`);
-        } else {
-          console.warn(`[followup] Failed to queue comment for processing: ${err.message}`);
-        }
+        // Redis may have accepted the job before the connection failed. A posted
+        // comment is not evidence of a successful submission; retain both handles.
+        console.warn(`[followup] Queue submission uncertain: ${(queueErr as Error).message}`);
+        res.status(202).json({ success: false, state: 'unknown', posted: true, commentId, jobId,
+          sourceTaskId: taskId, message: 'Comment posted, but queue submission could not be confirmed. Inspect this job before retrying.' });
+        return;
       }
-
-      res.json({
-        success: true,
-        message: `Comment posted to ${repoOwner}/${repoName}#${issueNumber}`,
-        commentId,
-        jobId
-      });
+      res.status(202).json({ success: true, state: 'queued', posted: true, commentId, jobId, sourceTaskId: taskId });
     } catch (error) {
       console.error('Error posting follow-up comment:', error);
       res.status(500).json({ error: 'Failed to post follow-up comment' });

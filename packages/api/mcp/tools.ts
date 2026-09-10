@@ -1,3 +1,4 @@
+import { trackExecution } from './operationTracking.js';
 import { z } from 'zod';
 import packageInfo from '../package.json' with { type: 'json' };
 import type { Knex } from 'knex';
@@ -144,7 +145,7 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
   const operations = new McpOperations(db);
   tools.push({ name: 'get_operation', description: 'Read a durable mutation receipt and honest acceptance/completion state. Poll no faster than retryAfterSeconds.', scope: 'read', readOnly: true, schema: z.object({ operationId: z.uuid() }).strict(), run: async ({ principal, args }) => {
     const row = await operations.get(principal, args.operationId);
-    if (row.repository) await policy.repository(principal, row.repository);
+    if (row.repository) await policy.repository(principal, row.repository, false, { includeDisabled: row.tool.endsWith('_repository_configuration'), allowUnconfigured: row.tool === 'remove_repository_configuration' });
     const original = tools.find(tool => tool.name === row.tool);
     if (original?.permission) policy.requirePermission(principal, original.permission);
     const receipt = operations.project(row);
@@ -154,18 +155,20 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
     if (continuation.goalId) receipt.targetState = await db('goals').where({ goal_id: continuation.goalId, owner_id: principal.user.id }).first('desired_state', 'result_state', 'current_task_id');
     if (continuation.taskId) receipt.targetState = await db('task_history').where({ task_id: continuation.taskId }).orderBy('history_id', 'desc').first('state', 'timestamp');
     updateReceiptState(row, receipt);
+    await trackExecution(deps, row, principal, receipt);
     if (row.state === 'accepted' && row.tool === 'implement_plan' && Array.isArray(result.issues)) {
       const issues = await db('plan_issues').where({ draft_id: result.planId }).whereIn('issue_number', result.issues).select('issue_number', 'status', 'task_id', 'pr_number');
       receipt.targetState = { issues };
       if (issues.length === result.issues.length && issues.every(issue => ['under_review', 'merged', 'closed'].includes(issue.status))) receipt.state = 'completed';
     }
-    if (!['accepted', 'running'].includes(String(receipt.state))) delete receipt.retryAfterSeconds;
+    if (['accepted', 'posted', 'queued', 'running'].includes(String(receipt.state))) receipt.retryAfterSeconds = 3;
+    else delete receipt.retryAfterSeconds;
     return ok(receipt);
   } });
   tools.push({ name: 'cancel_operation', description: 'Request cancellation of an accepted plan generation, goal or task operation. Completed external effects cannot be undone.', scope: 'execute', schema: z.object({ ...mutationShape, operationId: z.uuid() }).strict(), run: async ({ principal, args }) => {
     const row = await operations.get(principal, args.operationId);
     if (row.repository) await policy.repository(principal, row.repository, true);
-    if (!['running', 'accepted'].includes(row.state)) throw new McpError('NOT_CANCELLABLE', 'This receipt is terminal or uncertain; inspect its target directly.', 409);
+    if (!['running', 'accepted', 'posted', 'queued'].includes(row.state)) throw new McpError('NOT_CANCELLABLE', 'This receipt is terminal or uncertain; inspect its target directly.', 409);
     const result = row.result ? JSON.parse(row.result) : {};
     const target = result.continuation || result;
     if (target.goalId) await callWorkflow(goals.cancel, principal, { params: { goalId: target.goalId }, idempotencyKey: args.idempotencyKey });
@@ -200,9 +203,10 @@ export function workflow(tools: McpTool[], definition: Omit<McpTool, 'run'>, han
     const response = await callWorkflow(handler, principal, input(args));
     if (definition.readOnly) return response;
     const data = response.data as Record<string, unknown>;
+    if (definition.name === 'index_repository') return { status: 202, data: { ...data, state: 'queued', continuation: { jobId: data.jobId, repository: args.repository, branch: data.baseBranch } } };
     const goal = data.goal as { id?: string } | undefined;
     return { status: definition.name.startsWith('cancel_') || definition.name === 'create_goal' ? 202 : response.status, data: { ...data, continuation: {
-      ...(args.planId ? { planId: args.planId } : {}), ...(args.goalId || goal?.id ? { goalId: args.goalId || goal?.id } : {}), ...(args.taskId ? { taskId: args.taskId } : {}),
+      ...(args.planId ? { planId: args.planId } : {}), ...(args.goalId || goal?.id ? { goalId: args.goalId || goal?.id } : {}), ...(data.jobId ? { taskId: data.jobId, jobId: data.jobId, ...(args.taskId ? { sourceTaskId: args.taskId } : {}) } : args.taskId ? { taskId: args.taskId } : {}),
     } } };
   } });
 }
@@ -235,7 +239,7 @@ export async function executeTool(tool: McpTool, raw: unknown, principal: McpPri
   const args = tool.schema.parse(raw) as Args;
   deps.policy.requireScope(principal, tool.scope);
   if (tool.permission) deps.policy.requirePermission(principal, tool.permission);
-  if (args.repository) await deps.policy.repository(principal, args.repository, !tool.readOnly, ['get_repository_configuration', 'update_repository_configuration'].includes(tool.name));
+  if (args.repository && tool.name !== 'create_repository_configuration') await deps.policy.repository(principal, args.repository, !tool.readOnly, { includeDisabled: tool.name.endsWith('_repository_configuration'), allowUnconfigured: tool.name === 'remove_repository_configuration' });
   // A deleted target cannot be reloaded, but its owner/grant-bound receipt can
   // still be returned after current scope and repository authorization.
   const deletedReplay = !tool.readOnly && tool.name.startsWith('delete_')
