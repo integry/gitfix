@@ -84,22 +84,28 @@ export const createBrowserWindowOptions = (
     y: workArea.y + Math.floor((workArea.height - sizing.height) / 2),
     backgroundColor: platform === 'linux' ? '#00000000' : '#f8fafc',
     show: false,
+    // Avoid Electron's opaque GTK rim. The renderer paints the Linux edge;
+    // Electron 44 retains a native 5px internal resize band for this mode.
     ...(platform === 'linux' ? { icon: desktopIcon, transparent: true } : {}),
     ...(platform === 'darwin'
       ? {
           titleBarStyle: 'hiddenInset' as const,
           titleBarOverlay: { height: DESKTOP_TITLE_BAR_HEIGHT },
         }
-      : {
-          ...(platform === 'linux' ? { frame: false } : {}),
-          titleBarStyle: 'hidden' as const,
-          titleBarOverlay: {
-            color: '#f8fafc',
-            symbolColor: '#475569',
-            height: platform === 'linux' ? DESKTOP_TITLE_BAR_HEIGHT : 36,
-          },
-          autoHideMenuBar: true,
-        }),
+      : platform === 'linux'
+        ? {
+            frame: false,
+            autoHideMenuBar: true,
+          }
+        : {
+            titleBarStyle: 'hidden' as const,
+            titleBarOverlay: {
+              color: '#f8fafc',
+              symbolColor: '#475569',
+              height: 36,
+            },
+            autoHideMenuBar: true,
+          }),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,

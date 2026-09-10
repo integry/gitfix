@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import { createPackagedAcceptanceZoomBridge } from './acceptance-zoom';
 import { createDesktopBridge } from './preload-bridge';
+import { installWindowFrameStyles } from './preload-window-frame';
+
+if (process.platform === 'linux') installWindowFrameStyles(ipcRenderer, document);
 
 const connectJourneyAcceptance = process.env.PROPR_DESKTOP_CONNECT_SMOKE_TEST === '1'
   && (process.env.PROPR_DESKTOP_CONNECT_JOURNEY_PHASE === 'pair'
