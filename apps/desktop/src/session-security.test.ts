@@ -93,6 +93,7 @@ describe('production desktop session security', () => {
     const directory = await mkdtemp(join(tmpdir(), 'propr-session-security-'));
     const store = new ProfileStore(directory, encryption);
     let connectClaimCurrent = true;
+    let tokenRevoked = false;
     const service = new DesktopCredentialService({
       profiles: store,
       clientName: 'Session security test',
@@ -102,8 +103,8 @@ describe('production desktop session security', () => {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           })
-        : new Response(JSON.stringify({ username: 'octocat' }), {
-            status: 200,
+        : new Response(JSON.stringify(tokenRevoked ? { code: 'INSTANCE_TOKEN_REVOKED' } : { username: 'octocat' }), {
+            status: tokenRevoked ? 401 : 200,
             headers: { 'Content-Type': 'application/json' },
           }),
       snapshotConnectIdentityClaim: () => ({
@@ -345,6 +346,7 @@ describe('production desktop session security', () => {
       assert.equal(revokedReady.status, 'ready');
       if (revokedReady.status !== 'ready') return;
       const revoked = await service.activate(revokedReady.activationTicket);
+      tokenRevoked = true;
       assert.deepEqual(await service.invalidate({
         profileId: profile.id,
         transportScope: revoked.transportScope,

@@ -237,6 +237,16 @@ See [Desktop pairing protocol](./desktop-pairing.md) for the wire contract and t
 - **Secure storage unavailable:** start an unlocked Linux Secret Service/keyring session. Pairing does not fall back to a
   plaintext credential file.
 - **Offline:** restore DNS/network/API reachability and retry the saved profile. The profile is not deleted.
+- **Unexpected credential loss:** `desktop.credential_revocation.retry_pending` describes a retry failure,
+  not the action that queued the credential. `desktop.credential_decision` records fixed `reason` and
+  `outcome` fields for logout, renderer invalidation, authentication probes, and identity checks, without
+  recording credentials, account identities, URLs, or transport scopes. Malformed discovery blocks the
+  connection attempt while retaining the saved login. Renderer invalidation requires an independent native
+  check against the pinned instance and a definitive HTTP 401 token error; network failures and ambiguous
+  responses retain the credential. Verified instance identity changes still block the old credential.
+  Issue #2298's original retry log cannot establish its initiating action. Isolated regressions cover these
+  automatic retirement paths and voice opt-in/opt-out with another account's queued revocation. Desktop
+  voice remains Experimental and off by default; its preference and microphone cleanup do not log out.
 - **Desktop profile token revoked or expired:** pair the profile again in the browser. A role/allowlist change can also
   require fresh authorization.
 - **Repository GitHub authorization required:** `GITHUB_AUTHORIZATION_REQUIRED` and `GITHUB_REAUTH_REQUIRED` identify the

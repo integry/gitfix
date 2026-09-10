@@ -41,6 +41,11 @@ const DEFINITIVE_INVALID_CODES = new Set([
   'INSTANCE_TOKEN_REVOKED',
 ]);
 
+export interface DesktopCredentialDecision {
+  reason: 'logout' | 'renderer-invalidation' | 'probe-authentication' | 'discovery-validation' | 'instance-identity';
+  outcome: 'requested' | 'retained' | 'retired';
+}
+
 export interface CredentialServiceDependencies {
   profiles: Pick<ProfileStore,
     'list' | 'saveAndDetachCredential' | 'commitPairedProfile' | 'detachProfile' | 'setActive' | 'activateProfile' | 'security'
@@ -63,6 +68,8 @@ export interface CredentialServiceDependencies {
     code: 'network' | 'http' | 'local-cleanup';
     status?: number;
   }): void;
+  /** Fixed decision provenance; never includes identities, URLs, scopes or credentials. */
+  reportCredentialDecision?(decision: DesktopCredentialDecision): void;
   /** Fixed, bounded, secret-free evidence for packaged acceptance. */
   reportWebSocketHandshake?(evidence: DesktopWebSocketHandshakeEvidence): void;
   /** Fixed, bounded, secret-free evidence for scoped renderer user validation. */
@@ -316,12 +323,39 @@ const currentUserScopeGeneration = (url: URL): {
     : { count, generation: null, valid: false };
 };
 
-const parseCode = async (response: Response): Promise<string | undefined> => {
+const parseCode = async (response: Response, signal?: AbortSignal): Promise<string | undefined> => {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const deadline = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(8_000)]);
+  let onAbort = () => {};
   try {
-    const value = await response.clone().json() as { code?: unknown };
-    return typeof value.code === 'string' ? value.code : undefined;
+    if (deadline.aborted) return undefined;
+    if (response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+      return undefined;
+    }
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new Error('Credential validation cancelled'));
+      deadline.addEventListener('abort', onAbort, { once: true });
+    });
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_REVOCATION_RESPONSE_BYTES) return undefined;
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as { code?: unknown } | null;
+    return typeof value?.code === 'string' ? value.code : undefined;
   } catch {
     return undefined;
+  } finally {
+    deadline.removeEventListener('abort', onAbort);
+    void reader.cancel().catch(() => undefined);
   }
 };
 
@@ -473,6 +507,7 @@ export class DesktopCredentialService {
   readonly #pairingTiming: Pick<ProprDesktopPairingOptions, 'sleep' | 'now'>;
   readonly #pairingProtocol: PairingProtocolRequestOptions;
   readonly #reportRevocationFailure: NonNullable<CredentialServiceDependencies['reportRevocationFailure']>;
+  readonly #reportCredentialDecision: NonNullable<CredentialServiceDependencies['reportCredentialDecision']>;
   readonly #reportWebSocketHandshake: NonNullable<CredentialServiceDependencies['reportWebSocketHandshake']>;
   readonly #reportCurrentUserValidation: NonNullable<CredentialServiceDependencies['reportCurrentUserValidation']>;
   readonly #reportPairingProgress: NonNullable<CredentialServiceDependencies['reportPairingProgress']>;
@@ -511,6 +546,7 @@ export class DesktopCredentialService {
     this.#pairingTiming = dependencies.pairingTiming ?? {};
     this.#pairingProtocol = dependencies.pairingProtocol ?? {};
     this.#reportRevocationFailure = dependencies.reportRevocationFailure ?? (() => undefined);
+    this.#reportCredentialDecision = dependencies.reportCredentialDecision ?? (() => undefined);
     this.#reportWebSocketHandshake = dependencies.reportWebSocketHandshake ?? (() => undefined);
     this.#reportCurrentUserValidation = dependencies.reportCurrentUserValidation ?? (() => undefined);
     this.#reportPairingProgress = dependencies.reportPairingProgress ?? (() => undefined);
@@ -993,25 +1029,12 @@ export class DesktopCredentialService {
         };
       }
       if (error instanceof ProprClientError && error.kind === 'invalid_response') {
-        try {
-          const current = await this.#profiles.readProfileCredential(input.id);
-          if (current.profile?.apiBaseUrl === origin && current.credential?.origin === origin) {
-            const removed = await this.#detachIdentityFailedCredential(
-              current.credential,
-              operationGeneration,
-              operationSelection,
-              probeTicket,
-            );
-            if (!removed) {
-              return { status: 'offline', message: 'This connection changed while it was being checked. Try again.' };
-            }
-          }
-        } catch {
-          return { status: 'offline', message: 'ProPR could not safely invalidate this instance credential.' };
-        }
+        // An incomplete/proxy response cannot prove an identity change. Refuse
+        // this connection attempt without turning a transient failure into logout.
+        this.#credentialDecision('discovery-validation', 'retained');
         return {
-          status: 'authentication-required',
-          message: 'This endpoint returned invalid identity metadata. Approve it again to continue.',
+          status: 'offline',
+          message: 'This endpoint returned invalid identity metadata. Check the connection and try again.',
         };
       }
       return {
@@ -1184,8 +1207,8 @@ export class DesktopCredentialService {
       return { status: 'ready', version: discovery.version, authentication, activationTicket };
     }
 
-    const code = await parseCode(response);
-    if (code && DEFINITIVE_INVALID_CODES.has(code)) {
+    const code = await parseCode(response, operation.signal);
+    if (response.status === 401 && code && DEFINITIVE_INVALID_CODES.has(code)) {
       const removed = await this.#profiles.removeCredentialIfCurrent(
         credential,
         origin,
@@ -1197,6 +1220,7 @@ export class DesktopCredentialService {
         return { status: 'offline', message: 'This connection changed while it was being checked. Try again.' };
       }
       this.#clearActiveIfCredential(credential);
+      this.#credentialDecision('probe-authentication', 'retired');
       this.#schedulePendingRevocationRetry();
       return {
         status: 'authentication-required',
@@ -1271,6 +1295,7 @@ export class DesktopCredentialService {
   /** Retire only the renderer's current bearer; retain the saved instance and other credentials. */
   async logout(value: DesktopConnectionScope): Promise<void> {
     const operation = this.#beginOperation();
+    this.#credentialDecision('logout', 'requested');
     let active: ActiveCredential | null = null;
     let generation: number | undefined;
     try {
@@ -1293,10 +1318,12 @@ export class DesktopCredentialService {
       );
       if (!removed) throw new Error('Desktop credential changed before logout completed');
       if (this.#active === active) this.#active = null;
+      this.#credentialDecision('logout', 'retired');
       // The store atomically detaches the credential into its encrypted retry
       // journal. No network result can make it locally usable after this point.
       this.#schedulePendingRevocationRetry();
     } catch (error) {
+      this.#credentialDecision('logout', 'retained');
       // A failed local commit is not logout. Keep the same identity retryable,
       // without restoring it over a concurrent profile change or shutdown.
       if (!this.#closed && active && this.#active === active
@@ -1320,20 +1347,47 @@ export class DesktopCredentialService {
     try {
     await this.#waitForPairPublish();
     this.#schedulePendingRevocationRetry();
-    if (!DEFINITIVE_INVALID_CODES.has(value.code)) return { invalidated: false };
+    if (!value || !DEFINITIVE_INVALID_CODES.has(value.code)) return { invalidated: false };
     const active = this.#active;
     if (!active || active.profileId !== value.profileId
       || active.transportScope !== value.transportScope
       || this.#generation(active.profileId) !== active.profileGeneration
       || this.#selectionGeneration !== active.selectionGeneration) return { invalidated: false };
-    this.#active = null;
-    const invalidationGeneration = this.#bumpGeneration(active.profileId);
+    this.#credentialDecision('renderer-invalidation', 'requested');
+    // Renderer REST/socket errors are hints. Verify with the main-owned bearer
+    // at the pinned instance before allowing a hint to retire a saved login.
+    const isCurrent = () => this.#active === active && this.isActiveConnectionScope(value);
+    try {
+      const discovery = await this.#client(active.origin).discoverDesktop(8_000, operation.signal);
+      if (!isCurrent() || discovery.publicInstanceIdentity !== active.publicInstanceIdentity
+        || !discovery.compatibility.compatible || !discovery.desktopAuthentication.instanceBearerTokens) {
+        this.#credentialDecision('renderer-invalidation', 'retained');
+        return { invalidated: false };
+      }
+      const response = await this.#authenticatedFetch(
+        active, '/api/auth/user', { cache: 'no-store', signal: operation.signal }, 8_000,
+      );
+      const code = response.status === 401 && !response.redirected
+        ? await parseCode(response, operation.signal) : undefined;
+      if (!code || !DEFINITIVE_INVALID_CODES.has(code) || !isCurrent()) {
+        void response.body?.cancel().catch(() => undefined);
+        this.#credentialDecision('renderer-invalidation', 'retained');
+        return { invalidated: false };
+      }
+    } catch {
+      this.#credentialDecision('renderer-invalidation', 'retained');
+      return { invalidated: false };
+    }
     const removed = await this.#profiles.removeCredentialIfCurrent(
       active,
       active.origin,
-      () => this.#generation(active.profileId) === invalidationGeneration,
+      isCurrent,
     );
-    if (removed) this.#schedulePendingRevocationRetry();
+    if (removed) {
+      this.#invalidateProfileOperations(active.profileId);
+      this.#schedulePendingRevocationRetry();
+    }
+    this.#credentialDecision('renderer-invalidation', removed ? 'retired' : 'retained');
     return { invalidated: removed };
     } finally {
       operation.done();
@@ -1613,7 +1667,7 @@ export class DesktopCredentialService {
       const supportsRequest = discovery.compatibility.compatible
         && discovery.desktopAuthentication.instanceBearerTokens
         && discovery.desktopAuthentication.socketIoBearerAuthentication;
-      if (discovery.publicInstanceIdentity !== active.publicInstanceIdentity || !supportsRequest) {
+      if (discovery.publicInstanceIdentity !== active.publicInstanceIdentity) {
         await this.#detachIdentityFailedCredential(
           active,
           active.profileGeneration,
@@ -1621,14 +1675,14 @@ export class DesktopCredentialService {
         );
         return { cancel: true };
       }
+      if (!supportsRequest) {
+        this.#credentialDecision('discovery-validation', 'retained');
+        return { cancel: true };
+      }
       return this.prepareRequest(url, originalHeaders, details, active);
     } catch (error) {
       if (error instanceof ProprClientError && error.kind === 'invalid_response' && this.#active === active) {
-        await this.#detachIdentityFailedCredential(
-          active,
-          active.profileGeneration,
-          active.selectionGeneration,
-        ).catch(() => undefined);
+        this.#credentialDecision('discovery-validation', 'retained');
       }
       return { cancel: true };
     }
@@ -1824,6 +1878,12 @@ export class DesktopCredentialService {
     }
   }
 
+  #credentialDecision(reason: DesktopCredentialDecision['reason'], outcome: DesktopCredentialDecision['outcome']): void {
+    try { this.#reportCredentialDecision({ reason, outcome }); } catch {
+      // Diagnostics cannot change credential decisions.
+    }
+  }
+
   #reportFixedRevocationFailure(diagnostic: {
     code: 'network' | 'http' | 'local-cleanup';
     status?: number;
@@ -1934,7 +1994,10 @@ export class DesktopCredentialService {
         && this.#selectionGeneration === expectedSelectionGeneration
         && (expectedProbeTicket === undefined || this.#latestProbeTicket === expectedProbeTicket),
     );
-    if (removed) this.#schedulePendingRevocationRetry();
+    if (removed) {
+      this.#credentialDecision('instance-identity', 'retired');
+      this.#schedulePendingRevocationRetry();
+    }
     return removed;
   }
 

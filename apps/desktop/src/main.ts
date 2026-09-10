@@ -1659,6 +1659,9 @@ if (!hasSingleInstanceLock) {
       reportRevocationFailure: diagnostic => {
         log('warn', 'desktop.credential_revocation.retry_pending', diagnostic);
       },
+      reportCredentialDecision: decision => {
+        log('info', 'desktop.credential_decision', { ...decision });
+      },
       reportPairingProgress: progress => {
         log(progress.stage === 'browser-open-failed' ? 'warn' : 'info', 'desktop.authentication_pair.progress', {
           stage: progress.stage,
