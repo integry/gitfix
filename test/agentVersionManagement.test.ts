@@ -1,4 +1,4 @@
-import { afterEach, describe, test } from 'node:test';
+import { after, afterEach, describe, test } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
 import { AGENT_DEFAULTS } from '@propr/shared';
@@ -12,8 +12,16 @@ import { CONTAINER_CONFIG_PATHS } from '../packages/core/src/agents/types.js';
 import { AGENT_CLI_PACKAGES, AGENT_CLI_TAGS, AGENT_DEFAULT_VERSIONS } from '../packages/core/src/agents/version/types.js';
 import { findAgentCliVersionConflicts, generateAgentBundleImageTag, getAvailableVersions, getDefaultAgentCliVersionMatrix, resolveVersion } from '../packages/core/src/agents/version/versionService.js';
 import { clearNpmCache } from '../packages/core/src/agents/version/npmClient.js';
+import { buildDockerArgs } from '../packages/core/src/agents/impl/utils/dockerArgsBuilder.js';
+import { buildCodexDockerArgs } from '../packages/core/src/agents/impl/utils/codexDockerArgsBuilder.js';
+import { buildAntigravityDockerArgs } from '../packages/core/src/agents/impl/utils/antigravityDockerArgsBuilder.js';
+import { closeConnection } from '../packages/core/src/db/connection.js';
 
 const originalFetch = globalThis.fetch;
+
+after(async () => {
+    await closeConnection();
+});
 
 afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -148,14 +156,41 @@ describe('agent version management', () => {
         assert.doesNotMatch(agentDockerfile, /\bapk add\b/);
     });
 
-    test('launches ownership-repairing agent entrypoints as root before dropping privileges', () => {
-        const claudeDockerArgs = fs.readFileSync('packages/core/src/agents/impl/utils/dockerArgsBuilder.ts', 'utf8');
-        const codexDockerArgs = fs.readFileSync('packages/core/src/agents/impl/utils/codexDockerArgsBuilder.ts', 'utf8');
-        const antigravityAgent = fs.readFileSync('packages/core/src/agents/impl/AntigravityAgent.ts', 'utf8');
+    test('launches ownership-repairing agent entrypoints as root with CHOWN', () => {
+        const params = {
+            worktreePath: '/tmp/worktree',
+            githubToken: '',
+            issueNumber: 42,
+        };
 
-        for (const [name, source] of Object.entries({ claudeDockerArgs, codexDockerArgs, antigravityAgent })) {
-            assert.match(source, /'--cap-add', 'CHOWN'/, `${name} should grant CHOWN for mounted config repair`);
-            assert.match(source, /'--user', '0:0'/, `${name} should start as root so the entrypoint can repair config ownership`);
+        for (const type of ['claude', 'codex', 'antigravity'] as const) {
+            const config = {
+                id: `${type}-test`,
+                type,
+                alias: type,
+                enabled: true,
+                supportedModels: [],
+                configPath: `/tmp/propr-test-config/${type}`,
+                dockerImage: 'propr/agent:latest',
+            };
+            const args = type === 'claude'
+                ? buildDockerArgs(config, 10, params)
+                : type === 'codex'
+                    ? buildCodexDockerArgs(config, params)
+                    : buildAntigravityDockerArgs({
+                        ...params,
+                        configPath: config.configPath,
+                        dockerImage: config.dockerImage,
+                        shellCommand: 'exec agy',
+                    });
+            // Only Docker options before the image affect container privileges.
+            const imageIndex = args.indexOf(config.dockerImage);
+            assert.ok(imageIndex > 0, `${type} should specify the agent image`);
+            const dockerOptions = args.slice(0, imageIndex);
+            assert.ok(dockerOptions.some((arg, index) => arg === '--cap-add' && dockerOptions[index + 1] === 'CHOWN'),
+                `${type} should grant CHOWN for mounted config repair`);
+            assert.ok(dockerOptions.some((arg, index) => arg === '--user' && dockerOptions[index + 1] === '0:0'),
+                `${type} should start as root so the entrypoint can repair config ownership`);
         }
     });
 
