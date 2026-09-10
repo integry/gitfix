@@ -55,12 +55,13 @@ export function mountMcpBrowser(app: Express, oauth: McpOAuthProvider, overrides
     if (!pending) { res.status(400).send(renderMcpPage('Request expired', '<p>Return to your chat client and connect again.</p>')); return; }
     const repos = await repositories(req);
     res.set('Content-Security-Policy', `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${new URL(pending.params.redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`);
-    res.type('html').send(renderMcpPage('Connect an app', `<p><strong>${escape(pending.client.client_name || pending.client.client_id)}</strong> wants access to this ProPR instance as <strong>${escape(req.user!.username)}</strong>.</p><p>Instance: ${escape(oauth.config.instanceId)}</p><p>Requested permissions: <strong>${escape(pending.params.scopes?.join(', '))}</strong>. Execute can start work; publish creates GitHub issues; merge can merge reviewed changes; manage changes instance configuration.</p><p>Choose repositories. Access always remains limited by your current permissions. You can revoke this connection at any time.</p><form method="post">${csrf(req)}<input type="hidden" name="request" value="${escape(id)}">${repos.map(repo => `<label><input type="checkbox" name="repositories" value="${escape(repo)}">${escape(repo)}</label>`).join('')}<p><small>Return address: ${escape(pending.params.redirectUri)}</small></p><button name="decision" value="approve">Allow selected access</button><button class="secondary" name="decision" value="deny">Deny</button></form>`));
+    res.type('html').send(renderMcpPage('Connect an app', `<p><strong>${escape(pending.client.client_name || pending.client.client_id)}</strong> wants access to this ProPR instance as <strong>${escape(req.user!.username)}</strong>.</p><p>Instance: ${escape(oauth.config.instanceId)}</p><p>Choose permissions below. Read is required; leave optional permissions unchecked for read-only access. Execute can start work; publish creates GitHub issues; merge can merge reviewed changes; manage changes instance configuration.</p><p>Choose repositories. Access always remains limited by your current permissions. You can revoke this connection at any time.</p><form method="post">${csrf(req)}<input type="hidden" name="request" value="${escape(id)}"><h2>Permissions</h2>${pending.params.scopes?.map(scope => `<label><input type="checkbox" name="scopes" value="${escape(scope)}"${scope === 'read' ? ' checked disabled' : ''}>${escape(scope)}${scope === 'read' ? ' (required)' : ''}</label>`).join('')}<input type="hidden" name="scopes" value="read"><h2>Repositories</h2>${repos.map(repo => `<label><input type="checkbox" name="repositories" value="${escape(repo)}">${escape(repo)}</label>`).join('')}<p><small>Return address: ${escape(pending.params.redirectUri)}</small></p><button name="decision" value="approve">Allow selected access</button><button class="secondary" name="decision" value="deny">Deny</button></form>`));
   });
 
   app.post('/mcp/consent', async (req, res) => {
     if (typeof req.body.request !== 'string') { res.status(400).send('Invalid request'); return; }
-    if (req.body.decision !== 'approve') {
+    if (!['approve', 'deny'].includes(req.body.decision)) { res.status(400).send('Choose allow or deny.'); return; }
+    if (req.body.decision === 'deny') {
       const pending = await oauth.store.db.transaction(tx => oauth.store.take<PendingAuthorization>('pending', digest(req.body.request), tx));
       if (!pending) { res.status(400).send('Request expired'); return; }
       const url = new URL(pending.params.redirectUri); url.searchParams.set('error', 'access_denied');
@@ -73,7 +74,10 @@ export function mountMcpBrowser(app: Express, oauth: McpOAuthProvider, overrides
     const allowed = await repositories(req);
     if (!selected.length || selected.some((repo: unknown) => typeof repo !== 'string' || !allowed.includes(repo))) { res.status(400).send('Select at least one accessible repository.'); return; }
     const authorization = await resolveInstanceAuthorization(req.user!, oauth.store.db);
-    const redirect = await oauth.approve(req.body.request, req.user!, [...new Set(selected)] as string[], authorization.source);
+    const selectedScopes = typeof req.body.scopes === 'string' ? [req.body.scopes] : req.body.scopes ?? [];
+    let redirect: string;
+    try { redirect = await oauth.approve(req.body.request, req.user!, [...new Set(selected)] as string[], authorization.source, selectedScopes); }
+    catch { res.status(400).send('Request expired or invalid permission selection. Select only requested permissions, including read.'); return; }
     res.set('Content-Security-Policy', `default-src 'none'; form-action 'self' ${new URL(redirect).origin}; frame-ancestors 'none'; base-uri 'none'`);
     res.redirect(redirect);
   });

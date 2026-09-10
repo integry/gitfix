@@ -6,8 +6,9 @@ import { z } from 'zod';
 import packageInfo from '../package.json' with { type: 'json' };
 import { isDemoMode } from '../demoMode.js';
 import { loadMcpConfig, MCP_SCOPES, McpError } from './config.js';
+import { MCP_CONNECT_CONTRACT } from './connect.js';
 import { McpStore } from './store.js';
-import { McpOAuthProvider } from './oauth.js';
+import { McpOAuthProvider, validatePublicTokenRequest } from './oauth.js';
 import { McpPolicy, type McpPrincipal } from './policy.js';
 import { mountMcpBrowser } from './browser.js';
 import { createToolCatalog, executeTool, type McpTool, type ToolDeps } from './tools.js';
@@ -71,6 +72,11 @@ export function buildMcpServer(principal: McpPrincipal, deps: ToolDeps, catalog:
   return server;
 }
 
+export const mcpResponseHeaders: RequestHandler = (_req, res, next) => {
+  res.set({ 'X-ProPR-MCP-Contract': MCP_CONNECT_CONTRACT, 'Cache-Control': 'no-store' });
+  next();
+};
+
 export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void {
   const config = loadMcpConfig();
   if (!config) return;
@@ -97,24 +103,32 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
       next();
     } catch { res.status(400).json({ error: 'invalid_client' }); }
   });
+  app.use('/token', express.urlencoded({ extended: false, limit: '16kb' }), validatePublicTokenRequest);
   app.use(mcpAuthRouter(authOptions));
   mountMcpBrowser(app, oauth);
   const endpoint: RequestHandler = async (req, res) => {
-    res.set('Cache-Control', 'no-store');
+    // Empty 202 notifications still have an HTTP body stream at the gateway.
+    res.set({ 'Cache-Control': 'no-store', 'X-ProPR-MCP-Contract': MCP_CONNECT_CONTRACT }).type('application/json');
     const bearer = /^Bearer ([^\s]+)$/i.exec(req.get('authorization') || '')?.[1];
     if (!bearer) {
       res.set('WWW-Authenticate', `Bearer resource_metadata="${config.origin}/.well-known/oauth-protected-resource/api/mcp"`).status(401).json({ error: 'invalid_token' }); return;
     }
     let principal: McpPrincipal;
-    try { principal = await policy.authenticate(bearer); }
+    try { principal = await policy.authenticate(bearer, req.get('x-propr-mcp-resource')); }
     catch (error) {
       const status = error instanceof McpError ? error.status : 401;
       if (status === 503) res.set('Retry-After', '3');
-      res.set('WWW-Authenticate', `Bearer resource_metadata="${config.origin}/.well-known/oauth-protected-resource/api/mcp"`).status(status).json({ error: error instanceof McpError ? error.code : 'INVALID_TOKEN' }); return;
+      if (bearer.startsWith('propr_mcp_')) res.set('WWW-Authenticate', `Bearer resource_metadata="${config.origin}/.well-known/oauth-protected-resource/api/mcp"`);
+      res.status(status).json({ error: error instanceof McpError ? error.code : 'INVALID_TOKEN' }); return;
     }
     const handler = createMcpHandler(() => buildMcpServer(principal, deps, catalog), { legacy: 'stateless' });
     try { await toNodeHandler(handler)(req, res, req.body); }
     finally { await handler.close(); }
   };
   app.all('/api/mcp', endpoint);
+  app.use('/api/mcp', (error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) { next(error); return; }
+    const status = error && typeof error === 'object' && 'status' in error && [400, 413, 415].includes(Number(error.status)) ? Number(error.status) : 500;
+    if (!res.headersSent) res.set('X-ProPR-MCP-Contract', MCP_CONNECT_CONTRACT).status(status).json({ error: status === 500 ? 'MCP_UNAVAILABLE' : 'INVALID_REQUEST' });
+  });
 }

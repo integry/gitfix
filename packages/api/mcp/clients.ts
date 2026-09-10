@@ -54,6 +54,10 @@ export function validatePublicClient(client: OAuthClientInformationFull): OAuthC
   if (client.token_endpoint_auth_method !== 'none' || client.redirect_uris.length < 1 || client.redirect_uris.length > 10) {
     throw new InvalidClientMetadataError('Only public clients with 1–10 exact redirect URIs are supported');
   }
+  if ((client.grant_types !== undefined && (!Array.isArray(client.grant_types) || !client.grant_types.length || client.grant_types.some(value => !['authorization_code', 'refresh_token'].includes(value))))
+    || (client.response_types !== undefined && (!Array.isArray(client.response_types) || !client.response_types.length || client.response_types.some(value => value !== 'code')))) {
+    throw new InvalidClientMetadataError('Only authorization-code and rotating refresh grants are supported');
+  }
   for (const value of client.redirect_uris) {
     const url = new URL(value);
     if (url.hash || url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)))) {
@@ -68,9 +72,16 @@ export function parseClientMetadataDocument(document: Record<string, unknown>, i
   // SEP-3149 clients advertise supported methods separately from the legacy
   // preference. Intersect with this server's public-client-only policy.
   const supported = document.token_endpoint_auth_methods_supported;
-  if (supported !== undefined && (!Array.isArray(supported) || !supported.includes('none'))) throw new InvalidClientMetadataError('Client does not support public PKCE authentication');
+  const preference = document.token_endpoint_auth_method;
+  if (supported !== undefined && (!Array.isArray(supported) || !supported.length || supported.length > 32
+    || supported.some(method => typeof method !== 'string' || !method || /\s/.test(method)) || !supported.includes('none'))) {
+    throw new InvalidClientMetadataError('Client does not support public PKCE authentication or has malformed capabilities');
+  }
+  if (preference !== undefined && (typeof preference !== 'string' || !preference || /\s/.test(preference))) {
+    throw new InvalidClientMetadataError('Invalid legacy authentication method preference');
+  }
   const parsed = OAuthClientMetadataSchema.parse({ ...document,
-    ...(Array.isArray(supported) ? { token_endpoint_auth_method: 'none' } : {}),
+    ...(Array.isArray(supported) || preference === undefined ? { token_endpoint_auth_method: 'none' } : {}),
   });
   return validatePublicClient({ ...parsed, client_id: id });
 }

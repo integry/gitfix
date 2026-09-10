@@ -61,15 +61,16 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
   tools.push({ name: 'get_connection', description: 'Get identity, stable instance, scopes, effective tools, version and browser setup links.', scope: 'read', readOnly: true, schema: z.object({}).strict(), run: async ({ principal }) => ok({
     identity: { id: principal.user.id, username: principal.user.username }, instanceId: policy.config.instanceId,
     scopes: principal.scopes, permissions: principal.authorization.permissions, repositories: principal.grant.repositories,
-    version: packageInfo.version, connectContractVersion: 1, protocolVersions: ['2026-07-28', '2025-11-25'],
+    version: packageInfo.version, connectContractVersion: 'propr-connect-mcp/1', resource: principal.grant.resource, protocolVersions: ['2026-07-28', '2025-11-25'],
     capabilities: tools.filter(tool => principal.scopes.includes(tool.scope) && (!tool.permission || principal.authorization.permissions.includes(tool.permission))).map(tool => tool.name),
-    connectedAppsUrl: `${policy.config.origin}/mcp/apps`, setupUrl: `${process.env.FRONTEND_URL || policy.config.origin}/settings`,
+    connectedAppsUrl: principal.grant.membershipSource === 'connect' ? 'https://connect.propr.dev/connected-apps' : `${policy.config.origin}/mcp/apps`, setupUrl: `${process.env.FRONTEND_URL || policy.config.origin}/settings`,
     limitations: ['Deployment/release uses the existing operator CLI; no deployment backend is exposed by this instance.', 'Voice availability depends on the host.', 'Cancellation requests may take time to stop running work.'],
   }) });
   tools.push({ name: 'get_setup_status', description: 'Read MCP setup and credential status, with browser links for secret entry.', scope: 'read', readOnly: true, schema: z.object({}).strict(), run: async ({ principal }) => ok({
     mcpEnabled: true, directOAuth: true, connectTrustEnabled: !!policy.config.connect, instanceId: policy.config.instanceId,
     githubCredential: principal.user.accessToken ? 'available' : 'browser_login_required',
-    links: { connectedApps: `${policy.config.origin}/mcp/apps`, signIn: `${policy.config.origin}/api/auth/github`, settings: `${process.env.FRONTEND_URL || policy.config.origin}/settings` },
+    resource: principal.grant.resource,
+    links: { connectedApps: principal.grant.membershipSource === 'connect' ? 'https://connect.propr.dev/connected-apps' : `${policy.config.origin}/mcp/apps`, signIn: `${policy.config.origin}/api/auth/github`, settings: `${process.env.FRONTEND_URL || policy.config.origin}/settings` },
   }) });
   tools.push({ name: 'list_repositories', description: 'List currently configured repositories accessible under this grant.', scope: 'read', readOnly: true, schema: z.object(pageShape).strict(), run: async ({ principal, args }) => {
     const configured = await loadMonitoredReposRaw();

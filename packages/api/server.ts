@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- route registration and coordinated shutdown share startup state */
 import express, { Request, Response } from 'express';
-import { mountMcp } from './mcp/server.js';
+import { mountMcp, mcpResponseHeaders } from './mcp/server.js';
 import { createServer, Server as HttpServer } from 'http';
 import cors from 'cors';
 import { createClient, RedisClientType } from 'redis';
@@ -168,6 +168,9 @@ try {
   console.error(`FRONTEND_URL must be a valid URL, got: ${process.env.FRONTEND_URL}`);
   process.exit(1);
 }
+
+// Mark even parser/rate-limit/error responses at the instance boundary.
+if (process.env.MCP_ENABLED === 'true') app.use('/api/mcp', mcpResponseHeaders);
 
 app.use((req, res, next) => {
   // Server-rendered MCP consent forms submit on the API's own public origin,

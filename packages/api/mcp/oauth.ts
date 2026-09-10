@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidGrantError, InvalidTokenError, InvalidRequestError, InvalidScopeError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import type { Response } from 'express';
+import type { Response, RequestHandler } from 'express';
 import type { Knex } from 'knex';
 import type { GitHubUser } from '../authTypes.js';
 import { MCP_SCOPES, type McpConfig, type McpScope } from './config.js';
@@ -33,21 +33,26 @@ export class McpOAuthProvider implements OAuthServerProvider {
     if (params.resource?.href !== this.config.resource) throw new InvalidRequestError('resource must match this MCP endpoint');
     if (!/^[A-Za-z0-9_-]{43}$/.test(params.codeChallenge)) throw new InvalidRequestError('A valid S256 PKCE challenge is required');
     const scopes = params.scopes?.length ? params.scopes : ['read'];
-    if (scopes.some(scope => !MCP_SCOPES.includes(scope as McpScope))) throw new InvalidScopeError('Unknown scope');
+    if (!Array.isArray(scopes) || !scopes.includes('read') || scopes.length > MCP_SCOPES.length || scopes.some(scope => typeof scope !== 'string' || !MCP_SCOPES.includes(scope as McpScope))) throw new InvalidScopeError('Unknown scope');
     const id = secret();
     await this.store.put('pending', digest(id), { client, params: { ...params, scopes, resource: this.config.resource } }, Date.now() + 600_000);
     res.redirect(`${this.config.origin}/mcp/consent?request=${encodeURIComponent(id)}`);
   }
 
-  async approve(pendingId: string, user: GitHubUser, repositories: string[], membershipSource: string): Promise<string> {
+  async approve(pendingId: string, user: GitHubUser, repositories: string[], membershipSource: string, selectedScopes?: unknown): Promise<string> {
     return this.store.db.transaction(async tx => {
       const pending = await this.store.take<PendingAuthorization>('pending', digest(pendingId), tx);
       if (!pending || !user.accessToken || !/^\d+$/.test(user.id)) throw new InvalidGrantError('Authorization expired or GitHub credential unavailable');
+      const scopes = selectedScopes === undefined ? pending.params.scopes : selectedScopes;
+      if (!Array.isArray(scopes) || !scopes.length || scopes.length > MCP_SCOPES.length || !scopes.includes('read')
+        || scopes.some(scope => typeof scope !== 'string' || !pending.params.scopes?.includes(scope))) {
+        throw new InvalidScopeError('Select read and only permissions originally requested by the app');
+      }
       const grant: McpGrant = {
         id: randomUUID(), ownerId: user.id, clientId: pending.client.client_id,
         clientName: pending.client.client_name || pending.client.client_id,
         instanceId: this.config.instanceId, resource: this.config.resource,
-        scopes: pending.params.scopes as McpScope[], repositories,
+        scopes: [...new Set(scopes)] as McpScope[], repositories,
         createdAt: Date.now(), expiresAt: Date.now() + 30 * 86400_000, revoked: false, membershipSource,
       };
       const code = secret();
@@ -106,7 +111,7 @@ export class McpOAuthProvider implements OAuthServerProvider {
         await this.store.put('grant', grant.id, { ...grant, revoked: true }, undefined, tx);
         return null; // Commit revocation before reporting the error.
       }
-      if (scopes?.some(scope => !token.scopes.includes(scope as McpScope))) throw new InvalidScopeError('Scope escalation is forbidden');
+      if (scopes !== undefined && (!Array.isArray(scopes) || !scopes.length || !scopes.includes('read') || scopes.length > MCP_SCOPES.length || scopes.some(scope => typeof scope !== 'string' || !token.scopes.includes(scope as McpScope)))) throw new InvalidScopeError('Scope escalation is forbidden');
       await this.store.put('refresh', digest(refresh), { ...token, used: true }, token.expiresAt, tx);
       return this.issue(grant, tx, scopes?.length ? scopes as McpScope[] : token.scopes);
     });
@@ -133,3 +138,20 @@ export class McpOAuthProvider implements OAuthServerProvider {
     });
   }
 }
+
+
+/** The SDK ignores extra client-assertion and code-scope fields. Reject them
+ * before code consumption so public PKCE negotiation cannot hide an escalation. */
+export const validatePublicTokenRequest: RequestHandler = (req, res, next) => {
+  const body = req.body ?? {};
+  if (Object.values(body).some(value => typeof value !== 'string')) {
+    res.status(400).json({ error: 'invalid_request' }); return;
+  }
+  if (Object.hasOwn(body, 'client_assertion') || Object.hasOwn(body, 'client_assertion_type') || body.client_secret) {
+    res.status(400).json({ error: 'invalid_client', error_description: 'Public clients use client_id and S256 PKCE without client assertions or secrets.' }); return;
+  }
+  if (body.grant_type === 'authorization_code' && Object.hasOwn(body, 'scope')) {
+    res.status(400).json({ error: 'invalid_scope', error_description: 'Authorization-code scopes are fixed by consent.' }); return;
+  }
+  next();
+};

@@ -1,134 +1,195 @@
-# ProPR MCP Connect delegation contract (version 1)
+# Core / Connect MCP contract: propr-connect-mcp/1
 
-This is the concrete integration contract for `integry/propr-routing` and
-`integry/propr-site`. The instance implementation is in `packages/api/mcp`.
-This repository does not contain the Connect gateway or site. Companion PR
-links must be attached by the coordinating operator; none have been created
-by this implementation task. **These changes do not make mcp.propr.dev live.**
+[Core PR #2291](https://github.com/integry/propr/pull/2291) coordinates
+[the epic #2279](https://github.com/integry/propr/issues/2279),
+[routing PR #180](https://github.com/integry/propr-routing/pull/180), and
+[site PR #90](https://github.com/integry/propr-site/pull/90).
+The shared wire contract is the **implemented routing contract at
+[0c8ca02044c88b181395ca8e15425c0821e588e4](https://github.com/integry/propr-routing/blob/0c8ca02044c88b181395ca8e15425c0821e588e4/docs/mcp-connect-contract.md)**.
+Its `src/mcpCommon.ts`, `src/mcpGateway.ts`, `src/mcpOAuth.ts`, and
+`test/fixtures/mcpInstance.ts` were inspected. This document replaces core's
+incompatible proposed introspection contract. No deployment or merge is implied.
 
-## Public endpoints and ownership
+## Identities and endpoints
 
-* Direct: `https://<instance>/api/mcp`. The instance owns OAuth. This works with
-  the instance's own GitHub browser login, independently of Connect.
-* Hosted: `https://mcp.propr.dev/mcp`. Connect owns public OAuth, consent,
-  durable grants, refresh rotation and connected-app revocation.
-* One hosted grant permanently binds one numeric installation ID and one
-  stable instance ID. Changing target requires fresh consent and a new grant.
-* Gateway authenticates the client token, checks grant revocation and current
-  installation membership, then resolves the active tunnel from its registry.
-  No client-selected host, tunnel URL, target header or GitHub user header is
-  authoritative. Do not create global mutable current-instance state.
+| Boundary | Contract |
+| --- | --- |
+| Public OAuth issuer | `https://mcp.propr.dev` (no trailing slash) |
+| Public MCP resource | `https://mcp.propr.dev/mcp` |
+| Direct MCP | `https://<instance>/api/mcp`, independently configured instance OAuth |
+| Connect public keys | `/.well-known/jwks.json` on the trusted issuer |
+| Instance registration | `POST /v1/mcp/instances/register` |
+| Current validation | `POST /v1/mcp/delegations/validate` |
+| Credential handoff creation | `POST /v1/mcp/credentials` |
+| Credential redemption | `POST /v1/auth/instance-grants/redeem` |
 
-## Gateway-to-instance request
+Core explicitly opts in with `MCP_CONNECT_TRUST=true`. Its stable
+`MCP_INSTANCE_ID` is a UUID or a 16–100 character identifier, independent of
+hostnames and the existing `PROPR_INSTANCE_ID` tunnel routing identifier.
+The installation is a positive JSON integer. The P-256 instance private key
+and registration receipt live encrypted in `mcp_records`, protected by the
+existing `MCP_ENCRYPTION_KEY`. Requests never create or rotate that key.
 
-Forward the original request method, body and relevant MCP headers to
-`/api/mcp` through the registered Cloudflare Tunnel. Replace Authorization
-with `Bearer <delegation>`. Strip incoming user/routing/forwarded-identity
-headers. Never forward a client access token, refresh token or GitHub token.
-Preserve `MCP-Protocol-Version`, `Mcp-Param-*`, Accept and Content-Type.
-Preserve streaming, response backpressure and cancellation; disable buffering
-and private-response caching. Return `Cache-Control: no-store` on all paths.
+The [operator registration command](mcp.md#connect-instance-registration)
+reuses `GH_INSTALLATION_ID`, `PROPR_GH_RELAY_TOKEN`, enabled tunnel
+configuration, and the registry UUID written by `propr tunnel setup` to
+`PROPR_INSTANCE_ID` (or explicit `MCP_CONNECT_TUNNEL_ID`). Registration checks
+the current tunnel belongs to the relay credential's installation. A local
+receipt pins issuer, installation, instance, tunnel, key thumbprint and contract.
+Changed configuration fails closed until the operator registers it explicitly.
+Registration retries reuse the persisted key. Restoring a different instance ID
+never silently overwrites the identity.
 
-The delegation is an ES256 JWT. JOSE header:
+## One-use instance proof
+
+Every instance POST uses the **existing** `Authorization: Bearer prt_…` relay
+credential and an ES256 `instance_assertion`. There is no separate introspection
+secret. The header is `alg=ES256`, `typ=propr-instance-assertion+jwt`.
+
+Common assertion claims:
 
 ```json
-{"alg":"ES256","kid":"rotation-key-id","typ":"propr-mcp-delegation+jwt"}
+{
+  "iss": "urn:propr:instance:12345678-1234-4321-abcd-123456789012:mcp",
+  "sub": "12345678-1234-4321-abcd-123456789012",
+  "aud": "https://mcp.propr.dev/v1/mcp/delegations/validate",
+  "installation_id": 1,
+  "iat": 1789074000,
+  "exp": 1789074060,
+  "jti": "fresh-uuid-for-each-post",
+  "delegation_sha256": "lowercase-hex-sha256-of-the-exact-compact-delegation"
+}
 ```
 
-Example claims (illustrative identifiers):
+`aud` is the exact POST URL, lifetime is at most 60 seconds, clock tolerance is
+5 seconds. Connect atomically rejects assertion `jti` reuse. Core generates a
+new proof for validation, issuance and redemption separately.
+
+Registration sends `instance_id`, `tunnel_id`, a **public-only** P-256
+`public_jwk`, `contract_version="propr-connect-mcp/1"`, ordered
+`protocol_versions=["2026-07-28","2025-11-25"]`, and `instance_assertion`.
+Its assertion binds `tunnel_id`, RFC 7638 SHA-256 `key_thumbprint`,
+`contract_version`, and the identical ordered `protocol_versions` array
+instead of `delegation_sha256`. Changing a registry instance/key/tunnel or
+deleting a tunnel permanently revokes old Connect grants through routing's SQL
+triggers. Restoring the old target cannot revive them; fresh consent is required.
+Connector secret rotation for the same tunnel does not rotate instance identity.
+Do not clone an instance private key into unrelated stacks.
+
+## Delegation accepted by core
+
+Gateway header: `alg=ES256`, active `kid`, `typ=propr-mcp-delegation+jwt`.
+The signed claims use this exact shape:
 
 ```json
 {
   "iss": "https://mcp.propr.dev",
-  "aud": "urn:propr:instance:stable-instance-id",
-  "sub": "1234567",
-  "instance_id": "stable-instance-id",
-  "installation_id": "7654321",
-  "grant_id": "durable-connect-grant-id",
-  "scope": "read plan publish execute review",
-  "repositories": ["owner/repository"],
-  "contract_version": 1,
-  "iat": 1789070400,
-  "exp": 1789070460,
-  "jti": "unique-delegation-id"
+  "aud": "urn:propr:instance:12345678-1234-4321-abcd-123456789012:mcp",
+  "sub": "777",
+  "installation_id": 1,
+  "instance_id": "12345678-1234-4321-abcd-123456789012",
+  "instance_key_thumbprint": "RFC7638-thumbprint",
+  "grant_id": "grant-uuid",
+  "scopes": ["read", "plan"],
+  "repositories": ["acme/repository"],
+  "resource": "https://mcp.propr.dev/mcp",
+  "contract_version": "propr-connect-mcp/1",
+  "iat": 1789074000,
+  "exp": 1789074060,
+  "jti": "fresh-request-uuid"
 }
 ```
 
-`sub` is the numeric GitHub user ID encoded as a decimal string, never a
-username. Installation ID is also a decimal string. The maximum lifetime is
-60 seconds; allowed clock skew is 5 seconds. No wildcard repositories or
-scopes. Scope families are `read plan publish execute review merge deploy
-manage`. The instance checks all bindings with `jose`, fixed ES256 and a
-configured JWKS endpoint, then applies its own current allowlist, permissions,
-GitHub repository access and object ownership. `kid` selects from the fixed
-JWKS URL, never a key URL provided inside the token. Rotate signing keys with
-at least a 65-second overlap after stopping issuance with the old key.
+Core verifies the configured issuer/JWKS, exact scalar audience, type, algorithm,
+key ID, local persisted key thumbprint, installation, instance, public resource,
+positive numeric subject string, integer time bounds and lifetime. Repositories
+are nonempty, sorted, unique lowercase exact `owner/name` strings (at most 100,
+200 characters each, 4096 serialized characters). Scopes are a bounded array
+from `read plan publish execute review merge deploy manage`, including `read`.
+The `X-ProPR-MCP-Resource` hint, when present, must equal the verified claim.
+Neither headers nor client arguments choose the destination or authority.
 
-## Revocation and membership introspection
+Before every MCP HTTP invocation, including a delegation replayed directly to
+the instance, core sends `{delegation, instance_assertion}` to
+`/v1/mcp/delegations/validate`. Success must be `{active:true,...claims}` with
+**every signed claim unchanged**. Network failures, non-success responses,
+malformed JSON or discrepancies deny access. No active-result cache or offline
+grace exists. Connect checks its current grant, membership, entitlement,
+registry/key/tunnel binding and restrictions. Core then applies current local
+allowlist, durable membership (or configured bootstrap administrator), role,
+configured repositories, GitHub access and resource ownership. Connect does not
+implicitly create local members or grant administrator permissions.
 
-The instance calls the configured `MCP_CONNECT_INTROSPECTION_URL` **on every
-delegated request**, without caching positive results. The gateway must
-authorize `MCP_CONNECT_INTROSPECTION_SECRET` as a server credential specific
-to this installation/instance pair and reject requests for other bindings.
+Revocation prevents a new invocation validated after revocation commits. It does
+not undo accepted requests, committed effects or already-open streams. MCP
+mutation idempotency is core's durable operation key, never delegation `jti`.
 
-```http
-POST /internal/mcp/introspect
-Authorization: Bearer <instance-specific-server-credential>
-Content-Type: application/json
-```
+## GitHub credential handoff
 
-```json
-{"grant_id":"durable-connect-grant-id","subject":"1234567","instance_id":"stable-instance-id","installation_id":"7654321"}
-```
+If core lacks a stored GitHub credential, it POSTs the delegation and a fresh
+proof to `/v1/mcp/credentials`. It requires
+`{code:"pia_mcp_…",expires_in:60,redemption_endpoint:<exact expected URL>}`.
+It redeems with `{code,delegation,instance_assertion}` using a **new** proof
+bound to the redemption URL and exact delegation hash, plus the same relay
+credential. Routing checks grant and delegation `jti`, atomically consumes the
+code, and decrypts the existing instance-login payload. The response is
+`{github_user_id,username,avatar_url,access_token}`; its subject must match the
+delegation. Core also verifies the GitHub `/user` identity before accepting the
+principal. Credentials remain encrypted server-side; no credential or handoff
+code passes through the public client's OAuth or MCP traffic.
 
-Success response:
+Existing stored GitHub credentials and coordinated rotating-token refresh are
+reused. Connect's handoff omits expiry/refresh metadata; a GitHub 401 can fetch a
+fresh handoff after renewed browser consent, with a compare-and-set to avoid
+overwriting concurrent credential refreshes. Ordinary `pia_` browser login and
+direct instance OAuth retain their independent behavior.
 
-```json
-{
-  "active": true,
-  "grant_id": "durable-connect-grant-id",
-  "subject": "1234567",
-  "instance_id": "stable-instance-id",
-  "installation_id": "7654321",
-  "scope": "read plan publish execute review",
-  "repositories": ["owner/repository"]
-}
-```
+## Responses, errors and client consent
 
-Revoked grants or removed memberships return `active:false`. Current scopes
-and repositories are intersected with the signed claims, so reductions apply
-immediately even to an unexpired delegation. Network failure fails closed.
+All instance MCP responses carry
+`X-ProPR-MCP-Contract: propr-connect-mcp/1`, including parser errors and empty
+legacy notifications. Empty 202 notifications include `application/json` so the
+actual gateway accepts HTTP clients representing an empty body as a stream.
+SDK JSON/SSE transport remains unchanged. Delegated `get_connection` and
+`get_setup_status` report the public resource and Connect connected-app link.
 
-Optionally return a one-use `credential_grant` when the instance lacks the
-user's GitHub credential. It is redeemed server-side through the existing
-`redeemConnectAuthorizationCode` contract using `PROPR_GH_RELAY_URL` and
-`PROPR_GH_RELAY_TOKEN`. The redeemed numeric user ID must match `sub`.
-Never return GitHub credentials directly in the delegation. Without a
-redeemable grant or stored credential, the instance returns
-`GITHUB_CREDENTIAL_REQUIRED` and the user must sign in through the browser.
+| Condition | Behavior |
+| --- | --- |
+| Public token revoked/expired | Gateway 401 with public resource discovery |
+| Core trust/key/credential setup rejected with 401 | Gateway 502 `mcp_instance_trust_required`; no private OAuth challenge forwarded |
+| Online check unavailable/malformed | Core 503 `CONNECT_UNAVAILABLE`, `Retry-After: 3` |
+| Current validation/local membership denies | Core 403 `ACCESS_REVOKED` |
+| Signed contract unsupported | Core 409 `INSTANCE_VERSION_MISMATCH` |
+| Registry/protocol unsupported | Gateway 409 `mcp_version_mismatch` |
+| Tunnel fetch fails | Gateway 503 `mcp_tunnel_offline`; mutation outcome may be uncertain |
+| Tool scope/repository/precondition denied | Core MCP error; no OAuth step-up loop |
 
-## Gateway failure mapping
+The gateway makes one upstream request, strips cookies and private OAuth
+challenges, and preserves allowed protocol headers/streaming. It never retries
+mutations. The full allowlists and gateway errors remain specified in the pinned
+routing contract. Direct OAuth still advertises and verifies its own resource.
 
-* Invalid/expired client OAuth token: 401 with hosted protected-resource metadata.
-* Revoked grant/membership or installation mismatch: 403 `ACCESS_REVOKED`.
-* No active registered tunnel: 503 `INSTANCE_UNAVAILABLE`, `Retry-After: 5`.
-* Registry says contract/protocol unsupported: 409 `INSTANCE_VERSION_MISMATCH`.
-* Introspection unavailable: 503 `CONNECT_UNAVAILABLE`.
-* Preserve instance scope/precondition/tool errors; do not turn them into
-  successful empty responses. Do not retry mutations with new idempotency keys.
+Both OAuth consent flows are bounded by the original requested scopes. Direct
+consent now displays explicit optional scope checkboxes, unchecked by default,
+and keeps read selected. Forged escalation, malformed selections and refresh
+escalation are rejected. CIMD plural supported methods are intersected with
+`none`; valid singular legacy preference never overrides public PKCE support.
+Malformed array entries/preferences fail validation. An omitted legacy CIMD method defaults to public `none`. DCR still requires `none`. Token requests reject client assertions and attempted authorization-code scope overrides before consuming a code.
 
-The gateway must verify registry compatibility before forwarding. The instance
-uses the official SDK to classify both July 2026 stateless and November 2025
-Streamable HTTP requests on the same endpoint; there is one tool catalog.
+## Executable cross-repository evidence
 
-## Companion acceptance gates
+Run `MCP_ROUTING_REPOSITORY=/path/to/propr-routing npm run test:mcp:connect`.
+The runner archives the pinned Git commit into a temporary directory, installs
+its lockfile, bundles its **actual Worker entry point** and runs core's actual
+HTTP/auth/tool implementation. It reports both source identities and SDK
+versions. No routing source or policy is rewritten. See
+[mcp-coverage.md](mcp-coverage.md#connect-integration-follow-up-evidence) for exact
+commands, results, isolation and remaining gates.
 
-- Routing: hosted OAuth lifecycle, registry resolution, token replacement,
-  JWT/JWKS rotation, authenticated introspection/credential redemption,
-  unavailable/version mismatch paths, cancellation and uncached streaming.
-- Site: installation selection and explicit fixed-target consent, connected
-  app listing/revocation, credential bootstrap links, mobile/browser testing.
-- Shared fixture: `packages/api/test/mcpDelegation.test.ts` verifies the JWT
-  cryptography, introspection restrictions, revocation, separate credentials
-  and no token forwarding. Live tunnel/gateway interoperability remains an
-  operator verification step, not a result claimed by this fixture.
+No routing source change is required by the passing pinned integration. Root
+should dispatch a **documentation-only** follow-up to routing PR #180: replace
+the stale statement that no core PR is available with core PR #2291, record its
+system-generated follow-up commit and this harness evidence, and reconcile
+`docs/mcp-verification.md`. Site PR #90 still needs final capability reconciliation.
+Core PR #2291 and the larger full-chat epic remain open for root's independent
+coverage review. No new companion task, PR, deployment or merge was started.

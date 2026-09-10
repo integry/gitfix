@@ -44,6 +44,17 @@ test('CIMD intersects plural supported methods with public PKCE instead of trust
   const id = 'https://client.example/oauth/client.json';
   const document = { client_id: id, client_name: 'Test', redirect_uris: ['https://client.example/callback'], token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'], token_endpoint_auth_method: 'private_key_jwt' };
   assert.equal(parseClientMetadataDocument(document, id).token_endpoint_auth_method, 'none');
+  assert.equal(parseClientMetadataDocument({ ...document, token_endpoint_auth_methods_supported: undefined, token_endpoint_auth_method: undefined }, id).token_endpoint_auth_method, 'none');
+  assert.equal(parseClientMetadataDocument({ ...document, token_endpoint_auth_methods_supported: ['private_key_jwt', 'none'] }, id).token_endpoint_auth_method, 'none');
   assert.throws(() => parseClientMetadataDocument({ ...document, token_endpoint_auth_methods_supported: ['private_key_jwt'] }, id));
+  for (const supported of [[], ['none', 42], ['none', null], ['none', {}], ['none', ''], ['none', 'private key jwt'], 'none']) {
+    assert.throws(() => parseClientMetadataDocument({ ...document, token_endpoint_auth_methods_supported: supported }, id));
+  }
+  for (const preference of [null, 42, {}, [], '', 'private key jwt']) {
+    assert.throws(() => parseClientMetadataDocument({ ...document, token_endpoint_auth_method: preference }, id));
+  }
+  assert.equal(parseClientMetadataDocument({ ...document, token_endpoint_auth_method: undefined }, id).token_endpoint_auth_method, 'none');
+  assert.equal(parseClientMetadataDocument({ ...document, token_endpoint_auth_methods_supported: undefined, token_endpoint_auth_method: 'none' }, id).token_endpoint_auth_method, 'none');
+  assert.throws(() => parseClientMetadataDocument({ ...document, token_endpoint_auth_methods_supported: undefined }, id));
   assert.throws(() => parseClientMetadataDocument({ ...document, client_id: 'https://imposter.example/client.json' }, id));
 });

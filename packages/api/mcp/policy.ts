@@ -5,7 +5,7 @@ import type { GitHubUser } from '../authTypes.js';
 import { resolveInstanceAuthorization, type InstanceAuthorization, type InstancePermission } from '../authorization.js';
 import { isUserWhitelisted } from '../userWhitelist.js';
 import { refreshStoredGitHubCredential } from '../authGithubTokens.js';
-import { redeemConnectAuthorizationCode } from '../connectAuth.js';
+import { McpConnect, MCP_CONNECT_CONTRACT, instanceAudience } from './connect.js';
 import { McpError, MCP_SCOPES, type McpConfig, type McpScope } from './config.js';
 import { McpOAuthProvider, type McpGrant } from './oauth.js';
 import { secret } from './store.js';
@@ -24,7 +24,7 @@ export class McpPolicy {
     this.jwks = config.connect ? createRemoteJWKSet(new URL(config.connect.jwks), { timeoutDuration: 5000, cooldownDuration: 30_000 }) : undefined;
   }
 
-  async authenticate(bearer: string): Promise<McpPrincipal> {
+  async authenticate(bearer: string, resourceHint?: string): Promise<McpPrincipal> {
     let grant: McpGrant;
     let scopes: McpScope[];
     if (bearer.startsWith('propr_mcp_')) {
@@ -32,7 +32,7 @@ export class McpPolicy {
       grant = await this.oauth.grant(info.extra.grantId);
       scopes = info.scopes;
     } else {
-      try { grant = await this.delegation(bearer); }
+      try { grant = await this.delegation(bearer, resourceHint); }
       catch (error) {
         if (error instanceof McpError) throw error;
         if (error instanceof joseErrors.JWKSTimeout || !(error instanceof joseErrors.JOSEError)) throw new McpError('CONNECT_UNAVAILABLE', 'Connect grant validation is unavailable.', 503);
@@ -45,14 +45,36 @@ export class McpPolicy {
     if (user.tokenExpiresAt && user.tokenExpiresAt < Date.now() + 30_000) {
       user = await this.refreshCredential(user);
     }
-    const github = new Octokit({ auth: user.accessToken, request: { timeout: 10_000 } });
+    let github = new Octokit({ auth: user.accessToken, request: { timeout: 10_000 } });
     let identity;
     try { identity = (await github.request('GET /user')).data; }
-    catch { throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'GitHub authorization is unavailable; sign in again.', 401); }
+    catch (error) {
+      if (grant.membershipSource !== 'connect' || (error as { status?: number }).status !== 401) {
+        throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'GitHub authorization is unavailable; sign in again.', 401);
+      }
+      // Connect handoffs omit expiry/refresh metadata. A renewed browser consent
+      // can replace an expired credential; never replace a concurrently refreshed one.
+      const previous = user.accessToken;
+      const renewed = await new McpConnect(this.config, this.oauth.store).credential(bearer, grant.ownerId);
+      const candidate = new Octokit({ auth: renewed.accessToken, request: { timeout: 10_000 } });
+      let verified;
+      try { verified = (await candidate.request('GET /user')).data; }
+      catch { throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'Reconnect the app in Connect to renew GitHub authorization.', 401); }
+      if (String(verified.id) !== grant.ownerId) throw new McpError('ACCESS_REVOKED', 'Credential identity mismatch.', 403);
+      user = await this.oauth.store.db.transaction(async tx => {
+        const current = await this.oauth.store.get<GitHubUser>('credential', grant.ownerId, tx);
+        if (current?.accessToken && current.accessToken !== previous) return current;
+        await this.oauth.store.put('credential', renewed.id, renewed, undefined, tx);
+        return renewed;
+      });
+      github = new Octokit({ auth: user.accessToken, request: { timeout: 10_000 } });
+      try { identity = (await github.request('GET /user')).data; }
+      catch { throw new McpError('GITHUB_CREDENTIAL_REQUIRED', 'GitHub authorization is unavailable; reconnect the app.', 401); }
+    }
     if (String(identity.id) !== grant.ownerId || !isUserWhitelisted(identity.login)) throw new McpError('ACCESS_REVOKED', 'Current instance access denied.', 403);
     user = { ...user, username: identity.login, login: identity.login };
     const authorization = await resolveInstanceAuthorization(user, this.oauth.store.db);
-    if (authorization.source === 'demo' || (['local', 'managed'].includes(grant.membershipSource) && authorization.source === 'implicit')) {
+    if (authorization.source === 'demo' || (['local', 'managed', 'connect'].includes(grant.membershipSource) && authorization.source === 'implicit')) {
       throw new McpError('ACCESS_REVOKED', 'Instance membership was revoked.', 403);
     }
     return { user, authorization, grant, scopes, github };
@@ -87,46 +109,47 @@ export class McpPolicy {
     } finally { await store.db('mcp_records').where({ ...identity, value }).delete(); }
   }
 
-  private async delegation(token: string): Promise<McpGrant> {
+  private async delegation(token: string, resourceHint?: string): Promise<McpGrant> {
     const connect = this.config.connect;
     if (!connect || !this.jwks) throw new McpError('INVALID_TOKEN', 'Connect trust is disabled.', 401);
+    const proof = new McpConnect(this.config, this.oauth.store);
+    const thumbprint = await proof.registeredThumbprint();
     const { payload, protectedHeader } = await jwtVerify(token, this.jwks, {
-      algorithms: ['ES256'], issuer: connect.issuer, audience: `urn:propr:instance:${this.config.instanceId}`,
-      clockTolerance: 5, maxTokenAge: '65s', requiredClaims: ['sub', 'iat', 'exp', 'jti', 'grant_id', 'instance_id', 'installation_id', 'scope', 'repositories', 'contract_version'],
+      algorithms: ['ES256'], issuer: connect.issuer, audience: instanceAudience(this.config.instanceId),
+      clockTolerance: 5, maxTokenAge: '65s', requiredClaims: ['sub', 'iat', 'exp', 'jti', 'grant_id', 'instance_id', 'installation_id', 'scopes', 'repositories', 'contract_version', 'resource', 'instance_key_thumbprint'],
     });
-    if (payload.contract_version !== 1) throw new McpError('INSTANCE_VERSION_MISMATCH', 'This instance does not support the signed Connect contract version.', 409);
-    if (protectedHeader.typ !== 'propr-mcp-delegation+jwt'
-      || payload.aud !== `urn:propr:instance:${this.config.instanceId}` || typeof protectedHeader.kid !== 'string'
-      || payload.instance_id !== this.config.instanceId || payload.installation_id !== connect.installationId
-      || !/^\d+$/.test(payload.sub || '') || typeof payload.grant_id !== 'string'
-      || payload.exp! <= payload.iat! || payload.exp! - payload.iat! > 60 || payload.iat! > Date.now() / 1000 + 5
-      || typeof payload.scope !== 'string' || !Array.isArray(payload.repositories)
-      || payload.repositories.length > 100 || payload.repositories.some(repo => typeof repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo))) {
+    if (payload.contract_version !== MCP_CONNECT_CONTRACT) throw new McpError('INSTANCE_VERSION_MISMATCH', 'This instance does not support the signed Connect contract version.', 409);
+    const scopes = payload.scopes;
+    const repositories = payload.repositories;
+    if (protectedHeader.typ !== 'propr-mcp-delegation+jwt' || typeof protectedHeader.kid !== 'string' || !protectedHeader.kid
+      || payload.aud !== instanceAudience(this.config.instanceId) || payload.instance_id !== this.config.instanceId
+      || payload.installation_id !== connect.installationId || payload.instance_key_thumbprint !== thumbprint
+      || payload.resource !== connect.resource || (resourceHint !== undefined && resourceHint !== payload.resource)
+      || typeof payload.sub !== 'string' || !/^[1-9][0-9]*$/.test(payload.sub)
+      || typeof payload.grant_id !== 'string' || !payload.grant_id || typeof payload.jti !== 'string' || !payload.jti || payload.jti.length > 128
+      || !Number.isInteger(payload.iat) || !Number.isInteger(payload.exp) || payload.exp! <= payload.iat!
+      || payload.exp! - payload.iat! > 60 || payload.iat! > Date.now() / 1000 + 5
+      || !Array.isArray(scopes) || !scopes.includes('read') || scopes.length > MCP_SCOPES.length
+      || scopes.some(scope => typeof scope !== 'string' || !MCP_SCOPES.includes(scope as McpScope))
+      || !Array.isArray(repositories) || !repositories.length || repositories.length > 100 || JSON.stringify(repositories).length > 4096
+      || repositories.some(repo => typeof repo !== 'string' || repo.length > 200 || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(repo))
+      || JSON.stringify(repositories) !== JSON.stringify([...new Set(repositories)].sort())) {
       throw new McpError('INVALID_DELEGATION', 'Invalid Connect delegation binding.', 401);
     }
-    const scopes = payload.scope.split(' ') as McpScope[];
-    if (scopes.some(scope => !MCP_SCOPES.includes(scope))) throw new McpError('INVALID_DELEGATION', 'Unknown delegation scope.', 401);
-    // No positive cache: revocation and membership changes apply to every call.
-    const response = await fetch(connect.introspection, {
-      method: 'POST', headers: { Authorization: `Bearer ${connect.secret}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_id: payload.grant_id, subject: payload.sub, instance_id: this.config.instanceId, installation_id: connect.installationId }),
-      signal: AbortSignal.timeout(5000), redirect: 'error',
-    });
-    if (!response.ok) throw new McpError('CONNECT_UNAVAILABLE', 'Connect grant validation is unavailable.', 503);
-    const state = await response.json() as Record<string, unknown>;
-    if (state.active !== true || state.grant_id !== payload.grant_id || state.subject !== payload.sub
-      || state.instance_id !== payload.instance_id || state.installation_id !== payload.installation_id) throw new McpError('ACCESS_REVOKED', 'Connect grant or membership revoked.', 403);
-    if (typeof state.scope !== 'string' || !Array.isArray(state.repositories)) throw new McpError('INVALID_DELEGATION', 'Connect introspection omitted current grant restrictions.', 401);
-    const currentScopes = state.scope.split(' ');
-    const effectiveScopes = scopes.filter(scope => currentScopes.includes(scope));
-    const effectiveRepositories = (payload.repositories as string[]).filter(repo => (state.repositories as unknown[]).includes(repo));
-    if (!await this.oauth.store.get('credential', payload.sub!) && typeof state.credential_grant === 'string') {
-      const user = await redeemConnectAuthorizationCode({ code: state.credential_grant, relayUrl: process.env.PROPR_GH_RELAY_URL!, relayToken: process.env.PROPR_GH_RELAY_TOKEN! });
-      if (user.id !== payload.sub) throw new McpError('INVALID_DELEGATION', 'Credential owner does not match delegation.', 401);
-      await this.oauth.store.put('credential', user.id, user);
+    // Validate every invocation, even when the same JWT reaches the instance directly.
+    const state = await proof.online('/v1/mcp/delegations/validate', token);
+    if (state.active !== true || Object.keys(payload).some(key => JSON.stringify(state[key]) !== JSON.stringify(payload[key]))) {
+      throw new McpError('ACCESS_REVOKED', 'Connect validation binding changed or access was revoked.', 403);
     }
-    return { id: payload.grant_id, ownerId: payload.sub!, clientId: 'connect', clientName: 'ProPR Connect',
-      instanceId: this.config.instanceId, resource: this.config.resource, scopes: effectiveScopes, repositories: effectiveRepositories,
+    if (!await this.oauth.store.get('credential', payload.sub)) {
+      const user = await proof.credential(token, payload.sub);
+      // Never overwrite a newer browser credential or a concurrent refresh.
+      await this.oauth.store.db.transaction(async tx => {
+        if (!await this.oauth.store.get('credential', payload.sub!, tx)) await this.oauth.store.put('credential', user.id, user, undefined, tx);
+      });
+    }
+    return { id: payload.grant_id, ownerId: payload.sub, clientId: 'connect', clientName: 'ProPR Connect',
+      instanceId: this.config.instanceId, resource: connect.resource, scopes: scopes as McpScope[], repositories: repositories as string[],
       createdAt: payload.iat! * 1000, expiresAt: payload.exp! * 1000, revoked: false, membershipSource: 'connect' };
   }
 

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { after, mock, test } from 'node:test';
 import { randomBytes } from 'node:crypto';
-import { generateKeyPair, exportJWK, SignJWT } from 'jose';
+import { generateKeyPair, exportJWK, SignJWT, decodeJwt, calculateJwkThumbprint } from 'jose';
 import knex from 'knex';
 import { closeConnection } from '@propr/core';
 import { up } from '../../core/src/db/migrations/20260910220000_add_mcp.js';
 import { McpStore, digest } from '../mcp/store.js';
 import { McpOAuthProvider } from '../mcp/oauth.js';
+import { MCP_CONNECT_CONTRACT } from '../mcp/connect.js';
 import { McpPolicy } from '../mcp/policy.js';
 import { configureDemoMode } from '../demoMode.js';
 
@@ -21,9 +22,14 @@ test('signed hosted delegation enforces issuer/audience/instance, current grant 
   await db('instance_members').insert({ github_user_id: '123', role: 'member', source: 'local' });
   const key = await generateKeyPair('ES256');
   const jwk = { ...await exportJWK(key.publicKey), kid: 'fixture-key', alg: 'ES256', use: 'sig' };
-  const config = { origin: 'https://instance.example', resource: 'https://instance.example/api/mcp', instanceId: 'instance-123', encryptionKey: randomBytes(32),
-    connect: { issuer: 'https://mcp.propr.dev', jwks: 'https://mcp.propr.dev/.well-known/jwks.json', installationId: '456', introspection: 'https://mcp.propr.dev/internal/mcp/introspect', secret: 'fixture-server-credential' } };
+  const config = { origin: 'https://instance.example', resource: 'https://instance.example/api/mcp', instanceId: 'instance-1234567890', encryptionKey: randomBytes(32),
+    connect: { issuer: 'https://mcp.propr.dev', jwks: 'https://mcp.propr.dev/.well-known/jwks.json', installationId: 456, resource: 'https://mcp.propr.dev/mcp', tunnelId: 'tunnel-1', relayToken: 'prt_fixture' } };
   const store = new McpStore(db, config.encryptionKey);
+  const instanceKey = await generateKeyPair('ES256', { extractable: true });
+  const privateJwk = await exportJWK(instanceKey.privateKey);
+  const thumbprint = await calculateJwkThumbprint(await exportJWK(instanceKey.publicKey));
+  await store.put('connect_identity', 'instance', { instanceId: config.instanceId, privateJwk });
+  await store.put('connect_registration', 'instance', { instanceId: config.instanceId, issuer: config.connect.issuer, installationId: 456, tunnel_id: 'tunnel-1', key_thumbprint: thumbprint, contract_version: MCP_CONNECT_CONTRACT });
   const oauth = new McpOAuthProvider(store, config);
   const policy = new McpPolicy(oauth, config);
   const originalWhitelist = process.env.GITHUB_USER_WHITELIST;
@@ -39,10 +45,12 @@ test('signed hosted delegation enforces issuer/audience/instance, current grant 
     const req = new Request(input, init); const url = req.url;
     calls.push({ url, auth: req.headers.get('authorization') });
     if (url === config.connect.jwks) return Response.json({ keys: [jwk] });
-    if (url === config.connect.introspection) {
-      assert.equal(req.headers.get('authorization'), 'Bearer fixture-server-credential');
+    if (url === `${config.connect.issuer}/v1/mcp/delegations/validate`) {
+      assert.equal(req.headers.get('authorization'), 'Bearer prt_fixture');
       checks++;
-      return Response.json({ active, grant_id: 'grant-456', subject: '123', instance_id: config.instanceId, installation_id: '456', scope: 'read', repositories: ['acme/repo'] });
+      const body = await req.json();
+      assert.equal(decodeJwt(body.instance_assertion).delegation_sha256, digest(body.delegation));
+      return Response.json({ active, ...decodeJwt(body.delegation) });
     }
     if (url === 'https://api.github.com/user') {
       assert.equal(req.headers.get('authorization'), `token ${refreshed ? 'fixture-refreshed-github' : 'fixture-github-credential'}`);
@@ -56,11 +64,10 @@ test('signed hosted delegation enforces issuer/audience/instance, current grant 
     }
     throw new Error(`Unexpected fixture URL ${url}`);
   });
-  const issue = (overrides: Record<string, unknown> = {}) => new SignJWT({ grant_id: 'grant-456', instance_id: config.instanceId, installation_id: '456', scope: 'read execute', repositories: ['acme/repo', 'acme/restricted'], contract_version: 1, ...overrides })
-    .setProtectedHeader({ alg: 'ES256', kid: 'fixture-key', typ: 'propr-mcp-delegation+jwt' }).setIssuer(config.connect.issuer).setSubject('123').setAudience(`urn:propr:instance:${config.instanceId}`).setIssuedAt().setExpirationTime('60s').setJti('fixture-jti').sign(key.privateKey);
+  const issue = (overrides: Record<string, unknown> = {}) => new SignJWT({ grant_id: 'grant-456', instance_id: config.instanceId, installation_id: 456, scopes: ['read'], repositories: ['acme/repo'], contract_version: MCP_CONNECT_CONTRACT, resource: config.connect.resource, instance_key_thumbprint: thumbprint, ...overrides })
+    .setProtectedHeader({ alg: 'ES256', kid: 'fixture-key', typ: 'propr-mcp-delegation+jwt' }).setIssuer(config.connect.issuer).setSubject('123').setAudience(`urn:propr:instance:${config.instanceId}:mcp`).setIssuedAt().setExpirationTime('60s').setJti('fixture-jti').sign(key.privateKey);
   try {
     const token = await issue();
-    await assert.rejects(policy.authenticate(token), /GitHub access/);
     await store.put('credential', '123', { id: '123', username: 'tester', login: 'tester', displayName: 'Test', email: null, avatarUrl: null, accessToken: 'fixture-github-credential' });
     const principal = await policy.authenticate(token);
     assert.deepEqual(principal.scopes, ['read']);
@@ -74,8 +81,11 @@ test('signed hosted delegation enforces issuer/audience/instance, current grant 
     process.env.GITHUB_USER_WHITELIST = 'another-user'; await assert.rejects(policy.authenticate(token), /access denied/); process.env.GITHUB_USER_WHITELIST = 'tester';
     assert.ok(calls.every(call => call.auth !== `Bearer ${token}`), 'Delegation must never be forwarded to GitHub or introspection');
     const direct = 'propr_mcp_direct-fixture';
-    await store.put('grant', 'direct-grant', { ...principal.grant, id: 'direct-grant', membershipSource: 'local' });
+    await store.put('grant', 'direct-grant', { ...principal.grant, id: 'direct-grant', membershipSource: 'local', resource: config.resource });
     await store.put('access', digest(direct), { grantId: 'direct-grant', clientId: 'fixture', scopes: ['read'], expiresAt: Date.now() + 60000 }, Date.now() + 60000);
+    const beforeDirect = checks;
+    await new McpPolicy(oauth, { ...config, connect: undefined }).authenticate(direct);
+    assert.equal(checks, beforeDirect, 'Direct OAuth does not require Connect');
     await db('instance_members').where({ github_user_id: '123' }).update({ role: 'admin' });
     assert.ok((await policy.authenticate(direct)).authorization.permissions.includes('instance.manage_settings'));
     await db('instance_members').where({ github_user_id: '123' }).update({ role: 'member' });

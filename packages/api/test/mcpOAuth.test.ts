@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { up } from '../../core/src/db/migrations/20260910220000_add_mcp.js';
-import { McpOAuthProvider } from '../mcp/oauth.js';
+import { McpOAuthProvider, validatePublicTokenRequest } from '../mcp/oauth.js';
 import { McpStore } from '../mcp/store.js';
 import { loadMcpConfig, type McpConfig } from '../mcp/config.js';
 import { validateGitHubToken } from '../authBearer.js';
@@ -93,6 +93,7 @@ test('OAuth authorization validates exact redirects, scopes and resource before 
 test('SDK OAuth HTTP router performs a real authorization-code/PKCE exchange and replay rejection', async () => {
   const f = await fixture();
   const app = express();
+  app.use('/token', express.urlencoded({ extended: false, limit: '16kb' }), validatePublicTokenRequest);
   app.use(mcpAuthRouter({ provider: f.oauth, issuerUrl: new URL(f.config.origin), resourceServerUrl: new URL(f.config.resource), scopesSupported: ['read', 'plan'] }));
   const server = createServer(app);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -102,6 +103,11 @@ test('SDK OAuth HTTP router performs a real authorization-code/PKCE exchange and
     assert.equal(metadata.resource, f.config.resource);
     const code = await f.authorize();
     const params = new URLSearchParams({ grant_type: 'authorization_code', client_id: f.client.client_id, code, code_verifier: f.verifier, redirect_uri: f.client.redirect_uris[0], resource: f.config.resource });
+    for (const extra of [{ client_assertion: 'unsupported.jwt.assertion' }, { client_assertion_type: 'jwt-bearer' }, { scope: 'read merge' }, { client_secret: 'secret' }]) {
+      const attempted = new URLSearchParams(params);
+      for (const [key, value] of Object.entries(extra)) attempted.set(key, value);
+      assert.equal((await fetch(`${base}/token`, { method: 'POST', body: attempted })).status, 400);
+    }
     const response = await fetch(`${base}/token`, { method: 'POST', body: params });
     assert.equal(response.status, 200, await response.clone().text());
     const token = await response.json();
@@ -115,4 +121,26 @@ test('MCP configuration fails closed without explicit secrets and stable identit
   assert.equal(loadMcpConfig({}), undefined);
   assert.throws(() => loadMcpConfig({ MCP_ENABLED: 'true' }), /MCP_PUBLIC_ORIGIN/);
   assert.throws(() => loadMcpConfig({ MCP_ENABLED: 'true', MCP_PUBLIC_ORIGIN: 'https://instance.example', MCP_INSTANCE_ID: 'instance-123' }), /MCP_ENCRYPTION_KEY/);
+});
+
+
+test('direct consent selects a bounded subset, rejects malformed selections and never consumes a failed selection', async () => {
+  const f = await fixture();
+  try {
+    let url = '';
+    await f.oauth.authorize(f.client, { redirectUri: f.client.redirect_uris[0], codeChallenge: f.challenge,
+      resource: new URL(f.config.resource), scopes: ['read', 'plan', 'execute'] }, { redirect(value: string) { url = value; } } as never);
+    const pending = new URL(url).searchParams.get('request')!;
+    for (const scopes of [[], ['merge'], ['read', 'merge'], ['read', 3], ['read', {}], 'read', null]) {
+      await assert.rejects(f.oauth.approve(pending, f.user, ['acme/repo'], 'local', scopes));
+    }
+    const redirect = new URL(await f.oauth.approve(pending, f.user, ['acme/repo'], 'local', ['read', 'plan']));
+    const tokens = await f.exchange(redirect.searchParams.get('code')!);
+    assert.equal(tokens.scope, 'read plan');
+    await assert.rejects(f.oauth.exchangeRefreshToken(f.client, tokens.refresh_token!, ['read', 'execute'], new URL(f.config.resource)));
+    await assert.rejects(f.oauth.exchangeRefreshToken(f.client, tokens.refresh_token!, [], new URL(f.config.resource)));
+    const narrowed = await f.oauth.exchangeRefreshToken(f.client, tokens.refresh_token!, ['read'], new URL(f.config.resource));
+    assert.equal(narrowed.scope, 'read');
+    await assert.rejects(f.oauth.exchangeRefreshToken(f.client, narrowed.refresh_token!, ['read', 'plan'], new URL(f.config.resource)));
+  } finally { await f.db.destroy(); }
 });

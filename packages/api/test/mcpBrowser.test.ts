@@ -43,6 +43,17 @@ test('real consent and connected-app routes work at desktop/mobile widths and en
     assert.equal(await page.getByRole('heading', { name: 'Connect an app' }).count(), 1);
     const rejected = await context.request.post(`${origin}/mcp/consent`, { form: { csrf: 'wrong', request: new URL(consent).searchParams.get('request')!, decision: 'approve', repositories: 'acme/web-app' }, headers: { Origin: origin } });
     assert.equal(rejected.status(), 403);
+    assert.equal(await page.getByLabel('read (required)', { exact: true }).isChecked(), true);
+    assert.equal(await page.getByLabel('plan', { exact: true }).isChecked(), false);
+    assert.equal(await page.getByLabel('execute', { exact: true }).isChecked(), false);
+    // A forged form cannot add unrequested permissions, even with valid CSRF.
+    const csrf = await page.locator('input[name=csrf]').inputValue();
+    const escalation = await context.request.post(`${origin}/mcp/consent`, { form: {
+      csrf, request: new URL(consent).searchParams.get('request')!, decision: 'approve', repositories: 'acme/web-app', scopes: 'merge'
+    }, headers: { Origin: origin } });
+    assert.equal(escalation.status(), 400);
+    await page.getByLabel('plan', { exact: true }).check();
+    await page.getByLabel('plan', { exact: true }).uncheck();
     await page.getByLabel('acme/web-app').check();
     const capture = process.env.MCP_CAPTURE_PREVIEWS === 'true';
     if (capture) { await mkdir('.propr/previews', { recursive: true }); await page.screenshot({ path: '.propr/previews/mcp-consent-desktop.png', fullPage: true }); }
@@ -54,17 +65,17 @@ test('real consent and connected-app routes work at desktop/mobile widths and en
     await page.waitForURL('https://client.example/callback*', { timeout: 3000 }).catch(async () => { throw new Error(`Consent navigation failed: ${await page.locator('body').innerText()}`); });
     const code = new URL(page.url()).searchParams.get('code')!;
     const token = await oauth.exchangeAuthorizationCode(client, code, verifier, client.redirect_uris[0], new URL(`${origin}/api/mcp`));
-    await oauth.verifyAccessToken(token.access_token);
+    assert.equal(token.scope, 'read');
+    assert.deepEqual((await oauth.verifyAccessToken(token.access_token)).scopes, ['read']);
     await page.goto(`${origin}/mcp/apps`);
     assert.equal(await page.getByRole('heading', { name: 'Development chat client' }).count(), 1);
-    if (capture) await page.screenshot({ path: '.propr/previews/mcp-connected-apps-mobile.png', fullPage: true });
+
     await page.getByRole('button', { name: 'Revoke access' }).click();
     await page.getByText('No connected apps.').waitFor();
     await assert.rejects(oauth.verifyAccessToken(token.access_token));
     if (capture) await writeFile('.propr/previews/manifest.json', JSON.stringify({ previews: [
-      { path: '.propr/previews/mcp-consent-desktop.png', title: 'MCP app consent', description: 'Actual consent route with repository selection and requested scopes, using fictional fixture data.' },
+      { path: '.propr/previews/mcp-consent-desktop.png', title: 'MCP app consent', description: 'Actual consent route with optional permission checkboxes left unselected for read-only access, using fictional fixture data.' },
       { path: '.propr/previews/mcp-consent-mobile.png', title: 'Mobile MCP consent', description: 'Consent at a 390-pixel mobile viewport.' },
-      { path: '.propr/previews/mcp-connected-apps-mobile.png', title: 'Connected apps and revocation', description: 'The actual connected-apps route after consent, before revocation.' },
     ], toolSuggestions: [] }, null, 2));
   } finally { await browser?.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await db.destroy(); }
 });

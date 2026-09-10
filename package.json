@@ -70,7 +70,9 @@
     "deploy:hosted-ui": "npm run build -w propr-ui && npx wrangler deploy --config wrangler.hosted-ui.toml",
     "start:prod": "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $PWD/.env:/app/.env:ro -v $PWD/data:/app/data -v $PWD/logs:/app/logs -v $PWD/repos:/app/repos propr/launcher:latest",
     "test:mcp": "NODE_ENV=test npx tsx --experimental-test-module-mocks --test packages/api/test/mcpOAuth.test.ts packages/api/test/mcpOperations.test.ts packages/api/test/mcpIntegration.test.ts packages/api/test/mcpDelegation.test.ts packages/api/test/mcpWorkflows.test.ts",
-    "test:mcp:browser": "NODE_ENV=test npx tsx --test packages/api/test/mcpBrowser.test.ts"
+    "test:mcp:browser": "NODE_ENV=test npx tsx --test packages/api/test/mcpBrowser.test.ts",
+    "test:mcp:connect": "node scripts/test-mcp-connect.mjs",
+    "mcp:connect:register": "tsx scripts/mcp-connect-register.ts"
   },
   "keywords": [],
   "author": "Unchained Development O\u00dc / Rinalds Uzkalns",

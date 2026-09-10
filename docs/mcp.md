@@ -47,7 +47,7 @@ transactionally. Access tokens last five minutes. Refresh tokens rotate;
 reuse revokes the entire 30-day grant, including newly rotated access tokens.
 GitHub credentials are separately encrypted server-side and never returned
 to clients. Instance membership, allowlist and repository access are checked
-again for every call. The connected-app page is `/mcp/apps`.
+again for every call. The connected-app page is `/mcp/apps`. Consent shows each requested permission with optional scopes unchecked initially. Keep them unchecked for read-only access; select a requested subset when needed. Consent and refresh cannot add unrequested permissions.
 
 ## Client compatibility and verified upstream details
 
@@ -66,7 +66,7 @@ CIMD metadata uses a public HTTPS URL, bounded 32 KiB JSON, five-second
 timeout, no redirects and DNS-pinned public addresses. DCR remains available.
 Only public PKCE clients (`none`) are supported. New CIMD documents with
 `token_endpoint_auth_methods_supported` are intersected with `none`; a legacy
-`private_key_jwt` preference does not override that supported intersection.
+`private_key_jwt` preference does not override that supported intersection. Empty, non-string or whitespace-containing method names/preferences are rejected, as are unsupported grant/response-type arrays. DCR still binds the singular method to `none`.
 
 Use the exact callback displayed by the host; never register wildcard
 callbacks. [ChatGPT's official authentication guide](https://developers.openai.com/plugins/build/auth)
@@ -88,26 +88,73 @@ documents `--callback-port` and HTTP transport setup. Hosted Claude CIMD does
 not need the loopback exception. No live ChatGPT/Claude OAuth session has
 been exercised by the local fixture tests.
 
-## Connect
+## Connect instance registration
 
-Direct access does not require Connect. To explicitly trust a Connect
-gateway, additionally configure:
+Core [PR #2291](https://github.com/integry/propr/pull/2291) coordinates
+[routing PR #180](https://github.com/integry/propr-routing/pull/180) and
+[site PR #90](https://github.com/integry/propr-site/pull/90).
+Direct OAuth works independently of Connect trust. Hosted access uses the
+[implemented Connect contract](mcp-connect-contract.md).
 
-```dotenv
-MCP_CONNECT_TRUST=true
-MCP_CONNECT_ISSUER=https://mcp.propr.dev
-MCP_CONNECT_JWKS_URL=https://mcp.propr.dev/.well-known/jwks.json
-MCP_CONNECT_INSTALLATION_ID=<numeric installation ID>
-MCP_CONNECT_INTROSPECTION_URL=https://mcp.propr.dev/internal/mcp/introspect
-MCP_CONNECT_INTROSPECTION_SECRET=<instance-specific server credential>
-```
+1. Complete the existing operator/browser relay and `propr tunnel setup` flow.
+   Keep its `GH_INSTALLATION_ID`, `PROPR_GH_RELAY_URL`, `PROPR_GH_RELAY_TOKEN`,
+   `PROPR_UI_TUNNEL_ENABLED=true`, `PROPR_UI_TUNNEL_TOKEN` and `PROPR_INSTANCE_ID`.
+   The last value is the **tunnel registry UUID**, not the stable MCP identity.
+   An operator configuring a tunnel outside that flow can set
+   `MCP_CONNECT_TUNNEL_ID` to the active registry `tunnel_id` shown by Connect.
+   This is not Cloudflare's separate `cf_tunnel_id`.
+2. Configure the direct setup variables above in the same instance environment.
+   For a new instance, generate `MCP_INSTANCE_ID` once with
+   `node -e 'console.log(require("node:crypto").randomUUID())'`.
+   Preserve it separately from the tunnel ID. Keep `MCP_ENCRYPTION_KEY` in the
+   operator secret manager and point `DB_FILENAME` at the running API's durable
+   SQLite database. Use the actual API public origin for `MCP_PUBLIC_ORIGIN`.
+3. Explicitly opt in:
 
-Existing `PROPR_GH_RELAY_URL`/`PROPR_GH_RELAY_TOKEN` are additionally needed
-for optional credential grant redemption. The [Connect contract](mcp-connect-contract.md)
-specifies required claims, current membership/revocation semantics, scope
-intersection and gateway errors. Public gateway OAuth, routing registry,
-tunnels and the Connect site are companion-repository work. Configuration
-examples are not evidence that the hosted endpoint has been deployed.
+   ```dotenv
+   MCP_CONNECT_TRUST=true
+   MCP_CONNECT_ISSUER=https://mcp.propr.dev
+   ```
+
+   Issuer defaults to that canonical origin when trust is enabled. JWKS,
+   public resource, validation and handoff URLs are derived from it. The old
+   `MCP_CONNECT_INTROSPECTION_*`, `MCP_CONNECT_INSTALLATION_ID` and configurable
+   JWKS URL belong to the incompatible proposal and are no longer used.
+4. After the ordinary instance database migrations, run from the core checkout
+   with the **same environment and database** as the API:
+
+   ```sh
+   DOTENV_CONFIG_PATH=/path/to/instance/.env npm run mcp:connect:register
+   ```
+
+   In a built installation the equivalent entry point is
+   `DOTENV_CONFIG_PATH=/path/to/instance/.env node dist/scripts/mcp-connect-register.js`.
+   This operator command generates a P-256 key once, persists it encrypted in
+   SQLite before making a network request, signs registration, and stores the
+   verified registration receipt. It prints only the public instance/resource
+   identifiers. It never asks an operator to construct or paste JWTs. Retry the
+   command after a network failure; it reuses the same identity. A changed
+   `MCP_INSTANCE_ID` cannot overwrite an existing identity.
+5. Restart the API with the matching configuration. Add each intended user
+   through the existing Access settings and configure the allowed repositories.
+   Connect membership alone does not create local access. Connect a public
+   client to `https://mcp.propr.dev/mcp`, then explicitly select its installation,
+   requested permissions and repositories in the Connect browser consent flow.
+   GitHub credential handoff happens server-to-server on the first request.
+
+Secrets belong only in operator/browser setup, never chat inputs or public
+OAuth client traffic. Keep SQLite and its encryption key together across
+upgrades and backups. Losing either requires explicit operator recovery and
+fresh consent; do not reset a key automatically. Reprovisioning a tunnel or
+changing the registered key/instance invalidates old grants permanently. Update
+the tunnel configuration, rerun registration and obtain fresh consent. Rotating
+a connector secret for the same tunnel leaves the MCP identity unchanged.
+
+The existing managed tunnel routes `/api/*`, which covers delegated MCP. It does
+not automatically expose direct `/.well-known`, `/authorize`, `/mcp/consent`, etc.
+To offer **direct OAuth through a domain**, use the complete reverse-proxy routes
+listed in direct setup; public Connect clients use Connect's discovery/consent.
+No production configuration was changed by this PR.
 
 ## Tools and ordinary workflows
 
@@ -233,3 +280,10 @@ from launching an already requested issue again. Following an uncertain
 partial publication/implementation, an operator must reconcile the receipt,
 GitHub markers, issue labels and queue state before explicitly recovering it.
 No deployment, auto-merge activation or production migration was performed.
+
+
+The Connect follow-up also runs both actual repositories at the pinned routing
+commit, including registration, public OAuth, both SDK eras and proof-bound
+credential handoff. Exact commands/results and the remaining full-chat gates
+are in [the follow-up evidence](mcp-coverage.md#connect-integration-follow-up-evidence).
+Earlier test counts above describe the original PR baseline, not the follow-up.
