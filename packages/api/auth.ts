@@ -255,6 +255,8 @@ export function setupAuth(app: Express, demoModeAtStartup = isDemoMode()): Socke
 
         if (redirectTo) {
             (req.session as AuthSession).redirectTo = redirectTo;
+        } else {
+            delete (req.session as AuthSession).redirectTo;
         }
 
         if (browserAuthMode === 'connect') {
@@ -295,7 +297,21 @@ export function setupAuth(app: Express, demoModeAtStartup = isDemoMode()): Socke
         });
     } else if (browserAuthMode === 'github') {
         app.get('/api/auth/github/callback',
-            passport.authenticate('github', { failureRedirect: '/login' }),
+            (req: Request, res: Response, next: NextFunction) => {
+                // Passport regenerates the session on login. Carry only the
+                // validated return intent across it, without retaining other
+                // anonymous session data or accepting callback query overrides.
+                const redirectTo = getValidatedRedirectTo((req.session as AuthSession).redirectTo);
+                delete (req.session as AuthSession).redirectTo;
+                passport.authenticate('github', { failureRedirect: '/login' })(req, res, (error?: unknown) => {
+                    if (error) {
+                        next(error);
+                        return;
+                    }
+                    if (redirectTo) (req.session as AuthSession).redirectTo = redirectTo;
+                    next();
+                });
+            },
             completeAuthenticatedSessionWithPreviewCredential
         );
     } else if (browserAuthMode === 'connect') {
