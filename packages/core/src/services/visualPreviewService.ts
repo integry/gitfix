@@ -1,4 +1,4 @@
-import { githubInlineEligibility, MIB, resolveGitHubAttachmentCapacity, resolveVisualPreviewOriginalCapacity, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity, type GitHubInlineEligibility, type VisualPreviewOriginalCapacity } from '@propr/shared';
+import { describeVisualPreviewOriginalCapacity, githubInlineEligibility, MIB, resolveGitHubAttachmentCapacity, resolveVisualPreviewOriginalAssetCapacity, resolveVisualPreviewOriginalCapacity, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity, type GitHubInlineEligibility, type VisualPreviewOriginalAssetCapacity, type VisualPreviewOriginalCapacity } from '@propr/shared';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -27,6 +27,8 @@ const VIDEO_EXTENSIONS = new Set(['.mov', '.mp4', '.webm']);
 export interface VisualPreviewAsset {
   /** Snapshot for publisher selection; GitHub publishers revalidate the file before upload. */
   githubInline?: GitHubInlineEligibility;
+  /** Snapshot used to revalidate the staged copy against the same MIME-specific authority. */
+  originalStaging?: VisualPreviewOriginalAssetCapacity;
   sizeBytes?: number;
   relativePath: string;
   absolutePath: string;
@@ -158,15 +160,15 @@ function manifestToolSuggestions(manifest: VisualPreviewManifestData | null): Vi
 }
 
 async function collectAsset({
-  worktreePath, relativePath, type, manifestEntry, capacity, originalCapacity,
+  worktreePath, relativePath, type, manifestEntry, capacity, originalStaging,
 }: {
   worktreePath: string;
   relativePath: string;
   type: VisualPreviewType;
   manifestEntry: VisualPreviewManifestEntry | undefined;
   capacity: GitHubAttachmentCapacity;
-  originalCapacity: VisualPreviewOriginalCapacity;
-}): Promise<{ asset?: VisualPreviewAsset; oversized?: boolean }> {
+  originalStaging: VisualPreviewOriginalAssetCapacity;
+}): Promise<{ asset?: VisualPreviewAsset; oversizedSource?: VisualPreviewOriginalAssetCapacity['source'] }> {
   const absolutePath = path.resolve(worktreePath, relativePath);
   const root = path.resolve(worktreePath);
   if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) return {};
@@ -178,7 +180,7 @@ async function collectAsset({
     const [realRoot, realAsset] = await Promise.all([realpath(root), realpath(absolutePath)]);
     if (realAsset !== realRoot && !realAsset.startsWith(`${realRoot}${path.sep}`)) return {};
     if (stats.size === 0) return {};
-    if (stats.size > (type === 'image' ? originalCapacity.imageLimitBytes : originalCapacity.videoLimitBytes)) return { oversized: true };
+    if (stats.size > originalStaging.limitBytes) return { oversizedSource: originalStaging.source };
     sizeBytes = stats.size;
   } catch {
     return {};
@@ -187,6 +189,7 @@ async function collectAsset({
   return {
     asset: {
       sizeBytes,
+      originalStaging,
       githubInline: githubInlineEligibility(VISUAL_PREVIEW_CONTENT_TYPES[path.extname(relativePath).toLowerCase()], sizeBytes, capacity),
       relativePath,
       absolutePath,
@@ -223,20 +226,21 @@ export async function collectVisualPreviewEvidence({
   const capacity = resolveGitHubAttachmentCapacity(settings.githubAttachmentPlan, settings.githubAttachmentCapacity?.detectedPlan);
   const originalCapacity = resolveVisualPreviewOriginalCapacity(settings.originalEvidenceCapability, capacity);
   const assets: VisualPreviewAsset[] = [];
-  let oversized = false;
+  const oversizedSources = new Set<VisualPreviewOriginalAssetCapacity['source']>();
   for (const candidate of candidates) {
+    const originalStaging = resolveVisualPreviewOriginalAssetCapacity(VISUAL_PREVIEW_CONTENT_TYPES[path.extname(candidate.filePath).toLowerCase()], settings.originalEvidenceCapability, capacity)!;
     const collected = await collectAsset({
       worktreePath, relativePath: candidate.filePath, type: candidate.type,
-      manifestEntry: manifestEntries.get(candidate.filePath), capacity, originalCapacity,
+      manifestEntry: manifestEntries.get(candidate.filePath), capacity, originalStaging,
     });
     if (collected.asset) assets.push(collected.asset);
-    oversized ||= collected.oversized === true;
+    if (collected.oversizedSource) oversizedSources.add(collected.oversizedSource);
   }
 
-  if (oversized) {
+  if (oversizedSources.size > 0) {
     toolSuggestions.push({
       name: 'Media compression tooling',
-      reason: 'At least one generated preview exceeded the original-evidence staging safety limit; install or use an image optimizer or ffmpeg to fit that limit.'
+      reason: oversizedSources.has('legacy') ? 'At least one generated preview whose content type is not accepted by managed storage exceeded its legacy original-evidence staging safety limit; install or use an image optimizer or ffmpeg to fit that limit.' : 'At least one generated preview exceeded the managed original-evidence staging safety limit; install or use an image optimizer or ffmpeg to fit that limit.'
     });
   }
 
@@ -274,8 +278,8 @@ async function copyEvidenceToTemporaryDirectory(
       await mkdir(path.dirname(destination), { recursive: true });
       await copyFile(asset.absolutePath, destination);
       const { size: sizeBytes } = await lstat(destination);
-      const originalCapacity = evidence.originalCapacity!;
-      if (sizeBytes > (asset.type === 'image' ? originalCapacity.imageLimitBytes : originalCapacity.videoLimitBytes)) {
+      const fallbackLimit = asset.type === 'image' ? evidence.originalCapacity!.imageLimitBytes : evidence.originalCapacity!.videoLimitBytes;
+      if (sizeBytes > (asset.originalStaging?.limitBytes ?? fallbackLimit)) {
         throw new Error('Visual preview grew beyond the original-evidence staging safety limit');
       }
       assets.push({
@@ -430,10 +434,8 @@ export function appendVisualPreviewSection(body: string, section: string): strin
 export function buildVisualPreviewPrompt(settings: VisualPreviewSettings): string {
   if (!settings.enabled) return '';
   const githubCapacity = resolveGitHubAttachmentCapacity(settings.githubAttachmentPlan, settings.githubAttachmentCapacity?.detectedPlan);
-  const originalCapacity = resolveVisualPreviewOriginalCapacity(settings.originalEvidenceCapability, githubCapacity);
-  const capacityInstructions = originalCapacity.source === 'managed-storage'
-    ? `Managed-original storage is available: keep each original at or below ${originalCapacity.imageLimitBytes / MIB} MiB (the original-evidence staging safety limit). Preserve supported originals even when they exceed GitHub inline limits; the managed-storage publisher can preserve them and publish authenticated viewer links. Do not shrink an original solely to fit GitHub inline upload.`
-    : `Managed-original storage is unavailable. Keep images at or below ${originalCapacity.imageLimitBytes / MIB} MiB and videos at or below ${originalCapacity.videoLimitBytes / MIB} MiB (the legacy original-evidence staging safety limits).`;
+  const capacityInstructions = describeVisualPreviewOriginalCapacity(
+    settings.originalEvidenceCapability, githubCapacity, settings.types);
   const additionalInstructions = settings.instructions
     ? `\nRepository-specific capture instructions (apply only to preview generation):\n${settings.instructions}\n`
     : '';

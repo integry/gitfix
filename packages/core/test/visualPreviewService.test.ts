@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
 import { simpleGit } from 'simple-git';
+import { VISUAL_PREVIEW_CONTENT_TYPES } from '@propr/shared';
 import {
   appendVisualPreviewSection,
   buildVisualPreviewPrompt,
@@ -304,7 +305,7 @@ test('managed collection keeps supported originals beyond inline limits but enfo
         await truncate(absolutePath, sizeBytes);
         const evidence = await collectVisualPreviewEvidence({
           worktreePath: worktree, changedFiles: [relativePath],
-          settings: { enabled: true, types: ['image', 'video'], originalEvidenceCapability: { maxBytes } },
+          settings: { enabled: true, types: ['image', 'video'], originalEvidenceCapability: { maxBytes, allowedContentTypes: Object.values(VISUAL_PREVIEW_CONTENT_TYPES) } },
         });
         assert.equal(evidence.assets.length, extension !== 'pdf' && sizeBytes <= maxBytes ? 1 : 0, `${extension}, ${maxBytes}, ${sizeBytes}`);
         if (evidence.assets.length) {
@@ -319,10 +320,34 @@ test('managed collection keeps supported originals beyond inline limits but enfo
   }
 });
 
+test('PNG-only managed storage leaves an oversized video on the legacy staging limit', async () => {
+  const { truncate } = await import('node:fs/promises');
+  const { MIB } = await import('@propr/shared');
+  const worktree = await createWorktree();
+  const videoPath = '.propr/previews/unsupported.mp4';
+  await writeFile(path.join(worktree, videoPath), '');
+  await truncate(path.join(worktree, videoPath), 20 * MIB);
+
+  const evidence = await collectVisualPreviewEvidence({
+    worktreePath: worktree,
+    changedFiles: [videoPath],
+    settings: {
+      enabled: true,
+      types: ['video'],
+      originalEvidenceCapability: { maxBytes: 250 * MIB, allowedContentTypes: ['image/png'] },
+    },
+  });
+
+  assert.equal(evidence.assets.length, 0);
+  assert.equal(evidence.originalCapacity?.videoLimitBytes, 10 * MIB);
+  assert.match(evidence.toolSuggestions[0].reason, /not accepted by managed storage/);
+  assert.match(evidence.toolSuggestions[0].reason, /legacy original-evidence staging safety limit/);
+});
+
 test('prompt distinguishes managed originals from inline publication without instructing originals to shrink', () => {
   const prompt = buildVisualPreviewPrompt({
     enabled: true, types: ['image', 'video'], githubAttachmentPlan: 'paid',
-    originalEvidenceCapability: { maxBytes: 500 * 1024 * 1024 },
+    originalEvidenceCapability: { maxBytes: 500 * 1024 * 1024, allowedContentTypes: Object.values(VISUAL_PREVIEW_CONTENT_TYPES) },
   });
   assert.match(prompt, /GitHub inline publication limits: images at or below 10 MiB; videos at or below 100 MiB/);
   assert.match(prompt, /keep each original at or below 500 MiB/);
@@ -332,4 +357,13 @@ test('prompt distinguishes managed originals from inline publication without ins
   assert.match(legacy, /Managed-original storage is unavailable/);
   assert.match(legacy, /legacy original-evidence staging safety limits/);
   assert.doesNotMatch(legacy, /authenticated viewer links/);
+
+  const partial = buildVisualPreviewPrompt({
+    enabled: true,
+    types: ['image', 'video'],
+    originalEvidenceCapability: { maxBytes: 250 * 1024 * 1024, allowedContentTypes: ['image/png'] },
+  });
+  assert.match(partial, /available only for these content types: image\/png/);
+  assert.match(partial, /Other requested content types are not accepted by managed storage/);
+  assert.match(partial, /compress or regenerate an oversized unsupported type/);
 });

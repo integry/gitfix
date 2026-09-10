@@ -215,7 +215,10 @@ export async function loadOriginalEvidenceCapability(
     try {
         const status = await loadStatus();
         return status.state === 'enabled' && status.enabled && status.effective?.enabled
-            ? { maxBytes: status.effective.maxObjectBytes }
+            ? {
+                maxBytes: status.effective.maxObjectBytes,
+                allowedContentTypes: [...status.effective.allowedContentTypes]
+            }
             : undefined;
     } catch {
         return undefined;

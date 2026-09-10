@@ -15,6 +15,7 @@ export const MIB = 1024 * 1024;
 /** Supplied by a trusted managed-storage capability resolver, never repository configuration. */
 export interface VisualPreviewOriginalCapability {
   maxBytes: number;
+  allowedContentTypes: readonly string[];
 }
 
 export interface VisualPreviewOriginalCapacity {
@@ -23,22 +24,71 @@ export interface VisualPreviewOriginalCapacity {
   videoLimitBytes: number;
 }
 
+export interface VisualPreviewOriginalAssetCapacity {
+  source: 'legacy' | 'managed-storage';
+  limitBytes: number;
+}
+
 export const MAX_VISUAL_PREVIEW_ORIGINAL_BYTES = 500 * MIB;
+
+function validOriginalCapability(capability: VisualPreviewOriginalCapability | undefined): capability is VisualPreviewOriginalCapability {
+  return Boolean(capability
+    && Number.isSafeInteger(capability.maxBytes) && capability.maxBytes > 0
+    && Array.isArray(capability.allowedContentTypes)
+    && capability.allowedContentTypes.every(contentType => typeof contentType === 'string'));
+}
+
+/** Resolve staging authority for one concrete asset; managed allowlists are exact MIME matches. */
+export function resolveVisualPreviewOriginalAssetCapacity(
+  contentType: string,
+  capability?: VisualPreviewOriginalCapability,
+  githubCapacity = resolveGitHubAttachmentCapacity(),
+): VisualPreviewOriginalAssetCapacity | null {
+  const legacyLimitBytes = githubAttachmentLimitBytes(contentType, githubCapacity);
+  if (legacyLimitBytes === null) return null;
+  if (validOriginalCapability(capability) && capability.allowedContentTypes.includes(contentType)) {
+    return {
+      source: 'managed-storage',
+      limitBytes: Math.min(capability.maxBytes, MAX_VISUAL_PREVIEW_ORIGINAL_BYTES),
+    };
+  }
+  return { source: 'legacy', limitBytes: legacyLimitBytes };
+}
 
 /** GitHub limits are only the legacy staging fallback, not a managed-original ceiling. */
 export function resolveVisualPreviewOriginalCapacity(
   capability?: VisualPreviewOriginalCapability,
   githubCapacity = resolveGitHubAttachmentCapacity(),
 ): VisualPreviewOriginalCapacity {
-  if (capability && Number.isSafeInteger(capability.maxBytes) && capability.maxBytes > 0) {
-    const limit = Math.min(capability.maxBytes, MAX_VISUAL_PREVIEW_ORIGINAL_BYTES);
-    return { source: 'managed-storage', imageLimitBytes: limit, videoLimitBytes: limit };
-  }
+  const capacities = Object.values(VISUAL_PREVIEW_CONTENT_TYPES)
+    .map(contentType => ({ contentType, capacity: resolveVisualPreviewOriginalAssetCapacity(contentType, capability, githubCapacity)! }));
+  const categoryLimit = (prefix: 'image/' | 'video/') => Math.min(...capacities
+    .filter(({ contentType }) => contentType.startsWith(prefix))
+    .map(({ capacity }) => capacity.limitBytes));
   return {
-    source: 'legacy',
-    imageLimitBytes: githubAttachmentLimitBytes('image/png', githubCapacity)!,
-    videoLimitBytes: githubAttachmentLimitBytes('video/mp4', githubCapacity)!,
+    source: capacities.some(({ capacity }) => capacity.source === 'managed-storage') ? 'managed-storage' : 'legacy',
+    imageLimitBytes: categoryLimit('image/'),
+    videoLimitBytes: categoryLimit('video/'),
   };
+}
+
+export function describeVisualPreviewOriginalCapacity(
+  capability: VisualPreviewOriginalCapability | undefined,
+  githubCapacity: GitHubAttachmentCapacity,
+  requestedTypes: readonly ('image' | 'video')[],
+): string {
+  const relevantContentTypes = Object.values(VISUAL_PREVIEW_CONTENT_TYPES)
+    .filter(contentType => requestedTypes.some(type => contentType.startsWith(`${type}/`)));
+  const managedContentTypes = relevantContentTypes.filter(contentType =>
+    resolveVisualPreviewOriginalAssetCapacity(contentType, capability, githubCapacity)?.source === 'managed-storage');
+  if (managedContentTypes.length === 0) {
+    return `Managed-original storage is unavailable for the requested preview content types. Keep images at or below ${githubCapacity.imageLimitBytes / MIB} MiB and videos at or below ${githubCapacity.videoLimitBytes / MIB} MiB (the legacy original-evidence staging safety limits).`;
+  }
+  const managedLimitBytes = resolveVisualPreviewOriginalAssetCapacity(managedContentTypes[0], capability, githubCapacity)!.limitBytes;
+  if (managedContentTypes.length === relevantContentTypes.length) {
+    return `Managed-original storage is available: keep each original at or below ${managedLimitBytes / MIB} MiB (the original-evidence staging safety limit). Preserve supported originals even when they exceed GitHub inline limits; the managed-storage publisher can preserve them and publish authenticated viewer links. Do not shrink an original solely to fit GitHub inline upload.`;
+  }
+  return `Managed-original storage is available only for these content types: ${managedContentTypes.join(', ')}. Keep those originals at or below ${managedLimitBytes / MIB} MiB; they may retain their originals beyond GitHub inline limits for authenticated viewer links. Other requested content types are not accepted by managed storage and retain the legacy staging limits of ${githubCapacity.imageLimitBytes / MIB} MiB for images and ${githubCapacity.videoLimitBytes / MIB} MiB for videos; compress or regenerate an oversized unsupported type to fit its legacy limit.`;
 }
 
 export type GitHubInlineEligibility =

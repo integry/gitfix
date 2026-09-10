@@ -67,6 +67,7 @@ test('managed original capacity is derived only from enabled trusted storage sta
   const enabled: ManagedPreviewStorageStatus = { version: 1, state: 'enabled', enabled: true, effective };
   assert.deepEqual(await loadOriginalEvidenceCapability(async () => enabled), {
     maxBytes: effective.maxObjectBytes,
+    allowedContentTypes: ['image/png'],
   });
 
   for (const status of [

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { detectGitHubAttachmentPlan, githubAttachmentLimitBytes, githubInlineEligibility, resolveGitHubAttachmentCapacity, resolveVisualPreviewOriginalCapacity, VISUAL_PREVIEW_CONTENT_TYPES, MIB } from '@propr/shared';
+import { detectGitHubAttachmentPlan, githubAttachmentLimitBytes, githubInlineEligibility, resolveGitHubAttachmentCapacity, resolveVisualPreviewOriginalAssetCapacity, resolveVisualPreviewOriginalCapacity, VISUAL_PREVIEW_CONTENT_TYPES, MIB } from '@propr/shared';
 import { loadGitHubAttachmentCapacity } from '../src/services/visualPreviewCapacityService.js';
 import { normalizeStoredVisualPreviewSettings } from '../src/config/configManager.js';
 import { db } from '../src/db/connection.js';
@@ -42,9 +42,10 @@ test('stored settings retain override but discard client-supplied resolved paid 
 });
 
 test('managed original capacity honors server limits independently of GitHub plans and caps staging at 500 MiB', () => {
+  const allowedContentTypes = Object.values(VISUAL_PREVIEW_CONTENT_TYPES);
   for (const plan of ['auto', 'free', 'paid'] as const) {
     for (const maxBytes of [20 * MIB, 500 * MIB, 600 * MIB]) {
-      assert.deepEqual(resolveVisualPreviewOriginalCapacity({ maxBytes }, resolveGitHubAttachmentCapacity(plan)), {
+      assert.deepEqual(resolveVisualPreviewOriginalCapacity({ maxBytes, allowedContentTypes }, resolveGitHubAttachmentCapacity(plan)), {
         source: 'managed-storage', imageLimitBytes: Math.min(maxBytes, 500 * MIB), videoLimitBytes: Math.min(maxBytes, 500 * MIB),
       });
     }
@@ -52,12 +53,26 @@ test('managed original capacity honors server limits independently of GitHub pla
 });
 
 test('missing or invalid original capabilities retain conservative legacy staging', () => {
-  for (const capability of [undefined, ...[0, -1, NaN, Infinity, 0.5].map(maxBytes => ({ maxBytes }))]) {
+  for (const capability of [undefined, ...[0, -1, NaN, Infinity, 0.5].map(maxBytes => ({ maxBytes, allowedContentTypes: ['image/png'] }))]) {
     assert.deepEqual(resolveVisualPreviewOriginalCapacity(capability), {
       source: 'legacy', imageLimitBytes: 10 * MIB, videoLimitBytes: 10 * MIB,
     });
     assert.equal(resolveVisualPreviewOriginalCapacity(capability, resolveGitHubAttachmentCapacity('paid')).videoLimitBytes, 100 * MIB);
   }
+});
+
+test('managed original capacity applies only to exact allowed content types', () => {
+  const githubCapacity = resolveGitHubAttachmentCapacity('paid');
+  const capability = { maxBytes: 250 * MIB, allowedContentTypes: ['image/png'] };
+  assert.deepEqual(resolveVisualPreviewOriginalAssetCapacity('image/png', capability, githubCapacity), {
+    source: 'managed-storage', limitBytes: 250 * MIB,
+  });
+  assert.deepEqual(resolveVisualPreviewOriginalAssetCapacity('image/jpeg', capability, githubCapacity), {
+    source: 'legacy', limitBytes: 10 * MIB,
+  });
+  assert.deepEqual(resolveVisualPreviewOriginalAssetCapacity('video/mp4', capability, githubCapacity), {
+    source: 'legacy', limitBytes: 100 * MIB,
+  });
 });
 
 test('inline eligibility carries structured reasons independently of original capacity', () => {

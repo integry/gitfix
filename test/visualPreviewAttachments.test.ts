@@ -340,7 +340,7 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
   const originalBytes = await readFile(originalPath);
   const prepared = await prepareVisualPreviewEvidence({
     worktreePath: worktree, taskId: 'managed-original',
-    settings: { enabled: true, types: ['image'], originalEvidenceCapability: { maxBytes: 500 * MIB } },
+    settings: { enabled: true, types: ['image'], originalEvidenceCapability: { maxBytes: 500 * MIB, allowedContentTypes: ['image/png'] } },
   });
   t.after(async () => cleanupPreparedVisualPreviewEvidence(prepared));
   assert.equal(prepared.evidence.assets.length, 1);
