@@ -85,3 +85,57 @@ Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video forma
 ProPR publishes previews as [GitHub attachments](https://cli.github.com/manual/gh_pr_edit) so images render inline and videos use GitHub's media presentation. For follow-ups, it uploads the media first and then updates the existing progress comment; it does not create a temporary second comment. ProPR verifies that every temporary local path was replaced with a hosted attachment URL, then deletes the temporary files. If upload or verification fails, ProPR publishes a text-only explanation; preview media is not added to Git as a fallback. When the failure is a missing, unsupported, expired, or rejected user credential, that explanation includes the exact Settings reconnection steps in the affected pull request.
 
 Preview generation is evidence, not a replacement for automated tests. A preview failure does not discard an otherwise valid implementation; the PR explains missing tool support when the agent can identify it.
+
+## Managed Original Storage (Plus)
+
+**Settings → Integrations → Visual preview uploads** also shows managed preview
+storage availability. ProPR uses the existing Connect `account_status` Plus
+entitlement, a live routing connection, and Connect's storage-enabled status.
+Community installations, offline Connect connections, and relays without the
+storage endpoints continue to publish GitHub attachments.
+
+When available, the worker stores the exact accepted evidence bytes before
+GitHub publication. Storage failures do not interrupt GitHub uploads. The
+standard installation quota is 25 GiB, maximum original object size is 500 MiB,
+and retention is 90 days. Settings display the server's effective values when
+available; otherwise these standard values are explicitly labeled as defaults.
+The existing GitHub evidence collection and 10 MB attachment limit still apply.
+Managed storage does not replace the GitHub attachment credential.
+
+The administrator-only `GET /api/config/preview-storage` API returns
+`{ version: 1, state, enabled, effective }`. `state` is `enabled`, `plus_required`,
+`disabled`, or `unavailable`. `effective` contains validated server limits or
+`null`; credentials, presigned URLs, and viewer tokens are never included.
+
+### Relay v1 Client Contract
+
+The shared types and runtime parsers live in
+`packages/shared/src/previewStorage/v1.ts`; the isolated transport lives in
+`packages/core/src/services/previewStorage/v1.ts`. The relay implementation is
+provided separately by `integry/propr-routing` and must implement this contract:
+
+- `GET /v1/preview-storage/status` returns `PreviewStorageStatusV1`: `version: 1`,
+  `installationId`, `enabled`, `quotaBytes`, `usedBytes`, `reservedBytes`,
+  `maxObjectBytes`, `retentionDays`, `allowedContentTypes`, and `deleteSupported`.
+  Byte counts are nonnegative safe integers; object size and retention are positive.
+- `POST /v1/preview-artifacts/uploads` accepts `PreviewUploadRequestV1`: version,
+  repository slug, original byte size, content type, and lowercase hex SHA-256.
+  The relay must atomically reserve quota and bind the grant to those constraints.
+  It returns `PreviewUploadV1` with matching size/type/hash, `artifactId`,
+  `objectKey`, and `put: { url, headers, expiresAt }`.
+- The client sends the unchanged original with a direct HTTPS `PUT`, using only
+  the returned object-store headers. `Content-Type` is required; a supplied
+  `Content-Length` must match. Redirects are rejected, and the relay bearer
+  credential is never forwarded to the object store.
+- `POST /v1/preview-artifacts/:id/finalize` accepts version, object key,
+  size/type/hash. The relay verifies the stored object before returning a
+  `PreviewArtifactV1` with the same fields, artifact ID, and `state: 'ready'`.
+- `DELETE /v1/preview-artifacts/:id` is used only when `deleteSupported` is true.
+  It returns a successful HTTP status. No automatic mutation retries are made;
+  the relay must expire abandoned upload reservations.
+
+Relay calls use the configured Connect origin and existing
+`PROPR_GH_RELAY_TOKEN` bearer credential. Known error codes (`quota_exceeded`,
+`object_too_large`, `content_type_not_allowed`, `object_mismatch`) are preserved;
+raw response messages and transport errors are discarded. Unknown versions or
+malformed statuses fail closed. Future v2 support can be added alongside v1.

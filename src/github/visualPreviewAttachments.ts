@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { storeManagedVisualPreviewOriginals } from './managedVisualPreviewStorage.js';
 import { execa } from 'execa';
 import {
   appendVisualPreviewSection,
@@ -212,6 +213,15 @@ interface BaseVisualPreviewPublicationOptions {
   worktreePath: string;
   runCommand?: AttachmentCommandRunner;
   uploadAsset?: VisualPreviewAssetUploader;
+  storeOriginals?: typeof storeManagedVisualPreviewOriginals;
+}
+
+async function storeOriginalsSafely(options: BaseVisualPreviewPublicationOptions): Promise<void> {
+  try {
+    await (options.storeOriginals ?? storeManagedVisualPreviewOriginals)(options.evidence, `${options.owner}/${options.repo}`);
+  } catch {
+    // Optional original storage must never interrupt GitHub attachment publication.
+  }
 }
 
 function attachmentArguments(evidence: VisualPreviewEvidence): string[] {
@@ -276,6 +286,7 @@ export interface PublishPullRequestVisualPreviewOptions extends BaseVisualPrevie
 
 export async function publishPullRequestVisualPreviews(options: PublishPullRequestVisualPreviewOptions): Promise<void> {
   if (options.evidence.assets.length === 0) return;
+  await storeOriginalsSafely(options);
   const runner = options.runCommand || runAttachmentCommand;
   await runner({
     args: [
@@ -314,6 +325,7 @@ export async function publishPullRequestCommentVisualPreviews(
   if (options.evidence.assets.length === 0) {
     throw new Error('Cannot publish an attachment comment without preview assets');
   }
+  await storeOriginalsSafely(options);
   const authToken = options.authToken ?? await resolveVisualPreviewUploadToken();
   const repositoryId = await resolveRepositoryId(options);
   const uploader = options.uploadAsset ?? uploadVisualPreviewAsset;

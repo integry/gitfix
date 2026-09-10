@@ -229,3 +229,27 @@ test('uploads an attachment directly to the repository-scoped GitHub endpoint', 
     repositoryId: 987,
   }), 'https://github.com/user-attachments/assets/direct-asset-id');
 });
+
+test('managed storage failure still publishes GitHub attachments without exposing its error', async () => {
+  let attempted = false;
+  let published = false;
+  await publishPullRequestVisualPreviews({
+    owner: 'integry', repo: 'propr', pullRequestNumber: 42, body: 'Summary', evidence,
+    authToken: 'gho_test', worktreePath: '/worktree',
+    storeOriginals: async (originals, repository) => {
+      assert.equal(originals, evidence);
+      assert.equal(repository, 'integry/propr');
+      attempted = true;
+      throw new Error('https://signed.example/?token=secret');
+    },
+    runCommand: async ({ args }) => {
+      assert.equal(attempted, true);
+      assert.ok(args.includes('--attach'));
+      assert.ok(!args.join(' ').includes('signed.example'));
+      published = true;
+      return { stdout: '' };
+    },
+    octokit: { request: async <T>() => ({ data: { body: '![Preview](https://github.com/user-attachments/assets/1)' } }) as T },
+  });
+  assert.equal(published, true);
+});
