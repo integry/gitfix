@@ -123,6 +123,20 @@ Choose the package matching the operating system and CPU. Internal release-candi
 macOS release is ready only after Developer ID signing, notarization, stapling, and signed update-feed verification in the
 protected release jobs; an unsigned internal build is not evidence of those gates.
 
+For Apple Silicon local-test packages, “unsigned” means no Developer ID certificate or notarization. Forge seals the
+finished ARM64 bundle with an ad-hoc signature after plist, icon, fuse, and ASAR-integrity changes, before making ZIP/DMG
+artifacts. The hash-pinned native authority prebuilds retain their existing linker signatures and are verified separately;
+helpers, frameworks, and the final bundle are signed and strictly verified. Packaging fails if verification fails.
+This fix is limited to unsigned macOS ARM64 builds; Intel, Windows, and certificate-signed release paths are unchanged.
+
+CI verifies the copied DMG staging app and the extracted ARM64 ZIP/DMG payloads before applying its separate acceptance
+test certificate. A native regression also checks rejection of changed plist, resource, helper, and native binary bytes.
+To inspect an untouched local-test app on a Mac, run
+`node apps/desktop/scripts/sign-darwin-local-package.mjs /path/to/propr-desktop.app`.
+These checks do not launch the app or access Keychain. The owner still verifies GUI startup and normal secure storage on
+the real Mac with isolated userData; ad-hoc validation does not establish Developer ID trust or notarization, and does not
+change Gatekeeper, Keychain, or safeStorage policy.
+
 ## First launch and connection
 
 On Linux, choose **Set up this computer** to install a desktop-managed local stack, or **Connect to an existing instance**

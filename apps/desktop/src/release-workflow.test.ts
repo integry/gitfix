@@ -101,6 +101,19 @@ const job = (name: string, next?: string): string => {
 };
 
 describe('desktop trusted release workflow', () => {
+  test('seals local ARM64 packages after packaging and verifies artifact bytes before acceptance signing', () => {
+    const postPackage = forgeConfig.slice(forgeConfig.indexOf('postPackage:'), forgeConfig.indexOf('postMake:'));
+    assert.match(postPackage, /sign-darwin-local-package\.mjs/);
+    assert.match(postPackage, /await finalizeDarwinLocalPackages\(/);
+    assert.match(postPackage, /signingIdentity: macSigning\?\.PROPR_DESKTOP_MAC_SIGNING_IDENTITY/);
+    assert.match(workflow, /Verify final local ARM64 signatures and tamper rejection\n\s+if: matrix\.platform == 'darwin' && matrix\.arch == 'arm64'/);
+    assert.match(workflow, /PROPR_DESKTOP_TEST_LOCAL_SIGNATURE_APP: apps\/desktop\/out\/propr-desktop-darwin-arm64\/propr-desktop\.app/);
+    assert.match(workflow, /run: node --test apps\/desktop\/scripts\/sign-darwin-local-package\.test\.mjs/);
+    assert.match(makeDmg, /await cp\([\s\S]*await verifyDarwinLocalPackage\([\s\S]*await execFileAsync\(HDIUTIL/);
+    assert.match(nativeArtifactLifecycle,
+      /await extractArtifact\([\s\S]*await verifyDarwinLocalPackage\([\s\S]*await signDarwinPackagedConnectApplication\(/);
+  });
+
   test('keeps pull-request packaging unsigned and completely secretless', () => {
     const validation = `${job('validation-version', 'package')}\n${job('package', 'finalize')}\n${job('finalize', 'preflight')}`;
     assert.match(validation, /github\.event_name == 'pull_request'/);
@@ -412,7 +425,7 @@ describe('desktop trusted release workflow', () => {
     assert.equal(workflow.match(/run-installed-windows-app-harness\.ps1/g)?.length, 1);
     assert.equal(workflow.match(/PROPR_DESKTOP_WINDOWS_INSTALLED_APP=1/g)?.length, 1);
     assert.match(forgeConfig, /const linuxSetupResources = process\.platform === 'linux'[\s\S]*extraResource:/);
-    assert.doesNotMatch(forgeConfig, /windows-authority|postPackage/);
+    assert.doesNotMatch(forgeConfig, /windows-authority/);
     assert.match(forgeConfig, /buildWindowsMachineInstaller/);
     assert.match(forgeConfig, /wixDirectory: process\.env\.PROPR_DESKTOP_WIX_DIRECTORY/);
     assert.doesNotMatch(forgeConfig, /MakerSquirrel|noMsi|Setup\.exe|full\.nupkg/);

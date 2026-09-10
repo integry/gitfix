@@ -189,6 +189,16 @@ const config: ForgeConfig = {
         [FuseV1Options.WasmTrapHandlers]: true,
       });
     },
+    postPackage: async (_forgeConfig, packageResult) => {
+      // Run after final plist/icon/ASAR-integrity changes, before ZIP/DMG makers.
+      // The earlier fuse signature reset only covers an intermediate bundle.
+      const signingModule = './scripts/sign-darwin-local-package.mjs';
+      const { finalizeDarwinLocalPackages } = await import(signingModule);
+      await finalizeDarwinLocalPackages({
+        ...packageResult,
+        signingIdentity: macSigning?.PROPR_DESKTOP_MAC_SIGNING_IDENTITY,
+      });
+    },
     postMake: async (_forgeConfig, makeResults) => {
       if (process.platform !== 'win32') return makeResults;
       const installerModule = './scripts/build-windows-machine-installer.mjs';
