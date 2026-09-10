@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useId } from 'react';
 import { getRepoBranches } from '../api/proprApi';
 
 interface BaseBranchSelectorProps {
@@ -32,6 +32,7 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectedValueId = useId();
 
   // Parse owner/repo from repoName
   const parseRepo = (name: string): { owner: string; repo: string } | null => {
@@ -116,7 +117,9 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
           type="button"
           onClick={handleOpen}
           disabled={disabled || !repoName}
-          aria-labelledby={labelledBy}
+          aria-labelledby={labelledBy
+            ? `${labelledBy}${value ? ` ${selectedValueId}` : ''}`
+            : undefined}
           aria-describedby={describedBy}
           aria-haspopup="listbox"
           aria-expanded={false}
@@ -126,7 +129,7 @@ export const BaseBranchSelector: React.FC<BaseBranchSelectorProps> = ({
               : 'hover:border-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 cursor-pointer'
           }`}
         >
-          <span className={value ? 'text-gray-900' : 'text-gray-500'}>
+          <span id={selectedValueId} className={value ? 'text-gray-900' : 'text-gray-500'}>
             {value || placeholder}
           </span>
           <div className="flex items-center gap-1">

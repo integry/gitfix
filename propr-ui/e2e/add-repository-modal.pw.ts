@@ -71,7 +71,8 @@ test('bounds the dialog and keeps every control keyboard-reachable at 900x500 wi
   await page.goto('/repositories');
   await page.evaluate(() => { document.documentElement.style.fontSize = '24px'; });
 
-  await page.getByRole('button', { name: '+ Add Repository' }).click();
+  const addRepositoryLauncher = page.getByRole('button', { name: '+ Add Repository' });
+  await addRepositoryLauncher.click();
   const dialog = page.getByRole('dialog', { name: 'Add Repository' });
   const body = dialog.getByTestId('add-repository-modal-body');
   const footer = dialog.getByTestId('add-repository-modal-footer');
@@ -119,6 +120,11 @@ test('bounds the dialog and keeps every control keyboard-reachable at 900x500 wi
   await expect(submit).toBeFocused();
   await expect(submit).toBeInViewport();
 
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(submit).toBeFocused();
+
   expect((await title.boundingBox())?.y).toBe(titleBefore?.y);
   expect((await footer.boundingBox())?.y).toBe(footerBefore?.y);
   expect(await body.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
@@ -131,15 +137,21 @@ test('bounds the dialog and keeps every control keyboard-reachable at 900x500 wi
   const branchFilter = dialog.getByRole('combobox', { name: 'Base Branch (optional)' });
   await expect(branchFilter).toBeFocused();
   await page.keyboard.type('release');
+  const releaseBranch = dialog.getByRole('option', { name: 'release/2026.09' });
+  await expect(releaseBranch).toBeVisible();
   await page.keyboard.press('Tab');
   await page.keyboard.press('Tab');
-  await expect(dialog.getByRole('option', { name: 'release/2026.09' })).toBeFocused();
+  await expect(releaseBranch).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(dialog.getByRole('button', { name: 'Base Branch (optional)' })).toContainText('release/2026.09');
+  await expect(dialog.getByRole('button', {
+    name: 'Base Branch (optional) release/2026.09',
+    exact: true,
+  })).toBeVisible();
   await expect(submit).toBeInViewport();
 
   await submit.press('Enter');
   await expect(dialog).toBeHidden();
+  await expect(addRepositoryLauncher).toBeFocused();
   await expect.poll(() => configWrites).toBe(1);
 });
 

@@ -2,6 +2,15 @@
 import React from 'react';
 import { BaseBranchSelector } from './BaseBranchSelector';
 
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
 interface AddRepositoryModalProps {
   isOpen: boolean;
   newRepo: string;
@@ -40,6 +49,51 @@ export const AddRepositoryModal: React.FC<AddRepositoryModalProps> = ({
   const baseBranchId = React.useId();
   const baseBranchLabelId = React.useId();
   const baseBranchDescriptionId = React.useId();
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+  const repositoryInputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    const previouslyFocusedElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    repositoryInputRef.current?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+
+      const focusableElements = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      );
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+
+      const firstFocusableElement = focusableElements[0];
+      const lastFocusableElement = focusableElements[focusableElements.length - 1];
+      if (!dialogRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? lastFocusableElement : firstFocusableElement).focus();
+      } else if (event.shiftKey && document.activeElement === firstFocusableElement) {
+        event.preventDefault();
+        lastFocusableElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastFocusableElement) {
+        event.preventDefault();
+        firstFocusableElement.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      if (previouslyFocusedElement?.isConnected) {
+        previouslyFocusedElement.focus();
+      }
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -61,9 +115,11 @@ export const AddRepositoryModal: React.FC<AddRepositoryModalProps> = ({
       onClick={handleBackdropClick}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         className="bg-white rounded-lg max-w-lg w-full max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden border border-gray-300 shadow-lg"
       >
         {/* Modal Header */}
@@ -87,13 +143,13 @@ export const AddRepositoryModal: React.FC<AddRepositoryModalProps> = ({
             <div>
               <label htmlFor={repositoryId} className="block text-sm font-medium text-gray-700 mb-1">Repository *</label>
               <input
+                ref={repositoryInputRef}
                 id={repositoryId}
                 list={`${repositoryId}-options`}
                 value={newRepo}
                 onChange={(e) => onRepoChange(e.target.value)}
                 placeholder="owner/repo"
                 className="w-full px-3 py-2 bg-white text-gray-900 border border-gray-300 rounded-md font-mono text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                autoFocus
                 disabled={isReadOnly}
               />
               <datalist id={`${repositoryId}-options`}>
