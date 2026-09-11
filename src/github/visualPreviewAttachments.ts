@@ -1,32 +1,22 @@
 import { githubInlineEligibility, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity } from '@propr/shared';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { publicPreviewText, originalUnavailableText } from './visualPreviewPublication.js';
 import { storeManagedVisualPreviewOriginals, type ManagedVisualPreviewAssetResult } from './managedVisualPreviewStorage.js';
-import { execa } from 'execa';
-import { publicPreviewText, publishedOriginal, originalUnavailableText } from './visualPreviewPublication.js';
 import {
   appendVisualPreviewSection,
+  createPublishedVisualPreviewMetadata,
   isSupportedVisualPreviewUploadToken,
   isVisualPreviewCredentialError,
   markVisualPreviewOAuthCredentialReauthRequired,
-  redactSecrets,
   renderVisualPreviewSection,
-  renderVisualPreviewUploadFailureSection,
   redactVisualPreviewPaths,
   resolveVisualPreviewUploadToken as resolveStoredVisualPreviewUploadToken,
+  trustedGitHubAttachmentUrl,
   VisualPreviewCredentialError,
   VISUAL_PREVIEW_UPLOAD_TOKEN_ENV,
   type VisualPreviewEvidence
 } from '@propr/core';
-
-interface AttachmentCommandOptions {
-  capacity?: GitHubAttachmentCapacity;
-  args: string[];
-  authToken: string;
-  cwd: string;
-}
-
-export type AttachmentCommandRunner = (options: AttachmentCommandOptions) => Promise<{ stdout: string }>;
 
 interface VisualPreviewAssetUploadOptions {
   capacity?: GitHubAttachmentCapacity;
@@ -97,56 +87,6 @@ async function validateAttachmentFile(absolutePath: string, capacity?: GitHubAtt
   return eligibility.limitBytes;
 }
 
-/** Validate every original before GitHub credential lookup, repository lookup, or attachment upload. */
-async function validateInlineEvidence(evidence: VisualPreviewEvidence): Promise<void> {
-  for (const asset of evidence.assets) {
-    await validateAttachmentFile(asset.absolutePath, evidence.githubAttachmentCapacity);
-  }
-}
-
-const runAttachmentCommand: AttachmentCommandRunner = async ({ args, authToken, cwd, capacity }) => {
-  for (let index = 0; index < args.length; index++) {
-    if (args[index] === '--attach') await validateAttachmentFile(args[++index], capacity);
-  }
-  try {
-    const result = await execa('gh', args, {
-      cwd,
-      env: {
-        ...process.env,
-        GH_TOKEN: authToken,
-        GH_PROMPT_DISABLED: '1',
-        NO_COLOR: '1'
-      },
-      reject: true,
-      timeout: 60_000
-    });
-    return { stdout: result.stdout };
-  } catch (error) {
-    const commandError = error as { code?: unknown; stderr?: unknown; stdout?: unknown };
-    const detail = commandError.code === 'ENOENT'
-      ? 'gh executable was not found in PATH'
-      : typeof commandError.stderr === 'string' && commandError.stderr.trim()
-        ? redactSecrets(commandError.stderr.trim()).replace(/\s+/g, ' ').slice(0, 1000)
-        : '';
-    const message = 'GitHub CLI could not upload visual preview attachments';
-    const authFailure = /unsupported authentication type|bad credentials|authentication failed|http 401|requires authentication|not logged in/i.test(detail);
-    if (authFailure) {
-      try {
-        await markVisualPreviewOAuthCredentialReauthRequired('github_rejected_token');
-      } catch {
-        // Preserve the original upload error. The Settings status can recover
-        // once database access is restored.
-      }
-    }
-    const wrappedError = (authFailure
-      ? new VisualPreviewUploadAuthenticationError(message)
-      : new Error(message)) as Error & { stdout?: string };
-    const stdout = commandError.stdout;
-    if (typeof stdout === 'string') wrappedError.stdout = redactSecrets(stdout);
-    throw wrappedError;
-  }
-};
-
 async function markRejectedUploadCredential(): Promise<void> {
   try {
     await markVisualPreviewOAuthCredentialReauthRequired('github_rejected_token');
@@ -203,10 +143,11 @@ export const uploadVisualPreviewAsset: VisualPreviewAssetUploader = async ({
   }
 
   const payload = await response.json() as { url?: unknown };
-  if (typeof payload.url !== 'string' || !payload.url.startsWith('https://github.com/user-attachments/')) {
+  const attachmentUrl = trustedGitHubAttachmentUrl(payload.url);
+  if (!attachmentUrl) {
     throw new Error('GitHub uploaded a visual preview but did not return a valid attachment URL');
   }
-  return payload.url;
+  return attachmentUrl;
 };
 
 interface BaseVisualPreviewPublicationOptions {
@@ -219,9 +160,9 @@ interface BaseVisualPreviewPublicationOptions {
   /** Optional injection used by callers with an already-resolved upload credential. */
   authToken?: string;
   worktreePath: string;
-  runCommand?: AttachmentCommandRunner;
   uploadAsset?: VisualPreviewAssetUploader;
   storeOriginals?: typeof storeManagedVisualPreviewOriginals;
+  trustedConnectOrigin?: string;
 }
 
 async function storeOriginalsSafely(options: BaseVisualPreviewPublicationOptions): Promise<ManagedVisualPreviewAssetResult[]> {
@@ -235,35 +176,6 @@ async function storeOriginalsSafely(options: BaseVisualPreviewPublicationOptions
     // Optional original storage must never interrupt GitHub attachment publication.
     return [];
   }
-}
-
-function attachmentArguments(evidence: VisualPreviewEvidence): string[] {
-  return evidence.assets.flatMap(asset => ['--attach', asset.absolutePath]);
-}
-
-function bodyWithLocalPreviews(options: BaseVisualPreviewPublicationOptions): string {
-  const section = renderVisualPreviewSection({ ...options.evidence, assets: options.evidence.assets.map(asset => ({
-    ...asset, title: publicPreviewText(asset.title, options.evidence),
-    description: asset.description ? publicPreviewText(asset.description, options.evidence) : undefined,
-  })) }, {
-    useLocalPaths: true
-  });
-  return appendVisualPreviewSection(publicPreviewText(options.body, options.evidence), section);
-}
-
-
-function bodyWithUploadedPreviews(options: BaseVisualPreviewPublicationOptions, uploadedUrls: readonly string[]): string {
-  if (uploadedUrls.length !== options.evidence.assets.length) {
-    throw new Error('GitHub did not return an attachment URL for every visual preview');
-  }
-  const evidence = {
-    ...options.evidence,
-    assets: options.evidence.assets.map((asset, index) => ({
-      ...asset,
-      absolutePath: uploadedUrls[index],
-    })),
-  };
-  return publicPreviewText(appendVisualPreviewSection(options.body, renderVisualPreviewSection(evidence, { useLocalPaths: true })), options.evidence);
 }
 
 function assertUploadedBodyHasNoLocalPaths(body: unknown, evidence: VisualPreviewEvidence): asserts body is string {
@@ -282,7 +194,7 @@ function assertUploadedBodyContainsUrls(body: string, uploadedUrls: readonly str
   if (missingUrl) throw new Error('GitHub published a visual preview comment without every uploaded attachment URL');
 }
 
-async function resolveRepositoryId(options: PublishPullRequestVisualPreviewOptions): Promise<number> {
+async function resolveRepositoryId(options: BaseVisualPreviewPublicationOptions & { octokit: PublishPullRequestVisualPreviewOptions['octokit'] }): Promise<number> {
   const response = await options.octokit.request<{ data: { id?: unknown } }>('GET /repos/{owner}/{repo}', {
     owner: options.owner,
     repo: options.repo,
@@ -292,6 +204,132 @@ async function resolveRepositoryId(options: PublishPullRequestVisualPreviewOptio
     throw new Error('Could not determine which GitHub repository should own the visual preview attachments');
   }
   return repositoryId;
+}
+
+interface InlineCandidate {
+  assetIndex: number;
+  limitBytes: number;
+}
+
+/** Revalidate all staged files before any GitHub request, then select only compliant inline media. */
+async function resolveInlineCandidates(evidence: VisualPreviewEvidence): Promise<InlineCandidate[]> {
+  const candidates: InlineCandidate[] = [];
+  for (const [assetIndex, asset] of evidence.assets.entries()) {
+    const contentType = VISUAL_PREVIEW_CONTENT_TYPES[path.extname(asset.absolutePath).toLowerCase()];
+    if (!contentType) throw new Error(`Unsupported visual preview attachment type: ${path.basename(asset.absolutePath)}`);
+    const eligibility = githubInlineEligibility(contentType, (await stat(asset.absolutePath)).size, evidence.githubAttachmentCapacity);
+    if (eligibility.eligible) candidates.push({ assetIndex, limitBytes: eligibility.limitBytes });
+    else if (eligibility.reason !== 'size-limit-exceeded') throw new Error(`Invalid visual preview attachment: ${eligibility.reason}`);
+  }
+  return candidates;
+}
+
+function trustedConnectOrigin(options: BaseVisualPreviewPublicationOptions): string {
+  return options.trustedConnectOrigin ?? (process.env.PROPR_CONNECT_URL ?? 'https://connect.propr.dev').trim();
+}
+
+function publishedBody(
+  options: BaseVisualPreviewPublicationOptions,
+  originals: readonly ManagedVisualPreviewAssetResult[],
+  inlineCandidates: readonly InlineCandidate[],
+  uploads: { uploadedUrls: ReadonlyMap<number, string>; uploadFailures: ReadonlyMap<number, unknown> },
+): string {
+  const { uploadedUrls, uploadFailures } = uploads;
+  const candidates = new Set(inlineCandidates.map(candidate => candidate.assetIndex));
+  const originalsByIndex = new Map(originals.map(result => [result.assetIndex, result]));
+  const metadata = createPublishedVisualPreviewMetadata(options.evidence, {
+    taskId: options.taskId ?? options.evidence.taskId ?? '',
+    repository: `${options.owner}/${options.repo}`,
+    pullRequestNumber: options.pullRequestNumber,
+    trustedConnectOrigin: trustedConnectOrigin(options),
+    assets: options.evidence.assets.map((asset, assetIndex) => {
+      const original = originalsByIndex.get(assetIndex);
+      const failure = uploadFailures.get(assetIndex);
+      return {
+        assetIndex,
+        relativePath: asset.relativePath,
+        ...(uploadedUrls.get(assetIndex) ? { githubAttachmentUrl: uploadedUrls.get(assetIndex) } : {}),
+        ...(original?.stored && original.version === 1 && original.relativePath === asset.relativePath
+          && Date.parse(original.artifact.retentionExpiresAt) > Date.now()
+          ? { managedOriginal: original.artifact }
+          : {}),
+        ...(!candidates.has(assetIndex)
+          ? { unavailableReason: 'github-inline-limit' as const }
+          : failure
+            ? { unavailableReason: isVisualPreviewUploadAuthenticationError(failure)
+              ? 'github-authentication-failed' as const
+              : 'github-inline-failed' as const }
+            : {}),
+      };
+    }),
+  });
+  const publicEvidence = {
+    ...options.evidence,
+    assets: options.evidence.assets.map((asset, assetIndex) => {
+      const original = originalsByIndex.get(assetIndex);
+      const published = metadata.assets.find(item => item.assetIndex === assetIndex);
+      const notes = asset.description ? [asset.description] : [];
+      if (published?.managedViewerUrl && original?.stored) {
+        notes.push(`Connect sign-in required. Original retained until ${new Date(original.artifact.retentionExpiresAt).toISOString()}.`);
+      } else if (original || options.evidence.originalCapacity?.source === 'managed-storage') {
+        notes.push(originalUnavailableText(original));
+      }
+      if (!uploadedUrls.has(assetIndex)) {
+        notes.push('Inline preview unavailable: GitHub size limits or upload failure. No preview files were committed.');
+      }
+      return {
+        ...asset,
+        title: publicPreviewText(asset.title, options.evidence),
+        description: notes.length ? publicPreviewText(notes.join('\n\n'), options.evidence) : undefined,
+      };
+    }),
+    toolSuggestions: options.evidence.toolSuggestions.map(suggestion => ({
+      name: publicPreviewText(suggestion.name, options.evidence),
+      reason: publicPreviewText(suggestion.reason, options.evidence),
+    })),
+  };
+  return appendVisualPreviewSection(
+    publicPreviewText(options.body, options.evidence),
+    renderVisualPreviewSection(publicEvidence, { published: metadata }),
+  );
+}
+
+async function uploadInlineCandidates(
+  options: BaseVisualPreviewPublicationOptions & { octokit: PublishPullRequestVisualPreviewOptions['octokit'] },
+  inlineCandidates: readonly InlineCandidate[],
+): Promise<{ uploadedUrls: Map<number, string>; uploadFailures: Map<number, unknown> }> {
+  const uploadedUrls = new Map<number, string>();
+  const uploadFailures = new Map<number, unknown>();
+  if (inlineCandidates.length === 0) return { uploadedUrls, uploadFailures };
+  let authToken: string;
+  let repositoryId: number;
+  try {
+    [authToken, repositoryId] = await Promise.all([
+      options.authToken ? Promise.resolve(options.authToken) : resolveVisualPreviewUploadToken(),
+      resolveRepositoryId(options),
+    ]);
+  } catch (error) {
+    for (const { assetIndex } of inlineCandidates) uploadFailures.set(assetIndex, error);
+    return { uploadedUrls, uploadFailures };
+  }
+  const uploader = options.uploadAsset ?? uploadVisualPreviewAsset;
+  for (const { assetIndex } of inlineCandidates) {
+    const asset = options.evidence.assets[assetIndex];
+    try {
+      const uploadedUrl = await uploader({
+        absolutePath: asset.absolutePath,
+        authToken,
+        repositoryId,
+        ...(options.evidence.githubAttachmentCapacity ? { capacity: options.evidence.githubAttachmentCapacity } : {}),
+      });
+      const trustedUrl = trustedGitHubAttachmentUrl(uploadedUrl);
+      if (!trustedUrl) throw new Error('GitHub did not return a valid visual preview attachment URL');
+      uploadedUrls.set(assetIndex, trustedUrl);
+    } catch (error) {
+      uploadFailures.set(assetIndex, error);
+    }
+  }
+  return { uploadedUrls, uploadFailures };
 }
 
 export interface PublishPullRequestVisualPreviewOptions extends BaseVisualPreviewPublicationOptions {
@@ -304,29 +342,17 @@ export interface PublishPullRequestVisualPreviewOptions extends BaseVisualPrevie
 export async function publishPullRequestVisualPreviews(options: PublishPullRequestVisualPreviewOptions): Promise<void> {
   if (options.evidence.assets.length === 0) return;
   const originals = await storeOriginalsSafely(options);
-  if (options.evidence.originalCapacity?.source === 'managed-storage' || originals.some(result => result.stored)) {
-    await publishHybridVisualPreviews(options, originals);
-    return;
-  }
-  await validateInlineEvidence(options.evidence);
-  const runner = options.runCommand || runAttachmentCommand;
-  await runner({
-    args: [
-      'pr', 'edit', String(options.pullRequestNumber),
-      '--repo', `${options.owner}/${options.repo}`,
-      '--body', bodyWithLocalPreviews(options),
-      ...attachmentArguments(options.evidence)
-    ],
-    authToken: options.authToken ?? await resolveVisualPreviewUploadToken(),
-    cwd: options.worktreePath,
-    capacity: options.evidence.githubAttachmentCapacity,
-  });
-  const response = await options.octokit.request<{ data: { body?: string } }>('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+  const inlineCandidates = await resolveInlineCandidates(options.evidence);
+  const uploads = await uploadInlineCandidates(options, inlineCandidates);
+  const body = publishedBody(options, originals, inlineCandidates, uploads);
+  const response = await options.octokit.request<{ data: { body?: string } }>('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
     owner: options.owner,
     repo: options.repo,
-    pull_number: options.pullRequestNumber
+    pull_number: options.pullRequestNumber,
+    body,
   });
   assertUploadedBodyHasNoLocalPaths(response.data.body, options.evidence);
+  assertUploadedBodyContainsUrls(response.data.body!, [...uploads.uploadedUrls.values()]);
 }
 
 export interface PublishPullRequestCommentVisualPreviewOptions extends BaseVisualPreviewPublicationOptions {
@@ -349,24 +375,9 @@ export async function publishPullRequestCommentVisualPreviews(
     throw new Error('Cannot publish an attachment comment without preview assets');
   }
   const originals = await storeOriginalsSafely(options);
-  if (options.evidence.originalCapacity?.source === 'managed-storage' || originals.some(result => result.stored)) {
-    return publishHybridVisualPreviews(options, originals);
-  }
-  await validateInlineEvidence(options.evidence);
-  const authToken = options.authToken ?? await resolveVisualPreviewUploadToken();
-  const repositoryId = await resolveRepositoryId(options);
-  const uploader = options.uploadAsset ?? uploadVisualPreviewAsset;
-  const uploadedUrls: string[] = [];
-  for (const asset of options.evidence.assets) {
-    uploadedUrls.push(await uploader({
-      absolutePath: asset.absolutePath,
-      authToken,
-      repositoryId,
-      ...(options.evidence.githubAttachmentCapacity ? { capacity: options.evidence.githubAttachmentCapacity } : {}),
-    }));
-  }
-
-  const body = bodyWithUploadedPreviews(options, uploadedUrls);
+  const inlineCandidates = await resolveInlineCandidates(options.evidence);
+  const uploads = await uploadInlineCandidates(options, inlineCandidates);
+  const body = publishedBody(options, originals, inlineCandidates, uploads);
   const updatedStartingComment = await options.octokit.request<{ data: { html_url: string; body?: string } }>(
     'PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}',
     {
@@ -377,71 +388,10 @@ export async function publishPullRequestCommentVisualPreviews(
     }
   );
   assertUploadedBodyHasNoLocalPaths(updatedStartingComment.data.body, options.evidence);
-  assertUploadedBodyContainsUrls(updatedStartingComment.data.body, uploadedUrls);
+  assertUploadedBodyContainsUrls(updatedStartingComment.data.body, [...uploads.uploadedUrls.values()]);
 
   return {
     html_url: updatedStartingComment.data.html_url,
     body: updatedStartingComment.data.body,
   };
-}
-
-/** Publish only hosted URLs; each original and inline upload succeeds independently. */
-async function publishHybridVisualPreviews(
-  options: PublishPullRequestVisualPreviewOptions | PublishPullRequestCommentVisualPreviewOptions,
-  originals: ManagedVisualPreviewAssetResult[],
-): Promise<PublishedVisualPreviewComment> {
-  const sections: string[] = [];
-  const uploadedUrls: string[] = [];
-  let uploadContext: Promise<{ authToken: string; repositoryId: number }> | undefined;
-  let authenticationFailure = false;
-  for (const [index, asset] of options.evidence.assets.entries()) {
-    const result = originals.find(result => result.assetIndex === index && result.relativePath === asset.relativePath);
-    const viewer = publishedOriginal(result, {
-      taskId: options.taskId ?? options.evidence.taskId ?? '',
-      repository: `${options.owner}/${options.repo}`, pullRequestNumber: options.pullRequestNumber,
-    });
-    let inlineUrl: string | undefined;
-    try {
-      await validateAttachmentFile(asset.absolutePath, options.evidence.githubAttachmentCapacity);
-      uploadContext ??= (async () => ({
-        authToken: options.authToken ?? await resolveVisualPreviewUploadToken(),
-        repositoryId: await resolveRepositoryId(options),
-      }))();
-      inlineUrl = await (options.uploadAsset ?? uploadVisualPreviewAsset)({
-        ...await uploadContext, absolutePath: asset.absolutePath, capacity: options.evidence.githubAttachmentCapacity,
-      });
-      if (!/^https:\/\/github\.com\/user-attachments\/[^\s<>]+$/.test(inlineUrl)) throw new Error('Invalid attachment URL');
-      uploadedUrls.push(inlineUrl);
-    } catch (error) {
-      authenticationFailure ||= isVisualPreviewUploadAuthenticationError(error);
-      inlineUrl = undefined;
-    }
-    const escape = (text: string) => publicPreviewText(text, options.evidence).replace(/([\\`*_[\]{}()<>#+.!|])/g, '\\$1');
-    sections.push(`### ${escape(asset.title)}`);
-    if (inlineUrl) sections.push(`![${asset.type === 'image' ? escape(asset.title) : ''}](${inlineUrl})`);
-    if (asset.description) sections.push(escape(asset.description));
-    if (viewer) {
-      sections.push(`[View original (Connect sign-in required)](<${new URL(viewer.viewerUrl).href}>)\n\nOriginal retained until ${new Date(viewer.retentionExpiresAt).toISOString()}.`);
-      uploadedUrls.push(new URL(viewer.viewerUrl).href);
-    } else {
-      sections.push(originalUnavailableText(result));
-    }
-    if (!inlineUrl) sections.push('Inline preview unavailable: GitHub size limits or upload failure. No preview files were committed.');
-  }
-  if (authenticationFailure) {
-    const explanation = renderVisualPreviewUploadFailureSection({ assets: [], toolSuggestions: [] }, { authenticationFailure: true });
-    sections.push(explanation.slice(explanation.indexOf('### Restore preview uploads')));
-  }
-  const suggestions = renderVisualPreviewSection({ assets: [], toolSuggestions: options.evidence.toolSuggestions }, {});
-  if (suggestions) sections.push(suggestions.replace(/^.*?## Visual preview\n\n/s, ''));
-  const body = publicPreviewText(appendVisualPreviewSection(options.body, ['<!-- propr-visual-preview -->', '## Visual preview', ...sections].join('\n\n')), options.evidence);
-  assertUploadedBodyHasNoLocalPaths(body, options.evidence);
-  const isComment = 'startingCommentId' in options;
-  const response = await options.octokit.request<{ data: { body?: string; html_url: string } }>(
-    isComment ? 'PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}' : 'PATCH /repos/{owner}/{repo}/pulls/{pull_number}',
-    { owner: options.owner, repo: options.repo, ...(isComment ? { comment_id: options.startingCommentId } : { pull_number: options.pullRequestNumber }), body },
-  );
-  assertUploadedBodyHasNoLocalPaths(response.data.body, options.evidence);
-  assertUploadedBodyContainsUrls(response.data.body, uploadedUrls);
-  return { body: response.data.body, html_url: response.data.html_url };
 }

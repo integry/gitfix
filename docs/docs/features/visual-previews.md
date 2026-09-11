@@ -82,7 +82,7 @@ Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video forma
 
 ## Publication And Upload Failures
 
-ProPR publishes eligible previews as GitHub attachments so images render inline and videos use GitHub's media presentation. With Plus managed storage, it also publishes a **View original (Connect sign-in required)** link for each successfully finalized original. This is a normal authenticated link, never an inline image or a presigned object-store URL. Originals can remain available even when GitHub rejects an attachment or its size exceeds the inline limit. For follow-ups, it uploads the media first and then updates the existing progress comment; it does not create a temporary second comment. ProPR verifies that every temporary local path was replaced with a hosted attachment URL, then deletes the temporary files. If neither publication route succeeds, ProPR publishes a text-only explanation; preview media is not added to Git as a fallback. When the failure is a missing, unsupported, expired, or rejected user credential, that explanation includes the exact Settings reconnection steps in the affected pull request.
+ProPR publishes eligible previews as GitHub attachments so images render inline and videos use GitHub's media presentation. Plus installations with managed storage also publish an authenticated ProPR Connect link to the finalized full-resolution original. For follow-ups, it uploads the media first and then updates the existing progress comment; it does not create a temporary second comment. ProPR verifies that no temporary local path remains in the published body, then deletes the temporary files only after managed storage, GitHub upload, and the final publication or fallback have settled. If an upload fails, ProPR publishes the available trusted result plus a safe explanation; preview media is not added to Git as a fallback. When the failure is a missing, unsupported, expired, or rejected user credential, that explanation includes the Settings reconnection steps in the affected pull request. Originals are normal authenticated links, never inline images or presigned object-store URLs, and can remain available when an attachment exceeds the inline limit.
 
 Preview generation is evidence, not a replacement for automated tests. A preview failure does not discard an otherwise valid implementation; the PR explains missing tool support when the agent can identify it.
 
@@ -118,13 +118,18 @@ Community installations, offline Connect connections, and relays without the
 storage endpoints continue to publish GitHub attachments.
 
 When available, the worker stores the exact accepted evidence bytes before
-GitHub inline eligibility checks and publication, so originals can be stored even
-when they exceed GitHub attachment limits. Storage failures do not interrupt GitHub uploads. The
+GitHub inline selection and publication, so originals can be stored even
+when they exceed GitHub attachment limits. A finalized artifact contributes only its stable,
+authenticated Connect viewer URL; presigned object URLs and object keys never enter publication
+metadata. Storage failures do not interrupt eligible GitHub uploads. The
 standard installation quota is 25 GiB, maximum original object size is 500 MiB,
 and retention is 90 days. Settings display the server's effective values when
 available; otherwise these standard values are explicitly labeled as defaults.
 Managed originals use the server-reported object and quota limits independently of
-GitHub inline capacity. These are **server-reported effective values**, with v1 defaults of **25 GiB installation quota**, **500 MiB per object**, and **90-day retention**. The attachment plan override controls only GitHub video inline capacity; it never grants Plus or raises Connect limits.
+GitHub inline capacity. The hybrid publisher links every successfully finalized original and
+includes a GitHub attachment only when a fresh file check fits the resolved capacity. Consequently,
+an oversized video can publish as an authenticated-original link without transcoding; the attachment
+plan setting above controls paid-plan video inline capacity. The override never grants Plus or raises Connect limits.
 Managed storage does not replace the GitHub attachment credential.
 
 The administrator-only `GET /api/config/preview-storage` API returns
@@ -161,7 +166,9 @@ provided separately by `integry/propr-routing` and must implement this contract:
   neither requires a full-size `Uint8Array`/`Buffer`. The PUT is re-hashed before
   finalization to detect changed input. Node fetch uses `duplex: 'half'` and the
   exact returned object-store headers. `Content-Type` is required; a supplied
-  `Content-Length` must match. Redirects are rejected, and the relay bearer
+  `Content-Length` must match. The closed signed-header allowlist also accepts only the exact
+  create-only conditional `If-None-Match: *`; other conditional headers and values are rejected.
+  Redirects are rejected, and the relay bearer
   credential is never forwarded to the object store.
 - `POST /v1/preview-artifacts/:id/finalize` accepts version, object key,
   size/type/hash. The relay verifies the stored object before returning a
@@ -183,8 +190,9 @@ bearer credential. Viewer trust is configured separately by `PROPR_CONNECT_URL`
 (default `https://connect.propr.dev`), passed to the client as
 `trustedConnectOrigin`; it must be an HTTPS origin, not a URL with a path.
 The trusted origin is never taken from a remote upload/finalize response. Known error codes (`quota_exceeded`,
-`object_too_large`, `content_type_not_allowed`, `object_mismatch`) are preserved;
-raw response messages and transport errors are discarded. Unknown versions or
+`object_too_large`, `content_type_not_allowed`, `object_mismatch`) are parsed from a bounded JSON
+error body before HTTP-status fallback, so the two HTTP 413 cases remain distinct. Raw response
+messages, oversized/unknown bodies, and transport errors are discarded. Unknown versions or
 malformed statuses fail closed. Future v2 support can be added alongside v1.
 
 

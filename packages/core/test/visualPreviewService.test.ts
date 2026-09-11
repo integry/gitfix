@@ -10,6 +10,7 @@ import {
   buildVisualPreviewPrompt,
   cleanupPreparedVisualPreviewEvidence,
   collectVisualPreviewEvidence,
+  createPublishedVisualPreviewMetadata,
   prepareVisualPreviewEvidence,
   renderVisualPreviewSection,
   renderVisualPreviewUploadFailureSection,
@@ -20,6 +21,50 @@ import {
 import { parsePublishedVisualPreviews } from '../src/services/publishedVisualPreviewService.js';
 
 const temporaryDirectories: string[] = [];
+const RESTORE_PREVIEW_UPLOADS_GUIDANCE = [
+  '### Restore preview uploads',
+  '',
+  'An instance administrator must open the ProPR Web UI, go to **Settings → Visual preview uploads**, '
+    + 'and add or replace the personal access token. The token must have access to this repository. GitHub '
+    + 'rejects GitHub App user (`ghu_`) and installation (`ghs_`) tokens for attachments. A server operator can '
+    + 'alternatively set `GITHUB_VISUAL_PREVIEW_TOKEN`; that environment override takes precedence over the Web '
+    + 'UI credential. Then request the visual preview again.',
+].join('\n');
+
+const hybridRenderingEvidence = {
+  taskId: 'task-2282',
+  assets: [
+    {
+      relativePath: '.propr/previews/desktop.png', absolutePath: '/staged/desktop.png',
+      type: 'image' as const, title: 'Desktop', description: 'Changed controls.', sizeBytes: 7,
+    },
+    {
+      relativePath: '.propr/previews/mobile.png', absolutePath: '/staged/mobile.png',
+      type: 'image' as const, title: 'Mobile', description: 'Changed controls.', sizeBytes: 8,
+    },
+  ],
+  toolSuggestions: [],
+};
+
+function managedOriginal(assetIndex: number) {
+  const filename = assetIndex === 0 ? 'desktop.png' : 'mobile.png';
+  return {
+    version: 1 as const, artifactId: `artifact-${assetIndex}`, state: 'ready' as const,
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    displayFilename: filename, sizeBytes: hybridRenderingEvidence.assets[assetIndex].sizeBytes,
+    contentType: 'image/png' as const, sha256: String(assetIndex).repeat(64),
+    viewerUrl: `https://connect.example.test/previews/artifact-${assetIndex}`,
+    retentionExpiresAt: '2099-01-01T00:00:00Z',
+  };
+}
+
+function renderPublishedAssets(assets: Parameters<typeof createPublishedVisualPreviewMetadata>[1]['assets']): string {
+  const published = createPublishedVisualPreviewMetadata(hybridRenderingEvidence, {
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    trustedConnectOrigin: 'https://connect.example.test', assets,
+  });
+  return renderVisualPreviewSection(hybridRenderingEvidence, { published });
+}
 
 async function createWorktree(): Promise<string> {
   const worktree = await mkdtemp(path.join(tmpdir(), 'propr-visual-preview-'));
@@ -148,6 +193,101 @@ test('renders videos only as local upload references', () => {
   });
   assert.match(local, /!\[\]\(\/worktree\/\.propr\/previews\/walkthrough\.mp4\)/);
   assert.equal(renderVisualPreviewSection(evidence, {}), '');
+});
+
+test('renders hybrid previews only from validated structured publication metadata', () => {
+  const previewEvidence = {
+    taskId: 'task-2282',
+    assets: [{
+      relativePath: '.propr/previews/desktop.png', absolutePath: '/staged/desktop.png',
+      type: 'image' as const, title: 'Desktop', description: 'Changed controls.', sizeBytes: 7,
+    }],
+    toolSuggestions: [],
+  };
+  const artifact = {
+    version: 1 as const, artifactId: 'artifact-1', state: 'ready' as const,
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    displayFilename: 'desktop.png', sizeBytes: 7, contentType: 'image/png', sha256: 'a'.repeat(64),
+    viewerUrl: 'https://connect.example.test/previews/artifact-1', retentionExpiresAt: '2099-01-01T00:00:00Z',
+  };
+  const published = createPublishedVisualPreviewMetadata(previewEvidence, {
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    trustedConnectOrigin: 'https://connect.example.test',
+    assets: [{
+      assetIndex: 0, relativePath: '.propr/previews/desktop.png',
+      githubAttachmentUrl: 'https://github.com/user-attachments/assets/github-asset',
+      managedOriginal: artifact,
+    }],
+  });
+  const section = renderVisualPreviewSection(previewEvidence, { published });
+  assert.match(section, /!\[Desktop\]\(https:\/\/github\.com\/user-attachments\/assets\/github-asset\)/);
+  assert.match(section, /\[View the full-resolution original in ProPR Connect\]\(https:\/\/connect\.example\.test\/previews\/artifact-1\)/);
+  assert.deepEqual(parsePublishedVisualPreviews(section), [{
+    type: 'image', title: 'Desktop', description: 'Changed controls.',
+    url: 'https://github.com/user-attachments/assets/github-asset',
+  }]);
+
+  const untrusted = createPublishedVisualPreviewMetadata(previewEvidence, {
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    trustedConnectOrigin: 'https://connect.example.test',
+    assets: [{
+      assetIndex: 0, relativePath: '.propr/previews/desktop.png',
+      githubAttachmentUrl: 'https://example.com/agent.png',
+      managedOriginal: { ...artifact, viewerUrl: 'https://public.example.com/original.png' },
+      unavailableReason: 'github-inline-limit',
+    }],
+  });
+  const safeSection = renderVisualPreviewSection(previewEvidence, { published: untrusted });
+  assert.doesNotMatch(safeSection, /example\.com\/agent|public\.example/);
+  assert.match(safeSection, /does not fit the resolved GitHub inline limit/);
+});
+
+test('hybrid rendering includes complete recovery guidance for an authentication failure without a managed original', () => {
+  const section = renderPublishedAssets([{
+    assetIndex: 0,
+    relativePath: hybridRenderingEvidence.assets[0].relativePath,
+    unavailableReason: 'github-authentication-failed',
+  }]);
+
+  assert.match(section, /The preview could not be uploaded to GitHub\./);
+  assert.ok(section.includes(RESTORE_PREVIEW_UPLOADS_GUIDANCE));
+});
+
+test('hybrid rendering preserves a managed original and complete recovery guidance after an authentication failure', () => {
+  const section = renderPublishedAssets([{
+    assetIndex: 0,
+    relativePath: hybridRenderingEvidence.assets[0].relativePath,
+    managedOriginal: managedOriginal(0),
+    unavailableReason: 'github-authentication-failed',
+  }]);
+
+  assert.match(section, /\[View the full-resolution original in ProPR Connect\]\(https:\/\/connect\.example\.test\/previews\/artifact-0\)/);
+  assert.match(section, /the authenticated original remains available above/);
+  assert.ok(section.includes(RESTORE_PREVIEW_UPLOADS_GUIDANCE));
+});
+
+test('hybrid rendering includes authentication recovery guidance exactly once for multiple failures', () => {
+  const section = renderPublishedAssets(hybridRenderingEvidence.assets.map((asset, assetIndex) => ({
+    assetIndex,
+    relativePath: asset.relativePath,
+    unavailableReason: 'github-authentication-failed' as const,
+  })));
+
+  assert.equal(section.split('### Restore preview uploads').length - 1, 1);
+  assert.equal(section.split(RESTORE_PREVIEW_UPLOADS_GUIDANCE).length - 1, 1);
+});
+
+test('hybrid rendering omits authentication recovery guidance for non-authentication inline failures', () => {
+  const section = renderPublishedAssets([{
+    assetIndex: 0,
+    relativePath: hybridRenderingEvidence.assets[0].relativePath,
+    managedOriginal: managedOriginal(0),
+    unavailableReason: 'github-inline-failed',
+  }]);
+
+  assert.match(section, /the authenticated original remains available above/);
+  assert.doesNotMatch(section, /### Restore preview uploads/);
+  assert.equal(section.includes(RESTORE_PREVIEW_UPLOADS_GUIDANCE), false);
 });
 
 test('removing an empty preview slot preserves unrelated body whitespace', () => {

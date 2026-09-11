@@ -19,8 +19,57 @@ export {
   redactVisualPreviewValue,
   redactVisualPreviewPaths,
 } from './visualPreviewPaths.js';
-export const VISUAL_PREVIEW_MARKER = '<!-- propr-visual-preview -->';
-export const VISUAL_PREVIEW_SLOT = '<!-- propr-visual-preview-slot -->';
+export {
+  createPublishedVisualPreviewMetadata,
+  trustedGitHubAttachmentUrl,
+  VISUAL_PREVIEW_MARKER,
+  VISUAL_PREVIEW_SLOT,
+} from './visualPreviewRendering.js';
+export type {
+  CreatePublishedVisualPreviewMetadataOptions,
+  PublishedVisualPreviewAssetInput,
+  PublishedVisualPreviewMetadata,
+  RenderVisualPreviewOptions,
+  RenderVisualPreviewUploadFailureOptions,
+} from './visualPreviewRendering.js';
+
+import {
+  appendVisualPreviewSection as appendRenderedVisualPreviewSection,
+  renderVisualPreviewSection as renderPreviewSection,
+  renderVisualPreviewUploadFailureSection as renderUploadFailureSection,
+  type RenderVisualPreviewOptions,
+  type RenderVisualPreviewUploadFailureOptions,
+} from './visualPreviewRendering.js';
+
+function publicVisualPreviewEvidence(evidence: VisualPreviewEvidence): VisualPreviewEvidence {
+  return {
+    ...evidence,
+    assets: evidence.assets.map(asset => ({
+      ...asset,
+      title: redactVisualPreviewPaths(asset.title),
+      description: asset.description ? redactVisualPreviewPaths(asset.description) : undefined,
+    })),
+    toolSuggestions: evidence.toolSuggestions.map(suggestion => ({
+      name: redactVisualPreviewPaths(suggestion.name),
+      reason: redactVisualPreviewPaths(suggestion.reason),
+    })),
+  };
+}
+
+export function renderVisualPreviewSection(evidence: VisualPreviewEvidence, options: RenderVisualPreviewOptions): string {
+  return renderPreviewSection(publicVisualPreviewEvidence(evidence), options);
+}
+
+export function renderVisualPreviewUploadFailureSection(
+  evidence: VisualPreviewEvidence,
+  options: RenderVisualPreviewUploadFailureOptions = {},
+): string {
+  return renderUploadFailureSection(publicVisualPreviewEvidence(evidence), options);
+}
+
+export function appendVisualPreviewSection(body: string, section: string): string {
+  return appendRenderedVisualPreviewSection(redactVisualPreviewPaths(body), section);
+}
 
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_PREVIEW_ASSETS = 8;
@@ -69,10 +118,6 @@ export interface CollectVisualPreviewEvidenceOptions {
   worktreePath: string;
   changedFiles: readonly string[];
   settings: VisualPreviewSettings;
-}
-
-export interface RenderVisualPreviewOptions {
-  useLocalPaths?: boolean;
 }
 
 export interface PrepareVisualPreviewEvidenceOptions {
@@ -363,73 +408,6 @@ export async function cleanupPreparedVisualPreviewEvidence(
 ): Promise<void> {
   if (!prepared?.temporaryDirectory) return;
   await rm(prepared.temporaryDirectory, { recursive: true, force: true });
-}
-
-function markdownText(value: string): string {
-  return redactVisualPreviewPaths(value).replace(/([\\`*_[\]{}()<>#+.!|])/g, '\\$1');
-}
-
-function markdownTarget(target: string): string {
-  return /[\s()]/.test(target) ? `<${target.replaceAll('>', '%3E')}>` : target;
-}
-
-function appendToolSuggestions(parts: string[], suggestions: VisualPreviewToolSuggestion[]): void {
-  if (suggestions.length === 0) return;
-  parts.push('### Suggested agent tools', suggestions
-    .map(suggestion => `- **${markdownText(suggestion.name)}:** ${markdownText(suggestion.reason)}`)
-    .join('\n'));
-}
-
-export function renderVisualPreviewSection(
-  evidence: VisualPreviewEvidence,
-  options: RenderVisualPreviewOptions
-): string {
-  const assets = options.useLocalPaths ? evidence.assets : [];
-  if (assets.length === 0 && evidence.toolSuggestions.length === 0) return '';
-  const parts = [VISUAL_PREVIEW_MARKER, '## Visual preview'];
-
-  for (const asset of assets) {
-    const target = asset.absolutePath;
-    parts.push(`### ${markdownText(asset.title)}`);
-    parts.push(`![${asset.type === 'image' ? markdownText(asset.title) : ''}](${markdownTarget(target)})`);
-    if (asset.description) parts.push(markdownText(asset.description));
-  }
-
-  appendToolSuggestions(parts, evidence.toolSuggestions);
-
-  return parts.join('\n\n');
-}
-
-export interface RenderVisualPreviewUploadFailureOptions { authenticationFailure?: boolean; }
-
-export function renderVisualPreviewUploadFailureSection(
-  evidence: VisualPreviewEvidence,
-  options: RenderVisualPreviewUploadFailureOptions = {},
-): string {
-  const parts = [
-    VISUAL_PREVIEW_MARKER,
-    '## Visual preview',
-    'Preview media was generated but could not be uploaded to GitHub. No preview files were committed.'
-  ];
-  if (options.authenticationFailure) {
-    parts.push('### Restore preview uploads');
-    parts.push(
-      'An instance administrator must open the ProPR Web UI, go to **Settings → Visual preview uploads**, '
-      + 'and add or replace the personal access token. The token must have access to this repository. GitHub '
-      + 'rejects GitHub App user (`ghu_`) and installation (`ghs_`) tokens for attachments. A server operator can '
-      + 'alternatively set `GITHUB_VISUAL_PREVIEW_TOKEN`; that environment override takes precedence over the Web '
-      + 'UI credential. Then request the visual preview again.',
-    );
-  }
-  appendToolSuggestions(parts, evidence.toolSuggestions);
-  return parts.join('\n\n');
-}
-
-export function appendVisualPreviewSection(body: string, section: string): string {
-  body = redactVisualPreviewPaths(body);
-  if (!section) return body.replace(VISUAL_PREVIEW_SLOT, '');
-  if (body.includes(VISUAL_PREVIEW_SLOT)) return body.replace(VISUAL_PREVIEW_SLOT, section);
-  return `${body.trim()}\n\n---\n\n${section}`;
 }
 
 export function buildVisualPreviewPrompt(settings: VisualPreviewSettings): string {

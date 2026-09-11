@@ -30,7 +30,7 @@ const status: PreviewStorageStatusV1 = {
 };
 const upload = {
   version: 1, artifactId: 'artifact-1', objectKey: '42/original', ...metadata, ...assetMetadata,
-  put: { url: signedUrl, headers: { 'Content-Type': 'image/png', 'Content-Length': String(original.length) }, expiresAt: '2099-01-01T00:00:00Z' },
+  put: { url: signedUrl, headers: { 'Content-Type': 'image/png', 'Content-Length': String(original.length), 'If-None-Match': '*' }, expiresAt: '2099-01-01T00:00:00Z' },
 };
 const artifact = { version: 1, artifactId: upload.artifactId, state: 'ready', ...metadata, ...assetMetadata,
   viewerUrl: 'https://connect.example.test/previews/artifact-1', retentionExpiresAt: '2099-01-01T00:00:00Z' };
@@ -107,6 +107,7 @@ test('Plus uploads the exact original and finalizes the bound object without for
   assert.equal(calls[2].url, signedUrl);
   assert.deepEqual(calls[2].putBytes, new Uint8Array(original));
   assert.deepEqual(calls[2].init?.headers, upload.put.headers);
+  assert.equal(new Headers(calls[2].init?.headers).get('if-none-match'), '*');
   assert.equal((calls[2].init as RequestInit & { duplex: string }).duplex, 'half');
   assert.deepEqual(JSON.parse(calls[1].init?.body as string), { version: 1, ...assetMetadata, ...metadata });
   assert.deepEqual(JSON.parse(calls[3].init?.body as string), { version: 1, objectKey: upload.objectKey, ...metadata });
@@ -135,7 +136,7 @@ for (const [override, code] of [
   });
 }
 
-for (const [httpStatus, code] of [[409, 'quota_exceeded'], [413, 'object_too_large']] as const) {
+for (const [httpStatus, code] of [[409, 'quota_exceeded'], [413, 'quota_exceeded'], [413, 'object_too_large']] as const) {
   test(`relay ${code} remains a safe typed error`, async () => {
     const { client, calls } = fixture({ failAt: 2, failure: Response.json({ code, message: secrets.join(' ') }, { status: httpStatus }) });
     assert.deepEqual(await client.uploadOriginal(input), { stored: false, code });
@@ -143,12 +144,25 @@ for (const [httpStatus, code] of [[409, 'quota_exceeded'], [413, 'object_too_lar
   });
 }
 
+test('unknown and oversized 413 bodies use the generic object-size fallback without retaining body data', async () => {
+  for (const body of [
+    { code: 'unknown_code', message: secrets.join(' ') },
+    { code: 'quota_exceeded', message: 'x'.repeat(5 * 1024) },
+  ]) {
+    const { client } = fixture({ failAt: 2, failure: Response.json(body, { status: 413 }) });
+    assert.deepEqual(await client.uploadOriginal(input), { stored: false, code: 'object_too_large' });
+  }
+});
+
 test('mismatched metadata, expired grants and unsafe signed headers prevent PUT', async () => {
   for (const value of [
     { ...upload, sizeBytes: 20 }, { ...upload, sha256: 'a'.repeat(64) },
     { ...upload, put: { ...upload.put, expiresAt: '2000-01-01T00:00:00Z' } },
     { ...upload, put: { ...upload.put, url: 'http://objects.example.test/file' } },
     { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, Authorization: `Bearer ${secrets[3]}` } } },
+    { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, 'If-None-Match': 'anything-but-star' } } },
+    { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, 'If-Match': '*' } } },
+    { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, 'If-Modified-Since': 'yesterday' } } },
     { ...upload, put: { ...upload.put, headers: { 'Content-Type': 'video/mp4' } } },
     { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, 'content-type': 'image/png' } } },
     { ...upload, put: { ...upload.put, headers: { ...upload.put.headers, 'Content-Length': '7' } } },
