@@ -8,10 +8,32 @@ import { ProviderLogo } from '../ui/ProviderLogo';
 
 interface ParentTaskRowProps {
   group: TaskGroup;
+  desktopLayout?: boolean;
   task: Task;
   onRowClick: (taskId: string) => void;
   isDuplicateRepo?: boolean;
 }
+
+// Keep text selection and nested controls independent of the row click target.
+const openDesktopRow = (event: React.MouseEvent, taskId: string, onRowClick: (id: string) => void) => {
+  if ((event.target as Element).closest('a, button, input, select, textarea, [role="button"]')) return;
+  if (window.getSelection()?.toString()) return;
+  onRowClick(taskId);
+};
+
+const TaskTitle: React.FC<{ title: string; taskId: string; desktopLayout: boolean; onRowClick: (id: string) => void }> = ({ title, taskId, desktopLayout, onRowClick }) => desktopLayout ? (
+  <button
+    type="button"
+    className="task-title"
+    onClick={event => {
+      event.stopPropagation();
+      if (event.detail > 0 && window.getSelection()?.toString()) return;
+      onRowClick(taskId);
+    }}
+  >
+    {title}
+  </button>
+) : <>{title}</>;
 
 const renderTaskBadges = (task: Task, prNumber?: number | null, forceIssueWithPr = false): React.ReactNode[] => {
   const badges: React.ReactNode[] = [];
@@ -47,7 +69,7 @@ const renderTaskBadges = (task: Task, prNumber?: number | null, forceIssueWithPr
   return badges;
 };
 
-export const ParentTaskRow: React.FC<ParentTaskRowProps> = ({ group, task, onRowClick, isDuplicateRepo = false }) => {
+export const ParentTaskRow: React.FC<ParentTaskRowProps> = ({ group, task, onRowClick, isDuplicateRepo = false, desktopLayout = false }) => {
   const typeInfo = getTaskTypeInfo(task);
   const isDimmed = shouldDimTask(task);
   const showIssueWithPr = task.status === 'completed' || typeInfo.type === 'followup';
@@ -55,29 +77,28 @@ export const ParentTaskRow: React.FC<ParentTaskRowProps> = ({ group, task, onRow
   return (
     <tr
       className="hover:bg-gray-50 transition-colors cursor-pointer group bg-white border-b border-slate-100"
-      onClick={() => onRowClick(task.id)}
+      onClick={event => desktopLayout ? openDesktopRow(event, task.id, onRowClick) : onRowClick(task.id)}
     >
-      <td className="py-3 px-6 align-top">
+      <td className="task-repository py-3 px-6 align-top">
         <div className={`flex flex-col ${isDuplicateRepo ? 'opacity-30' : ''}`}>
           <span className="text-xs text-gray-400 font-normal">{group.repoOwner}</span>
           <span className="text-sm font-bold text-gray-800">{group.repoName}</span>
         </div>
       </td>
-      <td className="py-3 px-4 align-top">
+      <td className="task-summary py-3 px-4 align-top">
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
+          {desktopLayout && <div className="task-inline-repository">{group.repoOwner}/{group.repoName}</div>}
+          <div className="task-badges flex items-center gap-2">
             {renderTaskBadges(task, group.prNumber, showIssueWithPr)}
             <TaskTypeBadge type={typeInfo.type} />
           </div>
           <div className="text-sm text-gray-900 font-medium">
-            {(() => {
-              // For followup tasks, prefer subtitle if available
-              if (typeInfo.type === 'followup' && task.subtitle) {
-                return task.subtitle;
-              }
-              // Otherwise use the clean title
-              return typeInfo.cleanTitle || task.subtitle || 'No title';
-            })()}
+            <TaskTitle
+              title={(typeInfo.type === 'followup' && task.subtitle) || typeInfo.cleanTitle || task.subtitle || 'No title'}
+              taskId={task.id}
+              desktopLayout={desktopLayout}
+              onRowClick={onRowClick}
+            />
           </div>
           {(() => {
             // Show agent/model info if available
@@ -87,7 +108,7 @@ export const ParentTaskRow: React.FC<ParentTaskRowProps> = ({ group, task, onRow
               const displayText = agent && model ? `${agent} ${model}` : agent || model;
               return (
                 <div className="flex items-center gap-1 text-xs">
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                  <span className="task-model inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
                     <ProviderLogo provider={agent} className="w-3.5 h-3.5" />
                     <span>{displayText}</span>
                   </span>
@@ -98,13 +119,13 @@ export const ParentTaskRow: React.FC<ParentTaskRowProps> = ({ group, task, onRow
           })()}
         </div>
       </td>
-      <td className="py-3 px-4 align-top">
+      <td className="task-status py-3 px-4 align-top">
         <div className="flex items-center justify-between">
           {getStatusPill(task.status)}
           <ScoreBadge score={task.critiqueScore} dimmed={isDimmed} />
         </div>
       </td>
-      <td className="py-3 px-4 align-top">
+      <td className="task-metadata py-3 px-4 align-top">
         <div className="text-sm text-gray-800" title={new Date(task.createdAt).toLocaleString()}>
           {formatRelativeTime(task.createdAt)}
         </div>
@@ -112,16 +133,17 @@ export const ParentTaskRow: React.FC<ParentTaskRowProps> = ({ group, task, onRow
           {formatDuration(task.processedAt || task.createdAt, task.completedAt)}
         </div>
       </td>
-      <td className="py-3 px-6 align-top text-right">
+      {!desktopLayout && <td className="py-3 px-6 align-top text-right">
         <button className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors opacity-0 group-hover:opacity-100">
           <ChevronRight size={16} />
         </button>
-      </td>
+      </td>}
     </tr>
   );
 };
 
 interface ChildTaskRowProps {
+  desktopLayout?: boolean;
   task: Task;
   onRowClick: (taskId: string) => void;
 }
@@ -130,7 +152,7 @@ interface ChildTaskRowExtraProps extends ChildTaskRowProps {
   isLastChild?: boolean;
 }
 
-export const ChildTaskRow: React.FC<ChildTaskRowExtraProps> = ({ task, onRowClick, isLastChild = false }) => {
+export const ChildTaskRow: React.FC<ChildTaskRowExtraProps> = ({ task, onRowClick, isLastChild = false, desktopLayout = false }) => {
   const childTypeInfo = getTaskTypeInfo(task);
   const isDimmed = shouldDimTask(task);
   const showIssueWithPr = task.status === 'completed' || childTypeInfo.type === 'followup';
@@ -146,24 +168,24 @@ export const ChildTaskRow: React.FC<ChildTaskRowExtraProps> = ({ task, onRowClic
   return (
     <tr
       className="hover:bg-gray-50 transition-colors cursor-pointer bg-gray-50/30 group border-b border-slate-100"
-      onClick={() => onRowClick(task.id)}
+      onClick={event => desktopLayout ? openDesktopRow(event, task.id, onRowClick) : onRowClick(task.id)}
     >
-      <td className="py-3 px-6 align-top relative">
+      <td className="task-repository py-3 px-6 align-top relative">
          {/* Visual connector line placeholder if we wanted one spanning rows */}
       </td>
-      <td className="py-0 px-4 align-top relative">
+      <td className="task-summary py-0 px-4 align-top relative">
         {/* Vertical line - positioned absolutely to span across td boundaries with z-index to sit above row borders */}
         <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-gray-200 z-10" style={{ height: isLastChild ? 'calc(0.75rem + 0.5em + 1px)' : 'calc(100% + 1px)', top: '-1px' }}></div>
         {/* Horizontal arm - aligned with the middle of the text content */}
         <div className="absolute left-6 w-4 h-0.5 bg-gray-200 z-10" style={{ top: 'calc(0.75rem + 0.5em)' }}></div>
 
         <div className="flex flex-col gap-1 pl-6 py-3">
-          <div className="flex items-center gap-2 pl-4">
+          <div className="task-badges flex items-center gap-2 pl-4">
             {renderTaskBadges(task, task.prNumber, showIssueWithPr)}
             <TaskTypeBadge type={childTypeInfo.type} />
           </div>
           <div className="flex items-start gap-2 pl-4">
-            <span className="text-sm text-gray-600 line-clamp-1">{childDisplayTitle}</span>
+            <span className={`text-sm text-gray-600 ${desktopLayout ? 'min-w-0' : 'line-clamp-1'}`}><TaskTitle title={childDisplayTitle} taskId={task.id} desktopLayout={desktopLayout} onRowClick={onRowClick} /></span>
           </div>
           {(() => {
             // Show agent/model info if available
@@ -173,7 +195,7 @@ export const ChildTaskRow: React.FC<ChildTaskRowExtraProps> = ({ task, onRowClic
               const displayText = agent && model ? `${agent} ${model}` : agent || model;
               return (
                 <div className="flex items-center gap-1 text-xs pl-4">
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                  <span className="task-model inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
                     <ProviderLogo provider={agent} className="w-3.5 h-3.5" />
                     <span>{displayText}</span>
                   </span>
@@ -184,13 +206,13 @@ export const ChildTaskRow: React.FC<ChildTaskRowExtraProps> = ({ task, onRowClic
           })()}
         </div>
       </td>
-      <td className="py-3 px-4 align-top">
+      <td className="task-status py-3 px-4 align-top">
         <div className="flex items-center justify-between">
           {getStatusPill(task.status)}
           <ScoreBadge score={task.critiqueScore} dimmed={isDimmed} />
         </div>
       </td>
-      <td className="py-3 px-4 align-top">
+      <td className="task-metadata py-3 px-4 align-top">
         <div className="text-sm text-gray-800" title={new Date(task.createdAt).toLocaleString()}>
           {formatRelativeTime(task.createdAt)}
         </div>
@@ -198,27 +220,28 @@ export const ChildTaskRow: React.FC<ChildTaskRowExtraProps> = ({ task, onRowClic
           {formatDuration(task.processedAt || task.createdAt, task.completedAt)}
         </div>
       </td>
-      <td className="py-3 px-6 align-top text-right">
+      {!desktopLayout && <td className="py-3 px-6 align-top text-right">
          <button className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors opacity-0 group-hover:opacity-100">
             <ChevronRight size={16} />
          </button>
-      </td>
+      </td>}
     </tr>
   );
 };
 
 interface CollapseToggleRowProps {
+  desktopLayout?: boolean;
   groupKey: string;
   hiddenCount: number;
   onToggle: (groupKey: string, e: React.MouseEvent) => void;
 }
 
-export const CollapseToggleRow: React.FC<CollapseToggleRowProps> = ({ groupKey, hiddenCount, onToggle }) => (
+export const CollapseToggleRow: React.FC<CollapseToggleRowProps> = ({ groupKey, hiddenCount, onToggle, desktopLayout = false }) => (
   <tr className="bg-gray-50/30 border-b border-slate-100">
-    <td className="py-3 px-6 align-top relative">
+    <td className="task-repository py-3 px-6 align-top relative">
        {/* Empty cell for repository column alignment */}
     </td>
-    <td colSpan={4} className="py-0 px-4 align-top text-xs relative">
+    <td colSpan={desktopLayout ? 3 : 4} className="py-0 px-4 align-top text-xs relative">
        {/* Vertical line connecting to the tree structure - extends from top to the horizontal arm with z-index to sit above row borders */}
        <div className="absolute left-6 top-0 w-0.5 bg-gray-200 z-10" style={{ height: 'calc(0.75rem + 0.5rem + 0.5em - 2px)', top: '-1px' }}></div>
        {/* Horizontal arm - aligned with the middle of the button text */}
