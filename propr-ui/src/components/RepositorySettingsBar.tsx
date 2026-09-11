@@ -20,10 +20,7 @@ const AutoCiFollowupControl: React.FC<{
       title="Automatically create follow-up work when CI fails"
       onClick={(e) => e.stopPropagation()}
     >
-      <span className="min-w-0">
-        <span className="block">Auto CI follow-up</span>
-        <span className="mt-1 block text-slate-500">Create follow-up work when CI fails.</span>
-      </span>
+      <span className="min-w-0">Auto CI follow-up</span>
       <input
         type="checkbox"
         checked={repo.autoFollowupOnFailedCi === true}
@@ -78,33 +75,24 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
         <div>
           <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Repository</h3>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span className="min-w-0">
-              <span className="block">Monitor repository</span>
-              <span className="mt-1 block text-slate-500">Process new issues in this repository.</span>
-            </span>
+            <span className="min-w-0">Monitor repository</span>
             <input type="checkbox" checked={repo.enabled} onChange={() => onToggle(repo.id)} disabled={isReadOnly} aria-label={`Monitor ${repo.name}`} className="sr-only peer" />
             <span className={toggleClassName} />
           </label>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span className="min-w-0">
-              <span className="block">Star repository</span>
-              <span className="mt-1 block text-slate-500">Keep this repository at the top of the list.</span>
-            </span>
+            <span className="min-w-0">Star repository</span>
             <input type="checkbox" checked={repo.starred === true} onChange={() => onToggleStar(repo.id)} disabled={isReadOnly} aria-label="Star repository" className="sr-only peer" />
             <span className={toggleClassName} />
           </label>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span className="min-w-0">
-              <span className="block">Hide repository</span>
-              <span className="mt-1 block text-slate-500">Hide this repository from the default list.</span>
-            </span>
+            <span className="min-w-0">Hide repository</span>
             <input type="checkbox" checked={repo.hidden === true} onChange={() => onToggleHidden(repo.id)} disabled={isReadOnly} aria-label="Hide repository" className="sr-only peer" />
             <span className={toggleClassName} />
           </label>
         </div>
 
         {!isReadOnly && (
-          <div className="mt-8 border-t border-slate-200 pt-4">
+          <div className="mt-8 border-t border-slate-200 pt-6">
             <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Automation</h3>
             <div className="flex flex-col">
               <AutoCiFollowupControl repo={repo} onToggle={onToggleAutoCiFollowup} isReadOnly={isReadOnly} />
@@ -113,7 +101,7 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
           </div>
         )}
 
-        <div className="mt-8 border-t border-slate-200 pt-4">
+        <div className="mt-8 border-t border-slate-200 pt-6">
           <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Indexing</h3>
           <dl className="text-xs text-slate-600">
             <div className="flex items-center justify-between gap-4 py-2">
@@ -151,10 +139,7 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
             )}
           </dl>
           <div className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span className="min-w-0">
-              <span className="block">Reindex</span>
-              <span className="mt-1 block text-slate-500">Rebuild the index from the current branch.</span>
-            </span>
+            <span className="min-w-0">Reindex</span>
             <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
@@ -181,7 +166,7 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
           </div>
         </div>
 
-        <div className="mt-8 border-t border-slate-200 pt-4">
+        <div className="mt-8 border-t border-slate-200 pt-6">
           <button
             type="button"
             onClick={() => setIsDeleteDialogOpen(true)}

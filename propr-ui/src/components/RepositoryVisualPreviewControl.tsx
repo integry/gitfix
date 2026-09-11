@@ -75,7 +75,6 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
                 <Video className="h-3 w-3" /> Videos
               </button>
             </div>
-            <p className="mt-1 text-slate-500">Choose at least one preview format.</p>
           </div>
           <label className="block w-full min-w-0">
             <span className="mb-1 block">Preview instructions</span>
@@ -94,7 +93,6 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
               placeholder="Optional: capture separate desktop and mobile views…"
               aria-label={`Visual preview instructions for ${repo.name}`}
             />
-            <span className="mt-1 block text-slate-500">Specify what to capture and how to show it.</span>
           </label>
         </div>
       )}

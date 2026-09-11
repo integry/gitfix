@@ -62,7 +62,7 @@ const getStatusInfo = (status: RepositoryIndexingStatus | undefined): {
 };
 
 const getRepositoryListItemClassName = (isSelected: boolean) => (
-  `border-b border-slate-100 border-l-2 cursor-pointer transition-colors relative group ${isSelected ? 'border-l-teal-600 bg-slate-50' : 'border-l-transparent hover:bg-slate-50/50'}`
+  `border-b border-b-slate-100 border-l-2 cursor-pointer transition-colors relative group ${isSelected ? 'border-teal-600 bg-slate-50' : 'border-l-transparent hover:bg-slate-50/50'}`
 );
 
 const getStatusTextClassName = (statusType: RepoStatusType) => {
