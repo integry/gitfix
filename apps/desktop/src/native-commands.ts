@@ -6,7 +6,16 @@ import type {
   DesktopNativeNavigationState,
 } from './shared/contract';
 
-export type DesktopMainCommand = DesktopNativeCommand | 'open' | 'toggle-native-notifications';
+export const DESKTOP_HELP_URLS = {
+  website: 'https://propr.dev',
+  documentation: 'https://docs.propr.dev',
+  'connection-help': 'https://docs.propr.dev/docs/operations/desktop-application',
+  'report-problem': 'https://github.com/integry/propr/issues/new',
+} as const;
+const isHelpCommand = (command: string): command is keyof typeof DESKTOP_HELP_URLS =>
+  Object.prototype.hasOwnProperty.call(DESKTOP_HELP_URLS, command);
+
+export type DesktopMainCommand = DesktopNativeCommand | 'open' | 'toggle-native-notifications' | 'about' | keyof typeof DESKTOP_HELP_URLS;
 
 export interface DesktopNativeCommandState {
   authenticated: boolean;
@@ -31,6 +40,8 @@ interface DesktopNativeCommandDispatcherOptions {
   notificationState(): { available: boolean; enabled: boolean };
   setNativeNotificationsEnabled(scope: DesktopNotificationScope, enabled: boolean): Promise<void>;
   quit(): void;
+  showAbout?(): void;
+  openExternal?(url: string): Promise<void>;
   log?(level: 'warn', event: string): void;
 }
 
@@ -48,7 +59,7 @@ export interface DesktopNativeCommandDispatcher {
 }
 
 const AUTHENTICATED_COMMANDS = new Set<DesktopNativeCommand>([
-  'new-plan', 'tasks', 'plans', 'inbox', 'notification-settings',
+  'new-task', 'search', 'toggle-sidebar', 'new-plan', 'tasks', 'plans', 'inbox', 'notification-settings',
   'dashboard', 'goals', 'repositories', 'llm-logs', 'settings', 'back', 'forward',
 ]);
 
@@ -118,6 +129,15 @@ export const createDesktopNativeCommandDispatcher = (
   return {
     dispatch(command) {
       if (closed) return;
+      if (command === 'about') {
+        options.showAbout?.();
+        return;
+      }
+      if (isHelpCommand(command)) {
+        void options.openExternal?.(DESKTOP_HELP_URLS[command])
+          .catch(() => options.log?.('warn', 'desktop.native_command.external_open_failed'));
+        return;
+      }
       if (command === 'open') {
         options.restoreWindow();
         return;
@@ -143,7 +163,7 @@ export const createDesktopNativeCommandDispatcher = (
         return;
       }
 
-      if (command === 'manage-instances' && !state().canManageInstances) return;
+      if ((command === 'manage-instances' || command === 'connect-instance') && !state().canManageInstances) return;
       if (command === 'back' && !state().canGoBack) return;
       if (command === 'forward' && !state().canGoForward) return;
       const activeConnection = options.activeConnectionScope();

@@ -20,6 +20,7 @@ import { launchDesktopAuthentication } from './authentication-handoff';
 import { DesktopConnectDiscoveryService } from './connect-discovery';
 import { requestDesktopMicrophoneConsent } from './microphone-consent';
 import { configureMacOSBranding } from './macos-branding';
+import { applicationAboutDetails, showApplicationAbout } from './application-about';
 import { configureApplicationMenu } from './application-menu';
 import {
   authorizePackagedAcceptanceTest,
@@ -1816,6 +1817,12 @@ if (!hasSingleInstanceLock) {
       },
     });
     desktopNativeCommands = createDesktopNativeCommandDispatcher({
+      showAbout: () => {
+        const detail = applicationAboutDetails(app.getVersion(), process.platform, process.arch, process.versions);
+        void showApplicationAbout({ showMessageBox: options => dialog.showMessageBox(options), copy: text => clipboard.writeText(text) }, detail)
+          .catch(() => log('warn', 'desktop.about.open_failed'));
+      },
+      openExternal: openAllowedExternalUrl,
       channel: IPC_CHANNELS.nativeCommand,
       getWindow: () => mainWindow,
       restoreWindow: restoreMainWindow,

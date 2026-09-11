@@ -9,6 +9,8 @@ import type {
 import type { ExperienceState } from './desktopExperienceState';
 import type { DesktopAdapters, DesktopProfile } from './types';
 
+export const DESKTOP_UI_COMMAND_EVENT = 'propr:desktop-ui-command';
+
 interface DesktopNativeCommandOptions {
   app: DesktopAdapters['app'];
   state: ExperienceState;
@@ -16,11 +18,14 @@ interface DesktopNativeCommandOptions {
   onNavigate?(): void;
   onManageInstances(): void;
   onChooseInstances(): void;
+  onConnectInstance(): void;
+  onDiagnostics(): void;
   onReconnect(profile: DesktopProfile): Promise<void>;
 }
 
-const commandPaths: Record<Exclude<DesktopNativeCommand, 'manage-instances' | 'quit' | 'back' | 'forward'>, string> = {
+const commandPaths: Record<Exclude<DesktopNativeCommand, 'manage-instances' | 'connect-instance' | 'diagnostics' | 'search' | 'toggle-sidebar' | 'quit' | 'back' | 'forward'>, string> = {
   'new-plan': '/studio/new',
+  'new-task': '/studio/new?mode=task',
   dashboard: '/',
   goals: '/goals',
   repositories: '/repositories',
@@ -52,7 +57,7 @@ const matchesConnectedScope = (
 const readDesktopPath = (): string => window.location.hash.slice(1) || '/';
 
 const navigateNativeCommand = (
-  command: Exclude<DesktopNativeCommand, 'quit' | 'manage-instances'>,
+  command: Exclude<DesktopNativeCommand, 'quit' | 'manage-instances' | 'connect-instance' | 'diagnostics' | 'search' | 'toggle-sidebar'>,
   history: NativeNavigationHistory,
   onNavigate: DesktopNativeCommandOptions['onNavigate'],
 ): void => {
@@ -76,6 +81,8 @@ export const useDesktopNativeCommands = ({
   onNavigate,
   onManageInstances,
   onChooseInstances,
+  onConnectInstance,
+  onDiagnostics,
   onReconnect,
 }: DesktopNativeCommandOptions): void => {
   const [pendingCommand, setPendingCommand] = useState<DesktopNativeCommandDelivery | null>(null);
@@ -118,7 +125,12 @@ export const useDesktopNativeCommands = ({
       setPendingCommand(null);
       return;
     }
-    if (command === 'manage-instances') {
+    if (command === 'diagnostics') {
+      onDiagnostics();
+      setPendingCommand(null);
+      return;
+    }
+    if (command === 'manage-instances' || command === 'connect-instance') {
       if (!canManageInstances) {
         setPendingCommand(null);
         return;
@@ -127,7 +139,8 @@ export const useDesktopNativeCommands = ({
         setPendingCommand(null);
         return;
       }
-      if (state.phase === 'connected') onManageInstances();
+      if (command === 'connect-instance') onConnectInstance();
+      else if (state.phase === 'connected') onManageInstances();
       else onChooseInstances();
       setPendingCommand(null);
       return;
@@ -140,9 +153,12 @@ export const useDesktopNativeCommands = ({
       setPendingCommand(null);
       return;
     }
-    navigateNativeCommand(command, history.current, onNavigate);
+    if (command === 'search' || command === 'toggle-sidebar') {
+      onNavigate?.();
+      window.dispatchEvent(new CustomEvent(DESKTOP_UI_COMMAND_EVENT, { detail: command }));
+    } else navigateNativeCommand(command, history.current, onNavigate);
     setPendingCommand(null);
-  }, [app, canManageInstances, onChooseInstances, onManageInstances, onNavigate, pendingCommand, state]);
+  }, [app, canManageInstances, onConnectInstance, onDiagnostics, onChooseInstances, onManageInstances, onNavigate, pendingCommand, state]);
 
   // Effect Events expose only the latest committed render, and update before
   // layout effects can dispatch a shortcut for that commit.

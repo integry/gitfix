@@ -59,6 +59,11 @@ export const IPC_CHANNELS = Object.freeze({
 
 export const DESKTOP_NATIVE_COMMANDS = Object.freeze([
   'new-plan',
+  'new-task',
+  'search',
+  'toggle-sidebar',
+  'connect-instance',
+  'diagnostics',
   'dashboard',
   'goals',
   'repositories',

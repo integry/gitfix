@@ -101,9 +101,10 @@ const setup = async (mode, overrides = {}) => {
   };
 };
 
-for (const mode of ['ready', 'revoked']) {
-  test(`acceptance ${mode} fixture pairs, confirms, reprobes and activates through the real credential service`, linuxFixtureOptions, async () => {
-    const f = await setup(mode);
+for (const mode of ['ready', 'revoked', 'renderer-only-rejection']) {
+  test(`acceptance ${mode} fixture pairs, activates and verifies native invalidation through the real credential service`, linuxFixtureOptions, async () => {
+    const decisions = [];
+    const f = await setup(mode, { reportCredentialDecision: decision => decisions.push(decision) });
     try {
       assert.equal((await f.service.probe(f.profile)).status, 'authentication-required');
       await f.service.pair(f.profile);
@@ -138,9 +139,85 @@ for (const mode of ['ready', 'revoked']) {
       const confirmation = requests.findIndex(record => record.url === confirmationPath);
       const reprobe = requests.findIndex(record => record.url === '/api/auth/user');
       assert.ok(activation >= 0 && confirmation > activation && reprobe > confirmation);
+
+      if (mode !== 'ready') {
+        const saved = await f.profiles.readCredential(f.profile.id);
+        assert.ok(saved);
+        assert.equal(f.service.isActiveConnectionScope(activated), true);
+        const confirmed = mode === 'revoked';
+        assert.deepEqual(await f.service.invalidate({ ...activated, code: user.code }), {
+          invalidated: confirmed,
+        });
+        assert.deepEqual(Array.from(f.fixture.fixtureCurrentUserRecords, record => [
+          record.source, record.responseStatus, record.classification,
+        ]), [
+          ['account-confirmation', 200, 'success'],
+          ['main', 200, 'success'],
+          ['renderer', 401, 'revoked'],
+          ['main', confirmed ? 401 : 200, confirmed ? 'revoked' : 'success'],
+        ]);
+        assert.ok(f.fixture.fixtureCurrentUserRecords.every(record =>
+          record.authorizationMatchesActivatedBearer && !record.cookiePresent));
+        assert.deepEqual(await f.profiles.readCredential(f.profile.id), confirmed ? null : saved);
+        assert.equal(f.service.isActiveConnectionScope(activated), !confirmed);
+        const profiles = await f.profiles.list();
+        assert.equal(profiles.profiles[0].id, f.profile.id, 'Keep the saved instance after revocation');
+        if (!confirmed) {
+          assert.equal(profiles.activeProfileId, f.profile.id);
+          assert.deepEqual(await f.profiles.pendingRevocations(), []);
+        }
+        assert.deepEqual(decisions, [
+          { reason: 'renderer-invalidation', outcome: 'requested' },
+          { reason: 'renderer-invalidation', outcome: confirmed ? 'retired' : 'retained' },
+        ]);
+      }
     } finally { await f.close(); }
   });
 }
+
+test('acceptance revocation persists across request sources and resets for a new pairing', linuxFixtureOptions, async () => {
+  const fixture = await createFixture('revoked');
+  const nativeHeaders = { Authorization: `Bearer ${fixture.INSTANCE_TOKEN}` };
+  const rendererPath = '/api/auth/user?proprDesktopScopeGeneration=1';
+  const rendererHeaders = { ...nativeHeaders, Origin: shared.DESKTOP_RENDERER_ORIGIN };
+  const post = async (path, body = {}) => {
+    const response = await fetch(`${fixture.origin}${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const check = async (path, headers, status, code) => {
+    const response = await fetch(`${fixture.origin}${path}`, { headers });
+    assert.equal(response.status, status);
+    if (code) assert.equal((await response.json()).code, code);
+    else await response.arrayBuffer();
+  };
+  try {
+    for (let pairing = 0; pairing < 2; pairing++) {
+      const started = await post('/api/desktop/pairings');
+      const path = `/api/desktop/pairings/${started.pairingId}`;
+      await check('/api/auth/user', nativeHeaders, 401, 'INVALID_INSTANCE_TOKEN');
+      const polled = await post(`${path}/poll`, { deviceSecret: started.deviceSecret });
+      await post(`${path}/activate`, {
+        deviceSecret: started.deviceSecret, activationTicket: polled.activationTicket,
+      });
+      // An unauthenticated renderer request must not revoke the activated token.
+      await check(rendererPath, { Origin: shared.DESKTOP_RENDERER_ORIGIN }, 401, 'INVALID_INSTANCE_TOKEN');
+      await check(confirmationPath, nativeHeaders, 200);
+      await check('/api/auth/user', nativeHeaders, 200);
+      fixture.fixtureCurrentUserRecords.length = 0;
+      await check(rendererPath, rendererHeaders, 401, 'INSTANCE_TOKEN_REVOKED');
+      await check('/api/auth/user', nativeHeaders, 401, 'INSTANCE_TOKEN_REVOKED');
+      await check(confirmationPath, nativeHeaders, 401, 'INSTANCE_TOKEN_REVOKED');
+      await check(rendererPath, rendererHeaders, 401, 'INSTANCE_TOKEN_REVOKED');
+      assert.deepEqual(Array.from(fixture.fixtureCurrentUserRecords, record => record.rendererRequestOccurrence), [
+        2, 0, 0, 3,
+      ], 'Reset renderer request occurrences for each pairing, including its unauthenticated request');
+      fixture.fixtureCurrentUserRecords.length = 0;
+    }
+  } finally { await fixture.close(); }
+});
 
 for (const failure of ['malformed-account', 'denied-admission', 'cancelled-confirmation', 'missing-confirmation']) {
   test(`acceptance pairing never commits or activates after ${failure}`, linuxFixtureOptions, async () => {

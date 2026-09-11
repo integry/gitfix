@@ -18,7 +18,7 @@ const connected = (scope: DesktopConnectionScope): ExperienceState => ({
   result: { status: 'ready', version: '0.8.15', ...scope },
 });
 
-const fixture = () => {
+const fixture = (platform: NodeJS.Platform = 'darwin') => {
   let scope: DesktopConnectionScope | null = scopeA;
   const listeners = new Map<string, (event: unknown, value: unknown) => void>();
   const mainWindow = {
@@ -51,17 +51,19 @@ const fixture = () => {
   const onManageInstances = vi.fn();
   const onChooseInstances = vi.fn();
   const onNavigate = vi.fn();
+  const onConnectInstance = vi.fn();
+  const onDiagnostics = vi.fn();
   const hook = renderHook(({ state, blocked }: { state: ExperienceState; blocked: boolean }) => useDesktopNativeCommands({
     app: bridge.app, state, instanceChooserBlocked: blocked, onManageInstances, onChooseInstances,
-    onNavigate, onReconnect: async () => undefined,
+    onNavigate, onConnectInstance, onDiagnostics, onReconnect: async () => undefined,
   }), { initialProps: { state: connected(scopeA), blocked: false } });
-  const item = (label: string) => createApplicationMenuTemplate('darwin', dispatcher)
+  const item = (label: string) => createApplicationMenuTemplate(platform, dispatcher)
     .flatMap(item => Array.isArray(item.submenu) ? item.submenu : []).find(item => item.label === label)!;
   const click = async (label: string) => {
     await act(async () => { (item(label).click as () => void)(); });
     await act(async () => { window.dispatchEvent(new HashChangeEvent('hashchange')); });
   };
-  return { ...hook, item, click, restore, dispatcher, onManageInstances, onChooseInstances, onNavigate,
+  return { ...hook, onConnectInstance, onDiagnostics, item, click, restore, dispatcher, onManageInstances, onChooseInstances, onNavigate,
     switchTo(next: DesktopConnectionScope) {
       dispatcher.connectionUnavailable();
       scope = next;
@@ -71,7 +73,7 @@ const fixture = () => {
   };
 };
 
-describe('macOS menu to dispatcher to preload to renderer navigation', () => {
+describe.each(['darwin', 'linux'] as const)('%s menu to dispatcher to preload to renderer navigation', platform => {
   beforeEach(() => {
     vi.stubGlobal('__PROPR_DESKTOP__', true);
     window.location.hash = '#/';
@@ -80,24 +82,29 @@ describe('macOS menu to dispatcher to preload to renderer navigation', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
   it('routes every section and creation shortcut to the real desktop URL', async () => {
-    const value = fixture();
+    const value = fixture(platform);
     for (const [label, path, shortcut] of [
-      ['Dashboard', '/', '1'], ['Inbox', '/inbox', '2'], ['Plans', '/plans', '3'],
-      ['Goals', '/goals', '4'], ['Tasks', '/tasks', '5'], ['Repositories', '/repositories', '6'],
-      ['LLM Log', '/llm-logs', '7'], ['Settings…', '/settings', ','], ['New Plan', '/studio/new', 'N'],
+      ['Dashboard', '/'], ['Inbox', '/inbox'], ['Plans', '/plans'],
+      ['Goals', '/goals'], ['Tasks', '/tasks'], ['Repositories', '/repositories'],
+      ['Settings…', '/settings', ','], ['New Plan', '/studio/new', 'N'],
+      ['New Task…', '/studio/new?mode=task'],
     ]) {
-      expect(value.item(label).accelerator).toBe(`CmdOrCtrl+${shortcut}`);
+      expect(value.item(label).accelerator).toBe(shortcut ? `CmdOrCtrl+${shortcut}` : undefined);
       await value.click(label);
       expect(window.location.hash).toBe(`#${path}`);
     }
     expect(value.restore).toHaveBeenCalledTimes(9);
     expect(value.onNavigate).toHaveBeenCalledTimes(9);
-    await value.click('Switch / Manage Instances…');
+    await value.click('Connect Instance…');
+    expect(value.onConnectInstance).toHaveBeenCalledOnce();
+    await value.click('Connection Diagnostics…');
+    expect(value.onDiagnostics).toHaveBeenCalledOnce();
+    await value.click('Switch Account / Instance…');
     expect(value.onManageInstances).toHaveBeenCalledOnce();
   });
 
   it('uses current-account history, retains filters, and drops the forward branch after new navigation', async () => {
-    const value = fixture();
+    const value = fixture(platform);
     expect(value.item('Back').enabled).toBe(false);
     await value.click('Tasks');
     await act(async () => { window.location.hash = '#/tasks?status=completed'; });
@@ -122,7 +129,7 @@ describe('macOS menu to dispatcher to preload to renderer navigation', () => {
   });
 
   it('records actual HashRouter links as well as native commands', async () => {
-    const value = fixture();
+    const value = fixture(platform);
     render(<HashRouter><DesktopNativeNavigationObserver /><Link to="/tasks/task-42?tab=output">Task details</Link></HashRouter>);
     fireEvent.click(screen.getByRole('link', { name: 'Task details' }));
     expect(window.location.hash).toBe('#/tasks/task-42?tab=output');
@@ -135,7 +142,7 @@ describe('macOS menu to dispatcher to preload to renderer navigation', () => {
   });
 
   it('guards unsaved plans for both section and history navigation', async () => {
-    const value = fixture();
+    const value = fixture(platform);
     await value.click('New Plan');
     vi.mocked(window.confirm).mockReturnValue(false);
     await value.click('Back');
@@ -149,19 +156,20 @@ describe('macOS menu to dispatcher to preload to renderer navigation', () => {
   });
 
   it('disables navigation and busy instance actions during setup, offline and logged-out transitions', async () => {
-    const value = fixture();
+    const value = fixture(platform);
     await value.click('Tasks');
     act(() => value.dispatcher.connectionUnavailable());
     value.rerender({ state: { phase: 'choose' }, blocked: true });
-    for (const label of ['Settings…', 'Tasks', 'New Plan', 'Back', 'Forward', 'Switch / Manage Instances…']) {
+    for (const label of ['Settings…', 'Tasks', 'New Plan', 'New Task…', 'Search / Go To…', 'Toggle Sidebar', 'Connect Instance…', 'Back', 'Forward', 'Switch Account / Instance…']) {
       expect(value.item(label).enabled).toBe(false);
       await value.click(label);
     }
     expect(window.location.hash).toBe('#/tasks');
     expect(value.onChooseInstances).not.toHaveBeenCalled();
+    expect(value.onConnectInstance).not.toHaveBeenCalled();
     value.rerender({ state: { phase: 'choose' }, blocked: false });
-    expect(value.item('Switch / Manage Instances…').enabled).toBe(true);
-    await value.click('Switch / Manage Instances…');
+    expect(value.item('Switch Account / Instance…').enabled).toBe(true);
+    await value.click('Switch Account / Instance…');
     expect(value.onChooseInstances).toHaveBeenCalledOnce();
   });
 });

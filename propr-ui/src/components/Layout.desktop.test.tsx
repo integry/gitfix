@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopContext, type DesktopContextValue } from '../desktop/DesktopContext';
 import Layout from './Layout';
+import { DESKTOP_UI_COMMAND_EVENT } from '../desktop/useDesktopNativeCommands';
 
 const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
@@ -70,6 +71,23 @@ describe('Layout desktop instance selector', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.socket.isConnected = true;
+  });
+
+  it('moves version and copyright out of desktop only and toggles the actual sidebar', () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    const desktop = renderLayout(desktopValue());
+    expect(document.querySelector('aside footer')).toBeNull();
+    fireEvent(window, new CustomEvent(DESKTOP_UI_COMMAND_EVENT, { detail: 'toggle-sidebar' }));
+    expect(document.querySelector('aside')).toBeNull();
+    fireEvent(window, new CustomEvent(DESKTOP_UI_COMMAND_EVENT, { detail: 'toggle-sidebar' }));
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument();
+    desktop.unmount();
+    renderLayout(null);
+    expect(document.querySelector('aside footer')).toHaveTextContent('Rinalds Uzkalns');
+    expect(document.querySelector('aside footer')).toHaveTextContent(`v${__APP_VERSION__}`);
+    fireEvent(window, new CustomEvent(DESKTOP_UI_COMMAND_EVENT, { detail: 'toggle-sidebar' }));
+    expect(document.querySelector('aside')).not.toBeNull();
+    vi.unstubAllGlobals();
   });
 
   it('integrates the desktop drag surface into the application toolbar without a duplicate title row', async () => {
