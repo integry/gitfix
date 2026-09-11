@@ -373,6 +373,13 @@ function markdownTarget(target: string): string {
   return /[\s()]/.test(target) ? `<${target.replaceAll('>', '%3E')}>` : target;
 }
 
+function appendToolSuggestions(parts: string[], suggestions: VisualPreviewToolSuggestion[]): void {
+  if (suggestions.length === 0) return;
+  parts.push('### Suggested agent tools', suggestions
+    .map(suggestion => `- **${markdownText(suggestion.name)}:** ${markdownText(suggestion.reason)}`)
+    .join('\n'));
+}
+
 export function renderVisualPreviewSection(
   evidence: VisualPreviewEvidence,
   options: RenderVisualPreviewOptions
@@ -388,12 +395,7 @@ export function renderVisualPreviewSection(
     if (asset.description) parts.push(markdownText(asset.description));
   }
 
-  if (evidence.toolSuggestions.length > 0) {
-    parts.push('### Suggested agent tools');
-    parts.push(evidence.toolSuggestions
-      .map(suggestion => `- **${markdownText(suggestion.name)}:** ${markdownText(suggestion.reason)}`)
-      .join('\n'));
-  }
+  appendToolSuggestions(parts, evidence.toolSuggestions);
 
   return parts.join('\n\n');
 }
@@ -419,12 +421,7 @@ export function renderVisualPreviewUploadFailureSection(
       + 'UI credential. Then request the visual preview again.',
     );
   }
-  if (evidence.toolSuggestions.length > 0) {
-    parts.push('### Suggested agent tools');
-    parts.push(evidence.toolSuggestions
-      .map(suggestion => `- **${markdownText(suggestion.name)}:** ${markdownText(suggestion.reason)}`)
-      .join('\n'));
-  }
+  appendToolSuggestions(parts, evidence.toolSuggestions);
   return parts.join('\n\n');
 }
 
