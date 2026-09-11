@@ -79,7 +79,7 @@ export async function publishGoalVisualPreviews(
     }
 
     try {
-        await publishPullRequestVisualPreviews({
+        const publication = await publishPullRequestVisualPreviews({
             owner,
             repo,
             pullRequestNumber: pull.number,
@@ -88,7 +88,14 @@ export async function publishGoalVisualPreviews(
             worktreePath: goal.worktree_path!,
             octokit,
         });
-        logger.info({ goalId: goal.goal_id, pullRequestNumber: pull.number, previewCount: evidence.assets.length }, 'Uploaded goal visual previews to draft PR');
+        logger.info({
+            goalId: goal.goal_id,
+            pullRequestNumber: pull.number,
+            previewCount: publication.publishedAssetCount,
+            inlineIneligiblePreviewCount: publication.inlineIneligibleAssetCount,
+        }, publication.publishedAssetCount > 0
+            ? 'Uploaded goal visual previews to draft PR'
+            : 'Skipped goal visual preview upload because no assets were eligible for GitHub inline publication');
     } catch (error) {
         logger.warn({ goalId: goal.goal_id, pullRequestNumber: pull.number, error: (error as Error).message }, 'Could not upload goal visual previews; publishing a text-only explanation');
         try {

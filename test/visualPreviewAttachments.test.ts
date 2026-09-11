@@ -302,24 +302,31 @@ test('direct upload rejects oversized images for paid plans and oversized videos
   }
 });
 
-test('GitHub CLI PR upload enforces the capacity policy before starting gh', async () => {
+test('GitHub CLI PR publication skips upload when no assets meet the capacity policy', async () => {
   const { truncate } = await import('node:fs/promises');
   const directory = await mkdtemp(path.join(tmpdir(), 'propr-pr-capacity-'));
   try {
     const absolutePath = path.join(directory, 'preview.mp4');
     await writeFile(absolutePath, '');
     await truncate(absolutePath, 11 * 1024 * 1024);
-    await assert.rejects(publishPullRequestVisualPreviews({
+    const requests: string[] = [];
+    const published = await publishPullRequestVisualPreviews({
       owner: 'integry', repo: 'propr', pullRequestNumber: 42, body: '', authToken: 'existing', worktreePath: directory,
       evidence: { assets: [{ relativePath: '.propr/previews/preview.mp4', absolutePath, type: 'video', title: 'Preview' }], toolSuggestions: [] },
-      octokit: { request: async () => { assert.fail('must reject before publication'); } },
-    }), /limit of 10 MiB/);
+      octokit: { request: async <T>(endpoint: string) => {
+        requests.push(endpoint);
+        return { data: {} } as T;
+      } },
+      runCommand: async () => { assert.fail('must not start gh'); },
+    });
+    assert.deepEqual(published, { publishedAssetCount: 0, inlineIneligibleAssetCount: 1 });
+    assert.deepEqual(requests, ['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('publishers store prepared originals before rejecting GitHub-ineligible attachments', async t => {
+test('publishers store complete prepared originals while skipping GitHub-ineligible attachments', async t => {
   const { prepareVisualPreviewEvidence, cleanupPreparedVisualPreviewEvidence } = await import('@propr/core');
   const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
   const { simpleGit } = await import('simple-git');
@@ -350,8 +357,7 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
   await assert.rejects(access(originalPath));
   assert.equal((await git.status()).files.length, 0);
 
-  // Both publishers pass the complete staged original and task context to storage
-  // before rejecting it for GitHub inline publication.
+  // Both publishers pass the complete staged original and task context to storage.
   const storeOriginals = t.mock.fn(async (
     originals: typeof prepared.evidence,
     context: { taskId: string; repository: string; pullRequestNumber?: number },
@@ -363,7 +369,12 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
   });
 
   const network = t.mock.method(globalThis, 'fetch', async () => { assert.fail('must not fetch'); });
-  const request = t.mock.fn(async <T>(): Promise<T> => { assert.fail('must not call GitHub'); });
+  const request = t.mock.fn(async <T>(_endpoint: string, requestOptions: Record<string, unknown>): Promise<T> => ({
+    data: {
+      html_url: 'https://github.com/integry/propr/pull/42#issuecomment-100',
+      body: requestOptions.body,
+    },
+  }) as T);
   const uploadAsset = t.mock.fn(async (): Promise<string> => { assert.fail('must not upload'); });
   const runCommand = t.mock.fn(async (): Promise<{ stdout: string }> => { assert.fail('must not start gh'); });
   for (const plan of ['auto', 'free', 'paid'] as const) {
@@ -373,13 +384,17 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
       evidence: { ...prepared.evidence, githubAttachmentCapacity: resolveGitHubAttachmentCapacity(plan) },
       octokit: { request }, uploadAsset, runCommand, storeOriginals,
     };
-    await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
-    await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
+    assert.deepEqual(await publishPullRequestVisualPreviews(options), {
+      publishedAssetCount: 0, inlineIneligibleAssetCount: 1,
+    });
+    const publishedComment = await publishPullRequestCommentVisualPreviews(options);
+    assert.equal(publishedComment.publishedAssetCount, 0);
+    assert.equal(publishedComment.inlineIneligibleAssetCount, 1);
   }
   assert.equal(network.mock.callCount(), 0);
   assert.equal(storeOriginals.mock.callCount(), 6);
   await Promise.all(storeOriginals.mock.calls.map(call => call.result));
-  assert.equal(request.mock.callCount(), 0);
+  assert.equal(request.mock.callCount(), 6, 'only text-only PR and comment updates reach GitHub');
   assert.equal(uploadAsset.mock.callCount(), 0);
   assert.equal(runCommand.mock.callCount(), 0);
   assert.deepEqual(await readFile(asset.absolutePath), originalBytes, 'GitHub rejection does not consume the original');
@@ -387,11 +402,11 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
   await assert.rejects(access(asset.absolutePath));
 });
 
-test('GitHub publishers revalidate files despite stale eligible metadata before publishing any asset', async t => {
+test('GitHub publishers revalidate all files and publish only eligible sibling previews', async t => {
   const { MIB } = await import('@propr/shared');
-  const directory = await mkdtemp(path.join(tmpdir(), 'propr-stale-inline-'));
+  const directory = await mkdtemp(path.join(tmpdir(), 'propr-managed-inline-'));
   t.after(async () => rm(directory, { recursive: true, force: true }));
-  const absolutePath = path.join(directory, 'grew.mp4');
+  const absolutePath = path.join(directory, 'managed-original.png');
   await writeFile(absolutePath, '');
   await truncate(absolutePath, 11 * MIB);
   const options = {
@@ -400,16 +415,51 @@ test('GitHub publishers revalidate files despite stale eligible metadata before 
     evidence: {
       ...evidence,
       assets: [...evidence.assets, {
-        relativePath: '.propr/previews/grew.mp4', absolutePath, type: 'video' as const, title: 'Grew',
+        relativePath: '.propr/previews/managed-original.png', absolutePath, type: 'image' as const, title: 'Managed original',
         sizeBytes: 1, githubInline: { eligible: true as const, limitBytes: 10 * MIB },
+        originalStaging: { source: 'managed-storage' as const, limitBytes: 500 * MIB },
       }],
     },
-    octokit: { request: async <T>(): Promise<T> => { assert.fail('must not call GitHub'); } },
-    uploadAsset: async (): Promise<string> => { assert.fail('must not upload even the first eligible asset'); },
-    runCommand: async (): Promise<{ stdout: string }> => { assert.fail('must not start gh'); },
+    storeOriginals: async (originals: typeof evidence) => {
+      assert.equal(originals.assets.length, 2, 'managed storage receives complete evidence');
+      return [];
+    },
   };
-  await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
-  await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
+  let prArguments: string[] = [];
+  const prPublished = await publishPullRequestVisualPreviews({
+    ...options,
+    octokit: { request: async <T>(endpoint: string): Promise<T> => {
+      assert.equal(endpoint, 'GET /repos/{owner}/{repo}/pulls/{pull_number}');
+      return { data: { body: '![Desktop settings](https://github.com/user-attachments/assets/eligible)' } } as T;
+    } },
+    runCommand: async ({ args }): Promise<{ stdout: string }> => {
+      prArguments = args;
+      return { stdout: '' };
+    },
+  });
+  assert.deepEqual(prPublished, { publishedAssetCount: 1, inlineIneligibleAssetCount: 1 });
+  assert.deepEqual(prArguments.filter((argument, index) => prArguments[index - 1] === '--attach'), [fixturePath]);
+  assert.equal(prArguments.join('\n').includes(absolutePath), false);
+  assert.equal(prArguments.join('\n').includes('Managed original'), false);
+
+  const uploads: string[] = [];
+  const commentPublished = await publishPullRequestCommentVisualPreviews({
+    ...options,
+    octokit: { request: async <T>(endpoint: string, requestOptions: Record<string, unknown>): Promise<T> => endpoint.startsWith('GET ')
+      ? { data: { id: 987 } } as T
+      : { data: { html_url: 'https://github.com/integry/propr/pull/42#issuecomment-100', body: requestOptions.body } } as T },
+    uploadAsset: async ({ absolutePath: uploadedPath }) => {
+      uploads.push(uploadedPath);
+      return 'https://github.com/user-attachments/assets/eligible';
+    },
+  });
+  assert.equal(commentPublished.publishedAssetCount, 1);
+  assert.equal(commentPublished.inlineIneligibleAssetCount, 1);
+  assert.equal(commentPublished.html_url, 'https://github.com/integry/propr/pull/42#issuecomment-100');
+  assert.match(commentPublished.body, /### Desktop settings/);
+  assert.match(commentPublished.body, /https:\/\/github\.com\/user-attachments\/assets\/eligible/);
+  assert.doesNotMatch(commentPublished.body, /Managed original/);
+  assert.deepEqual(uploads, [fixturePath]);
 });
 
 test('managed storage failure still publishes GitHub attachments without exposing its error', async () => {

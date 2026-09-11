@@ -253,7 +253,7 @@ Comment on this PR to request refinements — the AI agent monitors comments and
 
         if (visualPreview && commitResult && visualPreview.evidence.assets.length > 0) {
             try {
-                await publishPullRequestVisualPreviews({
+                const publication = await publishPullRequestVisualPreviews({
                     owner: issueRef.repoOwner,
                     repo: issueRef.repoName,
                     pullRequestNumber: prResponse.data.number,
@@ -262,7 +262,13 @@ Comment on this PR to request refinements — the AI agent monitors comments and
                     worktreePath: visualPreview.worktreePath,
                     octokit
                 });
-                correlatedLogger.info({ prNumber: prResponse.data.number, previewCount: visualPreview.evidence.assets.length }, 'Uploaded visual previews to pull request');
+                correlatedLogger.info({
+                    prNumber: prResponse.data.number,
+                    previewCount: publication.publishedAssetCount,
+                    inlineIneligiblePreviewCount: publication.inlineIneligibleAssetCount,
+                }, publication.publishedAssetCount > 0
+                    ? 'Uploaded visual previews to pull request'
+                    : 'Skipped visual preview upload because no assets were eligible for GitHub inline publication');
             } catch (previewError) {
                 correlatedLogger.warn({ prNumber: prResponse.data.number, error: (previewError as Error).message }, 'Could not upload visual previews; publishing a text-only explanation');
                 try {

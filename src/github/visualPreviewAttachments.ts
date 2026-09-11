@@ -91,11 +91,18 @@ async function validateAttachmentFile(absolutePath: string, capacity?: GitHubAtt
   return eligibility.limitBytes;
 }
 
-/** Validate every original before GitHub credential lookup, repository lookup, or attachment upload. */
-async function validateInlineEvidence(evidence: VisualPreviewEvidence): Promise<void> {
+/** Revalidate every original before network access and retain only GitHub-inline assets. */
+async function selectInlineEvidence(evidence: VisualPreviewEvidence): Promise<VisualPreviewEvidence> {
+  const assets: VisualPreviewEvidence['assets'] = [];
   for (const asset of evidence.assets) {
-    await validateAttachmentFile(asset.absolutePath, evidence.githubAttachmentCapacity);
+    try {
+      await validateAttachmentFile(asset.absolutePath, evidence.githubAttachmentCapacity);
+      assets.push(asset);
+    } catch {
+      // Managed originals can remain valid even when GitHub cannot publish them inline.
+    }
   }
+  return { ...evidence, assets };
 }
 
 const runAttachmentCommand: AttachmentCommandRunner = async ({ args, authToken, cwd, capacity }) => {
@@ -305,17 +312,34 @@ export interface PublishPullRequestVisualPreviewOptions extends BaseVisualPrevie
   };
 }
 
-export async function publishPullRequestVisualPreviews(options: PublishPullRequestVisualPreviewOptions): Promise<void> {
-  if (options.evidence.assets.length === 0) return;
+export interface PublishedVisualPreviewResult {
+  publishedAssetCount: number;
+  inlineIneligibleAssetCount: number;
+}
+
+export async function publishPullRequestVisualPreviews(options: PublishPullRequestVisualPreviewOptions): Promise<PublishedVisualPreviewResult> {
+  if (options.evidence.assets.length === 0) return { publishedAssetCount: 0, inlineIneligibleAssetCount: 0 };
+  const inlineEvidence = await selectInlineEvidence(options.evidence);
   await storeOriginalsSafely(options);
-  await validateInlineEvidence(options.evidence);
+  const result = {
+    publishedAssetCount: inlineEvidence.assets.length,
+    inlineIneligibleAssetCount: options.evidence.assets.length - inlineEvidence.assets.length,
+  };
+  const inlineOptions = { ...options, evidence: inlineEvidence };
+  if (inlineEvidence.assets.length === 0) {
+    await options.octokit.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: options.owner, repo: options.repo, pull_number: options.pullRequestNumber,
+      body: bodyWithLocalPreviews(inlineOptions),
+    });
+    return result;
+  }
   const runner = options.runCommand || runAttachmentCommand;
   await runner({
     args: [
       'pr', 'edit', String(options.pullRequestNumber),
       '--repo', `${options.owner}/${options.repo}`,
-      '--body', bodyWithLocalPreviews(options),
-      ...attachmentArguments(options.evidence)
+      '--body', bodyWithLocalPreviews(inlineOptions),
+      ...attachmentArguments(inlineEvidence)
     ],
     authToken: options.authToken ?? await resolveVisualPreviewUploadToken(),
     cwd: options.worktreePath,
@@ -326,7 +350,8 @@ export async function publishPullRequestVisualPreviews(options: PublishPullReque
     repo: options.repo,
     pull_number: options.pullRequestNumber
   });
-  assertUploadedBodyHasNoLocalPaths(response.data.body, options.evidence);
+  assertUploadedBodyHasNoLocalPaths(response.data.body, inlineEvidence);
+  return result;
 }
 
 export interface PublishPullRequestCommentVisualPreviewOptions extends BaseVisualPreviewPublicationOptions {
@@ -337,7 +362,7 @@ export interface PublishPullRequestCommentVisualPreviewOptions extends BaseVisua
   startingCommentId: number;
 }
 
-export interface PublishedVisualPreviewComment {
+export interface PublishedVisualPreviewComment extends PublishedVisualPreviewResult {
   html_url: string;
   body: string;
 }
@@ -348,13 +373,26 @@ export async function publishPullRequestCommentVisualPreviews(
   if (options.evidence.assets.length === 0) {
     throw new Error('Cannot publish an attachment comment without preview assets');
   }
+  const inlineEvidence = await selectInlineEvidence(options.evidence);
   await storeOriginalsSafely(options);
-  await validateInlineEvidence(options.evidence);
+  const result = {
+    publishedAssetCount: inlineEvidence.assets.length,
+    inlineIneligibleAssetCount: options.evidence.assets.length - inlineEvidence.assets.length,
+  };
+  const inlineOptions = { ...options, evidence: inlineEvidence };
+  if (inlineEvidence.assets.length === 0) {
+    const updated = await options.octokit.request<{ data: { html_url: string; body?: string } }>(
+      'PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}',
+      { owner: options.owner, repo: options.repo, comment_id: options.startingCommentId, body: bodyWithLocalPreviews(inlineOptions) },
+    );
+    if (typeof updated.data.body !== 'string') throw new Error('GitHub did not return the published visual preview comment');
+    return { ...result, html_url: updated.data.html_url, body: updated.data.body };
+  }
   const authToken = options.authToken ?? await resolveVisualPreviewUploadToken();
   const repositoryId = await resolveRepositoryId(options);
   const uploader = options.uploadAsset ?? uploadVisualPreviewAsset;
   const uploadedUrls: string[] = [];
-  for (const asset of options.evidence.assets) {
+  for (const asset of inlineEvidence.assets) {
     uploadedUrls.push(await uploader({
       absolutePath: asset.absolutePath,
       authToken,
@@ -363,7 +401,7 @@ export async function publishPullRequestCommentVisualPreviews(
     }));
   }
 
-  const body = bodyWithUploadedPreviews(options, uploadedUrls);
+  const body = bodyWithUploadedPreviews(inlineOptions, uploadedUrls);
   const updatedStartingComment = await options.octokit.request<{ data: { html_url: string; body?: string } }>(
     'PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}',
     {
@@ -373,10 +411,11 @@ export async function publishPullRequestCommentVisualPreviews(
       body,
     }
   );
-  assertUploadedBodyHasNoLocalPaths(updatedStartingComment.data.body, options.evidence);
+  assertUploadedBodyHasNoLocalPaths(updatedStartingComment.data.body, inlineEvidence);
   assertUploadedBodyContainsUrls(updatedStartingComment.data.body, uploadedUrls);
 
   return {
+    ...result,
     html_url: updatedStartingComment.data.html_url,
     body: updatedStartingComment.data.body,
   };
