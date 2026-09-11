@@ -839,7 +839,8 @@ const runPackagedConnectDiscoverySmoke = async (window: BrowserWindow): Promise<
     || proof.candidates.length !== 1
     || !candidate
     || Object.keys(candidate).sort().join(',') !== 'apiBaseUrl,id,label'
-    || candidate.id !== 'propr-connect-discovered'
+    || typeof candidate.id !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(candidate.id)
     || candidate.label !== 'ProPR Connect'
     || candidate.apiBaseUrl !== 'https://t-packaged123.propr.dev') {
     throw new Error('Packaged Connect renderer discovery proof was invalid');

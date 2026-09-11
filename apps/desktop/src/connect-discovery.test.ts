@@ -29,7 +29,7 @@ const deferred = <T>() => {
 };
 
 describe('desktop fixed-root Connect discovery', () => {
-  it('projects only a stable opaque profile and canonical endpoint', async () => {
+  it('projects fresh opaque profiles with identity claims and canonical endpoints', async () => {
     const service = new DesktopConnectDiscoveryService({
       list: async () => ({ profiles: [], activeProfileId: null }),
     }, {
@@ -44,21 +44,44 @@ describe('desktop fixed-root Connect discovery', () => {
     assert.equal(unclaimed.isCurrent(), true);
     const candidates = await service.discover();
     assert.deepEqual(candidates, [{
-      id: 'propr-connect-discovered',
+      id: candidates[0].id,
       label: 'ProPR Connect',
       apiBaseUrl: 'https://t-discovered123.propr.dev',
     }]);
     const serialized = JSON.stringify(candidates);
     assert.doesNotMatch(serialized, /123e4567|root|path|environment|executable|credential|authority/i);
     const claim = service.snapshotIdentityClaim(
-      'propr-connect-discovered', 'https://t-discovered123.propr.dev',
+      candidates[0].id, 'https://t-discovered123.propr.dev',
     );
     assert.equal(claim.status, 'claimed');
     if (claim.status === 'claimed') {
       assert.equal(claim.publicInstanceIdentity, readyStatus().publicInstanceIdentity);
       assert.equal(claim.isCurrent(), true);
     }
-    assert.equal(unclaimed.isCurrent(), false);
+    assert.equal(unclaimed.isCurrent(), true);
+    const next = await service.discover();
+    assert.notEqual(next[0].id, candidates[0].id);
+    assert.notEqual(candidates[0].id, 'propr-connect-discovered');
+    assert.equal(claim.isCurrent(), true);
+    assert.equal(service.snapshotIdentityClaim(next[0].id, next[0].apiBaseUrl).status, 'claimed');
+  });
+
+  it('discards an older Add Instance discovery without replacing the newer identity claim', async () => {
+    const older = deferred<ConnectStatusDocument>();
+    let calls = 0;
+    const service = new DesktopConnectDiscoveryService({
+      list: async () => ({ profiles: [], activeProfileId: null }),
+    }, {
+      supported: true,
+      discover: () => calls++ === 0 ? older.promise : Promise.resolve(readyStatus()),
+    });
+    const pending = service.discover();
+    const [current] = await service.discover();
+    older.resolve(readyStatus('https://t-older123.propr.dev'));
+    assert.deepEqual(await pending, []);
+    const claim = service.snapshotIdentityClaim(current.id, current.apiBaseUrl);
+    assert.equal(claim.status, 'claimed');
+    assert.equal(claim.isCurrent(), true);
   });
 
   it('fences rediscovery to an existing managed profile and preserves its id and label', async () => {
@@ -169,24 +192,24 @@ describe('desktop fixed-root Connect discovery', () => {
     const failed = deferred<ConnectStatusDocument>();
     let calls = 0;
     const service = new DesktopConnectDiscoveryService({
-      list: async () => ({ profiles: [], activeProfileId: null }),
+      list: async () => ({ profiles: [{ id: 'saved', label: 'Saved', apiBaseUrl: 'https://t-discovered123.propr.dev', createdAt: '2026-08-01', updatedAt: '2026-08-01' }], activeProfileId: null }),
     }, {
       supported: true,
       discover: async () => calls++ === 0 ? readyStatus() : failed.promise,
     });
-    await service.discover();
+    await service.rediscover('saved');
     const active = service.snapshotIdentityClaim(
-      'propr-connect-discovered', 'https://t-discovered123.propr.dev',
+      'saved', 'https://t-discovered123.propr.dev',
     );
-    const rejected = service.discover();
+    const rejected = service.rediscover('saved');
     assert.equal(active.isCurrent(), false);
     assert.equal(service.snapshotIdentityClaim(
-      'propr-connect-discovered', 'https://t-discovered123.propr.dev',
+      'saved', 'https://t-discovered123.propr.dev',
     ).status, 'pending');
     failed.reject(new Error('native discovery failed'));
     await assert.rejects(rejected, /native discovery failed/);
     const recovered = service.snapshotIdentityClaim(
-      'propr-connect-discovered', 'https://t-discovered123.propr.dev',
+      'saved', 'https://t-discovered123.propr.dev',
     );
     assert.equal(recovered.status, 'claimed');
     assert.equal(recovered.isCurrent(), true);

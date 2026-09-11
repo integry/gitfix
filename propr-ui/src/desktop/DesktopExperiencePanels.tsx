@@ -1,5 +1,5 @@
 import { GitHubAccountIdentity } from '../components/GitHubAccountIdentity';
-import React, { useLayoutEffect, useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import {
   DEFAULT_LOCAL_API_BASE_URL,
   isProprLoopbackHostname,
@@ -21,7 +21,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { normalizeBaseUrl } from './browserAdapters';
-import type { DesktopAuthenticationProgressStage, DesktopConnectionResult, DesktopPairingApprovalActionResult, DesktopProfile } from './types';
+import type { DesktopAdapters, DesktopAuthenticationProgressStage, DesktopConnectionResult, DesktopPairingApprovalActionResult, DesktopProfile } from './types';
 
 interface DesktopSetupLayerProps {
   children: React.ReactNode;
@@ -71,26 +71,75 @@ interface ProfileEditorProps {
   candidate?: boolean;
   notice?: string | null;
   operationError?: string | null;
+  discovery?: DesktopAdapters['discovery'];
   onPresented?(): void;
   onCancel(): void;
   onSave(profile: DesktopProfile): void;
 }
 
-export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate = false, notice, operationError, onPresented, onCancel, onSave }) => {
+export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate = false, notice, operationError, discovery, onPresented, onCancel, onSave }) => {
   const [name, setName] = useState(initial?.name || 'My ProPR');
   const [baseUrl, setBaseUrl] = useState(initial ? initial.baseUrl : DEFAULT_LOCAL_API_BASE_URL);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryMessage, setDiscoveryMessage] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<DesktopProfile[]>([]);
+  const [selectedCandidate, setSelectedCandidate] = useState<DesktopProfile | null>(null);
+  const discoveryAttempt = useRef(0);
   const connectEndpoint = parseProprConnectEndpoint(baseUrl);
 
   useLayoutEffect(() => { onPresented?.(); }, [onPresented]);
+  useLayoutEffect(() => () => { discoveryAttempt.current += 1; }, []);
+
+  const cancelDiscovery = () => {
+    discoveryAttempt.current += 1;
+    setDiscovering(false);
+    setCandidates([]);
+    setDiscoveryMessage(null);
+  };
+  const prefill = (profile: DesktopProfile) => {
+    setBaseUrl(profile.baseUrl);
+    setSelectedCandidate(profile);
+    setCandidates([]);
+    setValidationError(null);
+    setDiscoveryMessage('Address filled from ProPR Connect. Review it, then choose Connect to continue.');
+  };
+  const discoverConnect = async () => {
+    if (!discovery?.supported) return;
+    const attempt = ++discoveryAttempt.current;
+    setDiscovering(true);
+    setCandidates([]);
+    setDiscoveryMessage(null);
+    try {
+      const found = await discovery.discover();
+      if (attempt !== discoveryAttempt.current) return;
+      // Only accept canonical Connect origins from the trusted adapter. Retain
+      // its id for main-process identity checks, but never its account or label.
+      const endpoints = new Set<string>();
+      const choices = found.flatMap(profile => {
+        const endpoint = parseProprConnectEndpoint(profile.baseUrl);
+        if (!endpoint || endpoints.has(endpoint.origin)) return [];
+        endpoints.add(endpoint.origin);
+        return [{ id: profile.id, name: 'ProPR Connect', baseUrl: endpoint.origin, kind: 'remote' as const }];
+      });
+      if (choices.length === 1) prefill(choices[0]);
+      else if (choices.length > 1) setCandidates(choices);
+      else setDiscoveryMessage('No shared endpoint was found. Open or run ProPR Connect, make sure sharing is ready, then retry Use ProPR Connect. You can also paste its API URL below.');
+    } catch {
+      if (attempt === discoveryAttempt.current) setDiscoveryMessage('Could not discover ProPR Connect. Open or run ProPR Connect, check that sharing is ready, then retry Use ProPR Connect or paste its API URL below.');
+    } finally {
+      if (attempt === discoveryAttempt.current) setDiscovering(false);
+    }
+  };
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
+    cancelDiscovery();
     try {
       const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
       const hostname = new URL(normalizedBaseUrl).hostname;
       onSave({
-        id: initial?.id || createProfileId(),
+        id: (selectedCandidate?.baseUrl === normalizedBaseUrl ? selectedCandidate.id : undefined) || initial?.id || createProfileId(),
         account: initial?.account,
         name: name.trim() || 'My ProPR',
         baseUrl: normalizedBaseUrl,
@@ -105,21 +154,33 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate
   const error = validationError || operationError;
   return (
     <form className="desktop-profile-form" onSubmit={submit}>
-      <button type="button" className="desktop-back-button" onClick={onCancel}>
+      <button type="button" className="desktop-back-button" onClick={() => { cancelDiscovery(); onCancel(); }}>
         <ArrowLeft aria-hidden="true" /> Back
       </button>
       <h2>{candidate || !initial ? 'Connect to an instance' : 'Edit instance'}</h2>
       <p>Enter the address shown by your ProPR server.</p>
       {notice && <div className="desktop-version-note" role="status">{notice}</div>}
+      {!initial && discovery?.supported && <>
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" className="desktop-secondary-button" disabled={discovering} onClick={() => void discoverConnect()}><Cloud aria-hidden="true" /> Use ProPR Connect</button>
+          {(discovering || candidates.length > 0) && <button type="button" className="desktop-link-button" onClick={cancelDiscovery}>Cancel discovery</button>}
+        </div>
+        {discovering && <div role="status">Looking for a shared ProPR Connect API URL…</div>}
+        {discoveryMessage && <div className="desktop-version-note" role="status">{discoveryMessage}</div>}
+        {candidates.length > 0 && <fieldset className="mt-3">
+          <legend className="mb-2 text-sm font-semibold">Choose a ProPR Connect endpoint</legend>
+          <div className="desktop-profile-list">{candidates.map(profile => <button key={profile.id} type="button" className="desktop-secondary-button" onClick={() => prefill(profile)}>{profile.baseUrl}</button>)}</div>
+        </fieldset>}
+      </>}
       <label>
         Display name
         <input autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="Team ProPR" maxLength={80} />
       </label>
       <label>
         Instance URL
-        <input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} inputMode="url" placeholder="https://propr.example.com" maxLength={2048} aria-describedby={error ? 'profile-url-error' : undefined} />
+        <input value={baseUrl} onChange={event => { cancelDiscovery(); setValidationError(null); setBaseUrl(event.target.value); }} inputMode="url" placeholder="https://propr.example.com" maxLength={2048} aria-describedby={error ? 'profile-url-error' : undefined} />
       </label>
-      {connectEndpoint && <div className="desktop-connect-verified" role="status"><Cloud aria-hidden="true" /> Verified ProPR Connect endpoint</div>}
+      {connectEndpoint && <div className="desktop-connect-verified" role="status"><Cloud aria-hidden="true" /> ProPR Connect address · Identity checked when connecting</div>}
       {error && <div id="profile-url-error" className="desktop-inline-error" role="alert">{error}</div>}
       <button type="submit" className="desktop-primary-button">{candidate || !initial ? 'Connect' : 'Save changes'}</button>
     </form>

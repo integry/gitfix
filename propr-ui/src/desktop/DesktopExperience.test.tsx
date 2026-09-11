@@ -212,12 +212,12 @@ describe('DesktopExperience', () => {
 
     const input = screen.getByLabelText('Instance URL');
     fireEvent.change(input, { target: { value: 'https://t-instance123.propr.dev' } });
-    expect(screen.getByRole('status')).toHaveTextContent('Verified ProPR Connect endpoint');
+    expect(screen.getByRole('status')).toHaveTextContent('ProPR Connect address · Identity checked when connecting');
 
     fireEvent.change(input, { target: { value: 'https://t-instance123.propr.dev:8443' } });
-    expect(screen.queryByText('Verified ProPR Connect endpoint')).not.toBeInTheDocument();
+    expect(screen.queryByText('ProPR Connect address · Identity checked when connecting')).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: 'https://t-instance123.foo.propr.dev' } });
-    expect(screen.queryByText('Verified ProPR Connect endpoint')).not.toBeInTheDocument();
+    expect(screen.queryByText('ProPR Connect address · Identity checked when connecting')).not.toBeInTheDocument();
   });
 
   it('prefills new profiles from the shared local API endpoint contract', async () => {
