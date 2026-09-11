@@ -513,7 +513,7 @@ function GoalList() {
     newGoalButtonRef.current?.focus();
   }, []);
   const openCreator = useCallback(() => setIsCreating(true), []);
-  return <div className="mx-auto w-full max-w-[1440px] p-4 sm:p-6 lg:px-8">
+  return <div className="min-h-full w-full min-w-0 bg-white p-4 sm:p-6">
     <div className="border-b border-slate-200 pb-5">
       <div><h1 className="text-2xl font-bold text-slate-900">Goals</h1><p className="mt-1 text-sm text-slate-600">Long-running work kept in one exact coding-agent session.</p></div>
     </div>

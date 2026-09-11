@@ -73,7 +73,7 @@ const InboxPage: React.FC = () => {
         : null;
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-3 py-4 sm:px-6 sm:py-7">
+    <div className="min-h-full w-full min-w-0 bg-white p-4 sm:p-6">
       <div className="mb-4 flex items-start justify-between gap-3 sm:mb-6">
         <div className="min-w-0">
           <h1 className="text-xl font-bold text-slate-950 sm:text-2xl">Inbox</h1>
