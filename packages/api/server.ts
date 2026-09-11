@@ -2,6 +2,7 @@ import { ROUTING_STATUS_REDIS_KEY } from '@propr/shared';
 /* eslint-disable max-lines -- route registration and coordinated shutdown share startup state */
 import express, { Request, Response } from 'express';
 import { mountMcp, mcpResponseHeaders } from './mcp/server.js';
+import { getMcpOriginSync, isMcpEnabledSync } from './mcp/configResolver.js';
 import { createServer, Server as HttpServer } from 'http';
 import cors from 'cors';
 import { createClient, RedisClientType } from 'redis';
@@ -33,6 +34,7 @@ import {
   createUserRepoPreferencesRoutes,
   createAgentRuntimeRoutes, createNotificationRoutes,
   createAdminRoutes,
+  createAdminMcpRoutes,
   createGoalRoutes,
   createVisualPreviewAuthRoutes,
   createVoiceRoutes,
@@ -172,12 +174,12 @@ try {
 }
 
 // Mark even parser/rate-limit/error responses at the instance boundary.
-if (process.env.MCP_ENABLED === 'true') app.use('/api/mcp', mcpResponseHeaders);
+app.use('/api/mcp', (req, res, next) => { if (isMcpEnabledSync()) { mcpResponseHeaders(req, res, next); } else { next(); } });
 
 app.use((req, res, next) => {
   // Server-rendered MCP consent forms submit on the API's own public origin,
   // which can differ from FRONTEND_URL. Keep other API CORS policy intact.
-  const mcpOrigin = process.env.MCP_ENABLED === 'true' ? process.env.MCP_PUBLIC_ORIGIN?.replace(/\/$/, '') : undefined;
+  const mcpOrigin = getMcpOriginSync();
   const consentOrigin = req.path.startsWith('/mcp/') && mcpOrigin && req.get('origin') === mcpOrigin;
   cors({ origin: consentOrigin ? mcpOrigin : validateCorsOrigin, credentials: true })(req, res, next);
 });
@@ -305,6 +307,7 @@ function setupRoutes(): void {
   });
   const voiceRoutes = createVoiceRoutes({ briefingService: voiceBriefingService });
   const adminRoutes = createAdminRoutes();
+  const adminMcpRoutes = createAdminMcpRoutes({ database: db, redisClient });
   const visualPreviewAuthRoutes = createVisualPreviewAuthRoutes({
     managedStorage: createManagedPreviewStorageClient(() => redisClient.get(ROUTING_STATUS_REDIS_KEY)),
   });
@@ -346,6 +349,7 @@ function setupRoutes(): void {
     ...createMemberCatalogRouteEntries({ instanceCatalogRoutes }),
     ...createManagementRouteEntries({
       adminRoutes,
+      adminMcpRoutes,
       agentLoginRoutes,
       agentRuntimeRoutes,
       agentVersionRoutes,
@@ -476,6 +480,12 @@ async function start(): Promise<void> {
       }
     } else {
       console.log('Demo mode: skipped startup config initialization; API config reads use the curated database directly');
+    }
+    // Prime MCP config cache before route registration so authRedirect and CORS
+    // middleware see the correct origin on the first request after startup.
+    if (!demoMode) {
+      const { resolveMcpConfig } = await import('./mcp/configResolver.js');
+      await resolveMcpConfig(db).catch(() => undefined);
     }
     setupRoutes();
     if (!demoMode) {

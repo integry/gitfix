@@ -14,6 +14,7 @@ import NotificationSettingsSection from './NotificationSettingsSection';
 import VisualPreviewAuthSection from './VisualPreviewAuthSection';
 import ManagedPreviewStorageSection from './ManagedPreviewStorageSection';
 import SettingsNavigation, { type SettingsNavigationSection } from './SettingsNavigation';
+import McpServerSection from './McpServerSection';
 
 const AdminSettingsPage: React.FC = () => {
   const { isDemoMode } = useDemoMode();
@@ -271,6 +272,12 @@ const AdminSettingsPage: React.FC = () => {
       category: 'integrations',
       searchText: 'visual preview upload screenshots videos GitHub login personal access token PAT credential authentication connect managed storage quota retention Plus originals',
       content: <><VisualPreviewAuthSection /><ManagedPreviewStorageSection /></>
+    },
+    {
+      id: 'mcp-server',
+      category: 'integrations',
+      searchText: 'MCP model context protocol AI assistant Claude Claude Code ChatGPT tools connection OAuth enable disable toggle server',
+      content: <McpServerSection />
     },
     {
       id: 'personal-notifications',
