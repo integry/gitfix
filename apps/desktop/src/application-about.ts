@@ -16,7 +16,8 @@ export const showApplicationAbout = async (host: {
   copy(text: string): void;
 }, details: string): Promise<void> => {
   const { response } = await host.showMessageBox({
-    type: 'info', title: 'About ProPR', message: 'ProPR', detail: details,
+    type: 'info', title: 'About ProPR', message: 'ProPR',
+    detail: `ProPR is an AI-powered development workspace for planning, running, and reviewing coding tasks across your repositories.\n\n${details}`,
     buttons: ['Close', 'Copy Version Details'], defaultId: 0, cancelId: 0,
   });
   if (response === 1) host.copy(details);

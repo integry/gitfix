@@ -323,20 +323,22 @@ for (const platform of ['darwin', 'linux'] as const) {
   });
 }
 
-it('About copies public version diagnostics only when requested', async () => {
-  const details = applicationAboutDetails('0.8.15', 'linux', 'x64', process.versions);
-  const copied: string[] = [];
-  for (const response of [0, 1]) {
-    await showApplicationAbout({
-      showMessageBox: async options => {
-        assert.equal(options.title, 'About ProPR');
-        assert.equal(options.detail, details);
-        assert.deepEqual(options.buttons, ['Close', 'Copy Version Details']);
-        return { response, checkboxChecked: false };
-      },
-      copy: text => copied.push(text),
-    }, details);
-    assert.equal(copied.length, response);
-  }
-  assert.deepEqual(copied, [details]);
-});
+for (const platform of ['darwin', 'linux']) {
+  it(`${platform} About describes ProPR above diagnostics and copies version details only when requested`, async () => {
+    const details = applicationAboutDetails('0.8.15', platform, 'x64', process.versions);
+    const copied: string[] = [];
+    for (const response of [0, 1]) {
+      await showApplicationAbout({
+        showMessageBox: async options => {
+          assert.equal(options.title, 'About ProPR');
+          assert.equal(options.detail, `ProPR is an AI-powered development workspace for planning, running, and reviewing coding tasks across your repositories.\n\n${details}`);
+          assert.deepEqual(options.buttons, ['Close', 'Copy Version Details']);
+          return { response, checkboxChecked: false };
+        },
+        copy: text => copied.push(text),
+      }, details);
+      assert.equal(copied.length, response);
+    }
+    assert.deepEqual(copied, [details]);
+  });
+}
