@@ -1,3 +1,4 @@
+import { describeGitHubAttachmentCapacity, resolveGitHubAttachmentCapacity, type GitHubAttachmentPlanOverride } from "@propr/shared";
 /**
  * Repository Management Commands
  *
@@ -36,8 +37,16 @@ function parseVisualPreviewTypes(value: string | undefined): VisualPreviewSettin
   return values as VisualPreviewSettings['types'];
 }
 
+function parseAttachmentPlan(value: string): GitHubAttachmentPlanOverride {
+  if (value !== 'auto' && value !== 'free' && value !== 'paid') {
+    throw new Error('GitHub attachment plan must be auto, free, or paid');
+  }
+  return value;
+}
+
 function formatVisualPreview(settings: VisualPreviewSettings | undefined): string {
-  return settings?.enabled ? settings.types.join('+') : 'Disabled';
+  const capacity = resolveGitHubAttachmentCapacity(settings?.githubAttachmentPlan, settings?.githubAttachmentCapacity?.detectedPlan);
+  return `${settings?.enabled ? settings.types.join('+') : 'Disabled'}; ${capacity.override}: ${describeGitHubAttachmentCapacity(capacity)}`;
 }
 
 /**
@@ -270,6 +279,7 @@ Examples:
     .option("-b, --branch <branch>", "Base branch name (default: main/master)")
     .option("--auto-ci-followup", "Enable automatic follow-up when CI fails (default: off)")
     .option("--visual-previews", "Enable visual previews for user-visible changes")
+    .option("--github-attachment-plan <plan>", "GitHub attachment capacity: auto, free, paid (default: auto)")
     .option("--preview-types <types>", "Comma-separated preview types: image,video")
     .option("--preview-instructions <text>", "Additional visual capture instructions")
     .addHelpText("after", `
@@ -285,7 +295,7 @@ Examples:
     .action(
       async (
         fullName: string,
-        options: { alias?: string; branch?: string; autoCiFollowup?: boolean; visualPreviews?: boolean; previewTypes?: string; previewInstructions?: string }
+        options: { alias?: string; branch?: string; autoCiFollowup?: boolean; visualPreviews?: boolean; previewTypes?: string; previewInstructions?: string; githubAttachmentPlan?: string }
       ) => {
         try {
           if (!fullName.includes("/")) {
@@ -315,6 +325,7 @@ Examples:
             enabled: true,
             autoFollowupOnFailedCi: options.autoCiFollowup ?? false,
             visualPreview: {
+              ...(options.githubAttachmentPlan !== undefined ? { githubAttachmentPlan: parseAttachmentPlan(options.githubAttachmentPlan) } : {}),
               enabled: previewRequested,
               types: parseVisualPreviewTypes(options.previewTypes),
               ...(options.previewInstructions?.trim() ? { instructions: options.previewInstructions.trim() } : {})
@@ -334,6 +345,7 @@ Examples:
               `  Automatic CI follow-up: ${formatEnabled(options.autoCiFollowup ?? false)}`
             );
             console.log(`  Visual previews: ${formatVisualPreview({
+              ...(options.githubAttachmentPlan !== undefined ? { githubAttachmentPlan: parseAttachmentPlan(options.githubAttachmentPlan) } : {}),
               enabled: previewRequested,
               types: parseVisualPreviewTypes(options.previewTypes)
             })}`);
@@ -451,6 +463,7 @@ Example:
     .option("--no-auto-ci-followup", "Disable automatic follow-up when CI fails")
     .option("--visual-previews", "Enable visual previews")
     .option("--no-visual-previews", "Disable visual previews")
+    .option("--github-attachment-plan <plan>", "GitHub attachment capacity: auto, free, paid (default: auto)")
     .option("--preview-types <types>", "Comma-separated preview types: image,video")
     .option("--preview-instructions <text>", "Replace visual capture instructions")
     .addHelpText("after", `
@@ -470,7 +483,7 @@ Examples:
     .action(
       async (
         fullName: string,
-        options: { enable?: boolean; disable?: boolean; autoCiFollowup?: boolean; visualPreviews?: boolean; previewTypes?: string; previewInstructions?: string }
+        options: { enable?: boolean; disable?: boolean; autoCiFollowup?: boolean; visualPreviews?: boolean; previewTypes?: string; previewInstructions?: string; githubAttachmentPlan?: string }
       ) => {
         try {
           if (options.enable && options.disable) {
@@ -480,7 +493,7 @@ Examples:
             process.exit(1);
           }
 
-          if (!options.enable && !options.disable && options.autoCiFollowup === undefined && options.visualPreviews === undefined && options.previewTypes === undefined && options.previewInstructions === undefined) {
+          if (!options.enable && !options.disable && options.autoCiFollowup === undefined && options.visualPreviews === undefined && options.previewTypes === undefined && options.previewInstructions === undefined && options.githubAttachmentPlan === undefined) {
             console.error(
               "Error: Must specify a monitoring, automatic CI follow-up, or visual preview option."
             );
@@ -504,8 +517,9 @@ Examples:
           }
 
           const enabled = options.enable ? true : options.disable ? false : undefined;
-          const visualPreviewUpdate = options.visualPreviews !== undefined || options.previewTypes !== undefined || options.previewInstructions !== undefined
+          const visualPreviewUpdate = options.visualPreviews !== undefined || options.previewTypes !== undefined || options.previewInstructions !== undefined || options.githubAttachmentPlan !== undefined
             ? {
+                ...(options.githubAttachmentPlan !== undefined && { githubAttachmentPlan: parseAttachmentPlan(options.githubAttachmentPlan) }),
                 ...(options.visualPreviews !== undefined && { enabled: options.visualPreviews }),
                 ...(options.previewTypes !== undefined && { types: parseVisualPreviewTypes(options.previewTypes) }),
                 ...(options.previewInstructions !== undefined && { instructions: options.previewInstructions.trim() })

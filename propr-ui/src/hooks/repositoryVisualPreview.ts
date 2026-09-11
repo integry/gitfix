@@ -1,3 +1,4 @@
+import { normalizeGitHubAttachmentPlanOverride } from '@propr/shared';
 import type { MonitoredRepo } from '../api/proprApi';
 
 export type VisualPreviewSettings = NonNullable<MonitoredRepo['visualPreview']>;
@@ -22,6 +23,8 @@ export function parseVisualPreview(value: unknown): VisualPreviewSettings {
     : undefined;
   return {
     enabled: candidate.enabled === true,
+    ...(candidate.githubAttachmentPlan !== undefined ? { githubAttachmentPlan: normalizeGitHubAttachmentPlanOverride(candidate.githubAttachmentPlan) } : {}),
+    ...(candidate.githubAttachmentCapacity ? { githubAttachmentCapacity: candidate.githubAttachmentCapacity as VisualPreviewSettings['githubAttachmentCapacity'] } : {}),
     types: types.length > 0 ? types : ['image'],
     ...(instructions ? { instructions } : {})
   };

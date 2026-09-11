@@ -1,3 +1,4 @@
+import { normalizeGitHubAttachmentPlanOverride } from '@propr/shared';
 import { randomUUID } from 'crypto';
 import type { RepoToMonitor, VisualPreviewSettings, VisualPreviewType } from '@propr/core';
 import { normalizeOptionalBranchName } from './branchNameValidation.js';
@@ -20,6 +21,7 @@ function normalizeStoredVisualPreviewSettings(value: unknown): VisualPreviewSett
     : undefined;
   return {
     enabled: candidate.enabled === true,
+    ...(candidate.githubAttachmentPlan !== undefined ? { githubAttachmentPlan: normalizeGitHubAttachmentPlanOverride(candidate.githubAttachmentPlan) } : {}),
     types: types.length > 0 ? types : ['image'],
     ...(instructions ? { instructions } : {})
   };
@@ -88,6 +90,14 @@ export function preserveRepoAutoFollowup(
   });
 }
 
+function visualPreviewSettingsEqual(left: VisualPreviewSettings, right: VisualPreviewSettings): boolean {
+  // GET materializes legacy missing plans as auto; that alone is not an edit.
+  return (left.githubAttachmentPlan ?? 'auto') === (right.githubAttachmentPlan ?? 'auto')
+    && left.enabled === right.enabled
+    && JSON.stringify(left.types) === JSON.stringify(right.types)
+    && left.instructions === right.instructions;
+}
+
 export function preserveRepoVisualPreview(
   previousRepos: RepoToMonitor[],
   normalizedRepos: RepoToMonitor[],
@@ -102,7 +112,7 @@ export function preserveRepoVisualPreview(
       const normalized = normalizeStoredVisualPreviewSettings(repo.visualPreview);
       if (!explicitByRepository.has(repositoryKey)) explicitByRepository.set(repositoryKey, normalized);
       const previous = previousRepos.find(candidate => candidate.id === repo.id);
-      if (JSON.stringify(normalized) !== JSON.stringify(normalizeStoredVisualPreviewSettings(previous?.visualPreview))) {
+      if (!visualPreviewSettingsEqual(normalized, normalizeStoredVisualPreviewSettings(previous?.visualPreview))) {
         changedByRepository.set(repositoryKey, normalized);
       }
     }
@@ -149,6 +159,9 @@ function normalizeVisualPreview(value: unknown, repoName: string): ValidationRes
   if (typeof candidate.enabled !== 'boolean') {
     return failure(`Invalid visualPreview.enabled format for ${repoName}: must be a boolean`);
   }
+  if (candidate.githubAttachmentPlan !== undefined && !['auto', 'free', 'paid'].includes(candidate.githubAttachmentPlan)) {
+    return failure(`Invalid visualPreview.githubAttachmentPlan for ${repoName}: supported values are auto, free, and paid`);
+  }
   const types = normalizeVisualPreviewTypes(candidate.types, repoName);
   if (!types.ok) return types;
   if (candidate.enabled && types.value.length === 0) {
@@ -164,6 +177,7 @@ function normalizeVisualPreview(value: unknown, repoName: string): ValidationRes
 
   return success({
     enabled: candidate.enabled,
+    ...(candidate.githubAttachmentPlan !== undefined ? { githubAttachmentPlan: candidate.githubAttachmentPlan } : {}),
     types: types.value.length > 0 ? types.value : ['image'],
     ...(instructions ? { instructions } : {})
   });

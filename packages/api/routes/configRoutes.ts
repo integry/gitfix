@@ -11,7 +11,8 @@ import { saveSettingsWithRollback } from './configRoutesSettings.js';
 import { saveThenPublishConfigUpdate } from './configRoutesPersistence.js';
 import type { AgentPreparationDeps } from './configRoutesAgentsTypes.js';
 import type { Knex } from 'knex';
-import { normalizeRepoConfig, preserveRepoAutoFollowup, preserveRepoVisualPreview, withDefaultRepoOptions } from './configRepoValidation.js';
+import { normalizeRepoConfig, preserveRepoAutoFollowup, preserveRepoVisualPreview } from './configRepoValidation.js';
+import { loadReposWithAttachmentCapacity } from './configRoutesRepos.js';
 
 interface ConfigRoutesDeps {
   redisClient: RedisClientType;
@@ -184,7 +185,7 @@ export function createConfigRoutes(deps: ConfigRoutesDeps) {
   const postFollowupIgnoreKeywords = createJsonPostHandler({ lockKey: 'config:ignore-keywords:lock', pickValue: body => body.followup_ignore_keywords, validate: followup_ignore_keywords => parseNormalizedStringArrayResult(followup_ignore_keywords, 'followup_ignore_keywords'), save: followup_ignore_keywords => configStore.saveFollowupIgnoreKeywords(followup_ignore_keywords), subtype: 'followup_ignore_keywords_update', body: followup_ignore_keywords => ({ followup_ignore_keywords }), committedErrorMessage: 'Follow-up ignore keywords were saved, but publishing the config update notification failed. Persisted config may require a follow-up check.' });
 
   const getRepos = createJsonGetHandler(
-    async () => (await configStore.loadMonitoredReposRaw()).map(withDefaultRepoOptions),
+    () => loadReposWithAttachmentCapacity(configStore),
     repos_to_monitor => ({ repos_to_monitor }),
     'Failed to load repository configuration',
     '/api/config/repos GET'

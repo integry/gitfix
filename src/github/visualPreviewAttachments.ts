@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { githubInlineEligibility, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity } from '@propr/shared';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { storeManagedVisualPreviewOriginals } from './managedVisualPreviewStorage.js';
 import { execa } from 'execa';
@@ -16,6 +17,7 @@ import {
 } from '@propr/core';
 
 interface AttachmentCommandOptions {
+  capacity?: GitHubAttachmentCapacity;
   args: string[];
   authToken: string;
   cwd: string;
@@ -24,6 +26,7 @@ interface AttachmentCommandOptions {
 export type AttachmentCommandRunner = (options: AttachmentCommandOptions) => Promise<{ stdout: string }>;
 
 interface VisualPreviewAssetUploadOptions {
+  capacity?: GitHubAttachmentCapacity;
   absolutePath: string;
   authToken: string;
   repositoryId: number;
@@ -77,7 +80,28 @@ export async function resolveVisualPreviewUploadToken(
   );
 }
 
-const runAttachmentCommand: AttachmentCommandRunner = async ({ args, authToken, cwd }) => {
+async function validateAttachmentFile(absolutePath: string, capacity?: GitHubAttachmentCapacity): Promise<number> {
+  const contentType = VISUAL_PREVIEW_CONTENT_TYPES[path.extname(absolutePath).toLowerCase()];
+  if (!contentType) throw new Error(`Unsupported visual preview attachment type: ${path.basename(absolutePath)}`);
+  const eligibility = githubInlineEligibility(contentType, (await stat(absolutePath)).size, capacity);
+  if (!eligibility.eligible) {
+    if (eligibility.reason === 'size-limit-exceeded') throw new Error(`Visual preview exceeds the GitHub attachment limit of ${eligibility.limitBytes / (1024 * 1024)} MiB`);
+    throw new Error(`Invalid visual preview attachment: ${eligibility.reason}`);
+  }
+  return eligibility.limitBytes;
+}
+
+/** Validate every original before GitHub credential lookup, repository lookup, or attachment upload. */
+async function validateInlineEvidence(evidence: VisualPreviewEvidence): Promise<void> {
+  for (const asset of evidence.assets) {
+    await validateAttachmentFile(asset.absolutePath, evidence.githubAttachmentCapacity);
+  }
+}
+
+const runAttachmentCommand: AttachmentCommandRunner = async ({ args, authToken, cwd, capacity }) => {
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === '--attach') await validateAttachmentFile(args[++index], capacity);
+  }
   try {
     const result = await execa('gh', args, {
       cwd,
@@ -117,18 +141,6 @@ const runAttachmentCommand: AttachmentCommandRunner = async ({ args, authToken, 
   }
 };
 
-const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
-  '.gif': 'image/gif',
-  '.jpeg': 'image/jpeg',
-  '.jpg': 'image/jpeg',
-  '.mov': 'video/quicktime',
-  '.mp4': 'video/mp4',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.webm': 'video/webm',
-  '.webp': 'image/webp',
-};
-
 async function responseErrorDetail(response: Response): Promise<string> {
   const rawBody = redactSecrets((await response.text()).trim()).replace(/\s+/g, ' ').slice(0, 1000);
   if (!rawBody) return '';
@@ -157,11 +169,14 @@ export const uploadVisualPreviewAsset: VisualPreviewAssetUploader = async ({
   absolutePath,
   authToken,
   repositoryId,
+  capacity,
 }) => {
-  const contentType = CONTENT_TYPE_BY_EXTENSION[path.extname(absolutePath).toLowerCase()];
+  const contentType = VISUAL_PREVIEW_CONTENT_TYPES[path.extname(absolutePath).toLowerCase()];
   if (!contentType) throw new Error(`Unsupported visual preview attachment type: ${path.basename(absolutePath)}`);
 
+  const limit = await validateAttachmentFile(absolutePath, capacity);
   const body = await readFile(absolutePath);
+  if (body.byteLength > limit) throw new Error('Visual preview grew beyond the GitHub attachment limit');
   const uploadUrl = new URL('https://uploads.github.com/user-attachments/assets');
   uploadUrl.searchParams.set('name', path.basename(absolutePath));
   uploadUrl.searchParams.set('content_type', contentType);
@@ -293,6 +308,7 @@ export interface PublishPullRequestVisualPreviewOptions extends BaseVisualPrevie
 export async function publishPullRequestVisualPreviews(options: PublishPullRequestVisualPreviewOptions): Promise<void> {
   if (options.evidence.assets.length === 0) return;
   await storeOriginalsSafely(options);
+  await validateInlineEvidence(options.evidence);
   const runner = options.runCommand || runAttachmentCommand;
   await runner({
     args: [
@@ -302,7 +318,8 @@ export async function publishPullRequestVisualPreviews(options: PublishPullReque
       ...attachmentArguments(options.evidence)
     ],
     authToken: options.authToken ?? await resolveVisualPreviewUploadToken(),
-    cwd: options.worktreePath
+    cwd: options.worktreePath,
+    capacity: options.evidence.githubAttachmentCapacity,
   });
   const response = await options.octokit.request<{ data: { body?: string } }>('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
     owner: options.owner,
@@ -332,6 +349,7 @@ export async function publishPullRequestCommentVisualPreviews(
     throw new Error('Cannot publish an attachment comment without preview assets');
   }
   await storeOriginalsSafely(options);
+  await validateInlineEvidence(options.evidence);
   const authToken = options.authToken ?? await resolveVisualPreviewUploadToken();
   const repositoryId = await resolveRepositoryId(options);
   const uploader = options.uploadAsset ?? uploadVisualPreviewAsset;
@@ -341,6 +359,7 @@ export async function publishPullRequestCommentVisualPreviews(
       absolutePath: asset.absolutePath,
       authToken,
       repositoryId,
+      ...(options.evidence.githubAttachmentCapacity ? { capacity: options.evidence.githubAttachmentCapacity } : {}),
     }));
   }
 
