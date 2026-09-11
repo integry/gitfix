@@ -20,7 +20,10 @@ const AutoCiFollowupControl: React.FC<{
       title="Automatically create follow-up work when CI fails"
       onClick={(e) => e.stopPropagation()}
     >
-      <span className="min-w-0">Auto CI follow-up</span>
+      <span className="min-w-0">
+        <span className="block">Auto CI follow-up</span>
+        <span className="mt-1 block text-slate-500">Create follow-up work when CI fails.</span>
+      </span>
       <input
         type="checkbox"
         checked={repo.autoFollowupOnFailedCi === true}
@@ -75,7 +78,10 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
         <div>
           <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Repository</h3>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span className="min-w-0">Monitor repository</span>
+            <span className="min-w-0">
+              <span className="block">Monitor repository</span>
+              <span className="mt-1 block text-slate-500">Process new issues in this repository.</span>
+            </span>
             <input type="checkbox" checked={repo.enabled} onChange={() => onToggle(repo.id)} disabled={isReadOnly} aria-label={`Monitor ${repo.name}`} className="sr-only peer" />
             <span className={toggleClassName} />
           </label>
@@ -172,7 +178,7 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
             onClick={() => setIsDeleteDialogOpen(true)}
             disabled={isReadOnly}
             aria-describedby={`remove-repository-description-${repo.id}`}
-            className="flex w-full items-center gap-2 rounded-md border border-red-200 bg-red-50/50 px-4 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-2 rounded-md border border-red-200 bg-red-50/50 px-4 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Trash2 className="h-3.5 w-3.5 shrink-0" />
             Remove repository from ProPR
