@@ -16,7 +16,7 @@ import knex from 'knex';
 import { closeConnection } from '@propr/core';
 import { up } from '../../core/src/db/migrations/20260910220000_add_mcp.js';
 import { McpStore } from '../mcp/store.js';
-import { McpOAuthProvider } from '../mcp/oauth.js';
+import { McpOAuthProvider, type McpGrant } from '../mcp/oauth.js';
 import { mountMcpBrowser } from '../mcp/browser.js';
 import { configureDemoMode } from '../demoMode.js';
 import { mountMcp } from '../mcp/server.js';
@@ -110,17 +110,33 @@ test('real consent and connected-app routes work at desktop/mobile widths and en
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const oauth = new McpOAuthProvider(new McpStore(db, randomBytes(32)), { origin, resource: `${origin}/api/mcp`, instanceId: 'development-instance', encryptionKey: randomBytes(32) });
-  mountMcpBrowser(app, oauth, { accessibleRepositories: async () => ['acme/web-app', 'acme/api-service'] });
+  let accessibleRepositories = ['acme/web-app', 'acme/api-service'];
+  mountMcpBrowser(app, oauth, { accessibleRepositories: async () => accessibleRepositories });
   const client = await oauth.clientsStore.registerClient!({ client_name: 'Development chat client', token_endpoint_auth_method: 'none', redirect_uris: ['https://client.example/callback'], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] });
   const verifier = randomBytes(32).toString('base64url');
-  let consent = '';
-  await oauth.authorize(client, { redirectUri: client.redirect_uris[0], resource: new URL(`${origin}/api/mcp`), codeChallenge: createHash('sha256').update(verifier).digest('base64url'), scopes: ['read', 'plan', 'execute'] }, { redirect: (url: string) => { consent = url; } } as never);
+  const authorize = async (scopes = ['read', 'plan', 'execute'], clientName = client.client_name) => {
+    let consent = '';
+    await oauth.authorize({ ...client, client_name: clientName }, { redirectUri: client.redirect_uris[0], resource: new URL(`${origin}/api/mcp`), codeChallenge: createHash('sha256').update(verifier).digest('base64url'), scopes }, { redirect: (url: string) => { consent = url; } } as never);
+    return consent;
+  };
+  const consent = await authorize();
   let browser;
   try {
     browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
     const context = await browser.newContext({ viewport: { width: 1200, height: 1000 }, ignoreHTTPSErrors: true });
     const page = await context.newPage();
-    await page.goto(consent);
+    const response = await page.goto(consent);
+    assert.equal(response?.headers()['cache-control'], 'no-store');
+    const policy = response?.headers()['content-security-policy'] || '';
+    const nonce = /script-src 'nonce-([^']+)'/.exec(policy)?.[1];
+    assert.ok(nonce);
+    assert.match(policy, /default-src 'none'/);
+    assert.match(policy, /frame-ancestors 'none'; base-uri 'none'/);
+    assert.ok(policy.includes(`form-action 'self' https://client.example`));
+    assert.ok(policy.includes(`style-src 'nonce-${nonce}'`));
+    assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval|\*/);
+    assert.equal(await page.locator('script').evaluate(element => (element as HTMLScriptElement).nonce), nonce);
+    assert.equal(await page.locator('style').evaluate(element => (element as HTMLStyleElement).nonce), nonce);
     const sessionCookie = (await context.cookies(origin)).find(cookie => cookie.name === 'connect.sid');
     assert.ok(sessionCookie, 'HTTPS consent must establish a browser session');
     assert.equal(sessionCookie.secure, true);
@@ -132,36 +148,158 @@ test('real consent and connected-app routes work at desktop/mobile widths and en
     assert.equal(await page.getByLabel('read (required)', { exact: true }).isChecked(), true);
     assert.equal(await page.getByLabel('plan', { exact: true }).isChecked(), false);
     assert.equal(await page.getByLabel('execute', { exact: true }).isChecked(), false);
+    assert.equal(await page.getByLabel('acme/web-app').isChecked(), false);
+    assert.equal(await page.getByLabel('acme/api-service').isChecked(), false);
     // A forged form cannot add unrequested permissions, even with valid CSRF.
     const csrf = await page.locator('input[name=csrf]').inputValue();
     const escalation = await context.request.post(`${origin}/mcp/consent`, { form: {
       csrf, request: new URL(consent).searchParams.get('request')!, decision: 'approve', repositories: 'acme/web-app', scopes: 'merge'
     }, headers: { Origin: origin } });
     assert.equal(escalation.status(), 400);
-    await page.getByLabel('plan', { exact: true }).check();
-    await page.getByLabel('plan', { exact: true }).uncheck();
-    await page.getByLabel('acme/web-app').check();
+    const forgedForm = { csrf, request: new URL(consent).searchParams.get('request')!, decision: 'approve', repositories: 'acme/web-app', scopes: 'read' };
+    assert.equal((await context.request.post(`${origin}/mcp/consent`, { form: forgedForm, headers: { Origin: 'https://attacker.example' } })).status(), 403);
+    assert.equal((await context.request.post(`${origin}/mcp/consent`, { form: { ...forgedForm, scopes: 'plan' }, headers: { Origin: origin } })).status(), 400);
+    assert.equal((await context.request.post(`${origin}/mcp/consent`, { form: { ...forgedForm, repositories: 'acme/private' }, headers: { Origin: origin } })).status(), 400);
+
+    const permissions = page.getByRole('group', { name: 'Permissions', exact: true });
+    const repositories = page.getByRole('group', { name: 'Repositories', exact: true });
+    const assertCounts = async (scopes: number, repos: number) => {
+      assert.equal(await permissions.getByRole('status').innerText(), `${scopes} of 3 permissions selected`);
+      assert.equal(await repositories.getByRole('status').innerText(), `${repos} of 2 repositories selected`);
+      assert.equal(await page.getByLabel('read (required)', { exact: true }).isChecked(), true);
+      assert.equal(await page.getByLabel('read (required)', { exact: true }).isDisabled(), true);
+    };
+    let consentPosts = 0;
+    page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/mcp/consent') consentPosts++; });
     const capture = process.env.MCP_CAPTURE_PREVIEWS === 'true';
-    if (capture) { await mkdir('.propr/previews', { recursive: true }); await page.screenshot({ path: '.propr/previews/mcp-consent-desktop.png', fullPage: true }); }
-    await page.setViewportSize({ width: 390, height: 844 });
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-    if (capture) await page.screenshot({ path: '.propr/previews/mcp-consent-mobile.png', fullPage: true });
+    if (capture) await mkdir('.propr/previews', { recursive: true });
+    const exerciseSelections = async (device: 'desktop' | 'mobile') => {
+      await page.setViewportSize(device === 'desktop' ? { width: 1200, height: 1000 } : { width: 390, height: 844 });
+      await assertCounts(device === 'desktop' ? 1 : 2, device === 'desktop' ? 0 : 1);
+      const selectPermissions = permissions.getByRole('button', { name: 'Select all permissions' });
+      const clearPermissions = permissions.getByRole('button', { name: 'Clear permissions' });
+      const selectRepositories = repositories.getByRole('button', { name: 'Select all repositories' });
+      const clearRepositories = repositories.getByRole('button', { name: 'Clear repositories' });
+      // Tab through the real controls; exercise both Enter and Space activation.
+      if (device === 'desktop') {
+        await page.keyboard.press('Tab');
+        assert.equal(await selectPermissions.evaluate(element => element === document.activeElement), true);
+        await page.keyboard.press('Enter');
+      } else await selectPermissions.click();
+      await assertCounts(3, device === 'desktop' ? 0 : 1);
+      assert.deepEqual(await permissions.getByRole('checkbox').evaluateAll(elements => elements.map(element => (element as HTMLInputElement).value)), ['read', 'plan', 'execute']);
+      if (device === 'desktop') {
+        await page.keyboard.press('Tab');
+        assert.equal(await clearPermissions.evaluate(element => element === document.activeElement), true);
+        await page.keyboard.press('Space');
+      } else await clearPermissions.click();
+      await assertCounts(1, device === 'desktop' ? 0 : 1);
+      if (device === 'desktop') {
+        await page.keyboard.press('Tab');
+        assert.equal(await page.getByLabel('plan', { exact: true }).evaluate(element => element === document.activeElement), true);
+        await page.keyboard.press('Space');
+        await page.keyboard.press('Tab'); // execute remains unselected
+        await page.keyboard.press('Tab');
+        assert.equal(await selectRepositories.evaluate(element => element === document.activeElement), true);
+        await page.keyboard.press('Space');
+      } else {
+        await page.getByLabel('plan', { exact: true }).check();
+        await selectRepositories.click();
+      }
+      await assertCounts(2, 2);
+      if (device === 'desktop') {
+        await page.keyboard.press('Tab');
+        assert.equal(await clearRepositories.evaluate(element => element === document.activeElement), true);
+        await page.keyboard.press('Enter');
+      } else await clearRepositories.click();
+      await assertCounts(2, 0);
+      if (device === 'desktop') {
+        await page.keyboard.press('Tab');
+        assert.equal(await page.getByLabel('acme/web-app').evaluate(element => element === document.activeElement), true);
+        await page.keyboard.press('Space');
+      } else await page.getByLabel('acme/web-app').check();
+      await assertCounts(2, 1);
+      // Individual changes still work after bulk selection in each group.
+      await selectPermissions.click();
+      await page.getByLabel('execute', { exact: true }).uncheck();
+      await selectRepositories.click();
+      await page.getByLabel('acme/api-service').uncheck();
+      await assertCounts(2, 1);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      assert.equal(page.url(), consent);
+      assert.equal(consentPosts, 0, 'bulk and individual selection must never submit consent');
+      assert.equal((await db('mcp_records').where({ kind: 'grant' })).length, 0);
+      if (capture) await page.screenshot({ path: `.propr/previews/mcp-consent-${device}.png`, fullPage: true });
+    };
+    await exerciseSelections('desktop');
+    await exerciseSelections('mobile');
+    // Repositories are reauthorized at submission, even if they were originally offered.
+    accessibleRepositories = ['acme/api-service'];
+    assert.equal((await context.request.post(`${origin}/mcp/consent`, { form: forgedForm, headers: { Origin: origin } })).status(), 400);
+    accessibleRepositories = ['acme/web-app', 'acme/api-service'];
     await page.route('https://client.example/callback*', route => route.fulfill({ body: 'OAuth test callback' }));
     await page.getByRole('button', { name: 'Allow selected access' }).click();
     await page.waitForURL('https://client.example/callback*', { timeout: 3000 }).catch(async () => { throw new Error(`Consent navigation failed: ${await page.locator('body').innerText()}`); });
     const code = new URL(page.url()).searchParams.get('code')!;
     const token = await oauth.exchangeAuthorizationCode(client, code, verifier, client.redirect_uris[0], new URL(`${origin}/api/mcp`));
-    assert.equal(token.scope, 'read');
-    assert.deepEqual((await oauth.verifyAccessToken(token.access_token)).scopes, ['read']);
+    assert.equal(consentPosts, 1);
+    assert.deepEqual(token.scope?.split(' ').sort(), ['plan', 'read']);
+    const access = await oauth.verifyAccessToken(token.access_token);
+    assert.deepEqual([...access.scopes].sort(), ['plan', 'read']);
+    const grant = await oauth.store.get<McpGrant>('grant', access.extra.grantId);
+    assert.deepEqual(grant?.scopes.slice().sort(), ['plan', 'read']);
+    assert.deepEqual(grant?.repositories, ['acme/web-app']);
     await page.goto(`${origin}/mcp/apps`);
     assert.equal(await page.getByRole('heading', { name: 'Development chat client' }).count(), 1);
 
     await page.getByRole('button', { name: 'Revoke access' }).click();
     await page.getByText('No connected apps.').waitFor();
     await assert.rejects(oauth.verifyAccessToken(token.access_token));
+
+    // Progressive enhancement: manual selection and approval still work without JavaScript.
+    const noScriptContext = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
+    const noScriptPage = await noScriptContext.newPage();
+    await noScriptPage.goto(await authorize());
+    assert.equal(await noScriptPage.getByRole('button', { name: 'Select all permissions' }).isVisible(), false);
+    assert.equal(await noScriptPage.getByRole('button', { name: 'Clear repositories' }).isVisible(), false);
+    await noScriptPage.getByLabel('plan', { exact: true }).check();
+    await noScriptPage.getByLabel('plan', { exact: true }).uncheck();
+    await noScriptPage.getByLabel('acme/api-service').check();
+    await noScriptPage.route('https://client.example/callback*', route => route.fulfill({ body: 'OAuth test callback' }));
+    await noScriptPage.getByRole('button', { name: 'Allow selected access' }).click();
+    await noScriptPage.waitForURL('https://client.example/callback*');
+    const noScriptToken = await oauth.exchangeAuthorizationCode(client, new URL(noScriptPage.url()).searchParams.get('code')!, verifier, client.redirect_uris[0], new URL(`${origin}/api/mcp`));
+    const noScriptAccess = await oauth.verifyAccessToken(noScriptToken.access_token);
+    assert.deepEqual(noScriptAccess.scopes, ['read']);
+    assert.deepEqual((await oauth.store.get<McpGrant>('grant', noScriptAccess.extra.grantId))?.repositories, ['acme/api-service']);
+    await noScriptContext.close();
+
+    // Empty repositories and required-read-only requests have explicit, non-actionable bulk states.
+    accessibleRepositories = [];
+    const hostileName = 'Chat </script><img src=x onerror="window.injected=true">';
+    const emptyConsent = await authorize(['read'], hostileName);
+    const emptyResponse = await page.goto(emptyConsent);
+    assert.notEqual(/script-src 'nonce-([^']+)'/.exec(emptyResponse?.headers()['content-security-policy'] || '')?.[1], nonce);
+    assert.equal(await page.getByText(hostileName, { exact: true }).count(), 1);
+    assert.equal(await page.locator('img').count(), 0, 'client metadata must remain escaped text');
+    assert.equal(await page.locator('script').count(), 1);
+    for (const group of [permissions, repositories]) {
+      for (const button of await group.getByRole('button').all()) assert.equal(await button.isDisabled(), true);
+    }
+    assert.equal(await permissions.getByRole('status').innerText(), '1 of 1 permissions selected');
+    assert.equal(await repositories.getByRole('status').innerText(), '0 of 0 repositories selected');
+    assert.equal(await page.getByLabel('read (required)', { exact: true }).isChecked(), true);
+    assert.equal(await page.getByText('This app only requests required read access.').isVisible(), true);
+    assert.equal(await page.getByText('No accessible repositories are available.', { exact: false }).isVisible(), true);
+    assert.equal(await page.getByRole('button', { name: 'Allow selected access' }).isDisabled(), true);
+    await page.getByRole('button', { name: 'Deny', exact: true }).click();
+    await page.waitForURL('https://client.example/callback*');
+    assert.equal(new URL(page.url()).searchParams.get('error'), 'access_denied');
+    assert.equal(new URL(page.url()).searchParams.has('code'), false);
+    assert.equal((await db('mcp_records').where({ kind: 'grant' })).length, 2, 'denial must not create another grant');
     if (capture) await writeFile('.propr/previews/manifest.json', JSON.stringify({ previews: [
-      { path: '.propr/previews/mcp-consent-desktop.png', title: 'MCP app consent', description: 'Actual consent route with optional permission checkboxes left unselected for read-only access, using fictional fixture data.' },
-      { path: '.propr/previews/mcp-consent-mobile.png', title: 'Mobile MCP consent', description: 'Consent at a 390-pixel mobile viewport.' },
+      { path: '.propr/previews/mcp-consent-desktop.png', title: 'MCP consent bulk controls', description: 'Actual consent route after bulk selection and individual changes, with separate permission/repository controls and selected counts. Fictional fixture data.' },
+      { path: '.propr/previews/mcp-consent-mobile.png', title: 'Mobile MCP consent bulk controls', description: 'The same selected consent state at a 390-pixel mobile viewport.' },
     ], toolSuggestions: [] }, null, 2));
   } finally { await browser?.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await db.destroy(); }
 });
