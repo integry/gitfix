@@ -101,6 +101,9 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
   savedAccounts: true,
   platform: desktopPlatform,
   app: {
+    ...(bridge.app.hasStartupConnectIntent ? {
+      hasStartupConnectIntent: () => bridge.app.hasStartupConnectIntent!(),
+    } : {}),
     onDeepLink: listener => bridge.app.onDeepLink(listener),
     onNativeCommand: listener => bridge.app.onNativeCommand(listener),
     setNativeNavigationState: state => bridge.app.setNativeNavigationState?.(state) ?? Promise.resolve(),

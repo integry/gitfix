@@ -98,6 +98,19 @@ export class DeepLinkDelivery<TWindow extends DeepLinkWindow> {
     if (this.window === window) this.flush(window);
   }
 
+  /** Startup must observe accepted Connect intent even before the window can receive it. */
+  hasPendingConnectIntent(): boolean {
+    const values = this.active ? [this.active.delivery.url, ...this.pending] : this.pending;
+    return values.some(value => {
+      try {
+        const url = new URL(value);
+        return url.protocol === 'propr:' && url.hostname === 'connect';
+      } catch {
+        return false;
+      }
+    });
+  }
+
   didStartMainFrameNavigation(window: TWindow): void {
     const { webContents } = window;
     this.readyRendererDocuments.delete(webContents);

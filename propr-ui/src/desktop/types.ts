@@ -145,6 +145,7 @@ export interface DesktopAdapters {
   savedAccounts?: boolean;
   platform: DesktopPlatform;
   app: {
+    hasStartupConnectIntent?(): Promise<boolean>;
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;

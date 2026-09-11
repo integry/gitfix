@@ -409,6 +409,8 @@ export interface DesktopBridge {
     minimize(): Promise<void>;
     toggleMaximize(): Promise<void>;
     closeWindow(): Promise<void>;
+    /** Resolves after consumer registration, before startup may reconnect a saved account. */
+    hasStartupConnectIntent?(): Promise<boolean>;
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;

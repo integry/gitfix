@@ -1129,6 +1129,7 @@ describe('desktop IPC shutdown gate', () => {
       packagedRendererUrl: 'propr-renderer://app/index.html',
       openExternal: async () => undefined,
       rendererConsumerReady: event => deepLinks.rendererConsumerReady(event.sender, event.senderFrame),
+      hasPendingConnectIntent: () => deepLinks.hasPendingConnectIntent(),
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinks.acknowledgeSender(event.sender, acknowledgement),
     });
@@ -1139,7 +1140,7 @@ describe('desktop IPC shutdown gate', () => {
     const invoke = (channel: string, ...args: unknown[]) =>
       Promise.resolve(handlers.get(channel)!(event, ...args));
 
-    await invoke(IPC_CHANNELS.deepLinkConsumerReady);
+    assert.deepEqual(await invoke(IPC_CHANNELS.deepLinkConsumerReady), { pendingConnect: false });
     assert.equal(deepLinks.deliver('propr://open?path=%2Ftasks'), true);
     assert.equal(deepLinks.deliver('propr://open?path=%2Fplans'), true);
     assert.equal(sent.length, 1);
