@@ -396,7 +396,7 @@ export async function executeReviewProcessing(params: ExecuteReviewParams): Prom
 
     const reviewCtx: RunReviewsContext = {
         registry, octokit: state.octokit, pullRequestNumber, repoOwner, repoName,
-        taskId, taskUrl, combinedCommentBody,
+        taskId, taskUrl, combinedCommentBody, reviewedHead: prData!.data.head.sha,
         // Prior review prose must never become an expanded Ultrafix objective.
         commentHistory: job.data.ultrafixMeta ? '' : commentHistory,
         originalTaskSpec,

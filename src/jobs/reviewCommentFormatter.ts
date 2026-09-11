@@ -106,6 +106,12 @@ function normalizeSuggestionMetadata(response: string): string {
     return response.slice(0, sectionStart) + section + response.slice(sectionEnd);
 }
 
+function reviewExecutionMetadata(options: { reviewedHead?: string; taskId?: string }): string {
+    const head = options.reviewedHead && /^[a-f0-9]{40}$/.test(options.reviewedHead) ? ` head="${options.reviewedHead}"` : '';
+    const task = options.taskId ? ` task="${encodeURIComponent(options.taskId)}"` : '';
+    return head + task;
+}
+
 /**
  * Build the GitHub comment body for a successful review.
  *
@@ -121,6 +127,8 @@ export function buildReviewComment(
     analysisResult: AnalysisResult,
     taskUrl?: string,
     options: {
+        reviewedHead?: string;
+        taskId?: string;
         omittedDiffFiles?: string[];
         prDiffTruncated?: boolean;
         costUsd?: number | null;
@@ -182,8 +190,9 @@ export function buildReviewComment(
 
     // --- Machine-readable marker ---
     comment += `\n\n<sub>\u{1F916} Review by [ProPR](https://propr.dev)</sub>`;
+    const executionMetadata = reviewExecutionMetadata(options);
     const partialReviewMetadata = isPartialReview ? ' partial="true"' : '';
-    comment += `\n<!-- propr:ai-review model="${effectiveModel}"${partialReviewMetadata} -->`;
+    comment += `\n<!-- propr:ai-review model="${effectiveModel}"${partialReviewMetadata}${executionMetadata} -->`;
 
     return comment;
 }

@@ -164,6 +164,10 @@ export function createAbortGenerationHandler(db: Knex, dependencies: Partial<Pla
       }
 
       const runId = parseActiveRunId(draft, 'generating');
+      if (req.body.expectedRunId !== undefined && req.body.expectedRunId !== runId) {
+        res.status(409).json({ error: 'Planner run changed before cancellation. Current run was preserved.' });
+        return;
+      }
       await signals.setAbortSignal(draftId, runId);
       const updatedRows = await transitionDraftOrReconcileSignal({
         db,
@@ -173,6 +177,7 @@ export function createAbortGenerationHandler(db: Knex, dependencies: Partial<Pla
         updates: {
           status: 'draft',
           generation_trace: JSON.stringify({
+            runId,
             steps: [],
             error: 'Generation aborted by user',
             abortedAt: new Date().toISOString()
@@ -212,6 +217,10 @@ export function createAbortRefinementHandler(db: Knex, dependencies: Partial<Pla
       }
 
       const runId = parseActiveRunId(draft, 'refining');
+      if (req.body.expectedRunId !== undefined && req.body.expectedRunId !== runId) {
+        res.status(409).json({ error: 'Planner run changed before cancellation. Current run was preserved.' });
+        return;
+      }
       await signals.setAbortSignal(draftId, runId);
       const updatedRows = await transitionDraftOrReconcileSignal({
         db,
@@ -221,6 +230,7 @@ export function createAbortRefinementHandler(db: Knex, dependencies: Partial<Pla
         updates: {
           status: 'review',
           refinement_result: JSON.stringify({
+            runId,
             action: 'cancelled',
             summary: 'Refinement cancelled by user',
             timestamp: new Date().toISOString()

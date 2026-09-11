@@ -13,6 +13,7 @@ import {
 
 interface FileChangesRoutesDeps {
   db: Knex;
+  normalizeJobReferences?: boolean;
 }
 
 export function createFileChangesRoutes(deps: FileChangesRoutesDeps) {
@@ -21,7 +22,7 @@ export function createFileChangesRoutes(deps: FileChangesRoutesDeps) {
   async function getFileChanges(req: FlatRequest, res: Response): Promise<void> {
     try {
       const { taskId: jobId } = req.params;
-      const taskId = normalizeTaskId(jobId);
+      const taskId = deps.normalizeJobReferences === false ? jobId : normalizeTaskId(jobId);
 
       console.log(`[file-changes] jobId: ${jobId}, taskId: ${taskId}`);
 

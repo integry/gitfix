@@ -1,6 +1,6 @@
 import type { Express } from 'express';
 import { networkInterfaces } from 'node:os';
-import { ipKeyGenerator, rateLimit, type RateLimitRequestHandler } from 'express-rate-limit';
+import { ipKeyGenerator, rateLimit, type Options, type RateLimitRequestHandler } from 'express-rate-limit';
 
 interface RateLimitEnvironment {
   [key: string]: string | undefined;
@@ -109,8 +109,8 @@ export function resolveRequestRateLimitPolicies(
   };
 }
 
-export function createRequestRateLimiter(policy: RequestRateLimitPolicy): RateLimitRequestHandler {
-  return rateLimit({
+export function requestRateLimitOptions(policy: RequestRateLimitPolicy): Partial<Options> {
+  return {
     windowMs: policy.windowMs,
     limit: policy.limit,
     identifier: policy.identifier,
@@ -142,7 +142,11 @@ export function createRequestRateLimiter(policy: RequestRateLimitPolicy): RateLi
       code: 'RATE_LIMIT_EXCEEDED',
       error: 'Too many requests. Please try again later.',
     },
-  });
+  };
+}
+
+export function createRequestRateLimiter(policy: RequestRateLimitPolicy): RateLimitRequestHandler {
+  return rateLimit(requestRateLimitOptions(policy));
 }
 
 export function createApiRequestRateLimiter(
