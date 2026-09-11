@@ -91,7 +91,15 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
   const authOptions = { provider: oauth, issuerUrl: new URL(config.origin), resourceServerUrl: new URL(config.resource), scopesSupported: [...MCP_SCOPES] };
   // SDK v1 supplies maintained OAuth AS components; v2 supplies both protocol
   // eras. v2 intentionally only exports Resource Server OAuth helpers.
-  app.get('/.well-known/oauth-authorization-server', (_req, res) => res.set('Cache-Control', 'no-store').json({ ...createOAuthMetadata(authOptions), token_endpoint_auth_methods_supported: ['none'], revocation_endpoint_auth_methods_supported: ['none'], client_id_metadata_document_supported: true, authorization_response_iss_parameter_supported: true }));
+  // Public discovery is static: build it once, outside the request handler.
+  const oauthMetadata = Object.freeze({
+    ...createOAuthMetadata(authOptions),
+    token_endpoint_auth_methods_supported: ['none'],
+    revocation_endpoint_auth_methods_supported: ['none'],
+    client_id_metadata_document_supported: true,
+    authorization_response_iss_parameter_supported: true,
+  });
+  app.get('/.well-known/oauth-authorization-server', (_req, res) => res.set('Cache-Control', 'no-store').json(oauthMetadata));
   // The SDK's RFC 8252 helper relaxes loopback ports. This installation's
   // contract requires byte-for-byte redirect matching, including loopback.
   // Protect the client lookup before the SDK router, using the same explicit
