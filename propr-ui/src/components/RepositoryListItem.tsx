@@ -104,7 +104,7 @@ export const RepositoryListItem: React.FC<RepositoryListItemProps> = ({
       <div className={`space-y-1 px-4 py-2 ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
         <div className="flex items-center gap-2 text-xs min-h-5">
           <span className={statusClassName} title={statusText}>
-            <StatusDot status={statusType} />
+            <StatusDot status={!repo.enabled || repo.hidden ? 'idle' : statusType} />
             <span className={statusType === 'indexed' ? 'sr-only' : undefined}>{statusText}</span>
             {progressText && <span className="text-blue-500">({progressText})</span>}
           </span>
