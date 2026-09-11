@@ -386,8 +386,13 @@ async function publishRecovery(
     directory.publishNoReplace(READY_NAME, PUBLIC_INSTANCE_IDENTITY_FILENAME);
     await onBoundary?.("identity-published");
   } catch (error) {
-    if (errno(error) !== "EEXIST") throw error;
-    unlinkIfPresent(directory, READY_NAME);
+    if (errno(error) === "EEXIST") {
+      unlinkIfPresent(directory, READY_NAME);
+    } else if (errno(error) !== "ENOENT") {
+      throw error;
+    }
+    // A concurrent creator may already have moved READY to the final name.
+    // Accept that race only after the final file passes the full read below.
   }
   syncDirectory(directory.fd);
   await onBoundary?.("directory-synced");
