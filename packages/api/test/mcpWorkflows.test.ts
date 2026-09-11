@@ -101,13 +101,21 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
     const jobs: Array<Record<string, unknown>> = [];
     const redisValues = new Map<string, string>();
     const pendingComments = new Map<string, string[]>();
+    const evalRedis = async (script: string, _keyCount: number, key: string) => {
+      if (script.includes('return comments')) {
+        const claimed = pendingComments.get(key) ?? [];
+        if (claimed.length > 0) pendingComments.delete(key);
+        return claimed;
+      }
+      return 1;
+    };
     const { cleanupJob } = await import('../../../src/jobs/prCommentJobUtils.js');
     const { pickUpPendingCommentsWithClaim, applyPendingCommentCommandContext } = await import('../../../src/jobs/prPendingComments.js');
     const { updateTaskTitleForPR } = await import('../../../src/jobs/prCommentJobHelpers.js');
     const correlatedLogger = core.logger.withCorrelation('mcp-pending-regression');
     const stateManager = { updateIssueRef: async () => {} } as unknown as InstanceType<typeof core.WorkerStateManager>;
     const deps: ToolDeps = { db, policy, taskQueue: { add: async (_name: string, data: Record<string, unknown>) => { jobs.push(data); return { id: String(jobs.length) }; }, getJobs: async () => [] } as never,
-      redisClient: { rPush: async () => 1, lPush: async () => 1, lTrim: async () => 'OK', sMembers: async () => [], get: async (key: string) => redisValues.get(key) || null, llen: async (key: string) => pendingComments.get(key)?.length || 0, lrange: async (key: string) => pendingComments.get(key) || [], del: async (key: string) => { pendingComments.delete(key); return 1; }, publish: async () => 1, set: async () => 'OK', eval: async () => 1 } as never, runtimeBuildQueue: {} as never,
+      redisClient: { rPush: async () => 1, lPush: async () => 1, lTrim: async () => 'OK', sMembers: async () => [], get: async (key: string) => redisValues.get(key) || null, llen: async (key: string) => pendingComments.get(key)?.length || 0, lrange: async (key: string) => pendingComments.get(key) || [], del: async (key: string) => { pendingComments.delete(key); return 1; }, publish: async () => 1, set: async () => 'OK', eval: evalRedis } as never, runtimeBuildQueue: {} as never,
       goalServices: { generateTitle: async () => 'Fixture goal', loadVisualPreviewSettings: async () => ({ enabled: false, types: ['image'] }), getOctokit: async () => github as never,
         stopExecution: async () => ({ success: true, containerStopped: stopGoalImmediately, removedQueuedJobs: stopGoalImmediately ? 1 : 0 }) as never,
         getCapabilities: async () => [{ agentId: agent.config.id, agentAlias: 'claude', agentType: 'claude', goalCapable: true, lifecycle: { launch: 'goal-prompt', resume: 'whole-session', runningInput: 'safe-boundary-resume' }, controls: { liveInput: false, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true } }] } };
