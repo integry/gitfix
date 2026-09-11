@@ -36,8 +36,9 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
   };
 
   return (
-    <div className="contents text-xs text-slate-600" onClick={(event) => event.stopPropagation()}>
-      <label className="inline-flex items-center gap-2 whitespace-nowrap cursor-pointer" title="Generate focused media for changes with a visible result">
+    <div className="min-w-0 text-xs text-slate-600" onClick={(event) => event.stopPropagation()}>
+      <label className="flex items-center justify-between gap-4 py-2 cursor-pointer" title="Generate focused media for changes with a visible result">
+        <span>Visual previews</span>
         <input
           type="checkbox"
           checked={settings.enabled}
@@ -45,16 +46,12 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
           className="sr-only peer"
           aria-label={`Visual previews for ${repo.name}`}
         />
-        <span className="relative w-7 h-4 bg-slate-200 rounded-full peer-focus:ring-2 peer-focus:ring-teal-500/20 peer-checked:bg-teal-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:bg-white after:border after:border-slate-300 after:transition-all peer-checked:after:translate-x-full" />
-        <span>Visual previews</span>
-        <span className={`rounded px-1.5 py-0.5 font-medium ${settings.enabled ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
-          {settings.enabled ? 'On' : 'Off'}
-        </span>
+        <span className="relative shrink-0 w-7 h-4 bg-slate-200 rounded-full peer-focus:ring-2 peer-focus:ring-teal-500/20 peer-checked:bg-teal-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:bg-white after:border after:border-slate-300 after:transition-all peer-checked:after:translate-x-full" />
       </label>
 
       {settings.enabled && (
-        <div className="col-span-full flex flex-wrap items-start gap-3" onClick={(event) => event.stopPropagation()}>
-          <div className="flex items-center gap-2 pt-1">
+        <div className="ml-2 mt-1 mb-2 flex flex-col gap-3 border-l-2 border-slate-200 pl-3" onClick={(event) => event.stopPropagation()}>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => toggleType('image')}
@@ -85,7 +82,7 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
             }}
             maxLength={4000}
             rows={2}
-            className="min-w-0 w-full flex-1 basis-64 resize-y rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-1 focus:ring-teal-400"
+            className="min-w-0 w-full resize-y rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-1 focus:ring-teal-400"
             placeholder="Optional: capture separate desktop and mobile views…"
             aria-label={`Visual preview instructions for ${repo.name}`}
           />

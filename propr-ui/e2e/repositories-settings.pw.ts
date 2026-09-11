@@ -36,9 +36,9 @@ async function stubRepositoryApis(page: Page, canManage = true) {
       case '/api/github/repos': json = { repos: [] }; break;
       case '/api/user/repo-preferences': json = { preferences: { 'integry/propr': { starred: true } } }; break;
       case '/api/repositories/indexing-status':
-        json = { repositories: repos.map(repo => ({
+        json = { repositories: repos.map((repo, index) => ({
           full_name: repo.name, branch: repo.baseBranch || 'HEAD', indexing_status: 'completed',
-          last_indexed_at: new Date().toISOString(), last_indexed_hash: '8a6fe50123456789', last_indexed_commit_message: 'Update repository',
+          last_indexed_at: new Date(Date.now() - (index + 1) * 3600000).toISOString(), last_indexed_hash: '8a6fe50123456789', last_indexed_commit_message: 'Update repository',
         })) };
         break;
       case '/api/repos/chat/messages': chatLoads++; json = { messages: [] }; break;
@@ -61,6 +61,8 @@ test('keeps navigation compact and saves settings for the selected repository', 
   const sdk = page.getByRole('button', { name: 'Select integry/integration-sdk', exact: true });
   const originalHeight = (await propr.locator('../..').boundingBox())!.height;
   expect(originalHeight).toBe((await sdk.locator('../..').boundingBox())!.height);
+  await expect(propr.locator('../..').getByText('8a6fe50', { exact: true })).toBeVisible();
+  await expect(propr.locator('../..').locator('time')).toHaveText('1h ago');
   await propr.click();
   const settings = page.getByRole('region', { name: 'Settings for integry/propr', exact: true });
   await expect(settings).toHaveCount(0);
@@ -98,7 +100,7 @@ test('keeps navigation compact and saves settings for the selected repository', 
   await page.mouse.move(1400, 850);
   if (process.env.PROPR_CAPTURE_PREVIEWS) {
     await mkdir('../.propr/previews', { recursive: true });
-    await page.screenshot({ path: '../.propr/previews/repositories-desktop.png' });
+    await page.screenshot({ animations: 'disabled', path: '../.propr/previews/repositories-desktop.png' });
   }
 });
 
@@ -119,13 +121,14 @@ for (const width of [320, 390]) {
     const box = (await settings.getByRole('textbox').boundingBox())!;
     expect(box.x + box.width).toBeLessThanOrEqual(width);
     if (width === 390 && process.env.PROPR_CAPTURE_PREVIEWS) {
-      await page.screenshot({ path: '../.propr/previews/repositories-mobile.png' });
+      await page.screenshot({ animations: 'disabled', path: '../.propr/previews/repositories-mobile.png' });
     }
     await settings.getByRole('button', { name: 'Reindex repository', exact: true }).scrollIntoViewIfNeeded();
     await expect(settings.getByRole('button', { name: 'Reindex repository', exact: true })).toBeInViewport();
+    await settings.getByRole('button', { name: 'Remove repository', exact: true }).scrollIntoViewIfNeeded();
     await expect(settings.getByRole('button', { name: 'Remove repository', exact: true })).toBeInViewport();
     if (width === 390 && process.env.PROPR_CAPTURE_PREVIEWS) {
-      await page.screenshot({ path: '../.propr/previews/repositories-mobile-indexing.png' });
+      await page.screenshot({ animations: 'disabled', path: '../.propr/previews/repositories-mobile-indexing.png' });
     }
     await page.getByRole('button', { name: 'Back to repositories' }).click();
     await expect(page.getByRole('button', { name: 'Select integry/propr', exact: true })).toBeVisible();
@@ -156,7 +159,7 @@ test('reindexes and stops indexing the selected repository branch from Settings'
   await page.getByRole('button', { name: 'Select integry/integration-sdk', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Settings for integry/integration-sdk', exact: true });
-  await expect(settings.getByText('Branch: main', { exact: true })).toBeVisible();
+  await expect(settings.getByText('main', { exact: true })).toBeVisible();
   await settings.getByRole('button', { name: 'Reindex repository', exact: true }).click();
   await expect.poll(() => api.indexingWrites[0]).toEqual({
     path: '/api/config/repos/trigger-indexing',
