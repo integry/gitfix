@@ -51,6 +51,8 @@ export interface StopTaskQueue {
 
 export interface StopTaskExecutionOptions {
   redisClient: StopTaskRedisClient;
+  /** Authenticated adapters resolve exact task IDs before calling this helper. */
+  exactTaskId?: boolean;
   /** Who requested the stop (username or e.g. 'system'). Defaults to 'user'. */
   requestedBy?: string;
   /** Human-readable cancellation reason, surfaced in the conversation log and task history. */
@@ -270,7 +272,7 @@ async function markTaskCancelledSafely(taskId: string, historyMetadata: Record<s
 export async function stopTaskExecution(taskIdOrJobId: string, options: StopTaskExecutionOptions): Promise<StopTaskExecutionResult> {
   const { redisClient } = options;
   const stopMessage = options.reason ?? 'Stop requested by user. Terminating execution...';
-  const taskId = normalizeTaskId(taskIdOrJobId);
+  const taskId = options.exactTaskId ? taskIdOrJobId : normalizeTaskId(taskIdOrJobId);
 
   const markCancelled = (historyMetadata: Record<string, unknown>): Promise<boolean> => markTaskCancelledSafely(taskId, historyMetadata, options);
 

@@ -2,6 +2,12 @@
 
 The ProPR API provides the backend server for the web-based management interface for monitoring and controlling your ProPR instance.
 
+Optional authenticated MCP is documented in [the MCP operator and user guide](../../docs/mcp.md).
+It uses separate ProPR OAuth credentials at `/api/mcp`; GitHub bearer tokens
+for the existing REST API are not MCP access tokens. See the
+[Connect wire contract](../../docs/mcp-connect-contract.md) and
+[capability/acceptance checklist](../../docs/mcp-coverage.md).
+
 ## Components
 
 - **api**: Express.js backend API with GitHub OAuth authentication

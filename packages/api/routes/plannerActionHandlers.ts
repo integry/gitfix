@@ -116,7 +116,7 @@ export function createGenerateHandler(db: Knex, deps: PlannerActionAuthorization
       await updateDraftContextConfig(db, draftId, draft, { baseBranch, granularity, contextLevel, compress, contextRepositories, generationModel, excludedFiles });
 
       generationClaimed = await claimDraftOperation(db, draftId, 'generating', {
-        generation_trace: JSON.stringify({ steps: [], startedAt: new Date().toISOString(), runId: correlationId })
+        updates: { generation_trace: JSON.stringify({ steps: [], startedAt: new Date().toISOString(), runId: correlationId }) }
       });
       if (!generationClaimed) {
         res.status(409).json({ error: 'Another operation is already running for this draft' });
@@ -151,6 +151,19 @@ export function createGenerateHandler(db: Knex, deps: PlannerActionAuthorization
   };
 }
 
+function estimateRefinementInputTokens(currentPlan: Plan, instruction: string, originalContext?: string): number {
+  const planJsonStr = JSON.stringify(currentPlan, null, 2);
+  const contextSection = originalContext
+    ? `\n\nOriginal Context (codebase details from initial plan generation):\n${originalContext}\n`
+    : '';
+  const roughPrompt = `${REFINER_SYSTEM_PROMPT}${contextSection}\n\nCurrent Plan:\n${planJsonStr}\n\nUser Request:\n"${instruction}"`;
+  return estimateTokens(roughPrompt);
+}
+
+function isValidExpectedRevision(value: unknown): boolean {
+  return value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0);
+}
+
 export function createRefineHandler(db: Knex, deps: PlannerActionAuthorizationDeps = {}) {
   const resolveMetadataToken = deps.resolveMetadataToken ?? resolveGitHubMetadataToken;
   const verifyRepositoryAccess = deps.verifyRepositoryAccess ?? verifyGitHubRepositoryAccess;
@@ -159,7 +172,10 @@ export function createRefineHandler(db: Knex, deps: PlannerActionAuthorizationDe
     const check = checkDbAndAuth(db, req.user?.id);
     if (!check.valid) { sendCheckError(res, check); return; }
 
-    const { draftId, plan: currentPlan, instruction, generationModel: requestedModel } = req.body;
+    const { draftId, plan: currentPlan, instruction, generationModel: requestedModel, expectedRevision } = req.body;
+    if (!isValidExpectedRevision(expectedRevision)) {
+      res.status(400).json({ error: 'expectedRevision must be a nonnegative integer' }); return;
+    }
     const inputCheck = validateRefineInput(req.body);
     if (!inputCheck.valid) { res.status(400).json({ error: inputCheck.error }); return; }
 
@@ -203,13 +219,7 @@ export function createRefineHandler(db: Knex, deps: PlannerActionAuthorizationDe
       // consistent with the original plan and respects that model's input limit.
       // Build a close approximation of the full prompt for token estimation
       // This matches the structure in taskPlanningService.refinePlan()
-      const planJsonStr = JSON.stringify(currentPlan, null, 2);
-      const contextSection = originalContext
-        ? `\n\nOriginal Context (codebase details from initial plan generation):\n${originalContext}\n`
-        : '';
-      const roughPrompt = `${REFINER_SYSTEM_PROMPT}${contextSection}\n\nCurrent Plan:\n${planJsonStr}\n\nUser Request:\n"${instruction}"`;
-      // Use tiktoken for accurate token count
-      const estimatedInputTokens = estimateTokens(roughPrompt);
+      const estimatedInputTokens = estimateRefinementInputTokens(currentPlan, instruction, originalContext);
 
       const settings = await loadSettings();
       const generationModel = await resolveConfiguredModel(selectRefinementModel(
@@ -238,7 +248,7 @@ export function createRefineHandler(db: Knex, deps: PlannerActionAuthorizationDe
       };
 
       refinementClaimed = await claimDraftOperation(db, draftId, 'refining', {
-        refinement_result: JSON.stringify(initialRefinementMeta),
+        updates: { refinement_result: JSON.stringify(initialRefinementMeta) }, expectedRevision
       });
       if (!refinementClaimed) {
         res.status(409).json({ error: 'Another operation is already running for this draft' });
@@ -246,7 +256,7 @@ export function createRefineHandler(db: Knex, deps: PlannerActionAuthorizationDe
       }
 
       // Return 202 Accepted immediately - client should poll for status
-      res.status(202).json({ success: true, status: 'refining', message: 'Plan refinement started' });
+      res.status(202).json({ success: true, status: 'refining', message: 'Plan refinement started', runId: correlationId });
 
       // Run refinement in background
       void runBackgroundRefinement({

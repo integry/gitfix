@@ -90,6 +90,9 @@ async function fetchGitHubUser(token: string): Promise<GitHubUser | null> {
 }
 
 export async function validateGitHubToken(token: string): Promise<GitHubUser | null> {
+    // ProPR OAuth credentials belong exclusively to /api/mcp. Reject them
+    // before cache lookup or GitHub forwarding, including when MCP is disabled.
+    if (token.startsWith('propr_mcp_')) return null;
     try {
         const cached = await readCachedGitHubUser(token).catch(error => {
             console.error('Bearer token cache read error:', error);

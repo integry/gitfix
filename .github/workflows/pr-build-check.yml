@@ -391,9 +391,31 @@ jobs:
           } > >(tee -a build_log.txt) 2>&1
 
       - name: Verify release-candidate metadata
+        id: release_metadata
         env:
           RELEASE_CANDIDATE: 'true'
         run: npm run release:verify
+
+      - name: Build MCP test dependencies
+        id: mcp_prepare
+        run: npm run test:prepare
+
+      - name: Install Chromium for required MCP consent tests
+        id: mcp_browser_setup
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify core MCP OAuth, workflows, browser and security
+        id: mcp_tests
+        env:
+          DATA_DIR: ${{ runner.temp }}/mcp-ci
+          DB_FILENAME: ${{ runner.temp }}/mcp-ci/isolated.sqlite
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA_DIR"
+          {
+            npm run test:mcp
+            npm run test:mcp:browser
+          } > >(tee -a build_log.txt) 2>&1
 
       - name: Run Fast Unit Tests
         id: unit_tests
@@ -813,6 +835,10 @@ jobs:
             echo "Node setup: ${{ steps.node.outcome }}"
             echo "Toolchain: ${{ steps.toolchain.outcome }}"
             echo "Dependency install: ${{ steps.install.outcome }}"
+            echo "Release metadata: ${{ steps.release_metadata.outcome }}"
+            echo "MCP dependency build: ${{ steps.mcp_prepare.outcome }}"
+            echo "MCP browser setup: ${{ steps.mcp_browser_setup.outcome }}"
+            echo "Core MCP tests: ${{ steps.mcp_tests.outcome }}"
             echo "Fast tests: ${{ steps.unit_tests.outcome }}"
             echo "Hosted tunnel tests: ${{ steps.tunnel_tests.outcome }}"
             echo "CLI packaging: ${{ steps.cli_pack.outcome }}"

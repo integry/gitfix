@@ -38,6 +38,7 @@ export interface RunReviewsContext {
     repoName: string;
     taskId: string;
     taskUrl: string;
+    reviewedHead?: string;
     combinedCommentBody: string;
     commentHistory: string;
     originalTaskSpec: string;
@@ -113,6 +114,7 @@ export async function runSingleReview(
         const costUsd = await calculateReviewCost(analysisResult, analysisResult.modelUsed || model, correlatedLogger);
         const { reviewCommentBody, findingCount } = await buildReviewCommentWithReservedFindingRange(
             assignment, analysisResult, taskUrl, {
+                reviewedHead: ctx.reviewedHead, taskId,
                 omittedDiffFiles: ctx.omittedDiffFiles,
                 prDiffTruncated: promptResult.prDiffTruncated,
                 costUsd,

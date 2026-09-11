@@ -258,6 +258,37 @@ function buildTokenRefreshRequest(user: NonNullable<Request['user']>): { endpoin
     };
 }
 
+/** Refresh a durable server credential without constructing a browser session.
+ * The caller serializes access to, and persists, this user credential.
+ */
+export async function refreshStoredGitHubCredential(user: NonNullable<Request['user']>): Promise<GitHubTokenRefreshResult> {
+    if (!user.refreshToken || user.githubAuthInvalid) return { status: 'reauth-required' };
+    // Browser sessions and MCP may share the same rotating GitHub credential.
+    // Use the existing durable refresh coordinator whenever it owns this token.
+    if (isSupportedVisualPreviewUploadToken(user.accessToken || '')) {
+        const shared = await visualPreviewOAuthCredentialService.refreshAndGetForOwner(user.id, false);
+        if (shared?.status === 'reauth_required') return { status: 'reauth-required' };
+        if (shared?.accessToken) {
+            user.accessToken = shared.accessToken;
+            user.refreshToken = shared.refreshToken;
+            user.tokenExpiresAt = shared.accessTokenExpiresAt;
+            user.refreshTokenExpiresAt = shared.refreshTokenExpiresAt;
+            return { status: 'refreshed', accessToken: user.accessToken, refreshToken: user.refreshToken, tokenExpiresAt: user.tokenExpiresAt, refreshTokenExpiresAt: user.refreshTokenExpiresAt };
+        }
+    }
+    const request = buildTokenRefreshRequest(user);
+    const response = await fetch(request.endpoint, { ...request.init, signal: AbortSignal.timeout(TOKEN_REFRESH_TIMEOUT_MS), redirect: 'error' });
+    if (!response.ok) return { status: 'temporarily-unavailable' };
+    const data = await response.json() as GitHubTokenRefreshResponse;
+    if (data.error) return { status: isUnrecoverableRefreshError(data.error) ? 'reauth-required' : 'temporarily-unavailable' };
+    if (!data.access_token) return { status: 'temporarily-unavailable' };
+    user.accessToken = data.access_token;
+    if (data.refresh_token) user.refreshToken = data.refresh_token;
+    if (data.expires_in) user.tokenExpiresAt = Date.now() + data.expires_in * 1000;
+    if (data.refresh_token_expires_in) user.refreshTokenExpiresAt = Date.now() + data.refresh_token_expires_in * 1000;
+    return { status: 'refreshed', accessToken: user.accessToken, refreshToken: user.refreshToken, tokenExpiresAt: user.tokenExpiresAt, refreshTokenExpiresAt: user.refreshTokenExpiresAt };
+}
+
 // Session fallback and the shared background credential deliberately converge here.
 // eslint-disable-next-line complexity
 async function performGitHubTokenRefresh(
