@@ -62,12 +62,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
     return presented;
   }, [adapters, cancelDiscovery, waitForPresentation]);
-  const {
-    deepLinkError,
-    editorNotice,
-    clearConnectCandidate,
-    hasPendingConnectCandidate,
-  } = useDesktopDeepLinks({
+  const { deepLinkError, editorNotice, clearConnectCandidate, hasPendingConnectCandidate } = useDesktopDeepLinks({
     deepLinks,
     phase: state.phase,
     profileId: state.phase === 'connecting' || state.phase === 'authenticating' || state.phase === 'connected'

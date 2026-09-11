@@ -78,8 +78,8 @@ interface ProfileEditorProps {
 }
 
 export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate = false, notice, operationError, discovery, onPresented, onCancel, onSave }) => {
-  const [name, setName] = useState(initial?.name || 'My ProPR');
-  const [baseUrl, setBaseUrl] = useState(initial ? initial.baseUrl : DEFAULT_LOCAL_API_BASE_URL);
+  const [name, setName] = useState(() => initial?.name || 'My ProPR');
+  const [baseUrl, setBaseUrl] = useState(() => initial ? initial.baseUrl : DEFAULT_LOCAL_API_BASE_URL);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discoveryMessage, setDiscoveryMessage] = useState<string | null>(null);

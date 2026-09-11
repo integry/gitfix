@@ -10,6 +10,7 @@ import type { DesktopLogger } from '../../../apps/desktop/src/logger';
 import { createDesktopBridge, type PreloadIpc } from '../../../apps/desktop/src/preload-bridge';
 import type { ProfileStore } from '../../../apps/desktop/src/profile-store';
 import { IPC_CHANNELS } from '../../../apps/desktop/src/shared/contract';
+import { DesktopDeepLinkInbox } from '../desktop-deep-link';
 import { DesktopExperience } from './DesktopExperience';
 import { createElectronDesktopAdapters } from './electronAdapters';
 import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from './types';
@@ -100,6 +101,7 @@ describe('DesktopExperience production Connect discovery pipeline', () => {
       devServerUrl: undefined,
       packagedRendererUrl: rendererUrl,
       openExternal: async () => undefined,
+      rendererConsumerReady: () => true,
     });
     const event = { senderFrame: { url: rendererUrl } } as unknown as IpcMainInvokeEvent;
     const ipc: PreloadIpc = {
@@ -111,8 +113,10 @@ describe('DesktopExperience production Connect discovery pipeline', () => {
       removeListener: () => undefined,
     };
     const adapters = createElectronDesktopAdapters(createDesktopBridge(ipc, true));
+    const inbox = new DesktopDeepLinkInbox();
+    const unsubscribe = adapters.app.onDeepLink(value => inbox.receive(value));
 
-    render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
+    render(<DesktopExperience adapters={adapters} deepLinks={inbox}><div>Connected app</div></DesktopExperience>);
     expect(adapters.platform).toBe(platform === 'MacIntel' ? 'macos' : 'linux');
     fireEvent.click(await screen.findByRole('button', { name: /Connect to an existing instance/ }));
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Shared development' } });
@@ -138,6 +142,7 @@ describe('DesktopExperience production Connect discovery pipeline', () => {
     if (claim.status === 'claimed') expect(claim.publicInstanceIdentity).toBe(readyStatus.publicInstanceIdentity);
     expect(credentials.pair).not.toHaveBeenCalled();
     expect(credentials.saveProfile).not.toHaveBeenCalled();
+    unsubscribe();
     registered.dispose();
     navigatorPlatform.mockRestore();
   });
