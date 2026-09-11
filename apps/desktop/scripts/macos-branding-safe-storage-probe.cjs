@@ -1,5 +1,6 @@
 const { app, safeStorage } = require('electron');
-const { readFileSync, writeFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const { readFileSync, renameSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { configureMacOSBranding } = require('./branding.cjs');
 
@@ -8,7 +9,7 @@ const { configureMacOSBranding } = require('./branding.cjs');
 const { namespace, legacyName } = require('./fixture.json');
 const phase = process.argv[2];
 const directory = __dirname;
-const phases = ['legacy-write', 'renamed-control', 'branded', 'legacy-read'];
+const phases = ['legacy-write', 'renamed-control', 'branded', 'legacy-read', 'cleanup'];
 const syntheticValue = 'Synthetic branding continuity fixture; not a credential.';
 let stage = 'isolation';
 
@@ -18,7 +19,12 @@ function check(condition) {
 
 function report(value) {
   // Status only: no plaintext, ciphertext, Keychain password or native errors.
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  // launchd owns stdio. Publish atomically inside the private fixture directory
+  // so the SSH runner cannot mistake a partial write or native log for a result.
+  check(phases.includes(phase));
+  const path = join(directory, `${phase}.json`);
+  writeFileSync(`${path}.tmp`, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+  renameSync(`${path}.tmp`, path);
 }
 
 try {
@@ -28,6 +34,24 @@ try {
   check(legacyName === 'ProPR Desktop' && phases.includes(phase));
   check(!app.isReady());
   check(app.getName() === `${namespace} ${legacyName}`);
+
+  if (phase === 'cleanup') {
+    stage = 'fixture-key-cleanup';
+    // Same GUI security session as the probes. Do not read passwords, change
+    // ACLs, unlock/reset a Keychain, or change its default/search-list settings.
+    // Both service AND account are exact UUID-scoped synthetic identifiers.
+    let removed = true;
+    for (const name of [legacyName, 'ProPR']) {
+      const result = spawnSync('/usr/bin/security', [
+        'delete-generic-password', '-s', `${namespace} ${name} Safe Storage`, '-a', `${namespace} ${name} Key`,
+      ], { timeout: 10_000, killSignal: 'SIGKILL', stdio: 'ignore' });
+      // Attempt both deletions even if one fails; errSecItemNotFound is benign.
+      removed = (result.status === 0 || result.status === 44) && removed;
+    }
+    check(removed);
+    report({ phase, removed });
+    app.exit(0);
+  }
 
   // Keep REAL native app-name changes, including the deliberately broken
   // control, inside UUID-scoped namespaces. Even a reintroduced setName('ProPR')
