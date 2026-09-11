@@ -3,12 +3,16 @@ import type {
   DesktopNativeCommand,
   DesktopNativeCommandDelivery,
   DesktopNotificationScope,
+  DesktopNativeNavigationState,
 } from './shared/contract';
 
 export type DesktopMainCommand = DesktopNativeCommand | 'open' | 'toggle-native-notifications';
 
 export interface DesktopNativeCommandState {
   authenticated: boolean;
+  canManageInstances?: boolean;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
   nativeNotificationsAvailable: boolean;
   nativeNotificationsEnabled: boolean;
 }
@@ -37,6 +41,7 @@ export interface DesktopNativeCommandDispatcher {
   rendererUnavailable(): void;
   connectionAvailable(): void;
   connectionUnavailable(): void;
+  updateNavigationState?(state: DesktopNativeNavigationState): void;
   refresh(): void;
   subscribe(listener: () => void): () => void;
   close(): void;
@@ -44,6 +49,7 @@ export interface DesktopNativeCommandDispatcher {
 
 const AUTHENTICATED_COMMANDS = new Set<DesktopNativeCommand>([
   'new-plan', 'tasks', 'plans', 'inbox', 'notification-settings',
+  'dashboard', 'goals', 'repositories', 'llm-logs', 'settings', 'back', 'forward',
 ]);
 
 const sameConnectionScope = (
@@ -75,12 +81,18 @@ export const createDesktopNativeCommandDispatcher = (
   let pending: DesktopNativeCommandDelivery | null = null;
   let notificationToggleTail: Promise<void> = Promise.resolve();
   let connectionGeneration = 0;
+  let navigation: DesktopNativeNavigationState | null = null;
 
   const state = (): DesktopNativeCommandState => {
-    const authenticated = connectionAvailable && options.activeConnectionScope() !== null;
+    const activeScope = options.activeConnectionScope();
+    const authenticated = connectionAvailable && activeScope !== null
+      && (!navigation || sameConnectionScope(navigation.connectionScope, activeScope));
     const notifications = options.notificationState();
     return {
       authenticated,
+      canManageInstances: navigation?.canManageInstances ?? true,
+      canGoBack: authenticated && navigation?.canGoBack === true,
+      canGoForward: authenticated && navigation?.canGoForward === true,
       nativeNotificationsAvailable: authenticated && notifications.available,
       nativeNotificationsEnabled: authenticated && notifications.available && notifications.enabled,
     };
@@ -131,6 +143,9 @@ export const createDesktopNativeCommandDispatcher = (
         return;
       }
 
+      if (command === 'manage-instances' && !state().canManageInstances) return;
+      if (command === 'back' && !state().canGoBack) return;
+      if (command === 'forward' && !state().canGoForward) return;
       const activeConnection = options.activeConnectionScope();
       const connection = activeConnection ? { ...activeConnection } : null;
       if (AUTHENTICATED_COMMANDS.has(command) && !state().authenticated) return;
@@ -147,6 +162,8 @@ export const createDesktopNativeCommandDispatcher = (
       if (queued) deliver(queued.command, queued.connectionScope);
     },
     rendererUnavailable() {
+      navigation = null;
+      notify();
       ready = false;
       readyWindow = null;
     },
@@ -157,8 +174,14 @@ export const createDesktopNativeCommandDispatcher = (
     },
     connectionUnavailable() {
       connectionAvailable = false;
+      navigation = null;
       connectionGeneration += 1;
       if (pending && AUTHENTICATED_COMMANDS.has(pending.command)) pending = null;
+      notify();
+    },
+    updateNavigationState(value) {
+      if (closed || (value.connectionScope && !sameConnectionScope(value.connectionScope, options.activeConnectionScope()))) return;
+      navigation = { ...value, connectionScope: value.connectionScope ? { ...value.connectionScope } : null };
       notify();
     },
     refresh: notify,

@@ -148,6 +148,7 @@ export interface DesktopAdapters {
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
+    setNativeNavigationState?(state: import('../../../apps/desktop/src/shared/contract').DesktopNativeNavigationState): Promise<void>;
     onNativeCommand?(listener: (
       delivery: import('../../../apps/desktop/src/shared/contract').DesktopNativeCommandDelivery,
     ) => void): () => void;

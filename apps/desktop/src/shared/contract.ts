@@ -54,10 +54,18 @@ export const IPC_CHANNELS = Object.freeze({
   notificationsChanged: 'desktop:notifications-changed',
   notificationNavigate: 'desktop:notification-navigate',
   nativeCommand: 'desktop:native-command',
+  nativeNavigationState: 'desktop:native-navigation-state',
 } as const);
 
 export const DESKTOP_NATIVE_COMMANDS = Object.freeze([
   'new-plan',
+  'dashboard',
+  'goals',
+  'repositories',
+  'llm-logs',
+  'settings',
+  'back',
+  'forward',
   'tasks',
   'plans',
   'inbox',
@@ -75,6 +83,22 @@ export interface DesktopNativeCommandDelivery {
   command: DesktopNativeCommand;
   connectionScope: DesktopConnectionScope | null;
 }
+
+export interface DesktopNativeNavigationState {
+  connectionScope: DesktopConnectionScope | null;
+  canManageInstances: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+export const isDesktopNativeNavigationState = (value: unknown): value is DesktopNativeNavigationState => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  return Object.keys(state).length === 4
+    && (state.connectionScope === null || isDesktopConnectionScope(state.connectionScope))
+    && typeof state.canManageInstances === 'boolean'
+    && typeof state.canGoBack === 'boolean' && typeof state.canGoForward === 'boolean';
+};
 
 export interface DesktopDeepLinkDelivery {
   deliveryId: number;
@@ -383,6 +407,7 @@ export interface DesktopBridge {
     onDeepLink(listener: (
       url: string,
     ) => DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>): () => void;
+    setNativeNavigationState?(state: DesktopNativeNavigationState): Promise<void>;
     onNativeCommand(listener: (delivery: DesktopNativeCommandDelivery) => void): () => void;
   };
   auth: {

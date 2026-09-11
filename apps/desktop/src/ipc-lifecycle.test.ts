@@ -28,6 +28,40 @@ const connectDiscovery = {
 };
 
 describe('desktop IPC shutdown gate', () => {
+  it('accepts only validated native menu state from the current authenticated connection', async () => {
+    const handlers = new Map<string, (...args: any[]) => Promise<unknown>>();
+    const scope = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    const received: unknown[] = [];
+    registerIpcHandlers({
+      app: {} as App,
+      ipcMain: { handle: (channel: string, handler: (...args: any[]) => Promise<unknown>) => handlers.set(channel, handler), removeHandler: () => undefined } as unknown as IpcMain,
+      profiles: {} as ProfileStore,
+      credentials: { isActiveConnectionScope: (value: typeof scope) => value.profileId === scope.profileId && value.transportScope === scope.transportScope } as DesktopCredentialService,
+      connectDiscovery,
+      lifecycle: {} as LocalLifecycleController,
+      logger: { log: () => undefined } as unknown as DesktopLogger,
+      desktopSession: {} as Session,
+      devServerUrl: undefined,
+      packagedRendererUrl: 'propr-renderer://app/index.html',
+      openExternal: async () => undefined,
+      onNativeNavigationState: state => received.push(state),
+    });
+    const handler = handlers.get(IPC_CHANNELS.nativeNavigationState)!;
+    const event = { senderFrame: { url: 'propr-renderer://app/index.html' } };
+    const state = { connectionScope: scope, canManageInstances: true, canGoBack: true, canGoForward: false };
+    await handler(event, state);
+    assert.deepEqual(received, [state]);
+    await handler(event, { ...state, connectionScope: { ...scope, transportScope: 'zyxwvutsrqponmlkjihgfe' } });
+    assert.equal(received.length, 1);
+    for (const invalid of [{ ...state, canGoBack: 'true' }, { ...state, path: '/tasks' }, { ...state, connectionScope: {} }]) {
+      await assert.rejects(handler(event, invalid), /IPC_OPERATION_FAILED/);
+    }
+    await assert.rejects(handler(event, state, 'extra'), /IPC_OPERATION_FAILED/);
+    await assert.rejects(handler({ senderFrame: { url: 'https://attacker.example' } }, state), /Untrusted/);
+    await handler(event, { ...state, connectionScope: null, canGoBack: false, canManageInstances: false });
+    assert.equal(received.length, 2);
+  });
+
   it('routes trusted scoped logout through credentials and clears only its notifications after durable removal', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const scope = { profileId: 'a', transportScope: 'scope-a' };

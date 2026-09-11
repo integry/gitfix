@@ -19,6 +19,7 @@ import type { SetupActions } from '@propr/local-setup';
 import { launchDesktopAuthentication } from './authentication-handoff';
 import { DesktopConnectDiscoveryService } from './connect-discovery';
 import { requestDesktopMicrophoneConsent } from './microphone-consent';
+import { configureMacOSBranding } from './macos-branding';
 import { configureApplicationMenu } from './application-menu';
 import {
   authorizePackagedAcceptanceTest,
@@ -212,6 +213,8 @@ try {
 } catch {
   process.exit(1);
 }
+if (process.platform === 'darwin') configureMacOSBranding(app);
+
 const packagedSmokeTest = packagedSmokeUserDataDirectory !== null;
 const packagedAcceptanceTest = packagedAcceptanceUserDataDirectory !== null;
 const acceptancePairingTiming = packagedAcceptancePairingTiming(packagedAcceptanceUserDataDirectory);
@@ -1298,6 +1301,13 @@ const createMainWindow = async (
     ),
   );
   if (process.platform === 'linux') synchronizeLinuxWindowFrame(window);
+  if (process.platform === 'darwin') {
+    window.on('page-title-updated', (event, title) => {
+      if (title !== 'ProPR Desktop') return;
+      event.preventDefault();
+      window.setTitle('ProPR');
+    });
+  }
   if (packagedSmokeTest && desktopWindowIcon) {
     log('info', PACKAGED_NATIVE_ICON_READY_EVENT, {
       asset: basename(desktopWindowIcon.path),
@@ -1906,6 +1916,7 @@ if (!hasSingleInstanceLock) {
         desktopNativeCommands?.connectionUnavailable();
       },
       onActiveWorkRefresh: () => desktopTray.refresh(),
+      onNativeNavigationState: state => desktopNativeCommands?.updateNavigationState?.(state),
       ...(app.isPackaged && !rendererPolicyPinnedForSmoke ? {
         onRendererActiveProfileChanged: (origin: string | null) => {
           notifications.clear();

@@ -61,7 +61,7 @@ describe('desktop application menu', () => {
     assert.ok(all.some(item => item.role === 'zoomIn'));
   });
 
-  it('keeps macOS conventions and synchronizes notification/auth state', () => {
+  it('keeps macOS conventions and disables authenticated navigation', () => {
     const value = fixture({ authenticated: false, nativeNotificationsAvailable: false });
     const controller = configureApplicationMenu(value.host, value.commands, 'darwin');
     let all = items(value.template());
@@ -70,17 +70,38 @@ describe('desktop application menu', () => {
     assert.ok(all.some(item => item.role === 'close'));
     assert.equal(all.find(item => item.label === 'Quit ProPR')?.accelerator, 'CmdOrCtrl+Q');
     assert.equal(all.find(item => item.label === 'New Plan')?.enabled, false);
-    assert.equal(all.find(item => item.label === 'Resume Native Notifications')?.enabled, false);
-    assert.equal(all.find(item => item.label === 'Resume Native Notifications')?.checked, false);
+    assert.equal(all.find(item => item.label === 'Settings…')?.enabled, false);
+    assert.equal(all.find(item => item.label === 'Back')?.enabled, false);
     assert.equal(value.listeners.size, 1);
     controller.close();
     assert.equal(value.listeners.size, 0);
 
-    const enabled = fixture({ nativeNotificationsEnabled: true });
-    configureApplicationMenu(enabled.host, enabled.commands, 'darwin');
-    const toggle = items(enabled.template()).find(item => item.label === 'Pause Native Notifications');
-    assert.equal(toggle?.type, 'checkbox');
-    assert.equal(toggle?.checked, true);
+
+  });
+
+
+  it('organizes macOS actions and exposes unique shortcuts for actual app sections', () => {
+    const value = fixture({ canGoBack: true, canGoForward: false, canManageInstances: false });
+    configureApplicationMenu(value.host, value.commands, 'darwin');
+    const template = value.template();
+    assert.deepEqual(template.map(item => item.label), ['ProPR', 'File', 'Edit', 'View', 'Go', 'Window']);
+    const all = items(template);
+    const accelerators = all.flatMap(item => item.accelerator ? [item.accelerator] : []);
+    assert.equal(new Set(accelerators).size, accelerators.length);
+    const sections = ['Dashboard', 'Inbox', 'Plans', 'Goals', 'Tasks', 'Repositories', 'LLM Log'];
+    sections.forEach((label, index) => {
+      const item = all.find(item => item.label === label);
+      assert.equal(item?.accelerator, `CmdOrCtrl+${index + 1}`);
+      (item?.click as () => void)();
+    });
+    assert.deepEqual(value.dispatched, ['dashboard', 'inbox', 'plans', 'goals', 'tasks', 'repositories', 'llm-logs']);
+    assert.equal(all.find(item => item.label === 'Settings…')?.accelerator, 'CmdOrCtrl+,');
+    assert.equal(all.find(item => item.label === 'Back')?.enabled, true);
+    assert.equal(all.find(item => item.label === 'Forward')?.enabled, false);
+    assert.equal(all.find(item => item.label === 'Switch / Manage Instances…')?.enabled, false);
+    assert.equal(all.filter(item => item.role === 'close').length, 1);
+    assert.ok(!all.some(item => ['Open ProPR', 'Notification Settings…', 'Resume Native Notifications'].includes(item.label ?? '')));
+    assert.ok((template[1].submenu as MenuItemConstructorOptions[]).some(item => item.label === 'New Plan'));
   });
 
   it('leaves the deferred Windows application menu untouched', () => {

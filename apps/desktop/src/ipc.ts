@@ -18,8 +18,8 @@ import {
   isSafeExternalUrl,
   isTrustedRendererUrl,
 } from './security';
-import { IPC_CHANNELS, isDesktopPairingOperationId } from './shared/contract';
-import type { DesktopAcceptanceJourneyStage, DesktopDeepLinkAcknowledgement } from './shared/contract';
+import { IPC_CHANNELS, isDesktopPairingOperationId, isDesktopNativeNavigationState } from './shared/contract';
+import type { DesktopAcceptanceJourneyStage, DesktopDeepLinkAcknowledgement, DesktopNativeNavigationState } from './shared/contract';
 
 export type DesktopAcceptanceOperation = 'PROFILE_SAVE' | 'PAIR' | 'PROBE' | 'ACTIVATE';
 export type DesktopAcceptanceOperationStatus =
@@ -52,6 +52,7 @@ interface RegisterIpcOptions {
   onActiveWorkConnectionAvailable?(): void;
   onActiveWorkConnectionUnavailable?(reason: 'disconnected' | 'logged-out' | 'revoked' | 'profile-changed'): void;
   onActiveWorkRefresh?(): void;
+  onNativeNavigationState?(state: DesktopNativeNavigationState): void;
   /** @internal Deterministic admitted-work accounting for lifecycle proof. */
   observeInvocation?(phase: 'entry' | 'exit', channel: string): void;
   /** @internal Fixed, secret-free packaged Connect acceptance evidence. */
@@ -196,6 +197,12 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     else options.onActiveWorkConnectionUnavailable?.('profile-changed');
   };
 
+  handle(IPC_CHANNELS.nativeNavigationState, (_event, state, ...args) => {
+    if (args.length || !isDesktopNativeNavigationState(state)) throw new Error('Invalid native navigation state');
+    if (state.connectionScope === null || options.credentials.isActiveConnectionScope(state.connectionScope)) {
+      options.onNativeNavigationState?.(state);
+    }
+  });
   handle(IPC_CHANNELS.appMetadata, () => ({
     name: options.app.getName(),
     version: options.app.getVersion(),

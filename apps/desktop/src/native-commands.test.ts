@@ -12,6 +12,37 @@ const deferred = () => {
 };
 
 describe('desktop native command dispatcher', () => {
+  it('drops queued navigation when another account replaces the same profile and scopes menu history', () => {
+    let scope = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    const oldScope = scope;
+    const sent: DesktopNativeCommandDelivery[] = [];
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => ({ isDestroyed: () => false, webContents: { send: (_channel, value) => sent.push(value) } }),
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => scope,
+      activeNotificationScope: () => null,
+      notificationState: () => ({ available: false, enabled: false }),
+      setNativeNotificationsEnabled: async () => undefined,
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+    dispatcher.dispatch('settings');
+    scope = { ...scope, transportScope: 'zyxwvutsrqponmlkjihgfe' };
+    dispatcher.rendererReady();
+    assert.deepEqual(sent, []);
+    dispatcher.updateNavigationState?.({ connectionScope: oldScope, canManageInstances: true, canGoBack: true, canGoForward: true });
+    assert.equal(dispatcher.getState().canGoBack, false);
+    dispatcher.updateNavigationState?.({ connectionScope: scope, canManageInstances: true, canGoBack: true, canGoForward: false });
+    assert.equal(dispatcher.getState().canGoBack, true);
+    dispatcher.dispatch('back');
+    assert.deepEqual(sent, [{ command: 'back', connectionScope: scope }]);
+    dispatcher.rendererUnavailable();
+    assert.equal(dispatcher.getState().canGoBack, false);
+    dispatcher.connectionUnavailable();
+    assert.equal(dispatcher.getState().authenticated, false);
+  });
+
   it('restores a hidden window, gates auth actions, and delivers only fixed renderer commands when ready', () => {
     const sent: DesktopNativeCommandDelivery[] = [];
     let restores = 0;

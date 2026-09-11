@@ -190,6 +190,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     state,
     instanceChooserBlocked: localSetupOpen || Boolean(acceptanceSetup),
     onManageInstances: openManager,
+    onNavigate: closeManager,
     onChooseInstances: showInstanceChooser,
     onReconnect: connect,
   });
