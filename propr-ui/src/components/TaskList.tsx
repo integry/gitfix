@@ -289,9 +289,9 @@ const TaskList: React.FC<TaskListProps> = ({ limit, showViewAll = false, hideFil
       </div>
 
       {/* Scrollable Content Area */}
-      <div className="flex-1 overflow-auto px-4 sm:px-6">
+      <div className="flex-1 overflow-auto">
         {tasks.length === 0 ? (
-          <div className="text-center py-20 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+          <div className="text-center py-20 mx-4 sm:mx-6 bg-gray-50 rounded-lg border border-dashed border-gray-300">
             <p className="text-gray-500">No tasks found — try clearing filters, or start one by creating a plan or adding your ProPR trigger label to a GitHub issue.</p>
           </div>
         ) : (
