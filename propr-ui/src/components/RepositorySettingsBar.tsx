@@ -22,7 +22,7 @@ const AutoCiFollowupControl: React.FC<{
     >
       <span className="min-w-0">
         <span className="block">Auto CI follow-up</span>
-        <span className="mt-1 block text-slate-500">Create follow-up work when CI fails.</span>
+        <span className="mt-1 block text-slate-500">When a GitHub Actions run fails, ProPR automatically sends a corrective task.</span>
       </span>
       <input
         type="checkbox"

@@ -40,7 +40,7 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
       <label className="flex items-center justify-between gap-4 py-2 cursor-pointer" title="Generate focused media for changes with a visible result">
         <span className="min-w-0">
           <span className="block">Visual previews</span>
-          <span className="mt-1 block text-slate-500">Capture visible changes for review.</span>
+          <span className="mt-1 block text-slate-500">Rendered previews of visual changes appear directly in GitHub pull requests.</span>
         </span>
         <input
           type="checkbox"
