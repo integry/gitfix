@@ -14,7 +14,7 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
   const settings: RepositoryVisualPreviewSettings = repo.visualPreview || { enabled: false, types: ['image'] };
   const [instructions, setInstructions] = useState(settings.instructions || '');
 
-  useEffect(() => setInstructions(settings.instructions || ''), [settings.instructions]);
+  useEffect(() => setInstructions(settings.instructions || ''), [repo.id, settings.instructions]);
 
   if (isReadOnly) return null;
 
@@ -36,8 +36,12 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
   };
 
   return (
-    <div className="mt-2 text-[11px] text-slate-600" onClick={(event) => event.stopPropagation()}>
-      <label className="inline-flex items-center gap-2 cursor-pointer" title="Generate focused media for changes with a visible result">
+    <div className="w-full min-w-0 text-xs text-slate-600" onClick={(event) => event.stopPropagation()}>
+      <label className="flex items-center justify-between gap-4 py-2 cursor-pointer" title="Generate focused media for changes with a visible result">
+        <span className="min-w-0">
+          <span className="block">Visual previews</span>
+          <span className="mt-1 block text-slate-500">Rendered previews of visual changes appear directly in GitHub pull requests.</span>
+        </span>
         <input
           type="checkbox"
           checked={settings.enabled}
@@ -45,50 +49,51 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
           className="sr-only peer"
           aria-label={`Visual previews for ${repo.name}`}
         />
-        <span className="relative w-7 h-4 bg-slate-200 rounded-full peer-focus:ring-2 peer-focus:ring-teal-500/20 peer-checked:bg-teal-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:bg-white after:border after:border-slate-300 after:transition-all peer-checked:after:translate-x-full" />
-        <span>Visual previews</span>
-        <span className={`rounded px-1.5 py-0.5 font-medium ${settings.enabled ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
-          {settings.enabled ? 'On' : 'Off'}
-        </span>
+        <span className="relative shrink-0 w-7 h-4 bg-slate-200 rounded-full peer-focus:ring-2 peer-focus:ring-teal-500/20 peer-checked:bg-teal-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:bg-white after:border after:border-slate-300 after:transition-all peer-checked:after:translate-x-full" />
       </label>
 
       {settings.enabled && (
-        <div className="mt-2 ml-9 space-y-2" onClick={(event) => event.stopPropagation()}>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => toggleType('image')}
-              className={`inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors ${settings.types.includes('image') ? 'border-teal-300 bg-teal-50 text-teal-700' : 'border-slate-200 bg-white text-slate-500'}`}
-              aria-pressed={settings.types.includes('image')}
-              title={settings.types.length === 1 && settings.types.includes('image') ? 'At least one preview type is required' : 'Include image previews'}
-            >
-              <Image className="h-3 w-3" /> Images
-            </button>
-            <button
-              type="button"
-              onClick={() => toggleType('video')}
-              className={`inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors ${settings.types.includes('video') ? 'border-teal-300 bg-teal-50 text-teal-700' : 'border-slate-200 bg-white text-slate-500'}`}
-              aria-pressed={settings.types.includes('video')}
-              title={settings.types.length === 1 && settings.types.includes('video') ? 'At least one preview type is required' : 'Include video previews'}
-            >
-              <Video className="h-3 w-3" /> Videos
-            </button>
+        <div className="ml-4 mt-1 mb-2 flex min-w-0 flex-col items-stretch gap-3 border-l-2 border-slate-200 pl-4" onClick={(event) => event.stopPropagation()}>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => toggleType('image')}
+                className={`inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors ${settings.types.includes('image') ? 'border-teal-300 bg-teal-50 text-teal-700' : 'border-slate-200 bg-white text-slate-500'}`}
+                aria-pressed={settings.types.includes('image')}
+                title={settings.types.length === 1 && settings.types.includes('image') ? 'At least one preview type is required' : 'Include image previews'}
+              >
+                <Image className="h-3 w-3" /> Images
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleType('video')}
+                className={`inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors ${settings.types.includes('video') ? 'border-teal-300 bg-teal-50 text-teal-700' : 'border-slate-200 bg-white text-slate-500'}`}
+                aria-pressed={settings.types.includes('video')}
+                title={settings.types.length === 1 && settings.types.includes('video') ? 'At least one preview type is required' : 'Include video previews'}
+              >
+                <Video className="h-3 w-3" /> Videos
+              </button>
+            </div>
           </div>
-          <textarea
-            value={instructions}
-            onChange={(event) => setInstructions(event.target.value)}
-            onBlur={() => {
-              const normalized = instructions.trim();
-              if (normalized !== (settings.instructions || '')) {
-                onUpdate(repo.id, settingsWithCurrentInstructions());
-              }
-            }}
-            maxLength={4000}
-            rows={2}
-            className="w-full max-w-sm resize-y rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-1 focus:ring-teal-400"
-            placeholder="Optional: capture separate desktop and mobile views…"
-            aria-label={`Visual preview instructions for ${repo.name}`}
-          />
+          <label className="block w-full min-w-0">
+            <span className="mb-1 block">Preview instructions</span>
+            <textarea
+              value={instructions}
+              onChange={(event) => setInstructions(event.target.value)}
+              onBlur={() => {
+                const normalized = instructions.trim();
+                if (normalized !== (settings.instructions || '')) {
+                  onUpdate(repo.id, settingsWithCurrentInstructions());
+                }
+              }}
+              maxLength={4000}
+              rows={2}
+              className="min-w-0 w-full resize-y rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-1 focus:ring-teal-400"
+              placeholder="Optional: capture separate desktop and mobile views…"
+              aria-label={`Visual preview instructions for ${repo.name}`}
+            />
+          </label>
         </div>
       )}
     </div>

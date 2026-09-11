@@ -31,17 +31,8 @@ interface RepositoryListContentProps {
   error: string | null;
   indexingStatuses: Record<string, RepositoryIndexingStatus>;
   selectedRepoId: string | null;
-  onToggle: (repoId: string) => void;
-  onToggleAutoCiFollowup: (repoId: string) => void;
-  onUpdateVisualPreview: (repoId: string, settings: NonNullable<MonitoredRepo['visualPreview']>) => void;
-  onRemove: (repoId: string) => void;
-  onStopIndexing: (repoName: string, baseBranch?: string) => void;
-  onReindex: (repoName: string, baseBranch?: string) => void;
-  onToggleStar: (repoId: string) => void;
-  onToggleHidden: (repoId: string) => void;
   onSelect: (repoId: string) => void;
   onRetry: () => void;
-  isReadOnly?: boolean;
 }
 
 export const RepositoryListContent: React.FC<RepositoryListContentProps> = ({
@@ -50,17 +41,8 @@ export const RepositoryListContent: React.FC<RepositoryListContentProps> = ({
   error,
   indexingStatuses,
   selectedRepoId,
-  onToggle,
-  onToggleAutoCiFollowup,
-  onUpdateVisualPreview,
-  onRemove,
-  onStopIndexing,
-  onReindex,
-  onToggleStar,
-  onToggleHidden,
   onSelect,
   onRetry,
-  isReadOnly = false,
 }) => {
   // Separate starred and non-starred repos
   const { starredRepos, unstarredRepos } = useMemo(() => {
@@ -105,17 +87,8 @@ export const RepositoryListContent: React.FC<RepositoryListContentProps> = ({
       key={repo.id}
       repo={repo}
       indexingStatuses={indexingStatuses}
-      onToggle={onToggle}
-      onToggleAutoCiFollowup={onToggleAutoCiFollowup}
-      onUpdateVisualPreview={onUpdateVisualPreview}
-      onRemove={onRemove}
-      onStopIndexing={onStopIndexing}
-      onReindex={onReindex}
-      onToggleStar={onToggleStar}
-      onToggleHidden={onToggleHidden}
       isSelected={repo.id === selectedRepoId}
       onSelect={onSelect}
-      isReadOnly={isReadOnly}
     />
   );
 
