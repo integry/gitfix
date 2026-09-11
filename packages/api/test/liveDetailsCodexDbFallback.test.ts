@@ -363,3 +363,25 @@ test('live-details keeps persisted goal output visible after completion cleanup'
     await database.destroy();
   }
 });
+
+test('live-details database output redacts local preview references while preserving event IDs', async () => {
+  const database = await createFallbackDatabase();
+  const taskId = 'integry-propr-2283-codex';
+  const local = '/tmp/work/.propr/previews/private.png';
+  try {
+    await database('llm_executions').insert({ execution_id: 'execution-2283', task_id: taskId,
+      session_id: 'preview-redaction', start_time: timestamp(0) });
+    await database('llm_execution_details').insert({ execution_id: 'execution-2283', sequence_number: 0,
+      ...rowFromCodexEvent({ type: 'item.completed', timestamp: timestamp(1), item: {
+        id: 'preview-command', type: 'command_execution', command: `capture ${local}`, aggregated_output: `Saved ${local}`, exit_code: 0,
+      } }),
+    });
+    const routes = createLiveDetailsRoutes({ redisClient: { get: async () => null } as unknown as RedisClientType, db: database });
+    const recorder = createJsonResponse();
+    await routes.getLiveDetails({ params: { taskId } } as unknown as FlatRequest, recorder.response);
+    const output = JSON.stringify(recorder.body());
+    assert.ok(!output.includes(local));
+    assert.match(output, /local preview omitted/);
+    assert.match(output, /live:integry-propr-2283-codex:database:preview-redaction/);
+  } finally { await database.destroy(); }
+});

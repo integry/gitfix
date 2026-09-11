@@ -1,3 +1,4 @@
+import type { GitHubAttachmentCapacity, GitHubAttachmentPlanOverride } from '@propr/shared';
 import type { AuthenticatedInstanceUser, ReasoningLevel } from '@propr/shared';
 
 export type CurrentUser = AuthenticatedInstanceUser;
@@ -123,6 +124,8 @@ export interface MonitoredRepo {
   autoFollowupOnFailedCi?: boolean;
   /** Generated media to embed in PRs when a change has a visible result. */
   visualPreview?: {
+    githubAttachmentPlan?: GitHubAttachmentPlanOverride;
+    githubAttachmentCapacity?: GitHubAttachmentCapacity;
     enabled: boolean;
     types: Array<'image' | 'video'>;
     instructions?: string;

@@ -85,3 +85,26 @@ Role assignments do not edit the GitHub trigger whitelist. Configure allowed log
 ## Live Updates And Shortcuts
 
 The UI subscribes to socket.io events, so the dashboard, task list, task detail, and plan generation update without a refresh. Keyboard shortcuts: `Cmd/Ctrl+K` focuses global search, `Alt+T` opens quick add to-do, and `Esc` closes open popovers.
+
+
+## Visual preview settings
+
+Under a repository's **Visual previews** controls, **GitHub attachment plan**
+accepts `auto`, `free`, or `paid`. `auto` detects the upload credential owner's
+plan only for repositories owned by that user. Unknown plans, organizations,
+missing credentials, and API failures use conservative Free limits. Images
+remain limited to 10 MiB; videos allow 10 MiB on Free and 100 MiB on paid.
+Only the override is saved; resolved capacity is read-only. This setting does
+not change the installation's Plus entitlement.
+
+**Settings → Integrations → Visual preview uploads** contains the attachment
+credential and **Managed preview storage** status. Status is **Enabled**,
+**Plus required**, **Disabled**, or **Unavailable**. **Refresh status** reads
+Connect again. Quota, object maximum, and retention show Connect's effective
+values. When those values cannot be loaded, the UI explicitly labels the v1
+standard defaults: 25 GiB installation quota, 500 MiB per object, 90 days.
+Unavailable storage leaves GitHub attachment publishing available. The managed
+viewer links require Connect authentication; the GitHub upload credential is
+still required for inline attachments.
+
+See [Visual previews](./visual-previews.md) for capture and publication behavior.

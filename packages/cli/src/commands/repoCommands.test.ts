@@ -111,3 +111,27 @@ test("repo add and toggle configure visual preview policy", async () => {
     instructions: "Show desktop and mobile."
   });
 });
+
+test('repo commands save and preserve all attachment plan overrides', async () => {
+  let repos = await runRepoWrite(['add', 'integry/previewed', '--visual-previews', '--github-attachment-plan', 'paid'], []);
+  assert.equal(repos[0].visualPreview?.githubAttachmentPlan, 'paid');
+  repos = await runRepoWrite(['toggle', 'integry/previewed', '--preview-instructions', 'Show mobile'], repos);
+  assert.equal(repos[0].visualPreview?.githubAttachmentPlan, 'paid');
+  for (const plan of ['free', 'auto']) {
+    repos = await runRepoWrite(['toggle', 'integry/previewed', '--github-attachment-plan', plan], repos);
+    assert.equal(repos[0].visualPreview?.githubAttachmentPlan, plan);
+    assert.equal(repos[0].visualPreview?.instructions, 'Show mobile');
+  }
+});
+
+test('repo list displays the override and unresolved conservative fallback', async () => {
+  const output: string[] = [];
+  console.log = (...values: unknown[]) => { output.push(values.join(' ')); };
+  globalThis.fetch = async () => new Response(JSON.stringify({ repos_to_monitor: [{
+    id: 'repo-1', name: 'integry/propr', enabled: true, autoFollowupOnFailedCi: false,
+    visualPreview: { enabled: true, types: ['image', 'video'], githubAttachmentPlan: 'auto' },
+  }] }), { headers: { 'content-type': 'application/json' } });
+  await createRepoCommand().parseAsync(['list'], { from: 'user' });
+  assert.match(output.join('\n'), /auto: Auto unresolved; using conservative Free limits/);
+  assert.match(output.join('\n'), /Images: 10 MiB; videos: 10 MiB/);
+});

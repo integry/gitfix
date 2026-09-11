@@ -1,9 +1,11 @@
 import type { Response } from 'express';
+import { redactVisualPreviewPaths, redactVisualPreviewValue } from '@propr/core';
 import type { FlatRequest } from '../requestTypes.js';
 import { RedisClientType } from 'redis';
 import { Knex } from 'knex';
 import path from 'path';
 import { validateSessionId, validateTaskId, validateLogType } from './validation.js';
+import { sendSafeJson } from './jsonResponse.js';
 
 interface ExecutionRoutesDeps {
   redisClient: RedisClientType;
@@ -38,7 +40,7 @@ export function createExecutionRoutes(deps: ExecutionRoutesDeps) {
         res.status(404).json({ error: 'Prompt not found for this execution' });
         return;
       }
-      res.json({ sessionId, ...promptData });
+      sendSafeJson(res, redactVisualPreviewValue({ sessionId, ...promptData }));
     } catch (error) {
       console.error('Error in /api/execution/:sessionId/prompt:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -70,7 +72,7 @@ export function createExecutionRoutes(deps: ExecutionRoutesDeps) {
         res.status(404).json({ error: 'Log files not found for this execution' });
         return;
       }
-      res.json({ sessionId, ...logData });
+      sendSafeJson(res, redactVisualPreviewValue({ sessionId, ...logData }));
     } catch (error) {
       console.error('Error in /api/execution/:sessionId/logs:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -115,14 +117,16 @@ export function createExecutionRoutes(deps: ExecutionRoutesDeps) {
       try {
         await fsPromises.access(filePath);
       } catch {
-        res.status(404).json({ error: `Log file no longer exists at ${filePath}` });
+        res.status(404).json({ error: 'Log file no longer exists' });
         return;
       }
       
       const content = await fsPromises.readFile(filePath, 'utf8');
       res.setHeader('Content-Type', type === 'conversation' ? 'application/json' : 'text/plain');
       res.setHeader('Content-Disposition', `inline; filename="${path.basename(filePath)}"`);
-      res.send(content);
+      res.send(type === 'conversation'
+        ? redactConversationLog(content)
+        : redactVisualPreviewPaths(content));
     } catch (error) {
       console.error('Error in /api/execution/:sessionId/logs/:type:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -147,7 +151,7 @@ export function createExecutionRoutes(deps: ExecutionRoutesDeps) {
         res.status(202).json({ message: 'Analysis is pending or has not been run for this execution.', analysis: null });
         return;
       }
-      res.json({ analysis: latestExecution.analysis_report });
+      res.json(redactVisualPreviewValue({ analysis: latestExecution.analysis_report }));
     } catch (error) {
       console.error('Error in /api/task/:taskId/analysis:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -179,4 +183,15 @@ async function getLogData(redisClient: RedisClientType, sessionId: string, conve
     if (conversationLogJson) return JSON.parse(conversationLogJson);
   }
   return null;
+}
+
+function redactConversationLog(content: string): string {
+  try { return JSON.stringify(redactVisualPreviewValue(JSON.parse(content))); }
+  catch {
+    // Older executions may store JSONL rather than a single JSON document.
+    return content.split('\n').map(line => {
+      try { return JSON.stringify(redactVisualPreviewValue(JSON.parse(line))); }
+      catch { return redactVisualPreviewPaths(line); }
+    }).join('\n');
+  }
 }

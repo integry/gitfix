@@ -1,3 +1,4 @@
+import { describeGitHubAttachmentCapacity, resolveGitHubAttachmentCapacity, type GitHubAttachmentPlanOverride } from '@propr/shared';
 import React, { useEffect, useState } from 'react';
 import { Image, Video } from 'lucide-react';
 import type { MonitoredRepo } from '../api/proprApi';
@@ -12,6 +13,7 @@ interface RepositoryVisualPreviewControlProps {
 
 export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewControlProps> = ({ repo, onUpdate, isReadOnly }) => {
   const settings: RepositoryVisualPreviewSettings = repo.visualPreview || { enabled: false, types: ['image'] };
+  const capacity = resolveGitHubAttachmentCapacity(settings.githubAttachmentPlan, settings.githubAttachmentCapacity?.detectedPlan);
   const [instructions, setInstructions] = useState(settings.instructions || '');
 
   useEffect(() => setInstructions(settings.instructions || ''), [repo.id, settings.instructions]);
@@ -75,6 +77,31 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
                 <Video className="h-3 w-3" /> Videos
               </button>
             </div>
+          </div>
+          <div className="max-w-sm space-y-1">
+            <label className="flex flex-wrap items-center gap-2">
+              <span>GitHub attachment plan</span>
+              <select
+                aria-label={`GitHub attachment plan for ${repo.name}`}
+                value={settings.githubAttachmentPlan ?? 'auto'}
+                disabled={isReadOnly}
+                onChange={event => {
+                  if (isReadOnly) return;
+                  onUpdate(repo.id, {
+                    ...settingsWithCurrentInstructions(),
+                    githubAttachmentPlan: event.target.value as GitHubAttachmentPlanOverride,
+                  });
+                }}
+                className="rounded border border-slate-200 bg-white px-2 py-1 text-slate-700 focus:border-teal-400"
+              >
+                <option value="auto">Auto (default)</option>
+                <option value="free">Free</option>
+                <option value="paid">Paid</option>
+              </select>
+            </label>
+            <p role="status" className={capacity.source === 'conservative-fallback' ? 'text-amber-700' : 'text-slate-600'}>
+              {describeGitHubAttachmentCapacity(capacity)}
+            </p>
           </div>
           <label className="block w-full min-w-0">
             <span className="mb-1 block">Preview instructions</span>
