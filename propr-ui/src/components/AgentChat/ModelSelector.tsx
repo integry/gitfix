@@ -37,6 +37,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const selectorRef = useRef<HTMLDivElement>(null);
   const optionsId = useId();
 
+  const getOptionId = (option: AgentModelOption) =>
+    `${optionsId}-option-${encodeURIComponent(JSON.stringify([option.agentId, option.modelId]))}`;
+
   const filteredOptions = useMemo(() => {
     const terms = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
     if (terms.length === 0) return options;
@@ -51,6 +54,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     .map(selection => options.find(option => isSameAgentModel(option, selection)))
     .filter((option): option is AgentModelOption => Boolean(option)), [options, selectedModels]);
 
+  const activeOption = isOpen && filteredOptions.length > 0
+    ? filteredOptions[Math.min(activeOptionIndex, filteredOptions.length - 1)]
+    : undefined;
+  const activeOptionId = activeOption ? getOptionId(activeOption) : undefined;
+
   useEffect(() => {
     const closeSelector = (event: PointerEvent) => {
       if (!selectorRef.current?.contains(event.target as Node)) setIsOpen(false);
@@ -59,6 +67,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     document.addEventListener('pointerdown', closeSelector);
     return () => document.removeEventListener('pointerdown', closeSelector);
   }, []);
+
+  useEffect(() => {
+    if (!activeOptionId) return;
+    document.getElementById(activeOptionId)?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeOptionId]);
 
   const toggleSelection = (option: AgentModelOption) => {
     const isSelected = selectedModels.some(selected => isSameAgentModel(selected, option));
@@ -105,6 +118,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           aria-controls={optionsId}
           aria-expanded={isOpen}
           aria-autocomplete="list"
+          aria-activedescendant={activeOptionId}
           autoComplete="off"
           value={search}
           onFocus={() => {
@@ -169,6 +183,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             return (
               <button
                 key={JSON.stringify([option.agentId, option.modelId])}
+                id={getOptionId(option)}
                 type="button"
                 role="option"
                 aria-selected={isSelected}
