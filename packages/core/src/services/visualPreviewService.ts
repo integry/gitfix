@@ -8,6 +8,7 @@ import {
   VISUAL_PREVIEW_DIRECTORY,
   VISUAL_PREVIEW_MANIFEST,
   VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
+  redactVisualPreviewPaths,
 } from './visualPreviewPaths.js';
 
 export {
@@ -15,12 +16,11 @@ export {
   VISUAL_PREVIEW_MANIFEST,
   VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
   VISUAL_PREVIEW_SOURCE_DIRECTORY,
+  redactVisualPreviewValue,
+  redactVisualPreviewPaths,
 } from './visualPreviewPaths.js';
 export {
-  appendVisualPreviewSection,
   createPublishedVisualPreviewMetadata,
-  renderVisualPreviewSection,
-  renderVisualPreviewUploadFailureSection,
   trustedGitHubAttachmentUrl,
   VISUAL_PREVIEW_MARKER,
   VISUAL_PREVIEW_SLOT,
@@ -32,6 +32,44 @@ export type {
   RenderVisualPreviewOptions,
   RenderVisualPreviewUploadFailureOptions,
 } from './visualPreviewRendering.js';
+
+import {
+  appendVisualPreviewSection as appendRenderedVisualPreviewSection,
+  renderVisualPreviewSection as renderPreviewSection,
+  renderVisualPreviewUploadFailureSection as renderUploadFailureSection,
+  type RenderVisualPreviewOptions,
+  type RenderVisualPreviewUploadFailureOptions,
+} from './visualPreviewRendering.js';
+
+function publicVisualPreviewEvidence(evidence: VisualPreviewEvidence): VisualPreviewEvidence {
+  return {
+    ...evidence,
+    assets: evidence.assets.map(asset => ({
+      ...asset,
+      title: redactVisualPreviewPaths(asset.title),
+      description: asset.description ? redactVisualPreviewPaths(asset.description) : undefined,
+    })),
+    toolSuggestions: evidence.toolSuggestions.map(suggestion => ({
+      name: redactVisualPreviewPaths(suggestion.name),
+      reason: redactVisualPreviewPaths(suggestion.reason),
+    })),
+  };
+}
+
+export function renderVisualPreviewSection(evidence: VisualPreviewEvidence, options: RenderVisualPreviewOptions): string {
+  return renderPreviewSection(publicVisualPreviewEvidence(evidence), options);
+}
+
+export function renderVisualPreviewUploadFailureSection(
+  evidence: VisualPreviewEvidence,
+  options: RenderVisualPreviewUploadFailureOptions = {},
+): string {
+  return renderUploadFailureSection(publicVisualPreviewEvidence(evidence), options);
+}
+
+export function appendVisualPreviewSection(body: string, section: string): string {
+  return appendRenderedVisualPreviewSection(redactVisualPreviewPaths(body), section);
+}
 
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_PREVIEW_ASSETS = 8;

@@ -136,21 +136,89 @@ for (const [override, code] of [
   });
 }
 
-for (const [httpStatus, code] of [[409, 'quota_exceeded'], [413, 'quota_exceeded'], [413, 'object_too_large']] as const) {
-  test(`relay ${code} remains a safe typed error`, async () => {
-    const { client, calls } = fixture({ failAt: 2, failure: Response.json({ code, message: secrets.join(' ') }, { status: httpStatus }) });
+for (const [httpStatus, code] of [[413, 'quota_exceeded'], [413, 'object_too_large'], [402, 'plus_required']] as const) {
+  test(`Connect ${httpStatus} ${code} envelope remains a safe typed error`, async () => {
+    const { client, calls } = fixture({
+      failAt: 2,
+      failure: Response.json({ error: { code, message: secrets.join(' ') } }, { status: httpStatus }),
+    });
     assert.deepEqual(await client.uploadOriginal(input), { stored: false, code });
     assert.equal(calls.length, 2);
   });
 }
 
+test('legacy top-level error codes remain compatible and the nested Connect envelope takes precedence', async () => {
+  const legacy = fixture({
+    failAt: 2,
+    failure: Response.json({ code: 'quota_exceeded', message: secrets.join(' ') }, { status: 409 }),
+  });
+  assert.deepEqual(await legacy.client.uploadOriginal(input), { stored: false, code: 'quota_exceeded' });
+
+  const conflicting = fixture({
+    failAt: 2,
+    failure: Response.json({
+      code: 'quota_exceeded',
+      error: { code: 'unknown_code', message: secrets.join(' ') },
+    }, { status: 500 }),
+  });
+  assert.deepEqual(await conflicting.client.uploadOriginal(input), { stored: false, code: 'upload_failed' });
+});
+
+test('concurrent Plus downgrades retain plus_required across create, finalize, and delete', async () => {
+  for (const failAt of [2, 4]) {
+    const { client } = fixture({
+      failAt,
+      failure: Response.json({
+        error: { code: 'plus_required', message: 'ProPR Plus is required to manage preview artifacts' },
+      }, { status: 402 }),
+    });
+    assert.deepEqual(await client.uploadOriginal(input), { stored: false, code: 'plus_required' });
+  }
+
+  const deletion = fixture({
+    failAt: 2,
+    failure: Response.json({
+      error: { code: 'plus_required', message: 'ProPR Plus is required to delete managed preview artifacts' },
+    }, { status: 402 }),
+  });
+  await assert.rejects(deletion.client.deleteArtifact('artifact-1'), /plus_required/);
+});
+
 test('unknown and oversized 413 bodies use the generic object-size fallback without retaining body data', async () => {
   for (const body of [
-    { code: 'unknown_code', message: secrets.join(' ') },
-    { code: 'quota_exceeded', message: 'x'.repeat(5 * 1024) },
+    { error: { code: 'unknown_code', message: secrets.join(' ') } },
+    { error: { code: 'quota_exceeded', message: 'x'.repeat(5 * 1024) } },
   ]) {
     const { client } = fixture({ failAt: 2, failure: Response.json(body, { status: 413 }) });
     assert.deepEqual(await client.uploadOriginal(input), { stored: false, code: 'object_too_large' });
+  }
+});
+
+test('upload capability requires the exact signed length and preserves normalized header casing', async () => {
+  assert.deepEqual(parsePreviewUploadV1(upload), upload);
+
+  const caseNormalized = {
+    ...upload,
+    put: { ...upload.put, headers: {
+      'content-type': input.contentType,
+      'content-length': String(original.length),
+      'if-none-match': '*',
+    } },
+  };
+  assert.deepEqual(parsePreviewUploadV1(caseNormalized), caseNormalized);
+
+  const { 'Content-Length': _missingLength, ...withoutLength } = upload.put.headers;
+  const { 'If-None-Match': _missingCreateOnly, ...withoutCreateOnly } = upload.put.headers;
+  for (const headers of [
+    withoutLength,
+    { ...upload.put.headers, 'Content-Length': String(original.length + 1) },
+    withoutCreateOnly,
+  ]) {
+    const invalidUpload = { ...upload, put: { ...upload.put, headers } };
+    assert.equal(parsePreviewUploadV1(invalidUpload), undefined);
+    const { client, calls } = fixture({ upload: invalidUpload });
+    assert.deepEqual(await client.uploadOriginal(input), { stored: false, code: 'invalid_contract' });
+    assert.equal(calls.length, 2);
   }
 });
 

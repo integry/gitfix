@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { parseManagedPreviewStorageStatus } from '@propr/shared';
 import {
   VisualPreviewOAuthCredentialService,
   type ManagedPreviewStorageClientV1,
@@ -174,7 +175,7 @@ export function createVisualPreviewAuthRoutes({
   async function getManagedStorageStatus(_req: Request, res: Response): Promise<void> {
     const unavailable = { version: 1, state: 'unavailable', enabled: false, effective: null };
     try {
-      res.json(managedStorage ? await managedStorage.getStatus() : unavailable);
+      res.json(managedStorage ? parseManagedPreviewStorageStatus(await managedStorage.getStatus()) ?? unavailable : unavailable);
     } catch {
       res.json(unavailable);
     }

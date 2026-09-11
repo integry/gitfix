@@ -10,3 +10,39 @@ export const VISUAL_PREVIEW_RUNTIME_DIRECTORIES = [
   VISUAL_PREVIEW_DIRECTORY,
   VISUAL_PREVIEW_SOURCE_DIRECTORY,
 ] as const;
+
+/** Remove runtime file references from public prose and persisted task output. */
+export function redactVisualPreviewPaths(text: string): string {
+  // Accept native, JSON-escaped, and URL-encoded separators. The staging root
+  // deliberately has no .propr component after evidence leaves the worktree.
+  const separator = String.raw`(?:[/\\]|%2f|%5c)`;
+  const runtimeDirectory = String.raw`(?:\.propr${separator}+(?:previews|preview-src)|propr-previews)`;
+  const runtime = String.raw`${runtimeDirectory}(?=${separator}|$|[\s\p{P}])`;
+  const containsRuntimePath = new RegExp(runtime, 'iu');
+  // Scan each token once, instead of backtracking over potentially large agent
+  // output looking for a path prefix. Quoted paths may contain spaces.
+  return text
+    .replace(/<[^<>\r\n]*>|"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|`(?:\\[^\r\n]|[^`\\\r\n])*`/g,
+      value => containsRuntimePath.test(value) ? `${value[0]}[local preview omitted]${value.at(-1)}` : value)
+    .replace(/[^\s<>"'`]+/g, value => containsRuntimePath.test(value) ? '[local preview omitted]' : value);
+}
+
+/** Apply path redaction to a public JSON projection without damaging JSON escapes. */
+export function redactVisualPreviewValue(value: unknown): unknown {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) return undefined;
+
+  const redact = (item: unknown): unknown => {
+    if (typeof item === 'string') return redactVisualPreviewPaths(item);
+    if (Array.isArray(item)) return item.map(redact);
+    if (item !== null && typeof item === 'object') {
+      return Object.fromEntries(Object.entries(item).map(([key, nested]) => [
+        redactVisualPreviewPaths(key),
+        redact(nested),
+      ]));
+    }
+    return item;
+  };
+
+  return redact(JSON.parse(serialized));
+}

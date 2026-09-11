@@ -150,7 +150,8 @@ export function parsePreviewUploadV1(value: unknown): PreviewUploadV1 | undefine
     headers[key] = value;
   }
   if (normalized['content-type'] !== original.contentType
-    || (normalized['content-length'] !== undefined && normalized['content-length'] !== String(original.sizeBytes))) return undefined;
+    || normalized['content-length'] !== String(original.sizeBytes)
+    || normalized['if-none-match'] !== '*') return undefined;
   return {
     ...original, artifactId: value.artifactId as string, objectKey: value.objectKey as string,
     put: { url: put.url, headers, expiresAt: put.expiresAt },

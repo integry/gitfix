@@ -1,6 +1,7 @@
 import { githubInlineEligibility, VISUAL_PREVIEW_CONTENT_TYPES, type GitHubAttachmentCapacity } from '@propr/shared';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { publicPreviewText, originalUnavailableText } from './visualPreviewPublication.js';
 import { storeManagedVisualPreviewOriginals, type ManagedVisualPreviewAssetResult } from './managedVisualPreviewStorage.js';
 import {
   appendVisualPreviewSection,
@@ -8,8 +9,8 @@ import {
   isSupportedVisualPreviewUploadToken,
   isVisualPreviewCredentialError,
   markVisualPreviewOAuthCredentialReauthRequired,
-  redactSecrets,
   renderVisualPreviewSection,
+  redactVisualPreviewPaths,
   resolveVisualPreviewUploadToken as resolveStoredVisualPreviewUploadToken,
   trustedGitHubAttachmentUrl,
   VisualPreviewCredentialError,
@@ -75,27 +76,15 @@ export async function resolveVisualPreviewUploadToken(
 async function validateAttachmentFile(absolutePath: string, capacity?: GitHubAttachmentCapacity): Promise<number> {
   const contentType = VISUAL_PREVIEW_CONTENT_TYPES[path.extname(absolutePath).toLowerCase()];
   if (!contentType) throw new Error(`Unsupported visual preview attachment type: ${path.basename(absolutePath)}`);
-  const eligibility = githubInlineEligibility(contentType, (await stat(absolutePath)).size, capacity);
+  let size: number;
+  try { size = (await stat(absolutePath)).size; }
+  catch { throw new Error('Visual preview source is unavailable'); }
+  const eligibility = githubInlineEligibility(contentType, size, capacity);
   if (!eligibility.eligible) {
     if (eligibility.reason === 'size-limit-exceeded') throw new Error(`Visual preview exceeds the GitHub attachment limit of ${eligibility.limitBytes / (1024 * 1024)} MiB`);
     throw new Error(`Invalid visual preview attachment: ${eligibility.reason}`);
   }
   return eligibility.limitBytes;
-}
-
-async function responseErrorDetail(response: Response): Promise<string> {
-  const rawBody = redactSecrets((await response.text()).trim()).replace(/\s+/g, ' ').slice(0, 1000);
-  if (!rawBody) return '';
-  try {
-    const parsed = JSON.parse(rawBody) as { message?: unknown; errors?: unknown };
-    const message = typeof parsed.message === 'string' ? parsed.message : '';
-    const errors = Array.isArray(parsed.errors)
-      ? parsed.errors.filter((error): error is string => typeof error === 'string').join('; ')
-      : '';
-    return [message, errors].filter(Boolean).join('; ');
-  } catch {
-    return rawBody;
-  }
 }
 
 async function markRejectedUploadCredential(): Promise<void> {
@@ -117,7 +106,9 @@ export const uploadVisualPreviewAsset: VisualPreviewAssetUploader = async ({
   if (!contentType) throw new Error(`Unsupported visual preview attachment type: ${path.basename(absolutePath)}`);
 
   const limit = await validateAttachmentFile(absolutePath, capacity);
-  const body = await readFile(absolutePath);
+  let body: Buffer;
+  try { body = await readFile(absolutePath); }
+  catch { throw new Error('Visual preview source is unavailable'); }
   if (body.byteLength > limit) throw new Error('Visual preview grew beyond the GitHub attachment limit');
   const uploadUrl = new URL('https://uploads.github.com/user-attachments/assets');
   uploadUrl.searchParams.set('name', path.basename(absolutePath));
@@ -138,16 +129,19 @@ export const uploadVisualPreviewAsset: VisualPreviewAssetUploader = async ({
       body,
       signal: AbortSignal.timeout(60_000),
     });
-  } catch (error) {
-    throw new Error(`GitHub could not upload ${path.basename(absolutePath)}: ${(error as Error).message}`);
+  } catch {
+    throw new Error('GitHub visual preview upload is unavailable');
   }
 
   if (!response.ok) {
-    const detail = await responseErrorDetail(response);
-    const suffix = detail ? `: ${detail}` : '';
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Discard best-effort: cancellation failure must not expose or replace the upload error.
+    }
     const message = response.status === 404
-      ? `GitHub could not upload ${path.basename(absolutePath)} because the token owner does not have write access to the repository${suffix}`
-      : `GitHub could not upload ${path.basename(absolutePath)} (HTTP ${response.status})${suffix}`;
+      ? `GitHub could not upload ${path.basename(absolutePath)} because the token owner does not have write access to the repository`
+      : `GitHub could not upload ${path.basename(absolutePath)} (HTTP ${response.status})`;
     if (response.status === 401) await markRejectedUploadCredential();
     if ([401, 403, 404].includes(response.status)) throw new VisualPreviewUploadAuthenticationError(message);
     throw new Error(message);
@@ -195,7 +189,7 @@ function assertUploadedBodyHasNoLocalPaths(body: unknown, evidence: VisualPrevie
   }
   const leakedPath = evidence.assets.find(asset => body.includes(asset.absolutePath)
     || body.includes(asset.absolutePath.replaceAll(' ', '%20')));
-  if (leakedPath) {
+  if (leakedPath || redactVisualPreviewPaths(body) !== body) {
     throw new Error('GitHub did not replace a local visual preview path with an uploaded attachment URL');
   }
 }
@@ -261,6 +255,7 @@ function publishedBody(
         relativePath: asset.relativePath,
         ...(uploadedUrls.get(assetIndex) ? { githubAttachmentUrl: uploadedUrls.get(assetIndex) } : {}),
         ...(original?.stored && original.version === 1 && original.relativePath === asset.relativePath
+          && Date.parse(original.artifact.retentionExpiresAt) > Date.now()
           ? { managedOriginal: original.artifact }
           : {}),
         ...(!candidates.has(assetIndex)
@@ -273,7 +268,35 @@ function publishedBody(
       };
     }),
   });
-  return appendVisualPreviewSection(options.body, renderVisualPreviewSection(options.evidence, { published: metadata }));
+  const publicEvidence = {
+    ...options.evidence,
+    assets: options.evidence.assets.map((asset, assetIndex) => {
+      const original = originalsByIndex.get(assetIndex);
+      const published = metadata.assets.find(item => item.assetIndex === assetIndex);
+      const notes = asset.description ? [asset.description] : [];
+      if (published?.managedViewerUrl && original?.stored) {
+        notes.push(`Connect sign-in required. Original retained until ${new Date(original.artifact.retentionExpiresAt).toISOString()}.`);
+      } else if (original || options.evidence.originalCapacity?.source === 'managed-storage') {
+        notes.push(originalUnavailableText(original));
+      }
+      if (!uploadedUrls.has(assetIndex)) {
+        notes.push('Inline preview unavailable: GitHub size limits or upload failure. No preview files were committed.');
+      }
+      return {
+        ...asset,
+        title: publicPreviewText(asset.title, options.evidence),
+        description: notes.length ? publicPreviewText(notes.join('\n\n'), options.evidence) : undefined,
+      };
+    }),
+    toolSuggestions: options.evidence.toolSuggestions.map(suggestion => ({
+      name: publicPreviewText(suggestion.name, options.evidence),
+      reason: publicPreviewText(suggestion.reason, options.evidence),
+    })),
+  };
+  return appendVisualPreviewSection(
+    publicPreviewText(options.body, options.evidence),
+    renderVisualPreviewSection(publicEvidence, { published: metadata }),
+  );
 }
 
 async function uploadInlineCandidates(

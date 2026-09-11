@@ -1,9 +1,15 @@
 import { pino, Logger } from 'pino';
 import { v4 as uuidv4 } from 'uuid';
+import { redactVisualPreviewValue } from '../services/visualPreviewPaths.js';
 
 const logLevel: string = process.env.LOG_LEVEL ?? 'info';
 
 const baseLogger: Logger = pino({
+    hooks: {
+        streamWrite: line => /(?:\.propr|propr-previews)/i.test(line)
+            ? JSON.stringify(redactVisualPreviewValue(JSON.parse(line))) + '\n'
+            : line,
+    },
     level: logLevel,
     transport: process.env.NODE_ENV !== 'production' ? {
         target: 'pino-pretty',

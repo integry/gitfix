@@ -82,7 +82,7 @@ Supported image formats are PNG, JPEG, GIF, SVG, and WebP. Supported video forma
 
 ## Publication And Upload Failures
 
-ProPR publishes eligible previews as GitHub attachments so images render inline and videos use GitHub's media presentation. Plus installations with managed storage also publish an authenticated ProPR Connect link to the finalized full-resolution original. For follow-ups, it uploads the media first and then updates the existing progress comment; it does not create a temporary second comment. ProPR verifies that no temporary local path remains in the published body, then deletes the temporary files only after managed storage, GitHub upload, and the final publication or fallback have settled. If an upload fails, ProPR publishes the available trusted result plus a safe explanation; preview media is not added to Git as a fallback. When the failure is a missing, unsupported, expired, or rejected user credential, that explanation includes the Settings reconnection steps in the affected pull request.
+ProPR publishes eligible previews as GitHub attachments so images render inline and videos use GitHub's media presentation. Plus installations with managed storage also publish an authenticated ProPR Connect link to the finalized full-resolution original. For follow-ups, it uploads the media first and then updates the existing progress comment; it does not create a temporary second comment. ProPR verifies that no temporary local path remains in the published body, then deletes the temporary files only after managed storage, GitHub upload, and the final publication or fallback have settled. If an upload fails, ProPR publishes the available trusted result plus a safe explanation; preview media is not added to Git as a fallback. When the failure is a missing, unsupported, expired, or rejected user credential, that explanation includes the Settings reconnection steps in the affected pull request. Originals are normal authenticated links, never inline images or presigned object-store URLs, and can remain available when an attachment exceeds the inline limit.
 
 Preview generation is evidence, not a replacement for automated tests. A preview failure does not discard an otherwise valid implementation; the PR explains missing tool support when the agent can identify it.
 
@@ -90,13 +90,13 @@ Preview generation is evidence, not a replacement for automated tests. A preview
 
 Each repository has a **GitHub attachment plan** setting under its visual-preview controls:
 
-- `auto` (default): best-effort detection of the attachment uploader's account plan using `GET /user` with the already-configured upload credential. Only recognized, explicit paid plans enable larger videos.
+- `auto` (default): best-effort detection of the attachment uploader's account plan using `GET /user` with the already-configured upload credential. Detection applies only when the repository owner matches the authenticated user. Only recognized, explicit paid plans enable larger videos.
 - `free`: enforce Free limits regardless of detection.
 - `paid`: explicitly enable paid video capacity for this repository.
 
-PNG, JPEG, GIF, SVG, and WebP images always have a **10 MiB** inline attachment limit. MP4, MOV, and WebM videos have a **10 MiB** limit for Free and **100 MiB** for paid. Other content types are unsupported. GitHub publishers validate every file against these limits before network access; GitHub can still reject an eligible upload.
+PNG, JPEG, GIF, SVG, and WebP images always have a **10 MiB** inline attachment limit. MP4, MOV, and WebM videos have a **10 MiB** limit for Free and **100 MiB** for paid. Other content types are unsupported. GitHub publishers validate every inline candidate against these limits before any GitHub request; GitHub can still reject an eligible upload.
 
-Original-evidence staging has its own safety capacity. Without a managed-storage capability, it defaults to the legacy image and video limits above. A trusted runtime resolver can supply `originalEvidenceCapability.maxBytes` from managed storage; staging honors that maximum, capped at **500 MiB** per original, independently of the GitHub plan. This capability is never accepted from stored repository settings. Prepared evidence retains supported originals within that safety limit and includes their size and structured `githubInline` eligibility/reason, even when they cannot be uploaded inline. The agent prompt describes both limits separately. Managed original storage is described below.
+Original-evidence staging has its own safety capacity. Without a managed-storage capability, it defaults to the legacy image and video limits above. A trusted runtime resolver can supply `originalEvidenceCapability.maxBytes` from managed storage; staging honors that maximum, capped at **500 MiB** per original, independently of the GitHub plan. This capability is never accepted from stored repository settings. Prepared evidence retains supported originals within that safety limit and includes their size and structured `githubInline` eligibility/reason, even when they cannot be uploaded inline. The agent prompt describes both limits separately. The managed publisher links finalized originals independently of inline eligibility; it does not resize originals to fit GitHub.
 
 If credentials are absent, GitHub omits the plan, or the API is ambiguous or unavailable, `auto` reports **Auto unresolved; using conservative Free limits**. Detection does not request broader OAuth scopes, GitHub App permissions, billing access, or changes to Connect. Organization membership and repository visibility do not establish the uploading account's paid status.
 
@@ -129,7 +129,7 @@ Managed originals use the server-reported object and quota limits independently 
 GitHub inline capacity. The hybrid publisher links every successfully finalized original and
 includes a GitHub attachment only when a fresh file check fits the resolved capacity. Consequently,
 an oversized video can publish as an authenticated-original link without transcoding; the attachment
-plan setting above controls paid-plan video inline capacity.
+plan setting above controls paid-plan video inline capacity. The override never grants Plus or raises Connect limits.
 Managed storage does not replace the GitHub attachment credential.
 
 The administrator-only `GET /api/config/preview-storage` API returns
@@ -165,9 +165,11 @@ provided separately by `integry/propr-routing` and must implement this contract:
   unchanged and available until upload settles. Both passes use bounded buffers;
   neither requires a full-size `Uint8Array`/`Buffer`. The PUT is re-hashed before
   finalization to detect changed input. Node fetch uses `duplex: 'half'` and the
-  exact returned object-store headers. `Content-Type` is required; a supplied
-  `Content-Length` must match. The closed signed-header allowlist also accepts only the exact
-  create-only conditional `If-None-Match: *`; other conditional headers and values are rejected.
+  exact returned object-store headers. The signed header map must include
+  `Content-Type` exactly matching `contentType`, `Content-Length` exactly matching
+  the decimal `sizeBytes`, and the mandatory create-only conditional
+  `If-None-Match: *`. The closed signed-header allowlist rejects other conditional
+  headers and values.
   Redirects are rejected, and the relay bearer
   credential is never forwarded to the object store.
 - `POST /v1/preview-artifacts/:id/finalize` accepts version, object key,
@@ -196,14 +198,14 @@ messages, oversized/unknown bodies, and transport errors are discarded. Unknown 
 malformed statuses fail closed. Future v2 support can be added alongside v1.
 
 
-### Hybrid publisher boundary
+### Publication outcomes
 
 `storeManagedVisualPreviewOriginals(evidence, { taskId, repository, pullRequestNumber? })`
 returns one versioned result per input asset, in input order. Each result includes
 `version: 1`, `assetIndex`, and `relativePath` (the index disambiguates duplicate
 paths), plus either `{ stored: true, artifact: PreviewArtifactV1 }` or
 `{ stored: false, code }`. Successful artifacts carry the trusted `viewerUrl` and
-retention metadata, so the dependent publisher can render links without uploading
+retention metadata, so the publisher can render links without uploading
 again. Staged evidence retains its task ID for existing publication callers.
 
 Failures are isolated per asset, including local file errors and unavailable or
@@ -211,5 +213,23 @@ disabled storage. Codes are a bounded union (`PreviewStorageErrorCodeV1`,
 `plus_required`, or `disabled`); raw remote errors are discarded. A failed asset
 does not discard successful results or stop later uploads or GitHub publication.
 Only these codes may be used for fallback text. Never log or publish upload grants,
-object keys, relay tokens, or raw remote response/error bodies. This boundary does
-not implement PR comment rendering or change inline collection policy.
+object keys, relay tokens, or raw remote response/error bodies. Public bodies and comments contain hosted links or fallback text; local runtime and staging paths are redacted from prose and task logs.
+
+
+| Situation | What reviewers see |
+| --- | --- |
+| Plus, original finalized, GitHub upload succeeds | Inline GitHub media and an authenticated original link with retention expiry. |
+| Plus, original finalized, GitHub size limit or upload failure | Authenticated original link and inline-unavailable text. |
+| Quota exceeded, upload/object expired, or Connect unavailable | Eligible GitHub media remains available; managed evidence gets fallback text. No expired grant or expired original is linked. |
+| Community or older relay without storage endpoints | Existing GitHub-only behavior and size limits; upload failure produces text with no local links. |
+| No visible change | No preview is generated. |
+
+Private repository originals require Connect sign-in and repository authorization
+on every viewer request. Possession of the URL does not grant access. Retention
+expiry removes access to the original; it does not remove an independently
+published GitHub attachment. Connect viewer authentication and deletion are
+server responsibilities; the client validates the trusted origin, metadata, and
+future retention timestamp before publishing a link.
+
+See [managed preview operations](../operations/propr-connect.md#managed-preview-storage-operations)
+for quota recovery, offline behavior, log handling, and release validation.
