@@ -5,6 +5,8 @@ import { RepositoryVisualPreviewControl, type RepositoryVisualPreviewSettings } 
 import { IndexingStatusIndicator } from './IndexingStatusIndicator';
 import { DeleteRepoDialog } from './DeleteRepoDialog';
 
+const toggleClassName = "relative shrink-0 w-7 h-4 bg-slate-200 rounded-full peer-focus:ring-2 peer-focus:ring-teal-500/20 peer-checked:bg-teal-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:bg-white after:border after:border-slate-300 after:transition-all peer-checked:after:translate-x-full peer-disabled:opacity-50 peer-disabled:cursor-not-allowed";
+
 const AutoCiFollowupControl: React.FC<{
   repo: MonitoredRepo;
   onToggle: (repoId: string) => void;
@@ -26,7 +28,7 @@ const AutoCiFollowupControl: React.FC<{
         className="sr-only peer"
         aria-label={`Automatic CI follow-up for ${repo.name}`}
       />
-      <span className="relative shrink-0 w-7 h-4 bg-slate-200 rounded-full peer-focus:ring-2 peer-focus:ring-teal-500/20 peer-checked:bg-teal-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:bg-white after:border after:border-slate-300 after:transition-all peer-checked:after:translate-x-full" />
+      <span className={toggleClassName} />
     </label>
   );
 };
@@ -70,30 +72,28 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
       className="h-full overflow-y-auto scrollbar-stealth bg-white"
     >
       <div className="w-full">
-        <div className="border-b border-slate-200 px-4 py-3 sm:px-6">
-          <h2 className="text-sm font-semibold text-slate-900">Repository settings</h2>
-          <p className="mt-1 break-words font-mono text-xs text-slate-500">{repo.name}</p>
-        </div>
-
-        <div className="border-b border-slate-200 px-4 py-3 sm:px-6">
-          <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Repository</h3>
+        <div className="px-4 py-3 sm:px-6">
+          <h3 className="text-[10px] uppercase font-bold tracking-widest text-slate-500">Repository</h3>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
             <span>Monitor repository</span>
-            <input type="checkbox" checked={repo.enabled} onChange={() => onToggle(repo.id)} disabled={isReadOnly} aria-label={`Monitor ${repo.name}`} className="h-4 w-4 accent-teal-600" />
+            <input type="checkbox" checked={repo.enabled} onChange={() => onToggle(repo.id)} disabled={isReadOnly} aria-label={`Monitor ${repo.name}`} className="sr-only peer" />
+            <span className={toggleClassName} />
           </label>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
             <span>Star repository</span>
-            <input type="checkbox" checked={repo.starred === true} onChange={() => onToggleStar(repo.id)} disabled={isReadOnly} className="h-4 w-4 accent-teal-600" />
+            <input type="checkbox" checked={repo.starred === true} onChange={() => onToggleStar(repo.id)} disabled={isReadOnly} className="sr-only peer" />
+            <span className={toggleClassName} />
           </label>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
             <span>Hide repository</span>
-            <input type="checkbox" checked={repo.hidden === true} onChange={() => onToggleHidden(repo.id)} disabled={isReadOnly} className="h-4 w-4 accent-teal-600" />
+            <input type="checkbox" checked={repo.hidden === true} onChange={() => onToggleHidden(repo.id)} disabled={isReadOnly} className="sr-only peer" />
+            <span className={toggleClassName} />
           </label>
         </div>
 
         {!isReadOnly && (
-          <div className="border-b border-slate-200 px-4 py-3 sm:px-6">
-            <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Automation</h3>
+          <div className="border-t border-slate-200 px-4 py-3 sm:px-6">
+            <h3 className="text-[10px] uppercase font-bold tracking-widest text-slate-500">Automation</h3>
             <div className="flex flex-col">
               <AutoCiFollowupControl repo={repo} onToggle={onToggleAutoCiFollowup} isReadOnly={isReadOnly} />
               <RepositoryVisualPreviewControl key={repo.id} repo={repo} onUpdate={onUpdateVisualPreview} isReadOnly={isReadOnly} />
@@ -101,8 +101,8 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
           </div>
         )}
 
-        <div className="border-b border-slate-200 px-4 py-3 sm:px-6">
-          <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Indexing</h3>
+        <div className="border-t border-slate-200 px-4 py-3 sm:px-6">
+          <h3 className="text-[10px] uppercase font-bold tracking-widest text-slate-500">Indexing</h3>
           <dl className="text-xs text-slate-600">
             <div className="flex items-center justify-between gap-4 py-2">
               <dt className="shrink-0">Current Branch</dt>
@@ -166,16 +166,20 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
           </div>
         </div>
 
-        <div className="px-4 py-3 sm:px-6">
+        <div className="border-t border-slate-200 px-4 py-3 sm:px-6">
           <button
             type="button"
             onClick={() => setIsDeleteDialogOpen(true)}
             disabled={isReadOnly}
-            className="inline-flex items-center gap-2 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-describedby={`remove-repository-description-${repo.id}`}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Trash2 className="h-3.5 w-3.5" />
-            Remove repository
+            Remove repository from ProPR
           </button>
+          <p id={`remove-repository-description-${repo.id}`} className="mt-1 px-3 text-xs text-slate-500">
+            This only stops tracking the repository in ProPR. It will not affect the repository on GitHub.
+          </p>
         </div>
       </div>
       <DeleteRepoDialog

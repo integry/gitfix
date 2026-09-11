@@ -62,7 +62,7 @@ const getStatusInfo = (status: RepositoryIndexingStatus | undefined): {
 };
 
 const getRepositoryListItemClassName = (isSelected: boolean) => (
-  `border-b border-slate-100 cursor-pointer transition-colors relative group ${isSelected ? 'bg-[#F0FDFA]' : 'hover:bg-slate-50/50'}`
+  `border-b border-slate-100 cursor-pointer transition-colors relative group ${isSelected ? 'bg-slate-50' : 'hover:bg-slate-50/50'}`
 );
 
 const getStatusTextClassName = (statusType: RepoStatusType) => {
@@ -100,7 +100,7 @@ export const RepositoryListItem: React.FC<RepositoryListItemProps> = ({
       className={itemClassName}
       onClick={() => onSelect?.(repo.id)}
     >
-      {isSelected && <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-teal-500" />}
+      {isSelected && <div className="absolute left-0 top-0 bottom-0 w-1 bg-teal-500" />}
       <div className={`space-y-1 px-4 py-2 ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
         <div className="flex items-center gap-2 text-xs min-h-5">
           <span className={statusClassName} title={statusText}>
@@ -109,7 +109,7 @@ export const RepositoryListItem: React.FC<RepositoryListItemProps> = ({
             {progressText && <span className="text-blue-500">({progressText})</span>}
           </span>
           {repoStatus?.last_indexed_hash && (
-            <span className="rounded-sm bg-slate-100 px-1 font-mono text-slate-700" title={repoStatus.last_indexed_hash}>
+            <span className="bg-slate-100 border border-slate-200 text-slate-800 rounded-sm px-1.5 py-0.5 font-mono" title={repoStatus.last_indexed_hash}>
               {repoStatus.last_indexed_hash.slice(0, 7)}
             </span>
           )}

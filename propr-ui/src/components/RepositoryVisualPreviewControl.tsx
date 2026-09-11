@@ -50,7 +50,7 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
       </label>
 
       {settings.enabled && (
-        <div className="ml-2 mt-1 mb-2 flex flex-col gap-3 border-l-2 border-slate-200 pl-3" onClick={(event) => event.stopPropagation()}>
+        <div className="ml-4 mt-1 mb-2 flex flex-col gap-3 border-l-2 border-slate-200 pl-4" onClick={(event) => event.stopPropagation()}>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"

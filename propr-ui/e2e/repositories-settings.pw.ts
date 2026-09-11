@@ -65,7 +65,8 @@ test('keeps navigation compact and saves settings for the selected repository', 
   await expect(propr.locator('../..').locator('time')).toHaveText('1h ago');
   await propr.click();
   const settings = page.getByRole('region', { name: 'Settings for integry/propr', exact: true });
-  await expect(settings).toHaveCount(0);
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole('heading', { name: 'Repository settings', exact: true })).toHaveCount(0);
   await expect(propr.locator('../..').getByRole('checkbox')).toHaveCount(0);
   await expect(propr.locator('../..').getByRole('button')).toHaveCount(1);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -110,9 +111,17 @@ for (const width of [320, 390]) {
     const api = await stubRepositoryApis(page);
     await page.goto('/repositories');
     await page.getByRole('button', { name: 'Select integry/propr', exact: true }).click();
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings for integry/propr', exact: true });
     await expect(settings.getByRole('textbox')).toBeVisible();
+    for (const name of ['Chat', 'Improve', 'Browse', 'To-Dos', 'Settings']) {
+      const tab = page.getByRole('button', { name, exact: true });
+      await expect(tab).toBeInViewport({ ratio: 1 });
+      const bounds = (await tab.boundingBox())!;
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    }
+    const tabStrip = page.getByRole('button', { name: 'Settings', exact: true }).locator('../..');
+    expect(await tabStrip.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await settings.getByRole('textbox').fill('Capture the mobile navigation.');
     await settings.getByText('Auto CI follow-up', { exact: true }).click();
     await expect.poll(() => api.writes.at(-1)?.[0].autoFollowupOnFailedCi).toBe(true);
@@ -125,8 +134,8 @@ for (const width of [320, 390]) {
     }
     await settings.getByRole('button', { name: 'Reindex repository', exact: true }).scrollIntoViewIfNeeded();
     await expect(settings.getByRole('button', { name: 'Reindex repository', exact: true })).toBeInViewport();
-    await settings.getByRole('button', { name: 'Remove repository', exact: true }).scrollIntoViewIfNeeded();
-    await expect(settings.getByRole('button', { name: 'Remove repository', exact: true })).toBeInViewport();
+    await settings.getByRole('button', { name: 'Remove repository from ProPR', exact: true }).scrollIntoViewIfNeeded();
+    await expect(settings.getByRole('button', { name: 'Remove repository from ProPR', exact: true })).toBeInViewport();
     if (width === 390 && process.env.PROPR_CAPTURE_PREVIEWS) {
       await page.screenshot({ animations: 'disabled', path: '../.propr/previews/repositories-mobile-indexing.png' });
     }
@@ -141,13 +150,12 @@ test('keeps repository and indexing changes unavailable to read-only users', asy
   await page.goto('/repositories');
   await page.getByRole('button', { name: 'Select integry/propr', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Chat', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: /Settings for/ })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('region', { name: /Settings for/ })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: 'Monitor integry/propr', exact: true })).toBeDisabled();
   await expect(page.getByRole('checkbox', { name: 'Star repository', exact: true })).toBeDisabled();
   await expect(page.getByRole('checkbox', { name: 'Hide repository', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Reindex repository', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Remove repository', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Remove repository from ProPR', exact: true })).toBeDisabled();
   await expect(page.getByRole('checkbox', { name: /Automatic CI follow-up|Visual previews/ })).toHaveCount(0);
 });
 
@@ -185,13 +193,15 @@ test('saves monitoring and confirms removal from Settings', async ({ page }) => 
   await page.getByRole('button', { name: 'Select integry/propr', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Settings for integry/propr', exact: true });
-  await settings.getByRole('checkbox', { name: 'Monitor integry/propr', exact: true }).uncheck();
+  await settings.getByText('Monitor repository', { exact: true }).click();
+  await expect(settings.getByRole('checkbox', { name: 'Monitor integry/propr', exact: true })).not.toBeChecked();
   await expect.poll(() => api.writes.at(-1)?.[0].enabled).toBe(false);
   expect(api.writes.at(-1)?.[1].enabled).toBe(true);
-  await settings.getByRole('button', { name: 'Remove repository', exact: true }).click();
+  await expect(settings.getByRole('button', { name: 'Remove repository from ProPR', exact: true })).toHaveAccessibleDescription('This only stops tracking the repository in ProPR. It will not affect the repository on GitHub.');
+  await settings.getByRole('button', { name: 'Remove repository from ProPR', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(settings).toBeVisible();
-  await settings.getByRole('button', { name: 'Remove repository', exact: true }).click();
+  await settings.getByRole('button', { name: 'Remove repository from ProPR', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Remove', exact: true }).click();
   await expect.poll(() => api.writes.at(-1)?.map(repo => repo.name)).toEqual(['integry/integration-sdk', 'integry/documentation']);
   await expect(page.getByRole('button', { name: 'Select integry/propr', exact: true })).toHaveCount(0);
