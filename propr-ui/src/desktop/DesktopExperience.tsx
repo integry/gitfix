@@ -62,12 +62,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     }
     return presented;
   }, [adapters, cancelDiscovery, waitForPresentation]);
-  const {
-    deepLinkError,
-    editorNotice,
-    clearConnectCandidate,
-    hasPendingConnectCandidate,
-  } = useDesktopDeepLinks({
+  const { deepLinkError, editorNotice, clearConnectCandidate, hasPendingConnectCandidate } = useDesktopDeepLinks({
     deepLinks,
     phase: state.phase,
     profileId: state.phase === 'connecting' || state.phase === 'authenticating' || state.phase === 'connected'
@@ -210,11 +205,17 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   useEffect(() => {
     let cancelled = false;
     activeProfileId.current = null;
-    void Promise.all([adapters.profiles.list(), adapters.profiles.getActiveId()]).then(([stored, activeId]) => {
+    void Promise.all([
+      adapters.profiles.list(),
+      adapters.profiles.getActiveId(),
+      adapters.app.hasStartupConnectIntent?.() ?? false,
+    ]).then(([stored, activeId, startupConnectIntent]) => {
       if (cancelled) return;
       activeProfileId.current = activeId;
       setProfiles(stored);
-      if (hasPendingConnectCandidate()) {
+      // The main-owned cold link can still be waiting for window load/presentation.
+      // Do not let automatic reconnect clear its account binding before it arrives.
+      if (startupConnectIntent || hasPendingConnectCandidate()) {
         setState({ phase: 'choose' });
         return;
       }

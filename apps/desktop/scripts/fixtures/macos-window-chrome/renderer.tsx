@@ -10,15 +10,22 @@ import { NotificationCenterProvider } from '../../../../../propr-ui/src/contexts
 import { SocketContext, type SocketContextValue } from '../../../../../propr-ui/src/contexts/SocketContext';
 import type { DesktopAdapters } from '../../../../../propr-ui/src/desktop/types';
 import { createElectronDesktopAdapters } from '../../../../../propr-ui/src/desktop/electronAdapters';
+import { DesktopDeepLinkInbox } from '../../../../../propr-ui/src/desktop-deep-link';
+import { createDesktopBridge } from '../../../src/preload-bridge';
+import { IPC_CHANNELS } from '../../../src/shared/contract';
 
 const profile = { id: 'local', name: 'This computer', kind: 'local' as const, baseUrl: 'http://127.0.0.1:3000' };
+const bridge = createDesktopBridge({
+  on: () => undefined,
+  removeListener: () => undefined,
+  invoke: async channel => {
+    if (channel === IPC_CHANNELS.deepLinkConsumerReady) return { pendingConnect: false };
+  },
+}, false);
 const adapters: DesktopAdapters = {
   // Exercise production platform detection, rather than inventing a CSS class.
-  // Only read the platform; fixture services below never call this bridge.
-  platform: createElectronDesktopAdapters({ discovery: { supported: false } } as never).platform,
-  app: {
-    onDeepLink: () => () => undefined,
-  },
+  platform: createElectronDesktopAdapters(bridge).platform,
+  app: bridge.app,
   profiles: {
     list: async () => [profile], getActiveId: async () => sessionStorage.getItem('frame-active-profile'),
     save: async () => undefined, remove: async () => undefined,
@@ -33,6 +40,10 @@ const adapters: DesktopAdapters = {
   authentication: { authenticate: async () => undefined },
   externalBrowser: { open: async () => undefined },
 };
+
+// Register the presentation consumer so the preload startup handshake completes.
+const deepLinks = new DesktopDeepLinkInbox();
+adapters.app.onDeepLink(value => deepLinks.receive(value));
 
 const noop = () => undefined;
 const subscribe = () => noop;
@@ -49,7 +60,7 @@ const socket: SocketContextValue = {
 };
 
 createRoot(document.getElementById('root')!).render(
-  <DesktopExperience adapters={adapters}>
+  <DesktopExperience adapters={adapters} deepLinks={deepLinks}>
     <MemoryRouter>
       <SocketContext.Provider value={socket}>
         <ToastProvider>

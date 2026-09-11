@@ -276,15 +276,23 @@ describe('desktop deep-link delivery', () => {
       () => 10,
     );
     const window = createWindow(sent);
+    assert.equal(delivery.hasPendingConnectIntent(), true, 'intent precedes window readiness');
     assert.equal(delivery.deliver(link), false);
     activateWindow(delivery, window);
     assert.equal(sent.length, 1);
+    assert.equal(delivery.hasPendingConnectIntent(), true, 'in-flight presentation still owns the intent');
     delivery.acknowledge(window, {
       ...sent[0],
       consumption: { kind: 'connect-confirmation', target: 'https://t-native-evidence.propr.dev' },
     });
     await delivery.whenIdle();
     assert.equal(sent.length, 1);
+    assert.equal(delivery.hasPendingConnectIntent(), false);
+  });
+
+  it('does not treat queued Open links as Connect intent', () => {
+    const delivery = new DeepLinkDelivery('desktop:deep-link', ['propr://open?path=%2Ftasks']);
+    assert.equal(delivery.hasPendingConnectIntent(), false);
   });
 
   it('does not spend the acknowledgement budget before the renderer consumer is ready', async () => {

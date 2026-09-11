@@ -47,6 +47,7 @@ interface RegisterIpcOptions {
   platform?: NodeJS.Platform;
   windowForSender?(event: IpcMainInvokeEvent): DesktopWindowControlTarget | null;
   rendererConsumerReady?(event: IpcMainInvokeEvent): boolean;
+  hasPendingConnectIntent?(): boolean;
   acknowledgeDeepLink?(event: IpcMainInvokeEvent, acknowledgement: DesktopDeepLinkAcknowledgement): boolean;
   onRendererActiveProfileChanged?(origin: string | null): void;
   onActiveWorkConnectionAvailable?(): void;
@@ -249,6 +250,7 @@ export const registerIpcHandlers = (options: RegisterIpcOptions): RegisteredIpcH
     if (args.length || !options.rendererConsumerReady?.(event)) {
       throw new Error('Unexpected desktop deep-link consumer readiness');
     }
+    return { pendingConnect: options.hasPendingConnectIntent?.() ?? false };
   });
   handle(IPC_CHANNELS.authLogout, async (_event, scope, ...args) => {
     if (args.length || !scope || typeof scope !== 'object' || Array.isArray(scope)

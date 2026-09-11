@@ -33,6 +33,14 @@ export const createDesktopBridge = (
     DesktopDeepLinkConsumption | null | Promise<DesktopDeepLinkConsumption | null>
   )>();
   const pendingDeepLinks: DesktopDeepLinkDelivery[] = [];
+  let resolveStartupConnectIntent!: (pending: boolean) => void;
+  let rejectStartupConnectIntent!: (error: unknown) => void;
+  const startupConnectIntent = new Promise<boolean>((resolve, reject) => {
+    resolveStartupConnectIntent = resolve;
+    rejectStartupConnectIntent = reject;
+  });
+  // A renderer without the startup consumer must not create an unhandled rejection.
+  void startupConnectIntent.catch(() => undefined);
   const isDelivery = (value: unknown): value is DesktopDeepLinkDelivery => Boolean(
     value && typeof value === 'object'
       && Number.isSafeInteger((value as DesktopDeepLinkDelivery).deliveryId)
@@ -144,11 +152,19 @@ export const createDesktopBridge = (
       minimize: () => invoke(ipc, IPC_CHANNELS.windowMinimize),
       toggleMaximize: () => invoke(ipc, IPC_CHANNELS.windowToggleMaximize),
       closeWindow: () => invoke(ipc, IPC_CHANNELS.windowClose),
+      hasStartupConnectIntent: () => startupConnectIntent,
       onDeepLink: (listener) => {
         const consumerWasAbsent = deepLinkListeners.size === 0;
         deepLinkListeners.add(listener);
         if (consumerWasAbsent) {
-          void invoke(ipc, IPC_CHANNELS.deepLinkConsumerReady).catch(() => undefined);
+          void invoke<{ pendingConnect: boolean }>(ipc, IPC_CHANNELS.deepLinkConsumerReady)
+            .then(state => {
+              if (!state || typeof state.pendingConnect !== 'boolean') {
+                throw new Error('Invalid desktop deep-link startup intent');
+              }
+              resolveStartupConnectIntent(state.pendingConnect);
+            })
+            .catch(rejectStartupConnectIntent);
         }
         pendingDeepLinks.splice(0).forEach(delivery => { void consume(delivery).catch(() => undefined); });
         return () => deepLinkListeners.delete(listener);

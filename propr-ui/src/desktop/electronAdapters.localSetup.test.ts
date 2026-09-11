@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createDesktopBridge } from '../../../apps/desktop/src/preload-bridge';
 import type { DesktopBridge, DesktopSetupRequest, DesktopSetupSnapshot } from '../../../apps/desktop/src/shared/contract';
 import { createElectronDesktopAdapters } from './electronAdapters';
 
@@ -11,8 +12,12 @@ const snapshot: DesktopSetupSnapshot = {
 
 const bridgeFixture = () => {
   const start = vi.fn(async () => snapshot);
-  const bridge = {
-    discovery: { supported: true },
+  const bridge: DesktopBridge = {
+    ...createDesktopBridge({
+      invoke: async () => { throw new Error('Unexpected IPC call in local setup adapter fixture'); },
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    }, true),
     localSetup: {
       status: async () => snapshot,
       start,
@@ -23,7 +28,7 @@ const bridgeFixture = () => {
       resolveGithubInstallation: async () => snapshot,
       onProgress: () => () => undefined,
     },
-  } as unknown as DesktopBridge;
+  };
   return { bridge, start };
 };
 

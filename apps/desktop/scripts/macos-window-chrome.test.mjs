@@ -39,7 +39,7 @@ async function exerciseChrome(context, native) {
       entryPoints: [join(desktop, 'scripts/fixtures/macos-window-chrome/renderer.tsx')],
       outfile: join(directory, 'renderer.js'), bundle: true, platform: 'browser', format: 'iife',
       resolveExtensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'],
-      define: { 'import.meta.env': '{}', __APP_VERSION__: '"chrome-test"', __PROPR_DESKTOP__: 'true' },
+      define: { 'process.platform': '"darwin"', 'import.meta.env': '{}', __APP_VERSION__: '"chrome-test"', __PROPR_DESKTOP__: 'true' },
     });
     await mkdir(join(directory, 'media'));
     await copyFile(join(root, 'propr-ui/public/media/logo-and-name-transparent.png'), join(directory, 'media/logo-and-name-transparent.png'));

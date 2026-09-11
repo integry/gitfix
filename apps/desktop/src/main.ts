@@ -1913,6 +1913,7 @@ if (!hasSingleInstanceLock) {
         if (ready) recordNativeEvent('desktop.deeplink.consumer_ready');
         return ready;
       },
+      hasPendingConnectIntent: () => deepLinkDelivery.hasPendingConnectIntent(),
       acknowledgeDeepLink: (event, acknowledgement) =>
         deepLinkDelivery.acknowledgeSender(event.sender, acknowledgement),
       onActiveWorkConnectionAvailable: () => {

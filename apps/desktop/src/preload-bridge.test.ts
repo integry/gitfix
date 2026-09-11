@@ -12,6 +12,7 @@ class FakeIpc implements PreloadIpc {
   async invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     this.invocations.push({ channel, args });
     if (channel === IPC_CHANNELS.authenticationPairAdmit) return { operationId: pairingOperationId };
+    if (channel === IPC_CHANNELS.deepLinkConsumerReady) return { pendingConnect: false };
     return undefined;
   }
 
@@ -275,6 +276,36 @@ describe('desktop preload bridge', () => {
       { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [] },
       { channel: IPC_CHANNELS.deepLinkConsumerReady, args: [] },
     ]);
+  });
+
+  for (const pendingConnect of [false, true]) {
+    it(`waits for consumer registration before reporting startup Connect intent (${pendingConnect})`, async () => {
+      const ipc = new FakeIpc();
+      let reply!: (value: unknown) => void;
+      ipc.invoke = async () => new Promise(resolve => { reply = resolve; });
+      const bridge = createDesktopBridge(ipc);
+      let settled = false;
+      const intent = bridge.app.hasStartupConnectIntent!().then(value => {
+        settled = true;
+        return value;
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(settled, false);
+      bridge.app.onDeepLink(() => null);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(settled, false);
+      reply({ pendingConnect });
+      assert.equal(await intent, pendingConnect);
+    });
+  }
+
+  it('rejects failed consumer readiness instead of permitting automatic reconnect', async () => {
+    const ipc = new FakeIpc();
+    ipc.invoke = async () => { throw new Error('Readiness rejected'); };
+    const bridge = createDesktopBridge(ipc);
+    const intent = bridge.app.hasStartupConnectIntent!();
+    bridge.app.onDeepLink(() => null);
+    await assert.rejects(intent, /Readiness rejected/);
   });
 
   it('buffers startup and second-instance deep links until the renderer subscribes', async () => {
