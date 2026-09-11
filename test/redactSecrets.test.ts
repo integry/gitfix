@@ -636,6 +636,23 @@ test('preview path redaction covers native and encoded worktree and staging refe
     assert.equal(redactSecrets(safe), safe);
 });
 
+test('preview path redaction covers native, Windows, and encoded runtime directory roots', () => {
+    for (const local of [
+        '/srv/task/.propr/previews', '/srv/task/.propr/preview-src', '/tmp/propr-previews',
+        'C:\\work\\.propr\\previews', 'C:\\work\\.propr\\preview-src', 'C:\\temp\\propr-previews',
+        '%2Fsrv%2Ftask%2F.propr%2Fpreviews', '%2Fsrv%2Ftask%2F.propr%2Fpreview-src',
+        '%2Ftmp%2Fpropr-previews',
+    ]) {
+        const atEnd = redactSecrets(local);
+        assert.ok(!atEnd.includes(local));
+        assert.ok(atEnd.includes('[local preview omitted]'));
+
+        const beforePunctuation = redactSecrets(`Runtime directory: ${local}. Capture complete.`);
+        assert.ok(!beforePunctuation.includes(local));
+        assert.ok(beforePunctuation.includes('Capture complete'));
+    }
+});
+
 test('preview path redaction preserves serialized JSON containing escaped quotes', () => {
     const local = '/tmp/private/.propr/previews/screen.png';
     const serialized = JSON.stringify({ message: `Captured ${local} before "the dialog" opened.` });

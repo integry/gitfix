@@ -16,8 +16,9 @@ export function redactVisualPreviewPaths(text: string): string {
   // Accept native, JSON-escaped, and URL-encoded separators. The staging root
   // deliberately has no .propr component after evidence leaves the worktree.
   const separator = String.raw`(?:[/\\]|%2f|%5c)`;
-  const runtime = String.raw`(?:\.propr${separator}+(?:previews|preview-src)|propr-previews)${separator}+`;
-  const containsRuntimePath = new RegExp(runtime, 'i');
+  const runtimeDirectory = String.raw`(?:\.propr${separator}+(?:previews|preview-src)|propr-previews)`;
+  const runtime = String.raw`${runtimeDirectory}(?=${separator}|$|[\s\p{P}])`;
+  const containsRuntimePath = new RegExp(runtime, 'iu');
   // Scan each token once, instead of backtracking over potentially large agent
   // output looking for a path prefix. Quoted paths may contain spaces.
   return text
