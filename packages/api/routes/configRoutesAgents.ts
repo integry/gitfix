@@ -1,3 +1,4 @@
+import { assertConfigRevision } from './configRevision.js';
 import { Request, Response } from 'express';
 import { db, logger } from '@propr/core';
 import * as configManager from '@propr/core';
@@ -376,6 +377,7 @@ export function createAgentsRoutes(deps: AgentsRoutesDeps) {
 
     // Agent updates share the settings lock because they may also rewrite default_agent_alias.
     const result = await withConfigLock(redisClient, SETTINGS_CONFIG_LOCK_KEY, async lock => {
+      assertConfigRevision(req.body.expectedRevision, await configStore.loadAgents());
       return effectiveApplyFn({
         agents: req.body.agents,
         processedAgents: prepared.processedAgents,

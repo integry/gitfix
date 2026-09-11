@@ -1,6 +1,7 @@
 import { ROUTING_STATUS_REDIS_KEY } from '@propr/shared';
 /* eslint-disable max-lines -- route registration and coordinated shutdown share startup state */
 import express, { Request, Response } from 'express';
+import { mountMcp, mcpResponseHeaders } from './mcp/server.js';
 import { createServer, Server as HttpServer } from 'http';
 import cors from 'cors';
 import { createClient, RedisClientType } from 'redis';
@@ -170,7 +171,16 @@ try {
   process.exit(1);
 }
 
-app.use(cors({ origin: validateCorsOrigin, credentials: true }));
+// Mark even parser/rate-limit/error responses at the instance boundary.
+if (process.env.MCP_ENABLED === 'true') app.use('/api/mcp', mcpResponseHeaders);
+
+app.use((req, res, next) => {
+  // Server-rendered MCP consent forms submit on the API's own public origin,
+  // which can differ from FRONTEND_URL. Keep other API CORS policy intact.
+  const mcpOrigin = process.env.MCP_ENABLED === 'true' ? process.env.MCP_PUBLIC_ORIGIN?.replace(/\/$/, '') : undefined;
+  const consentOrigin = req.path.startsWith('/mcp/') && mcpOrigin && req.get('origin') === mcpOrigin;
+  cors({ origin: consentOrigin ? mcpOrigin : validateCorsOrigin, credentials: true })(req, res, next);
+});
 // The `cors` package forwards rejected origins as middleware errors. Handle
 // those immediately so Express never renders its development HTML error page
 // (which contains stack traces and container paths).
@@ -263,6 +273,7 @@ function setupRoutes(): void {
   // compatibility dates). All other /api routes registered after this line are
   // authenticated.
   app.get('/api/compatibility', statusRoutes.getCompatibility);
+  mountMcp(app, { db, taskQueue, redisClient, runtimeBuildQueue });
   app.use('/api', ensureAuthenticated, resolveAuthorization);
   const taskRoutes = createTaskRoutes({ db, taskQueue });
   const taskHistoryRoutes = createTaskHistoryRoutes({ redisClient, taskQueue, db });

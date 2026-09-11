@@ -1,3 +1,4 @@
+import { recordPlannerStop } from './executionStop.js';
 /**
  * Background execution of plan refinement, kicked off after the refine
  * endpoint has returned 202.
@@ -134,6 +135,7 @@ export async function runBackgroundRefinement(
 
     // Store the refinement result including action, summary, and estimation data
     const refinementMeta = {
+      runId,
       status: 'completed',
       action: result.action,
       summary: result.summary,
@@ -178,6 +180,7 @@ export async function runBackgroundRefinement(
     if (aborted) return;
 
     const failureMeta = {
+      runId,
       status: 'failed',
       error: errorMessage,
       model: generationModel,
@@ -191,6 +194,6 @@ export async function runBackgroundRefinement(
       console.log(`[refine] Refinement run ${runId} is no longer active for draft ${draftId}, not saving failure`);
     }
   } finally {
-    await abortChecker.close();
+    try { await abortChecker.close(); } finally { await recordPlannerStop(db, draftId, runId); }
   }
 }
