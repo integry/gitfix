@@ -78,6 +78,8 @@ test('pinned actual Connect Worker -> actual core registration, OAuth, SDK eras,
   const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const nativeFetch = globalThis.fetch;
   const upstream: Request[] = [];
+  const repositoryRequests: string[] = [];
+  const repositoryUrl = 'https://api.github.com/user/installations/1/repositories?per_page=100&page=1';
   const instancePosts: Array<{ path: string; body: Record<string, string> }> = [];
   const wire: string[] = [];
   let offline = false;
@@ -88,6 +90,13 @@ test('pinned actual Connect Worker -> actual core registration, OAuth, SDK eras,
     assert.ok(request.headers.get('authorization')?.includes('github-member'), 'Only a GitHub credential can reach GitHub');
     if (githubExpired && request.headers.get('authorization')?.includes('github-member-expired')) return Response.json({ message: 'Expired' }, { status: 401 });
     if (url.pathname === '/user') return Response.json({ id: 777, login: 'member', avatar_url: null });
+    if (url.pathname.endsWith('/repositories')) {
+      repositoryRequests.push(request.url);
+      assert.equal(request.method, 'GET');
+      assert.equal(request.headers.get('authorization'), 'Bearer github-member', 'Discovery must use the consenting user credential');
+      assert.equal(request.url, repositoryUrl, 'Discovery must use the exact user-authorized installation path and pagination');
+      return Response.json({ total_count: 1, repositories: [{ id: 1, full_name: 'acme/allowed' }] });
+    }
     if (url.pathname === '/repos/acme/allowed') return Response.json({ permissions: { push: true } });
     return Response.json({ message: 'Not found' }, { status: 404 });
   }
@@ -137,8 +146,27 @@ test('pinned actual Connect Worker -> actual core registration, OAuth, SDK eras,
     const requestId = new URL(started.headers.get('location')!).searchParams.get('request');
     const details = await jsonOk(await api(`/v1/mcp/consent?request=${requestId}`, 'GET', undefined, 'github-member'));
     assert.deepEqual(details.scopes, MCP_SCOPES);
+    const beforeDiscovery = repositoryRequests.length;
+    const discovery = await api(`/v1/mcp/consent/repositories?request=${requestId}&installation_id=1`, 'GET', undefined, 'github-member');
+    const legacyRouting = discovery.status === 404;
+    if (legacyRouting) {
+      // Only the known merged routing pin predates repository discovery. A
+      // missing endpoint on a newer candidate must fail the paired test.
+      const report = JSON.parse(await readFile(`${process.env.MCP_ROUTING_FIXTURE}/commits.json`, 'utf8'));
+      assert.equal(report.routingHead, '1fcf82fd1a843fbdf199d79b8f92843dc74a89e0');
+      assert.equal((await jsonOk(discovery, 404)).error, 'not_found');
+      assert.equal(repositoryRequests.length, beforeDiscovery);
+    } else {
+      const discovered = await jsonOk(discovery);
+      assert.deepEqual(discovered.repositories, ['acme/allowed']);
+      assert.equal(discovered.complete, true);
+      assert.deepEqual(repositoryRequests.slice(beforeDiscovery), [repositoryUrl]);
+    }
     const approved = await jsonOk(await api('/v1/mcp/consent', 'POST', { request_id: requestId, approve: true,
       installation_id: 1, scopes: selectedScopes, repositories: ['acme/allowed'] }, 'github-member'));
+    if (!legacyRouting) {
+      assert.deepEqual(repositoryRequests.slice(beforeDiscovery), [repositoryUrl, repositoryUrl], 'Consent must recheck user-authorized repositories');
+    }
     const code = new URL(approved.redirect_url).searchParams.get('code')!;
     const exchange = (verifierValue: string) => gateway(new Request(`${origin}/oauth/token`, { method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code',
@@ -213,6 +241,7 @@ test('pinned actual Connect Worker -> actual core registration, OAuth, SDK eras,
     assert.equal(claims.aud, `urn:propr:instance:${config.instanceId}:mcp`);
     assert.equal(claims.installation_id, 1);
     assert.deepEqual(claims.scopes, ['read', 'plan']);
+    assert.deepEqual(claims.repositories, ['acme/allowed']);
     const credentialCalls = instancePosts.filter(p => p.path.includes('credentials') || p.path.endsWith('/redeem'));
     assert.deepEqual(credentialCalls.map(p => p.path), ['/v1/mcp/credentials', '/v1/auth/instance-grants/redeem']);
     assert.notEqual(credentialCalls[0].body.instance_assertion, credentialCalls[1].body.instance_assertion);
