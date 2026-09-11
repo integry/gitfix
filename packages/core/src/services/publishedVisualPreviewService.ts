@@ -1,5 +1,5 @@
 import type { VisualPreviewType } from '../config/configManager.js';
-import { VISUAL_PREVIEW_MARKER } from './visualPreviewService.js';
+import { trustedGitHubAttachmentUrl, VISUAL_PREVIEW_MARKER } from './visualPreviewService.js';
 
 const MAX_PREVIEW_ASSETS = 8;
 
@@ -8,23 +8,6 @@ export interface PublishedVisualPreview {
   title: string;
   description?: string;
   url: string;
-}
-
-function publishedAttachmentUrl(value: string): string | null {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== 'https:'
-      || parsed.hostname !== 'github.com'
-      || parsed.port
-      || parsed.username
-      || parsed.password
-      || parsed.search
-      || parsed.hash
-      || !/^\/user-attachments\/assets\/[A-Za-z0-9_-]+$/.test(parsed.pathname)) return null;
-    return parsed.href;
-  } catch {
-    return null;
-  }
 }
 
 function unescapeMarkdownText(value: string): string {
@@ -50,13 +33,16 @@ export function parsePublishedVisualPreviews(body: unknown): PublishedVisualPrev
     while (mediaIndex < lines.length && !lines[mediaIndex].trim()) mediaIndex += 1;
     const media = /^!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[A-Za-z0-9_-]+)\)$/.exec(lines[mediaIndex] || '');
     if (!title || !media) continue;
-    const url = publishedAttachmentUrl(media[2]);
+    const url = trustedGitHubAttachmentUrl(media[2]);
     if (!url) continue;
 
     const descriptionLines: string[] = [];
     let descriptionIndex = mediaIndex + 1;
     while (descriptionIndex < lines.length && !lines[descriptionIndex].startsWith('### ')) {
-      descriptionLines.push(lines[descriptionIndex]);
+      const line = lines[descriptionIndex];
+      if (!line.startsWith('[View the full-resolution original in ProPR Connect](')
+        && !line.startsWith('The GitHub inline attachment could not be published')
+        && !line.startsWith('The preview could not be uploaded to GitHub')) descriptionLines.push(line);
       descriptionIndex += 1;
     }
     const description = unescapeMarkdownText(descriptionLines.join(' ').replace(/\s+/g, ' ').trim()).slice(0, 300);
