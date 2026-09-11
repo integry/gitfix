@@ -3,6 +3,8 @@ import type { TaskGroup } from './types';
 import { ParentTaskRow, ChildTaskRow, CollapseToggleRow } from './TaskRows';
 import { MobileTaskCard } from './MobileTaskCard';
 import { SystemAlert } from '../ui/SystemAlert';
+import { useDesktop } from '../../desktop/DesktopContext';
+import './desktop-task-table.css';
 
 /** Renders a simple loading message for dashboard integration */
 export const DashboardLoadingState: React.FC = () => (
@@ -51,74 +53,88 @@ export const TaskTableContent: React.FC<TaskTableContentProps> = ({
   expandedGroups,
   onRowClick,
   onToggleGroup,
-}) => (
-  <>
-    {/* Mobile Card View */}
-    <div className="md:hidden">
-      {groupedTasks.map((group) => (
-        <MobileTaskCard
-          key={group.key}
-          group={group}
-          expandedGroups={expandedGroups}
-          onRowClick={onRowClick}
-          onToggleGroup={onToggleGroup}
-        />
-      ))}
-    </div>
+}) => {
+  const desktop = useDesktop();
+  const desktopLayout = desktop?.platform === 'macos' || desktop?.platform === 'linux';
 
-    {/* Desktop Table View */}
-    <div className="hidden md:block">
-      <table className="w-full">
-        <thead className="sr-only">
-          <tr>
-            <th>Repository</th>
-            <th>Issue/Task</th>
-            <th>Status</th>
-            <th>Metadata</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody className="bg-white">
-          {groupedTasks.map((group, index) => {
-            const parentTask = group.tasks[0];
-            const allChildren = group.tasks.slice(1);
-            const isExpanded = expandedGroups.has(group.key);
-            const shouldCollapse = allChildren.length > 3;
+  return (
+    <>
+      {/* Mobile Card View */}
+      <div className="md:hidden">
+        {groupedTasks.map((group) => (
+          <MobileTaskCard
+            key={group.key}
+            group={group}
+            expandedGroups={expandedGroups}
+            onRowClick={onRowClick}
+            onToggleGroup={onToggleGroup}
+          />
+        ))}
+      </div>
 
-            let visibleChildren = allChildren;
-            let hiddenCount = 0;
+      {/* Desktop Table View */}
+      <div className={desktopLayout ? 'desktop-task-list hidden md:block' : 'hidden md:block'}>
+        <table className="w-full">
+          {desktopLayout && (
+            <colgroup>
+              <col className="task-repository" />
+              <col />
+              <col className="task-status" />
+              <col className="task-metadata" />
+            </colgroup>
+          )}
+          <thead className="sr-only">
+            <tr>
+              <th className="task-repository">Repository</th>
+              <th>Issue/Task</th>
+              <th>Status</th>
+              <th>Metadata</th>
+              {!desktopLayout && <th>Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="bg-white">
+            {groupedTasks.map((group, index) => {
+              const parentTask = group.tasks[0];
+              const allChildren = group.tasks.slice(1);
+              const isExpanded = expandedGroups.has(group.key);
+              const shouldCollapse = allChildren.length > 3;
 
-            if (shouldCollapse && !isExpanded) {
-              visibleChildren = allChildren.slice(0, 3);
-              hiddenCount = allChildren.length - 3;
-            }
+              let visibleChildren = allChildren;
+              let hiddenCount = 0;
 
-            const prevGroup = index > 0 ? groupedTasks[index - 1] : null;
-            const isDuplicateRepo = prevGroup
-              ? prevGroup.repoOwner === group.repoOwner && prevGroup.repoName === group.repoName
-              : false;
+              if (shouldCollapse && !isExpanded) {
+                visibleChildren = allChildren.slice(0, 3);
+                hiddenCount = allChildren.length - 3;
+              }
 
-            return (
-              <React.Fragment key={group.key}>
-                <ParentTaskRow group={group} task={parentTask} onRowClick={onRowClick} isDuplicateRepo={isDuplicateRepo} />
+              const prevGroup = index > 0 ? groupedTasks[index - 1] : null;
+              const isDuplicateRepo = prevGroup
+                ? prevGroup.repoOwner === group.repoOwner && prevGroup.repoName === group.repoName
+                : false;
 
-                {visibleChildren.map((child, childIndex) => (
-                  <ChildTaskRow
-                    key={child.id}
-                    task={child}
-                    onRowClick={onRowClick}
-                    isLastChild={childIndex === visibleChildren.length - 1 && hiddenCount === 0}
-                  />
-                ))}
+              return (
+                <React.Fragment key={group.key}>
+                  <ParentTaskRow desktopLayout={desktopLayout} group={group} task={parentTask} onRowClick={onRowClick} isDuplicateRepo={isDuplicateRepo} />
 
-                {hiddenCount > 0 && (
-                  <CollapseToggleRow groupKey={group.key} hiddenCount={hiddenCount} onToggle={onToggleGroup} />
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  </>
-);
+                  {visibleChildren.map((child, childIndex) => (
+                    <ChildTaskRow
+                      desktopLayout={desktopLayout}
+                      key={child.id}
+                      task={child}
+                      onRowClick={onRowClick}
+                      isLastChild={childIndex === visibleChildren.length - 1 && hiddenCount === 0}
+                    />
+                  ))}
+
+                  {hiddenCount > 0 && (
+                    <CollapseToggleRow desktopLayout={desktopLayout} groupKey={group.key} hiddenCount={hiddenCount} onToggle={onToggleGroup} />
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+};

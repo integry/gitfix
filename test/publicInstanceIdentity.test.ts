@@ -35,6 +35,7 @@ import {
   PUBLIC_IDENTITY_DIRECTORY_MODE,
   PUBLIC_IDENTITY_FILE_MODE,
   getOrCreatePublicInstanceIdentity,
+  getOrCreatePublicInstanceIdentityPinned,
   publicIdentityFilePermissionsAllowed,
   samePublicFileIdentity,
   type PublicIdentityBoundary,
@@ -155,6 +156,54 @@ test('concurrent CLI and API creators publish one complete durable winner', asyn
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const outcome of ['winner', 'absent', 'malformed', 'unsafe', 'denied'] as const) {
+  test(`concurrent recovery publication validates the final identity: ${outcome}`, async () => {
+    const parent = temporaryRoot('propr-public-identity-publication-race-');
+    const root = connectRoot(parent);
+    const data = join(root, 'data');
+    const readyName = `.${PUBLIC_INSTANCE_IDENTITY_FILENAME}.ready-v1`;
+    let raced = false;
+    try {
+      await withOwnedConnectRootSnapshot(root, async ({ identityDirectory }) => {
+        const directory = {
+          ...identityDirectory,
+          publishNoReplace(oldName: string, newName: string): void {
+            if (oldName === readyName && newName === PUBLIC_INSTANCE_IDENTITY_FILENAME && !raced) {
+              raced = true;
+              if (outcome === 'denied') {
+                throw Object.assign(new Error('publication denied'), { code: 'EACCES' });
+              }
+              if (outcome === 'absent') {
+                identityDirectory.unlink(readyName);
+              } else {
+                // A peer finishes publication after our READY read, before our link.
+                identityDirectory.publishNoReplace(oldName, newName);
+                if (outcome === 'malformed') writeFileSync(identityPath(data), '{invalid');
+                if (outcome === 'unsafe') chmodSync(identityPath(data), 0o666);
+              }
+            }
+            identityDirectory.publishNoReplace(oldName, newName);
+          },
+        };
+        const result = getOrCreatePublicInstanceIdentityPinned(directory, { generate: () => IDS.first });
+        if (outcome === 'winner') {
+          assert.equal(await result, IDS.first);
+          assert.equal(await getApiIdentity(data, () => IDS.second), IDS.first);
+          assert.equal(lstatSync(identityPath(data)).nlink, 1);
+          assert.equal(existsSync(join(data, readyName)), false);
+        } else if (outcome === 'absent' || outcome === 'denied') {
+          await assert.rejects(result, { code: outcome === 'absent' ? 'ENOENT' : 'EACCES' });
+        } else {
+          await assert.rejects(result, outcome === 'malformed' ? SyntaxError : /permissions/);
+        }
+      }, { parseEnvFile: () => ({}) });
+      assert.equal(raced, true);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const boundary of [
   'temporary-opened',
