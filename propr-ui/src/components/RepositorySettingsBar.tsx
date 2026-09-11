@@ -20,7 +20,10 @@ const AutoCiFollowupControl: React.FC<{
       title="Automatically create follow-up work when CI fails"
       onClick={(e) => e.stopPropagation()}
     >
-      <span>Auto CI follow-up</span>
+      <span className="min-w-0">
+        <span className="block">Auto CI follow-up</span>
+        <span className="mt-1 block text-slate-500">Create follow-up work when CI fails.</span>
+      </span>
       <input
         type="checkbox"
         checked={repo.autoFollowupOnFailedCi === true}
@@ -75,18 +78,27 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
         <div>
           <h3 className="mb-2 text-[10px] uppercase font-bold tracking-widest text-slate-500">Repository</h3>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span>Monitor repository</span>
+            <span className="min-w-0">
+              <span className="block">Monitor repository</span>
+              <span className="mt-1 block text-slate-500">Process new issues in this repository.</span>
+            </span>
             <input type="checkbox" checked={repo.enabled} onChange={() => onToggle(repo.id)} disabled={isReadOnly} aria-label={`Monitor ${repo.name}`} className="sr-only peer" />
             <span className={toggleClassName} />
           </label>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span>Star repository</span>
-            <input type="checkbox" checked={repo.starred === true} onChange={() => onToggleStar(repo.id)} disabled={isReadOnly} className="sr-only peer" />
+            <span className="min-w-0">
+              <span className="block">Star repository</span>
+              <span className="mt-1 block text-slate-500">Keep this repository at the top of the list.</span>
+            </span>
+            <input type="checkbox" checked={repo.starred === true} onChange={() => onToggleStar(repo.id)} disabled={isReadOnly} aria-label="Star repository" className="sr-only peer" />
             <span className={toggleClassName} />
           </label>
           <label className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span>Hide repository</span>
-            <input type="checkbox" checked={repo.hidden === true} onChange={() => onToggleHidden(repo.id)} disabled={isReadOnly} className="sr-only peer" />
+            <span className="min-w-0">
+              <span className="block">Hide repository</span>
+              <span className="mt-1 block text-slate-500">Hide this repository from the default list.</span>
+            </span>
+            <input type="checkbox" checked={repo.hidden === true} onChange={() => onToggleHidden(repo.id)} disabled={isReadOnly} aria-label="Hide repository" className="sr-only peer" />
             <span className={toggleClassName} />
           </label>
         </div>
@@ -139,7 +151,10 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
             )}
           </dl>
           <div className="flex items-center justify-between gap-4 py-2 text-xs text-slate-600">
-            <span>Reindex</span>
+            <span className="min-w-0">
+              <span className="block">Reindex</span>
+              <span className="mt-1 block text-slate-500">Rebuild the index from the current branch.</span>
+            </span>
             <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
@@ -174,10 +189,10 @@ export const RepositorySettingsBar: React.FC<RepositorySettingsBarProps> = ({
             aria-describedby={`remove-repository-description-${repo.id}`}
             className="flex w-full items-center gap-2 rounded-md border border-red-200 bg-red-50/50 px-4 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <Trash2 className="h-3.5 w-3.5 shrink-0" />
             Remove repository from ProPR
           </button>
-          <p id={`remove-repository-description-${repo.id}`} className="mt-1 px-4 text-xs text-slate-500">
+          <p id={`remove-repository-description-${repo.id}`} className="mt-2 ml-[39px] text-xs text-slate-500">
             This only stops tracking the repository in ProPR. It will not affect the repository on GitHub.
           </p>
         </div>

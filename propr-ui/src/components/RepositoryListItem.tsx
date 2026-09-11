@@ -62,7 +62,7 @@ const getStatusInfo = (status: RepositoryIndexingStatus | undefined): {
 };
 
 const getRepositoryListItemClassName = (isSelected: boolean) => (
-  `border-b border-slate-100 cursor-pointer transition-colors relative group ${isSelected ? 'bg-slate-50' : 'hover:bg-slate-50/50'}`
+  `border-b border-slate-100 border-l-2 cursor-pointer transition-colors relative group ${isSelected ? 'border-l-teal-600 bg-slate-50' : 'border-l-transparent hover:bg-slate-50/50'}`
 );
 
 const getStatusTextClassName = (statusType: RepoStatusType) => {
@@ -100,7 +100,6 @@ export const RepositoryListItem: React.FC<RepositoryListItemProps> = ({
       className={itemClassName}
       onClick={() => onSelect?.(repo.id)}
     >
-      {isSelected && <div className="absolute left-0 top-0 bottom-0 w-1 bg-teal-500" />}
       <div className={`space-y-1 px-4 py-2 ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
         <div className="flex items-center gap-2 text-xs min-h-5">
           <span className={statusClassName} title={statusText}>
