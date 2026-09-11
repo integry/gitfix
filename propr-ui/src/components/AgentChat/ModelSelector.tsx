@@ -35,6 +35,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [activeOptionIndex, setActiveOptionIndex] = useState(0);
   const selectorRef = useRef<HTMLDivElement>(null);
+  const comboboxRef = useRef<HTMLInputElement>(null);
   const optionsId = useId();
 
   const getOptionId = (option: AgentModelOption) =>
@@ -84,9 +85,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     toggleSelection(option);
     setSearch('');
     setActiveOptionIndex(0);
+    comboboxRef.current?.focus();
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Tab') {
+      setIsOpen(false);
+      return;
+    }
     if (event.key === 'Escape') {
       setIsOpen(false);
       return;
@@ -108,10 +114,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   return (
-    <div className="relative z-10 min-w-0 flex-shrink-0 border-b border-slate-200 bg-white" ref={selectorRef}>
+    <div
+      className="relative z-10 min-w-0 flex-shrink-0 border-b border-slate-200 bg-white"
+      ref={selectorRef}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsOpen(false);
+      }}
+    >
       <div className="relative">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
         <input
+          ref={comboboxRef}
           type="text"
           role="combobox"
           aria-label="Search and add models to compare"
@@ -186,8 +199,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                 id={getOptionId(option)}
                 type="button"
                 role="option"
+                tabIndex={-1}
                 aria-selected={isSelected}
                 onMouseEnter={() => setActiveOptionIndex(index)}
+                onPointerDown={event => event.preventDefault()}
                 onClick={() => selectOption(option)}
                 className={`flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
                   index === activeOptionIndex ? 'bg-slate-100' : 'hover:bg-slate-50'

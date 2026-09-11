@@ -54,4 +54,71 @@ describe('ModelSelector keyboard navigation', () => {
       { agentId: 'agent-8', modelId: 'model-8' },
     ]);
   });
+
+  it('keeps options out of the tab order and closes the popup on Tab', () => {
+    render(
+      <ModelSelector
+        options={options}
+        selectedModels={[]}
+        onSelectedModelsChange={vi.fn()}
+        onClear={vi.fn()}
+      />,
+    );
+
+    const combobox = screen.getByRole('combobox', { name: 'Search and add models to compare' });
+    fireEvent.focus(combobox);
+
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('tabindex', '-1');
+    fireEvent.keyDown(combobox, { key: 'Tab' });
+    expect(screen.queryByRole('listbox', { name: 'Available models' })).not.toBeInTheDocument();
+  });
+
+  it('retains combobox focus for pointer selection so Escape still closes the popup', () => {
+    const onSelectedModelsChange = vi.fn();
+    render(
+      <ModelSelector
+        options={options}
+        selectedModels={[]}
+        onSelectedModelsChange={onSelectedModelsChange}
+        onClear={vi.fn()}
+      />,
+    );
+
+    const combobox = screen.getByRole('combobox', { name: 'Search and add models to compare' });
+    fireEvent.focus(combobox);
+    const option = screen.getByRole('option', { name: /Model 2/ });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+
+    expect(combobox).toHaveFocus();
+    expect(onSelectedModelsChange).toHaveBeenCalledWith([
+      { agentId: 'agent-2', modelId: 'model-2' },
+    ]);
+    expect(screen.getByRole('listbox', { name: 'Available models' })).toBeInTheDocument();
+
+    fireEvent.keyDown(combobox, { key: 'Escape' });
+    expect(screen.queryByRole('listbox', { name: 'Available models' })).not.toBeInTheDocument();
+  });
+
+  it('closes the popup when focus leaves the selector', () => {
+    render(
+      <>
+        <ModelSelector
+          options={options}
+          selectedModels={[]}
+          onSelectedModelsChange={vi.fn()}
+          onClear={vi.fn()}
+        />
+        <button type="button">Outside selector</button>
+      </>,
+    );
+
+    const combobox = screen.getByRole('combobox', { name: 'Search and add models to compare' });
+    fireEvent.focus(combobox);
+    fireEvent.blur(combobox, {
+      relatedTarget: screen.getByRole('button', { name: 'Outside selector' }),
+    });
+
+    expect(screen.queryByRole('listbox', { name: 'Available models' })).not.toBeInTheDocument();
+  });
 });
