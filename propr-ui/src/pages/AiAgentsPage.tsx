@@ -270,7 +270,7 @@ const AiAgentsPage: React.FC = () => {
 
   // Mobile layout
   const renderMobileLayout = () => (
-    <div className="h-full flex flex-col overflow-hidden sm:hidden">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden md:hidden">
       {/* Mobile Header with Tabs */}
       <div className="flex-shrink-0 border-b border-slate-200 bg-white">
         <div className="flex items-center justify-between px-4 py-2">
@@ -317,10 +317,10 @@ const AiAgentsPage: React.FC = () => {
       </div>
 
       {/* Mobile Content */}
-      <div className="flex-1 overflow-auto">
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {mobileTab === 'playground' ? (
-          <div className="h-full bg-[#F8FAFC] flex flex-col">
-            <div className="flex-1 min-h-0">
+          <div className="flex h-full min-w-0 flex-col bg-[#F8FAFC]">
+            <div className="min-h-0 min-w-0 flex-1">
               {!agentsLoading && (
                 <ChatPanel
                   agents={agents}
@@ -333,7 +333,7 @@ const AiAgentsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          <div className="h-full bg-white">
+          <div className="h-full overflow-y-auto bg-white overscroll-contain">
             <div className="px-4 py-4">
               {renderConfiguration('mobile')}
             </div>
@@ -345,7 +345,7 @@ const AiAgentsPage: React.FC = () => {
 
   // Desktop layout (existing split-pane)
   const renderDesktopLayout = () => (
-    <div className="h-full hidden sm:flex flex-col overflow-hidden">
+    <div className="hidden h-full flex-col overflow-hidden md:flex">
       {/* Continuous Horizon Header - single toolbar across both columns */}
       <div className="flex-shrink-0 border-b border-slate-200 bg-white">
         <PanelGroup direction="horizontal">

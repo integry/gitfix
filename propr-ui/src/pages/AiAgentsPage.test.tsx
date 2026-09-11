@@ -96,15 +96,14 @@ describe('AiAgentsPage model selection', () => {
     const firstChips = await screen.findAllByRole('button', {
       name: `First Codex: ${sharedModelId}`
     });
-    const secondChips = screen.getAllByRole('button', {
-      name: `Second Codex: ${sharedModelId}`
-    });
-
     await waitFor(() => {
       firstChips.forEach(chip => expect(chip).toHaveAttribute('aria-pressed', 'true'));
     });
 
-    fireEvent.click(secondChips[0]);
+    const modelSearch = screen.getAllByRole('combobox', { name: 'Search and add models to compare' })[0];
+    fireEvent.focus(modelSearch);
+    fireEvent.change(modelSearch, { target: { value: 'Second Codex' } });
+    fireEvent.click(screen.getByRole('option', { name: /Second Codex/ }));
 
     await waitFor(() => {
       screen.getAllByRole('button', {
@@ -136,9 +135,9 @@ describe('AiAgentsPage model selection', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Playground' })).toHaveClass('border-b-2');
-      screen.getAllByRole('button', {
+      expect(screen.queryByRole('button', {
         name: `First Codex: ${sharedModelId}`
-      }).forEach(chip => expect(chip).toHaveAttribute('aria-pressed', 'false'));
+      })).not.toBeInTheDocument();
       screen.getAllByRole('button', {
         name: `Second Codex: ${sharedModelId}`
       }).forEach(chip => expect(chip).toHaveAttribute('aria-pressed', 'true'));
@@ -162,8 +161,10 @@ describe('AiAgentsPage model selection', () => {
 
     const directChips = await screen.findAllByRole('button', { name: `First Codex: ${sharedModelId}` });
     await waitFor(() => directChips.forEach(chip => expect(chip).toHaveAttribute('aria-pressed', 'true')));
-    const poolChips = await screen.findAllByRole('button', { name: 'Balanced Pool: Balanced' });
-    fireEvent.click(poolChips[0]);
+    const modelSearch = screen.getAllByRole('combobox', { name: 'Search and add models to compare' })[0];
+    fireEvent.focus(modelSearch);
+    fireEvent.change(modelSearch, { target: { value: 'Balanced Pool' } });
+    fireEvent.click(screen.getByRole('option', { name: /Balanced Pool/ }));
     fireEvent.click(directChips[0]);
 
     const playgroundInput = screen.getAllByPlaceholderText('Type a message to test...')[0];
