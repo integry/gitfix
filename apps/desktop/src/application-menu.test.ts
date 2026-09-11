@@ -67,6 +67,7 @@ describe('desktop application menu', () => {
       assert.equal(all.find(item => item.label === 'Back')?.enabled, true);
       assert.equal(all.find(item => item.label === 'Forward')?.enabled, false);
       assert.equal(all.some(item => item.role === 'services'), platform === 'darwin');
+      assert.equal(all.find(item => item.role === 'hide')?.label, platform === 'darwin' ? 'Hide ProPR' : undefined);
       assert.ok(all.some(item => item.role === 'copy'));
       assert.ok(all.some(item => item.role === 'zoomIn'));
       assert.ok(!all.some(item => item.label === 'Open ProPR'));

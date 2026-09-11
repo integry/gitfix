@@ -44,24 +44,23 @@ it('localizes visible names, preserving bundle paths, identity, deep links and A
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-it('sets the runtime and About name while retaining legacy or isolated data paths', () => {
-  let name = 'ProPR Desktop';
-  const paths = new Map<string, string>();
-  const writes = new Map<string, string>();
+it('brands About without accessing the internal name or data paths', () => {
   let about: unknown;
-  configureMacOSBranding({
-    getPath(key) {
-      const path = `/Application Support/${name}/${key}`;
-      paths.set(key, path);
-      return path;
-    },
-    setName(value) { name = value; },
-    setPath(key, path) { writes.set(key, path); },
+  configureMacOSBranding(new Proxy({
     setAboutPanelOptions(value) { about = value; },
-  });
-  assert.equal(name, 'ProPR');
+  }, {
+    get(target, key, receiver) {
+      assert.equal(key, 'setAboutPanelOptions', 'Branding must only use presentation APIs');
+      return Reflect.get(target, key, receiver);
+    },
+    set() { assert.fail('Branding must not mutate app properties'); },
+  }));
   assert.deepEqual(about, { applicationName: 'ProPR' });
-  assert.deepEqual(writes, paths);
+});
+
+it('keeps the shipped productName as the legacy encryption identity', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.productName, 'ProPR Desktop');
 });
 
 it('registers branding before packager signing and leaves the final signing hook last', () => {

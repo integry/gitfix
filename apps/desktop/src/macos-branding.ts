@@ -4,12 +4,12 @@ import { join } from 'node:path';
 
 export const MACOS_APP_NAME = 'ProPR';
 
-export const configureMacOSBranding = (app: Pick<App, 'getPath' | 'setPath' | 'setName' | 'setAboutPanelOptions'>): void => {
-  // Electron derives these defaults from productName. Renaming the visible app
-  // must not strand existing profiles, credentials, cookies, or test isolation.
-  const paths = (['userData', 'sessionData', 'logs'] as const).map(name => [name, app.getPath(name)] as const);
-  app.setName(MACOS_APP_NAME);
-  for (const [name, path] of paths) app.setPath(name, path);
+export const configureMacOSBranding = (app: Pick<App, 'setAboutPanelOptions'>): void => {
+  // Keep package.json productName (ProPR Desktop) as Electron's internal name.
+  // Before ready, Electron derives the macOS safeStorage Keychain namespace
+  // from app.getName(), independently of userData. Restoring paths after a
+  // setName() cannot preserve encryption identity. Do not rename at any point:
+  // visible branding belongs in menu labels, About and localized bundle names.
   app.setAboutPanelOptions({ applicationName: MACOS_APP_NAME });
 };
 

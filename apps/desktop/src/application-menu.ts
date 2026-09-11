@@ -58,7 +58,7 @@ export const createApplicationMenuTemplate = (
         commandItem(commands, 'settings', 'Settings…', 'CmdOrCtrl+,', authenticated),
         ...(mac ? [
           { type: 'separator' as const }, { role: 'services' as const },
-          { type: 'separator' as const }, { role: 'hide' as const },
+          { type: 'separator' as const }, { role: 'hide' as const, label: 'Hide ProPR' },
           { role: 'hideOthers' as const }, { role: 'unhide' as const },
         ] : []),
         { type: 'separator' }, commandItem(commands, 'quit', 'Quit ProPR', 'CmdOrCtrl+Q'),
