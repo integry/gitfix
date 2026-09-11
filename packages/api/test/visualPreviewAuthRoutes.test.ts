@@ -233,3 +233,18 @@ test('managed storage status exposes effective limits and handles offline withou
   await offline.getManagedStorageStatus({} as Request, recorder.response);
   assert.deepEqual(recorder.getBody(), { version: 1, state: 'unavailable', enabled: false, effective: null });
 });
+
+test('storage API allowlists status fields rather than serializing transport details', async () => {
+  const unsafe = { version: 1 as const, enabled: true, state: 'enabled' as const,
+    localPath: '/tmp/private/.propr/previews/original.png', viewerToken: 'secret',
+    effective: { version: 1 as const, installationId: 42, enabled: true, quotaBytes: 25 * 1024 ** 3,
+      maxObjectBytes: 500 * 1024 ** 2, retentionDays: 90, usedBytes: 0, reservedBytes: 0,
+      allowedContentTypes: ['image/png'], deleteSupported: false, uploadUrl: 'https://objects.example/?secret=1' },
+  };
+  const routes = createVisualPreviewAuthRoutes({ managedStorage: { getStatus: async () => unsafe } });
+  const recorder = responseRecorder();
+  await routes.getManagedStorageStatus({} as Request, recorder.response);
+  const output = JSON.stringify(recorder.getBody());
+  for (const forbidden of ['localPath', '/tmp/', 'viewerToken', 'uploadUrl', 'secret']) assert.ok(!output.includes(forbidden));
+  assert.equal((recorder.getBody() as typeof unsafe).effective.retentionDays, 90);
+});

@@ -620,3 +620,18 @@ test('redactSecrets redacts secrets regardless of surrounding text with no known
     assert.ok(!result.includes('VeryLongSecretPassword12345678'), 'Generic PASSWORD assignment must be redacted even without fast-path prefix');
     assert.ok(result.includes('[REDACTED_SECRET]'));
 });
+
+test('preview path redaction covers native and encoded worktree and staging references', () => {
+    for (const local of [
+        '/tmp/private/.propr/previews/screen.png', '/home/worker/.propr/preview-src/capture.ts',
+        '/tmp/propr-previews/task-123/screen.png', 'C:\\work\\.propr\\previews\\screen.png',
+        '.propr/previews/screen.png', '%2Ftmp%2Fwork%2F.propr%2Fpreviews%2Fscreen.png',
+    ]) {
+        const output = redactSecrets(`Captured [preview](<${local}>) successfully.`);
+        assert.ok(!output.includes(local));
+        assert.ok(output.includes('Captured'));
+        assert.ok(output.includes('successfully'));
+    }
+    const safe = 'https://github.com/user-attachments/assets/123 https://connect.propr.dev/previews/123';
+    assert.equal(redactSecrets(safe), safe);
+});

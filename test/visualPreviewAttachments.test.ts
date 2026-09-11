@@ -319,7 +319,7 @@ test('GitHub CLI PR upload enforces the capacity policy before starting gh', asy
   }
 });
 
-test('publishers store prepared originals before rejecting GitHub-ineligible attachments', async t => {
+test('publishers retain prepared originals and publish fallback text for GitHub-ineligible attachments', async t => {
   const { prepareVisualPreviewEvidence, cleanupPreparedVisualPreviewEvidence } = await import('@propr/core');
   const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
   const { simpleGit } = await import('simple-git');
@@ -351,7 +351,7 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
   assert.equal((await git.status()).files.length, 0);
 
   // Both publishers pass the complete staged original and task context to storage
-  // before rejecting it for GitHub inline publication.
+  // before explaining that GitHub inline publication is unavailable.
   const storeOriginals = t.mock.fn(async (
     originals: typeof prepared.evidence,
     context: { taskId: string; repository: string; pullRequestNumber?: number },
@@ -363,7 +363,12 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
   });
 
   const network = t.mock.method(globalThis, 'fetch', async () => { assert.fail('must not fetch'); });
-  const request = t.mock.fn(async <T>(): Promise<T> => { assert.fail('must not call GitHub'); });
+  const request = t.mock.fn(async <T>(endpoint: string, input: Record<string, unknown>): Promise<T> => {
+    assert.match(endpoint, /^PATCH /);
+    assert.match(String(input.body), /Inline preview unavailable/);
+    assert.doesNotMatch(String(input.body), /\/tmp\/|\.propr\/previews\//);
+    return { data: { body: input.body, html_url: 'https://github.com/integry/propr/pull/42' } } as T;
+  });
   const uploadAsset = t.mock.fn(async (): Promise<string> => { assert.fail('must not upload'); });
   const runCommand = t.mock.fn(async (): Promise<{ stdout: string }> => { assert.fail('must not start gh'); });
   for (const plan of ['auto', 'free', 'paid'] as const) {
@@ -373,13 +378,13 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
       evidence: { ...prepared.evidence, githubAttachmentCapacity: resolveGitHubAttachmentCapacity(plan) },
       octokit: { request }, uploadAsset, runCommand, storeOriginals,
     };
-    await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
-    await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
+    await publishPullRequestVisualPreviews(options);
+    await publishPullRequestCommentVisualPreviews(options);
   }
   assert.equal(network.mock.callCount(), 0);
   assert.equal(storeOriginals.mock.callCount(), 6);
   await Promise.all(storeOriginals.mock.calls.map(call => call.result));
-  assert.equal(request.mock.callCount(), 0);
+  assert.equal(request.mock.callCount(), 6);
   assert.equal(uploadAsset.mock.callCount(), 0);
   assert.equal(runCommand.mock.callCount(), 0);
   assert.deepEqual(await readFile(asset.absolutePath), originalBytes, 'GitHub rejection does not consume the original');
@@ -482,4 +487,56 @@ test('managed client setup failure preserves a safe result for every asset', asy
     createClient: () => { throw new Error('relay-token-secret'); },
   });
   assert.deepEqual(result, [{ version: 1, assetIndex: 0, relativePath: evidence.assets[0].relativePath, stored: false, code: 'unavailable' }]);
+});
+
+test('hybrid publication isolates mixed asset outcomes and rejects untrusted viewer links', async () => {
+  const context = { taskId: 'mixed-assets', repository: 'integry/propr', pullRequestNumber: 42 };
+  const assets = ['Original', 'Quota', 'Untrusted'].map(title => ({ ...evidence.assets[0], title }));
+  let uploads = 0;
+  let published = '';
+  const artifact = { version: 1 as const, artifactId: 'original-1', state: 'ready' as const, ...context,
+    displayFilename: 'desktop.png', sizeBytes: 7, contentType: 'image/png', sha256: 'a'.repeat(64),
+    viewerUrl: 'https://connect.propr.dev/previews/original-1', retentionExpiresAt: '2099-01-01T00:00:00Z' };
+  const result = await publishPullRequestCommentVisualPreviews({
+    owner: 'integry', repo: 'propr', pullRequestNumber: 42, startingCommentId: 100,
+    body: `Follow-up complete. ${fixturePath}`, worktreePath: fixtureDirectory, authToken: 'gho_mock',
+    evidence: { ...evidence, taskId: context.taskId, assets },
+    storeOriginals: async () => assets.map((asset, assetIndex) => ({ version: 1 as const, assetIndex, relativePath: asset.relativePath,
+      ...(assetIndex === 1 ? { stored: false as const, code: 'quota_exceeded' as const }
+        : { stored: true as const, artifact: { ...artifact, viewerUrl: assetIndex === 2 ? 'https://evil.example/previews/original-1?token=secret' : artifact.viewerUrl } }),
+    })),
+    uploadAsset: async () => {
+      uploads++;
+      if (uploads === 1) throw new Error(`upload failure: ${fixturePath}`);
+      return `https://github.com/user-attachments/assets/asset-${uploads}`;
+    },
+    octokit: { request: async <T>(endpoint: string, input: Record<string, unknown>): Promise<T> => {
+      if (endpoint.startsWith('GET')) return { data: { id: 42 } } as T;
+      published = String(input.body);
+      return { data: { body: published, html_url: 'https://github.com/integry/propr/pull/42' } } as T;
+    } },
+  });
+  assert.equal(uploads, 3, 'later assets survive earlier upload failure');
+  assert.equal(result.body, published);
+  assert.match(published, /Connect sign-in required/);
+  assert.match(published, /quota exceeded/);
+  assert.match(published, /assets\/asset-2/);
+  assert.match(published, /assets\/asset-3/);
+  for (const forbidden of [fixturePath, 'evil.example', 'token=secret']) assert.ok(!published.includes(forbidden));
+});
+
+test('GitHub upload transport failures discard raw bodies, paths, and credentials', async t => {
+  for (const failure of [new Error(`${fixturePath} Bearer private-token`),
+    Response.json({ message: `${fixturePath} https://objects.example/?token=private-token` }, { status: 500 })]) {
+    t.mock.method(globalThis, 'fetch', async () => {
+      if (failure instanceof Error) throw failure;
+      return failure;
+    });
+    await assert.rejects(uploadVisualPreviewAsset({ absolutePath: fixturePath, authToken: 'gho_mock', repositoryId: 42 }), error => {
+      const output = String(error);
+      for (const forbidden of [fixturePath, 'private-token', 'objects.example']) assert.ok(!output.includes(forbidden));
+      return true;
+    });
+    t.mock.restoreAll();
+  }
 });

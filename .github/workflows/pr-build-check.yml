@@ -9,6 +9,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  visual-previews:
+    name: Visual preview release matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate mocked Connect and GitHub release paths
+        env:
+          NODE_ENV: test
+          PROPR_DEMO_MODE: 'true'
+        run: npm run test:visual-previews
+
   cli-node-matrix:
     name: CLI Agent Skill (Node ${{ matrix.node }})
     runs-on: ubuntu-latest

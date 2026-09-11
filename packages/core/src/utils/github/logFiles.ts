@@ -10,6 +10,7 @@ import type { DetailedUsageStats, ClaudeResult as TokenCalcClaudeResult } from '
 import { formatSubscriptionUsage } from './formatSubscriptionUsage.js';
 import type { SubscriptionUsageMetrics } from './formatSubscriptionUsage.js';
 import { describeAgentTermination, resolveAgentTerminationReason } from '../../agents/termination.js';
+import { redactVisualPreviewPaths } from '../../services/visualPreviewPaths.js';
 
 interface IssueRef {
     number: number;
@@ -130,7 +131,7 @@ const SECRET_PATTERNS: SecretPattern[] = [
 ];
 
 export function redactSecrets(input: string): string {
-    let result = input;
+    let result = redactVisualPreviewPaths(input);
     for (const { pattern, replacement, dynamicReplacement } of SECRET_PATTERNS) {
         if (dynamicReplacement === 'bearer') {
             // Preserve the original casing of "Bearer" / "bearer" / "BEARER"

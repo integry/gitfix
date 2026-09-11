@@ -8,6 +8,7 @@ import {
   VISUAL_PREVIEW_DIRECTORY,
   VISUAL_PREVIEW_MANIFEST,
   VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
+  redactVisualPreviewPaths,
 } from './visualPreviewPaths.js';
 
 export {
@@ -15,6 +16,8 @@ export {
   VISUAL_PREVIEW_MANIFEST,
   VISUAL_PREVIEW_RUNTIME_DIRECTORIES,
   VISUAL_PREVIEW_SOURCE_DIRECTORY,
+  redactVisualPreviewValue,
+  redactVisualPreviewPaths,
 } from './visualPreviewPaths.js';
 export const VISUAL_PREVIEW_MARKER = '<!-- propr-visual-preview -->';
 export const VISUAL_PREVIEW_SLOT = '<!-- propr-visual-preview-slot -->';
@@ -363,7 +366,7 @@ export async function cleanupPreparedVisualPreviewEvidence(
 }
 
 function markdownText(value: string): string {
-  return value.replace(/([\\`*_[\]{}()<>#+.!|])/g, '\\$1');
+  return redactVisualPreviewPaths(value).replace(/([\\`*_[\]{}()<>#+.!|])/g, '\\$1');
 }
 
 function markdownTarget(target: string): string {
@@ -426,6 +429,7 @@ export function renderVisualPreviewUploadFailureSection(
 }
 
 export function appendVisualPreviewSection(body: string, section: string): string {
+  body = redactVisualPreviewPaths(body);
   if (!section) return body.replace(VISUAL_PREVIEW_SLOT, '');
   if (body.includes(VISUAL_PREVIEW_SLOT)) return body.replace(VISUAL_PREVIEW_SLOT, section);
   return `${body.trim()}\n\n---\n\n${section}`;
