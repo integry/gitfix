@@ -20,6 +20,9 @@ await mkdir(path.join(root, '.propr/previews'), { recursive: true });
 await writeFile(path.join(root, relativePath), '');
 await truncate(path.join(root, relativePath), 11 * MIB);
 const localPath = path.join(root, relativePath);
+const inlineRelativePath = '.propr/previews/inline.mp4';
+await writeFile(path.join(root, inlineRelativePath), 'inline preview');
+const inlineLocalPath = path.join(root, inlineRelativePath);
 const secret = 'signed-private-secret';
 const viewerUrl = 'https://connect.propr.dev/previews/original-1';
 const attachmentUrl = 'https://github.com/user-attachments/assets/video-1';
@@ -65,29 +68,25 @@ for (const plan of ['pro', 'free', 'unknown'] as const) {
           },
         });
         const legacy = ['legacy', 'community', 'offline'].includes(scenario);
-        const evidence = await collectVisualPreviewEvidence({ worktreePath: root, changedFiles: [relativePath], settings: {
+        const selectedRelativePath = legacy ? inlineRelativePath : relativePath;
+        const selectedLocalPath = legacy ? inlineLocalPath : localPath;
+        const evidence = await collectVisualPreviewEvidence({ worktreePath: root, changedFiles: [selectedRelativePath], settings: {
           enabled: true, types: ['video'], githubAttachmentCapacity: capacity,
           ...(!legacy ? { originalEvidenceCapability: { maxBytes: status.maxObjectBytes, allowedContentTypes: status.allowedContentTypes } } : {}),
         } });
         evidence.taskId = 'release-test';
-        // Older GitHub-only collection still drops videos exceeding Free limits.
-        if (legacy && plan !== 'pro') {
-          assert.equal(evidence.assets.length, 0);
-          assert.doesNotMatch(renderVisualPreviewUploadFailureSection(evidence), /\/tmp\/|\.propr\/previews\//);
-          return;
-        }
         assert.equal(evidence.assets.length, 1);
-        evidence.assets[0].title = `Demo ${localPath}`;
+        evidence.assets[0].title = `Demo ${selectedLocalPath}`;
         let published = '';
         let uploads = 0;
         const options = {
           owner: 'integry', repo: 'propr', pullRequestNumber: 2283, startingCommentId: 123, worktreePath: root,
-          authToken: 'gho_mock', evidence, body: `Implementation complete. ${localPath}`,
+          authToken: 'gho_mock', evidence, body: `Implementation complete. ${selectedLocalPath}`,
           storeOriginals: (input: typeof evidence, context: Parameters<typeof storeManagedVisualPreviewOriginals>[1]) => storeManagedVisualPreviewOriginals(input, context, { createClient: () => client }),
-          uploadAsset: async () => { uploads++; if (scenario === 'github-failed') throw new Error(`${localPath} ${secret}`); return attachmentUrl; },
+          uploadAsset: async () => { uploads++; if (scenario === 'github-failed') throw new Error(`${selectedLocalPath} ${secret}`); return attachmentUrl; },
           runCommand: async ({ args }: { args: string[] }) => {
             uploads++;
-            published = args[args.indexOf('--body') + 1].replaceAll(localPath, attachmentUrl);
+            published = args[args.indexOf('--body') + 1].replaceAll(selectedLocalPath, attachmentUrl);
             return { stdout: '' };
           },
           octokit: { request: async <T>(endpoint: string, input: Record<string, unknown>): Promise<T> => {
@@ -99,13 +98,14 @@ for (const plan of ['pro', 'free', 'unknown'] as const) {
         };
         if (target === 'pr') await publishPullRequestVisualPreviews(options);
         else assert.equal((await publishPullRequestCommentVisualPreviews(options)).body, published);
-        assert.equal(uploads, plan === 'pro' ? 1 : 0);
-        assert.equal(published.includes(attachmentUrl), plan === 'pro' && scenario !== 'github-failed');
+        const githubInlineEligible = legacy || plan === 'pro';
+        assert.equal(uploads, githubInlineEligible ? 1 : 0);
+        assert.equal(published.includes(attachmentUrl), githubInlineEligible && scenario !== 'github-failed');
         assert.equal(published.includes(viewerUrl), ['plus', 'github-failed'].includes(scenario));
         if (scenario === 'plus') assert.match(published, /Connect sign-in required/);
         if (scenario === 'quota') assert.match(published, /quota exceeded/);
         if (!legacy && plan !== 'pro') assert.match(published, /Inline preview unavailable/);
-        for (const forbidden of [root, relativePath, secret, 'private-object', 'objects.example.test']) assert.ok(!published.includes(forbidden), forbidden);
+        for (const forbidden of [root, relativePath, inlineRelativePath, secret, 'private-object', 'objects.example.test']) assert.ok(!published.includes(forbidden), forbidden);
         if (['community', 'offline'].includes(scenario)) assert.equal(calls.length, 0);
         if (scenario === 'upload-expired') assert.equal(calls.length, 2, 'expired grants must not PUT');
         if (scenario === 'object-expired') assert.equal(calls.length, 4, 'expired objects must not be linked');
@@ -113,6 +113,23 @@ for (const plan of ['pro', 'free', 'unknown'] as const) {
     }
   }
 }
+
+test('unknown and free GitHub-only collection conservatively excludes an oversized video', async () => {
+  for (const plan of ['free', 'unknown'] as const) {
+    const capacity = await loadGitHubAttachmentCapacity('auto', 'integry/propr', {
+      resolveToken: async () => 'gho_mock',
+      fetch: async () => Response.json({ login: 'integry', plan: { name: plan } }),
+    });
+    assert.equal(capacity.effectivePlan, 'free');
+    const evidence = await collectVisualPreviewEvidence({
+      worktreePath: root,
+      changedFiles: [relativePath],
+      settings: { enabled: true, types: ['video'], githubAttachmentCapacity: capacity },
+    });
+    assert.equal(evidence.assets.length, 0);
+    assert.doesNotMatch(renderVisualPreviewUploadFailureSection(evidence), /\/tmp\/|\.propr\/previews\//);
+  }
+});
 
 test('issue completion and persisted task logs redact preview and staging paths', async t => {
   const paths = [localPath, '/tmp/propr-previews/task-123/demo.png', 'C:\\work\\.propr\\preview-src\\capture.ts', encodeURI(localPath).replaceAll('/', '%2F')];

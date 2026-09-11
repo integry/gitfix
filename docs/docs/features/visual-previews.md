@@ -94,7 +94,7 @@ Each repository has a **GitHub attachment plan** setting under its visual-previe
 - `free`: enforce Free limits regardless of detection.
 - `paid`: explicitly enable paid video capacity for this repository.
 
-PNG, JPEG, GIF, SVG, and WebP images always have a **10 MiB** inline attachment limit. MP4, MOV, and WebM videos have a **10 MiB** limit for Free and **100 MiB** for paid. Other content types are unsupported. GitHub publishers validate every inline candidate against these limits before uploading it; GitHub can still reject an eligible upload.
+PNG, JPEG, GIF, SVG, and WebP images always have a **10 MiB** inline attachment limit. MP4, MOV, and WebM videos have a **10 MiB** limit for Free and **100 MiB** for paid. Other content types are unsupported. GitHub publishers validate every inline candidate against these limits before any GitHub request; GitHub can still reject an eligible upload.
 
 Original-evidence staging has its own safety capacity. Without a managed-storage capability, it defaults to the legacy image and video limits above. A trusted runtime resolver can supply `originalEvidenceCapability.maxBytes` from managed storage; staging honors that maximum, capped at **500 MiB** per original, independently of the GitHub plan. This capability is never accepted from stored repository settings. Prepared evidence retains supported originals within that safety limit and includes their size and structured `githubInline` eligibility/reason, even when they cannot be uploaded inline. The agent prompt describes both limits separately. The managed publisher links finalized originals independently of inline eligibility; it does not resize originals to fit GitHub.
 

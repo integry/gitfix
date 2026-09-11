@@ -10,6 +10,7 @@ import {
 import {
     isVisualPreviewUploadAuthenticationError,
     publishPullRequestVisualPreviews,
+    type PublishPullRequestVisualPreviewOptions,
 } from '../github/visualPreviewAttachments.js';
 
 interface GoalVisualPreviewTarget {
@@ -19,6 +20,11 @@ interface GoalVisualPreviewTarget {
     checkpoint_interval_minutes: number | null;
     worktree_path: string | null;
 }
+
+type GoalVisualPreviewPublicationOverrides = Pick<
+    PublishPullRequestVisualPreviewOptions,
+    'authToken' | 'storeOriginals' | 'trustedConnectOrigin' | 'uploadAsset'
+>;
 
 function withoutPublishedVisualPreviews(body: string): string {
     const markerIndex = body.lastIndexOf(VISUAL_PREVIEW_MARKER);
@@ -44,8 +50,12 @@ export async function publishGoalVisualPreviews(
     goal: GoalVisualPreviewTarget,
     pull: { number: number },
     prepared: Awaited<ReturnType<typeof prepareVisualPreviewEvidence>>,
-    octokit: Awaited<ReturnType<typeof getAuthenticatedOctokit>>,
+    ...publication: [
+        octokit: Awaited<ReturnType<typeof getAuthenticatedOctokit>>,
+        overrides?: GoalVisualPreviewPublicationOverrides,
+    ]
 ): Promise<void> {
+    const [octokit, publicationOverrides = {}] = publication;
     const { evidence } = prepared;
     if (evidence.assets.length === 0 && evidence.toolSuggestions.length === 0) return;
     const [owner, repo] = goal.repository.split('/');
@@ -87,6 +97,7 @@ export async function publishGoalVisualPreviews(
             evidence,
             worktreePath: goal.worktree_path!,
             octokit,
+            ...publicationOverrides,
         });
         logger.info({ goalId: goal.goal_id, pullRequestNumber: pull.number, previewCount: evidence.assets.length }, 'Uploaded goal visual previews to draft PR');
     } catch (error) {
