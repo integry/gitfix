@@ -14,7 +14,7 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
   const settings: RepositoryVisualPreviewSettings = repo.visualPreview || { enabled: false, types: ['image'] };
   const [instructions, setInstructions] = useState(settings.instructions || '');
 
-  useEffect(() => setInstructions(settings.instructions || ''), [settings.instructions]);
+  useEffect(() => setInstructions(settings.instructions || ''), [repo.id, settings.instructions]);
 
   if (isReadOnly) return null;
 
@@ -36,8 +36,8 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
   };
 
   return (
-    <div className="mt-2 text-[11px] text-slate-600" onClick={(event) => event.stopPropagation()}>
-      <label className="inline-flex items-center gap-2 cursor-pointer" title="Generate focused media for changes with a visible result">
+    <div className="contents text-xs text-slate-600" onClick={(event) => event.stopPropagation()}>
+      <label className="inline-flex items-center gap-2 whitespace-nowrap cursor-pointer" title="Generate focused media for changes with a visible result">
         <input
           type="checkbox"
           checked={settings.enabled}
@@ -53,8 +53,8 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
       </label>
 
       {settings.enabled && (
-        <div className="mt-2 ml-9 space-y-2" onClick={(event) => event.stopPropagation()}>
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="col-span-full flex flex-wrap items-start gap-3" onClick={(event) => event.stopPropagation()}>
+          <div className="flex items-center gap-2 pt-1">
             <button
               type="button"
               onClick={() => toggleType('image')}
@@ -85,7 +85,7 @@ export const RepositoryVisualPreviewControl: React.FC<RepositoryVisualPreviewCon
             }}
             maxLength={4000}
             rows={2}
-            className="w-full max-w-sm resize-y rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-1 focus:ring-teal-400"
+            className="min-w-0 w-full flex-1 basis-64 resize-y rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-1 focus:ring-teal-400"
             placeholder="Optional: capture separate desktop and mobile views…"
             aria-label={`Visual preview instructions for ${repo.name}`}
           />

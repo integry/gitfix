@@ -3,7 +3,6 @@ import { Github, RefreshCw, Star, Eye, EyeOff } from 'lucide-react';
 import { DeleteRepoDialog } from './DeleteRepoDialog';
 import { RepositoryIndexingStatus, MonitoredRepo } from '../api/proprApi';
 import { getRepoStatusKey } from '../api/repoIndexingApi';
-import { RepositoryVisualPreviewControl, type RepositoryVisualPreviewSettings } from './RepositoryVisualPreviewControl';
 
 type RepoStatusType = 'indexed' | 'indexing' | 'failed' | 'idle';
 
@@ -17,7 +16,7 @@ const TrashIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4" }) 
 
 // Monospace Code Chip for commit hash
 const MonoCodeChip: React.FC<{ children: React.ReactNode; href?: string }> = ({ children, href }) => {
-  const baseClass = "text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded";
+  const baseClass = "text-[12px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded";
   if (href) {
     return (
       <a
@@ -130,50 +129,63 @@ const RepositoryActionButtons: React.FC<{
   onToggleStar: (repoId: string) => void;
   onToggleHidden: (repoId: string) => void;
   isReadOnly?: boolean;
-}> = ({ repo, statusType, onToggle, onReindex, onDeleteClick, onToggleStar, onToggleHidden, isReadOnly = false }) => (
-  <div className="flex items-center gap-1 flex-shrink-0 w-full sm:w-auto justify-end" onClick={(e) => e.stopPropagation()}>
-    {/* Star Button */}
-    <button
-      onClick={() => onToggleStar(repo.id)}
-      disabled={isReadOnly}
-      className={`p-1.5 rounded transition-colors ${
-        repo.starred
-          ? 'text-amber-500 hover:text-amber-600 hover:bg-amber-50'
-          : 'text-slate-300 opacity-0 group-hover:opacity-100 hover:text-amber-500 hover:bg-amber-50'
-      }`}
-      title={repo.starred ? 'Unstar repository' : 'Star repository'}
-    >
-      <Star className={`w-3.5 h-3.5 ${repo.starred ? 'fill-current' : ''}`} />
-    </button>
+  isSelected: boolean;
+}> = ({ repo, statusType, onToggle, onReindex, onDeleteClick, onToggleStar, onToggleHidden, isReadOnly = false, isSelected }) => (
+  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+    <div className={`flex items-center ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100'}`}>
+      {/* Star Button */}
+      <button
+        onClick={() => onToggleStar(repo.id)}
+        disabled={isReadOnly}
+        className={`p-1.5 rounded transition-colors ${
+          repo.starred
+            ? 'text-amber-500 hover:text-amber-600 hover:bg-amber-50'
+            : 'text-slate-300 hover:text-amber-500 hover:bg-amber-50'
+        }`}
+        title={repo.starred ? 'Unstar repository' : 'Star repository'}
+      >
+        <Star className={`w-3.5 h-3.5 ${repo.starred ? 'fill-current' : ''}`} />
+      </button>
 
-    {/* Hide/Unhide Button */}
-    <button
-      onClick={() => onToggleHidden(repo.id)}
-      disabled={isReadOnly}
-      className={`p-1.5 rounded transition-colors ${
-        repo.hidden
-          ? 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-          : 'text-slate-300 opacity-0 group-hover:opacity-100 hover:text-slate-500 hover:bg-slate-100'
-      }`}
-      title={repo.hidden ? 'Unhide repository' : 'Hide repository'}
-    >
-      {repo.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-    </button>
+      {/* Hide/Unhide Button */}
+      <button
+        onClick={() => onToggleHidden(repo.id)}
+        disabled={isReadOnly}
+        className={`p-1.5 rounded transition-colors ${
+          repo.hidden
+            ? 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+            : 'text-slate-300 hover:text-slate-500 hover:bg-slate-100'
+        }`}
+        title={repo.hidden ? 'Unhide repository' : 'Hide repository'}
+      >
+        {repo.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+      </button>
 
-    {/* Reindex Button - Gray ghost style */}
-    <button
-      onClick={() => onReindex(repo.name, repo.baseBranch)}
-      className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
-      title="Reindex Repository"
-      disabled={statusType === 'indexing' || isReadOnly}
-    >
-      <RefreshCw className={`w-3.5 h-3.5 ${statusType === 'indexing' ? 'animate-spin opacity-50' : ''}`} />
-    </button>
+      {/* Reindex Button - Gray ghost style */}
+      <button
+        onClick={() => onReindex(repo.name, repo.baseBranch)}
+        className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
+        title="Reindex Repository"
+        disabled={statusType === 'indexing' || isReadOnly}
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${statusType === 'indexing' ? 'animate-spin opacity-50' : ''}`} />
+      </button>
 
+      {/* Remove repository */}
+      <button
+        onClick={onDeleteClick}
+        disabled={isReadOnly}
+        className="p-1.5 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+        title="Remove repository"
+      >
+        <TrashIcon className="w-3.5 h-3.5" />
+      </button>
+    </div>
     {/* Toggle Switch */}
     <label className="relative inline-flex items-center cursor-pointer">
       <input
         type="checkbox"
+        aria-label={`Monitor ${repo.name}`}
         checked={repo.enabled}
         onChange={() => onToggle(repo.id)}
         disabled={isReadOnly}
@@ -181,54 +193,13 @@ const RepositoryActionButtons: React.FC<{
       />
       <div className="w-7 h-4 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-teal-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-teal-500"></div>
     </label>
-
-    {/* Delete Button - Only visible on hover */}
-    <button
-      onClick={onDeleteClick}
-      disabled={isReadOnly}
-      className="p-1.5 text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600 hover:bg-red-50 rounded transition-all"
-      title="Remove repository"
-    >
-      <TrashIcon className="w-3.5 h-3.5" />
-    </button>
   </div>
 );
-
-const AutoCiFollowupControl: React.FC<{
-  repo: MonitoredRepo;
-  onToggle: (repoId: string) => void;
-  isReadOnly: boolean;
-}> = ({ repo, onToggle, isReadOnly }) => {
-  if (isReadOnly) return null;
-
-  return (
-    <label
-      className="mt-2 inline-flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer"
-      title="Automatically create follow-up work when CI fails"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <input
-        type="checkbox"
-        checked={repo.autoFollowupOnFailedCi === true}
-        onChange={() => onToggle(repo.id)}
-        className="sr-only peer"
-        aria-label={`Automatic CI follow-up for ${repo.name}`}
-      />
-      <span className="relative w-7 h-4 bg-slate-200 rounded-full peer-focus:ring-2 peer-focus:ring-teal-500/20 peer-checked:bg-teal-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:bg-white after:border after:border-slate-300 after:transition-all peer-checked:after:translate-x-full" />
-      <span>Auto CI follow-up</span>
-      <span className={`rounded px-1.5 py-0.5 font-medium ${repo.autoFollowupOnFailedCi ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
-        {repo.autoFollowupOnFailedCi ? 'On' : 'Off'}
-      </span>
-    </label>
-  );
-};
 
 interface RepositoryListItemProps {
   repo: MonitoredRepo;
   indexingStatuses: Record<string, RepositoryIndexingStatus>;
   onToggle: (repoId: string) => void;
-  onToggleAutoCiFollowup: (repoId: string) => void;
-  onUpdateVisualPreview: (repoId: string, settings: RepositoryVisualPreviewSettings) => void;
   onRemove: (repoId: string) => void | Promise<void>;
   onStopIndexing: (repoName: string, baseBranch?: string) => void;
   onReindex: (repoName: string, baseBranch?: string) => void;
@@ -243,8 +214,6 @@ export const RepositoryListItem: React.FC<RepositoryListItemProps> = ({
   repo,
   indexingStatuses,
   onToggle,
-  onToggleAutoCiFollowup,
-  onUpdateVisualPreview,
   onRemove,
   onStopIndexing,
   onReindex,
@@ -292,95 +261,64 @@ export const RepositoryListItem: React.FC<RepositoryListItemProps> = ({
       className={itemClassName}
       onClick={() => onSelect?.(repo.id)}
     >
-      {/* Right-edge teal rail for selected state - points toward right pane */}
-      {isSelected && (
-        <div className="absolute right-0 top-0 bottom-0 w-[3px] bg-teal-500" />
-      )}
-      {/* --- Repository Row: Two-Line "Pulse" Layout --- */}
-      <div className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 py-3 px-4 ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
-        {/* Left Content: Identity + Status */}
-        <div className="flex-1 min-w-0 pr-3">
-          {/* Line 1: Repository Name + GitHub Link */}
-          <div className="flex items-center gap-2 mb-1">
-            <span className="font-semibold text-slate-900 truncate">
-              {repo.alias || repo.name}
-            </span>
-            {repo.alias && (
-              <span className="text-[10px] font-mono text-slate-400 truncate">
-                {repo.name}
-              </span>
-            )}
-            <a
-              href={`https://github.com/${repo.name}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-0.5 text-slate-400 hover:text-slate-700 transition-colors flex-shrink-0"
-              title="View on GitHub"
-              onClick={(e) => e.stopPropagation()}
+      {isSelected && <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-teal-500" />}
+      <div className={`space-y-1 px-4 py-3 ${repo.enabled ? 'opacity-100' : 'opacity-50'}`}>
+        <div className="flex items-center gap-2 text-xs min-h-5">
+          {shortHash && <MonoCodeChip href={commitUrl}>{shortHash}</MonoCodeChip>}
+          <span className={statusClassName}>
+            <StatusDot status={statusType} />
+            <span>{statusText}</span>
+            {progressText && <span className="text-blue-500">({progressText})</span>}
+          </span>
+          {statusType === 'indexing' && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onStopIndexing(repo.name, repo.baseBranch);
+              }}
+              disabled={isReadOnly}
+              className="text-red-500 hover:text-red-700 rounded"
+              title="Stop Indexing"
             >
-              <Github className="w-3 h-3" />
-            </a>
-          </div>
-
-          {/* Line 2: Status + Commit Hash + Timestamp */}
-          <div className="flex items-center gap-2 text-xs">
-            {/* Status Indicator */}
-            <span className={statusClassName}>
-              <StatusDot status={statusType} />
-              <span>{statusText}</span>
-              {progressText && <span className="text-blue-500">({progressText})</span>}
-            </span>
-
-            {/* Commit Hash Chip */}
-            {shortHash && (
-              <MonoCodeChip href={commitUrl}>{shortHash}</MonoCodeChip>
-            )}
-
-            {/* Relative Timestamp */}
-            {relativeTime && statusType === 'indexed' && (
-              <span className="text-slate-400">{relativeTime}</span>
-            )}
-
-            {/* Stop button for indexing */}
-            {statusType === 'indexing' && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onStopIndexing(repo.name, repo.baseBranch);
-                }}
-                className="p-0.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                title="Stop Indexing"
-              >
-                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" />
-                </svg>
-              </button>
-            )}
-          </div>
-
-          <AutoCiFollowupControl
+              Stop
+            </button>
+          )}
+          {relativeTime && statusType === 'indexed' && (
+            <span className="ml-auto whitespace-nowrap text-slate-500">{relativeTime}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            type="button"
+            className="min-w-0 flex-1 truncate text-left font-semibold text-slate-800 rounded focus-visible:outline-teal-500"
+            title={repo.alias ? `${repo.alias} (${repo.name})` : repo.name}
+            aria-label={`Select ${repo.name}`}
+            aria-pressed={isSelected}
+          >
+            {repo.alias || repo.name}
+          </button>
+          <a
+            href={`https://github.com/${repo.name}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-0.5 text-slate-400 hover:text-slate-700 shrink-0"
+            title="View on GitHub"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Github className="w-3 h-3" />
+          </a>
+          <RepositoryActionButtons
             repo={repo}
-            onToggle={onToggleAutoCiFollowup}
+            statusType={statusType}
+            onToggle={onToggle}
+            onReindex={onReindex}
+            onDeleteClick={handleDeleteClick}
+            onToggleStar={onToggleStar}
+            onToggleHidden={onToggleHidden}
             isReadOnly={isReadOnly}
-          />
-          <RepositoryVisualPreviewControl
-            repo={repo}
-            onUpdate={onUpdateVisualPreview}
-            isReadOnly={isReadOnly}
+            isSelected={isSelected}
           />
         </div>
-
-        {/* Right Action Gutter: Fixed-width area for maintenance tools */}
-        <RepositoryActionButtons
-          repo={repo}
-          statusType={statusType}
-          onToggle={onToggle}
-          onReindex={onReindex}
-          onDeleteClick={handleDeleteClick}
-          onToggleStar={onToggleStar}
-          onToggleHidden={onToggleHidden}
-          isReadOnly={isReadOnly}
-        />
       </div>
 
       <DeleteRepoDialog

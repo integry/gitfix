@@ -32,8 +32,6 @@ interface RepositoryListContentProps {
   indexingStatuses: Record<string, RepositoryIndexingStatus>;
   selectedRepoId: string | null;
   onToggle: (repoId: string) => void;
-  onToggleAutoCiFollowup: (repoId: string) => void;
-  onUpdateVisualPreview: (repoId: string, settings: NonNullable<MonitoredRepo['visualPreview']>) => void;
   onRemove: (repoId: string) => void;
   onStopIndexing: (repoName: string, baseBranch?: string) => void;
   onReindex: (repoName: string, baseBranch?: string) => void;
@@ -51,8 +49,6 @@ export const RepositoryListContent: React.FC<RepositoryListContentProps> = ({
   indexingStatuses,
   selectedRepoId,
   onToggle,
-  onToggleAutoCiFollowup,
-  onUpdateVisualPreview,
   onRemove,
   onStopIndexing,
   onReindex,
@@ -106,8 +102,6 @@ export const RepositoryListContent: React.FC<RepositoryListContentProps> = ({
       repo={repo}
       indexingStatuses={indexingStatuses}
       onToggle={onToggle}
-      onToggleAutoCiFollowup={onToggleAutoCiFollowup}
-      onUpdateVisualPreview={onUpdateVisualPreview}
       onRemove={onRemove}
       onStopIndexing={onStopIndexing}
       onReindex={onReindex}

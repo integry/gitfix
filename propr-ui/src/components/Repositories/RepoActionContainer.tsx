@@ -49,9 +49,10 @@ export interface RepoActionContainerProps {
     baseBranch?: string;
   } | null;
   initialTab?: ActionTab;
+  settingsBar?: React.ReactNode;
 }
 
-const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo, initialTab }) => {
+const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo, initialTab, settingsBar }) => {
   const [activeTab, setActiveTab] = useState<ActionTab>(initialTab || 'chat');
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
@@ -70,9 +71,12 @@ const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo,
     if (initialTab) setActiveTab(initialTab);
   }, [initialTab]);
 
+  const selectedRepoId = selectedRepo?.id;
+  const selectedRepoName = selectedRepo?.name;
+
   // Load persisted messages when repository changes
   useEffect(() => {
-    if (!selectedRepo) {
+    if (!selectedRepoName) {
       setChatMessages([]);
       setSuggestions([]);
       return;
@@ -81,7 +85,7 @@ const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo,
     const loadMessages = async () => {
       setIsLoadingMessages(true);
       try {
-        const messages = await getChatMessages(selectedRepo.name);
+        const messages = await getChatMessages(selectedRepoName);
         setChatMessages(messages as Message[]);
       } catch (error) {
         console.error('Failed to load chat messages:', error);
@@ -93,7 +97,7 @@ const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo,
 
     loadMessages();
     setSuggestions([]);
-  }, [selectedRepo]);
+  }, [selectedRepoId, selectedRepoName]);
 
   // Build chat history for API from messages
   const chatHistory: ChatMessage[] = chatMessages.map((msg) => ({
@@ -236,7 +240,7 @@ const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo,
   return (
     <div className="h-full min-w-0 flex flex-col bg-[#F8FAFC]">
       {/* Tab Header - flush against top border */}
-      <div className="flex items-stretch overflow-x-auto overflow-y-hidden border-b border-slate-200 bg-[#F8FAFC] scrollbar-thin">
+      <div className="flex shrink-0 items-stretch overflow-x-auto overflow-y-hidden border-b border-slate-200 bg-[#F8FAFC] scrollbar-thin">
         {/* Tabs keep their natural width and scroll horizontally on narrow screens so every action remains reachable. */}
         <div className="flex min-w-max items-stretch">
           <TabButton
@@ -265,6 +269,8 @@ const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo,
           />
         </div>
       </div>
+
+      {settingsBar}
 
       {/* Tab Content */}
       <div className="flex-1 min-h-0 min-w-0">
