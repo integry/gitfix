@@ -213,6 +213,9 @@ const DraftView: React.FC<{ currentStage: StudioStage; draft: PlannerDraft; onRe
   </div>
 );
 
+const getNewDraftTitle = (search: string): string =>
+  new URLSearchParams(search).get('mode') === 'task' ? 'New Task' : 'New Plan';
+
 const getDocumentTitle = (draft: PlannerDraft | null): string => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const draftAny = draft as any;
@@ -402,7 +405,7 @@ const PlanStudioPage: React.FC<PlanStudioPageProps> = ({ isNew = false }) => {
   // The actual draft to use - prefer the in-place draft when available
   const activeDraft = inPlaceDraft || draft;
 
-  useDocumentTitle(isNew && !inPlaceDraft ? (new URLSearchParams(location.search).get('mode') === 'task' ? 'New Task' : 'New Plan') : getDocumentTitle(activeDraft));
+  useDocumentTitle(isNew && !inPlaceDraft ? getNewDraftTitle(location.search) : getDocumentTitle(activeDraft));
 
   // Determine effective draft and status for rendering decisions
   // After refetch, 'draft' from useDraft contains the latest status

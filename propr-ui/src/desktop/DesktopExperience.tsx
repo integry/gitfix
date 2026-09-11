@@ -18,10 +18,7 @@ import { useConnectCandidatePresentation } from './useConnectCandidatePresentati
 import { useDesktopNativeCommands } from './useDesktopNativeCommands';
 import { DesktopConnectionDiagnostics } from './DesktopConnectionDiagnostics';
 import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
-import {
-  packagedAcceptanceSetupSurface,
-  type PackagedAcceptanceSetupSurface,
-} from './packagedAcceptanceLocalSetupSurface';
+import { packagedAcceptanceSetupSurface, type PackagedAcceptanceSetupSurface } from './packagedAcceptanceLocalSetupSurface';
 import './desktop.css';
 
 interface DesktopExperienceProps {
@@ -187,16 +184,20 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     setState({ phase: 'choose' });
   }, [cancelDiscovery, clearConnectCandidate]);
 
+  const openEditor = (profile: DesktopProfile | 'new') => {
+    cancelDiscovery();
+    clearConnectCandidate();
+    setOperationError(null);
+    setEditing(profile);
+  };
+
   useDesktopNativeCommands({
     app: adapters.app,
     state,
     instanceChooserBlocked: localSetupOpen || Boolean(acceptanceSetup),
     onManageInstances: () => { setEditing(null); openManager(); },
     onConnectInstance: () => {
-      cancelDiscovery();
-      clearConnectCandidate();
-      setOperationError(null);
-      setEditing('new');
+      openEditor('new');
       if (state.phase === 'connected') openManager();
       else setState({ phase: 'choose' });
     },
@@ -342,13 +343,6 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   };
 
   const retry = () => { if ('profile' in state) void connect(state.profile); };
-
-  const openEditor = (profile: DesktopProfile | 'new') => {
-    cancelDiscovery();
-    clearConnectCandidate();
-    setOperationError(null);
-    setEditing(profile);
-  };
 
   const closeEditor = () => {
     cancelDiscovery();

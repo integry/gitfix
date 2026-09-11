@@ -204,14 +204,13 @@ vi.mock('../../hooks/useGenerationPolling', () => ({
   }),
 }));
 describe('SetupWizard', () => {
-  it('opens New Task with single-task creation while retaining saved settings for normal plans', () => {
-    mockLocationSearch = '?mode=task';
-    const task = render(<MemoryRouter><SetupWizard onGenerateComplete={vi.fn()} /></MemoryRouter>);
-    expect(screen.getByLabelText('Task granularity')).toHaveTextContent('single');
-    task.unmount();
-    mockLocationSearch = '';
+  it.each([
+    ['?mode=task', 'single'],
+    ['', 'medium'],
+  ])('uses %s to select %s granularity without changing saved settings', (search, granularity) => {
+    mockLocationSearch = search;
     render(<MemoryRouter><SetupWizard onGenerateComplete={vi.fn()} /></MemoryRouter>);
-    expect(screen.getByLabelText('Task granularity')).toHaveTextContent('medium');
+    expect(screen.getByLabelText('Task granularity')).toHaveTextContent(granularity);
   });
 
   beforeEach(() => {
