@@ -6,6 +6,7 @@ import { useDynamicFavicon } from '../hooks/useDynamicFavicon';
 import { useSystemReadiness } from '../hooks/useSystemReadiness';
 import { useToast } from './ui/useToast';
 import { HomeIcon, SettingsIcon, MenuIcon, CloseIcon } from './icons/LayoutIcons';
+import { DESKTOP_UI_COMMAND_EVENT } from '../desktop/useDesktopNativeCommands';
 import GlobalHeader from './GlobalHeader';
 import AgentTankSidebar from './AgentTankSidebar';
 import { useSocket } from '../contexts/useSocket';
@@ -52,6 +53,18 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { unreadCount } = useNotificationCenter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const desktop = useDesktop();
+  const [desktopSidebarHidden, setDesktopSidebarHidden] = useState(false);
+  useEffect(() => {
+    if (!desktop) return;
+    const handleCommand = (event: Event) => {
+      if ((event as CustomEvent).detail === 'toggle-sidebar') {
+        if (window.matchMedia('(min-width: 1024px)').matches) setDesktopSidebarHidden(value => !value);
+        else setIsSidebarOpen(value => !value);
+      }
+    };
+    window.addEventListener(DESKTOP_UI_COMMAND_EVENT, handleCommand);
+    return () => window.removeEventListener(DESKTOP_UI_COMMAND_EVENT, handleCommand);
+  }, [desktop]);
   // Track repository indexing statuses for toast notifications
   const repoStatusesRef = useRef<Map<string, string>>(new Map());
 
@@ -182,6 +195,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   // Handler for menu toggle
   const handleMenuToggle = () => {
+    setDesktopSidebarHidden(false);
     setIsSidebarOpen(true);
   };
 
@@ -227,7 +241,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   );
 
   return (
-    <div className="desktop-shell flex h-full min-h-0 flex-col overflow-hidden bg-light-100 relative">
+    <div className={`${desktop && desktopSidebarHidden ? 'desktop-sidebar-hidden ' : ''}desktop-shell flex h-full min-h-0 flex-col overflow-hidden bg-light-100 relative`}>
       <div className="desktop-shell-content relative flex min-h-0 flex-1 overflow-hidden">
       {desktop && <div className="desktop-connected-drag-region" aria-hidden="true" />}
       {/* Mobile Overlay */}
@@ -239,7 +253,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       )}
 
       {/* Sidebar - Responsive */}
-      <aside className={`
+      {!(desktop && desktopSidebarHidden) && <aside className={`
         fixed lg:static inset-y-0 left-0 z-30
         desktop-sidebar flex flex-col w-60 bg-white border-r border-gray-200 shadow-sm
         transform transition-transform duration-200 ease-in-out
@@ -265,7 +279,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           {(isDemoMode || userHasPermission(user, 'instance.manage_agents')) && (
             <AgentTankSidebar allowManualRefresh={!isDemoMode} />
           )}
-          <footer className="px-4 py-3 border-t border-gray-100 text-[11px] leading-tight text-gray-400 space-y-1">
+          {!desktop && <footer className="px-4 py-3 border-t border-gray-100 text-[11px] leading-tight text-gray-400 space-y-1">
             <div>
               <a
                 href="https://propr.dev"
@@ -278,7 +292,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               v{__APP_VERSION__}
             </div>
             <div>© {new Date().getFullYear()} Rinalds Uzkalns</div>
-          </footer>
+          </footer>}
           <nav className="flex flex-none flex-col gap-1 border-t border-gray-100 py-1" aria-label="Application settings">
             {utilityNavigation.map(renderNavigationItem)}
           </nav>
@@ -314,7 +328,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </div>
           )}
         </div>
-      </aside>
+      </aside>}
 
       {/* Main content wrapper */}
       <div className="desktop-main-content flex-1 flex flex-col min-w-0">

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { createApplicationMenuTemplate } from './application-menu';
+import { applicationAboutDetails, showApplicationAbout } from './application-about';
 import { createDesktopNativeCommandDispatcher } from './native-commands';
 import type { DesktopNativeCommandDelivery, DesktopNotificationScope } from './shared/contract';
 
@@ -12,6 +14,40 @@ const deferred = () => {
 };
 
 describe('desktop native command dispatcher', () => {
+  for (const command of ['settings', 'new-task', 'search', 'toggle-sidebar'] as const) {
+  it(`drops queued ${command} when another account replaces the same profile and scopes menu history`, () => {
+    let scope = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    const oldScope = scope;
+    const sent: DesktopNativeCommandDelivery[] = [];
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'desktop:native-command',
+      getWindow: () => ({ isDestroyed: () => false, webContents: { send: (_channel, value) => sent.push(value) } }),
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => scope,
+      activeNotificationScope: () => null,
+      notificationState: () => ({ available: false, enabled: false }),
+      setNativeNotificationsEnabled: async () => undefined,
+      quit: () => undefined,
+    });
+    dispatcher.connectionAvailable();
+    dispatcher.dispatch(command);
+    scope = { ...scope, transportScope: 'zyxwvutsrqponmlkjihgfe' };
+    dispatcher.rendererReady();
+    assert.deepEqual(sent, []);
+    dispatcher.updateNavigationState?.({ connectionScope: oldScope, canManageInstances: true, canGoBack: true, canGoForward: true });
+    assert.equal(dispatcher.getState().canGoBack, false);
+    dispatcher.updateNavigationState?.({ connectionScope: scope, canManageInstances: true, canGoBack: true, canGoForward: false });
+    assert.equal(dispatcher.getState().canGoBack, true);
+    dispatcher.dispatch('back');
+    assert.deepEqual(sent, [{ command: 'back', connectionScope: scope }]);
+    dispatcher.rendererUnavailable();
+    assert.equal(dispatcher.getState().canGoBack, false);
+    dispatcher.connectionUnavailable();
+    assert.equal(dispatcher.getState().authenticated, false);
+  });
+
+  }
+
   it('restores a hidden window, gates auth actions, and delivers only fixed renderer commands when ready', () => {
     const sent: DesktopNativeCommandDelivery[] = [];
     let restores = 0;
@@ -263,3 +299,46 @@ describe('desktop native command dispatcher', () => {
     assert.equal(enabled, true);
   });
 });
+
+for (const platform of ['darwin', 'linux'] as const) {
+  it(`${platform} routes public help to the default browser and About to the native dialog without renderer authority`, async () => {
+    const urls: string[] = [];
+    let about = 0;
+    const dispatcher = createDesktopNativeCommandDispatcher({
+      channel: 'test', getWindow: () => null, restoreWindow: () => undefined,
+      activeConnectionScope: () => null, activeNotificationScope: () => null,
+      notificationState: () => ({ available: false, enabled: false }),
+      setNativeNotificationsEnabled: async () => undefined, quit: () => undefined,
+      openExternal: async url => { urls.push(url); }, showAbout: () => { about++; },
+    });
+    const items = createApplicationMenuTemplate(platform, dispatcher).flatMap(item => Array.isArray(item.submenu) ? item.submenu : []);
+    for (const label of ['ProPR Website', 'Documentation', 'Connection Help', 'Report a Problem…', 'About ProPR']) {
+      (items.find(item => item.label === label)?.click as () => void)();
+    }
+    await tick();
+    assert.deepEqual(urls, ['https://propr.dev', 'https://docs.propr.dev', 'https://docs.propr.dev/docs/operations/desktop-application', 'https://github.com/integry/propr/issues/new']);
+    assert.equal(about, 1);
+    const details = applicationAboutDetails('0.8.15', platform, 'arm64', { ...process.versions, electron: '44.0.0', chrome: '152.0.0' });
+    for (const expected of ['ProPR 0.8.15', `${platform} (arm64)`, 'Electron: 44.0.0', 'Chromium: 152.0.0', 'Node.js:', 'Rinalds Uzkalns']) assert.ok(details.includes(expected));
+  });
+}
+
+for (const platform of ['darwin', 'linux']) {
+  it(`${platform} About describes ProPR above diagnostics and copies version details only when requested`, async () => {
+    const details = applicationAboutDetails('0.8.15', platform, 'x64', process.versions);
+    const copied: string[] = [];
+    for (const response of [0, 1]) {
+      await showApplicationAbout({
+        showMessageBox: async options => {
+          assert.equal(options.title, 'About ProPR');
+          assert.equal(options.detail, `ProPR is an AI-powered development workspace for planning, running, and reviewing coding tasks across your repositories.\n\n${details}`);
+          assert.deepEqual(options.buttons, ['Close', 'Copy Version Details']);
+          return { response, checkboxChecked: false };
+        },
+        copy: text => copied.push(text),
+      }, details);
+      assert.equal(copied.length, response);
+    }
+    assert.deepEqual(copied, [details]);
+  });
+}

@@ -103,6 +103,7 @@ export const createElectronDesktopAdapters = (bridge: DesktopBridge): DesktopAda
   app: {
     onDeepLink: listener => bridge.app.onDeepLink(listener),
     onNativeCommand: listener => bridge.app.onNativeCommand(listener),
+    setNativeNavigationState: state => bridge.app.setNativeNavigationState?.(state) ?? Promise.resolve(),
     quit: () => bridge.app.quit(),
     minimize: () => bridge.app.minimize(),
     toggleMaximize: () => bridge.app.toggleMaximize(),

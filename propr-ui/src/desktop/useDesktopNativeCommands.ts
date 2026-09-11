@@ -1,4 +1,6 @@
-import { useEffect, useEffectEvent, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { DESKTOP_NAVIGATION_EVENT } from './DesktopNativeNavigationObserver';
+import { NativeNavigationHistory } from './nativeNavigationHistory';
 import { navigateToUiPath } from '../config/runtimeMode';
 import type {
   DesktopNativeCommand,
@@ -7,17 +9,28 @@ import type {
 import type { ExperienceState } from './desktopExperienceState';
 import type { DesktopAdapters, DesktopProfile } from './types';
 
+export const DESKTOP_UI_COMMAND_EVENT = 'propr:desktop-ui-command';
+
 interface DesktopNativeCommandOptions {
   app: DesktopAdapters['app'];
   state: ExperienceState;
   instanceChooserBlocked: boolean;
+  onNavigate?(): void;
   onManageInstances(): void;
   onChooseInstances(): void;
+  onConnectInstance(): void;
+  onDiagnostics(): void;
   onReconnect(profile: DesktopProfile): Promise<void>;
 }
 
-const commandPaths: Record<Exclude<DesktopNativeCommand, 'manage-instances' | 'quit'>, string> = {
+const commandPaths: Record<Exclude<DesktopNativeCommand, 'manage-instances' | 'connect-instance' | 'diagnostics' | 'search' | 'toggle-sidebar' | 'quit' | 'back' | 'forward'>, string> = {
   'new-plan': '/studio/new',
+  'new-task': '/studio/new?mode=task',
+  dashboard: '/',
+  goals: '/goals',
+  repositories: '/repositories',
+  'llm-logs': '/llm-logs',
+  settings: '/settings',
   tasks: '/tasks',
   plans: '/plans',
   inbox: '/inbox',
@@ -41,15 +54,66 @@ const matchesConnectedScope = (
   && state.result.profileId === connectionScope.profileId
   && state.result.transportScope === connectionScope.transportScope);
 
+const readDesktopPath = (): string => window.location.hash.slice(1) || '/';
+
+const navigateNativeCommand = (
+  command: Exclude<DesktopNativeCommand, 'quit' | 'manage-instances' | 'connect-instance' | 'diagnostics' | 'search' | 'toggle-sidebar'>,
+  history: NativeNavigationHistory,
+  onNavigate: DesktopNativeCommandOptions['onNavigate'],
+): void => {
+  // Include query/hash state in history (filters and detail tabs are navigation).
+  history.record(readDesktopPath());
+  const direction = command === 'back' || command === 'forward' ? command : null;
+  const target = command === 'back' || command === 'forward'
+    ? history.target(command)
+    : commandPaths[command];
+  if (target === undefined) return;
+  if (readDesktopPath() !== target && !confirmPlanStudioDiscard()) return;
+  if (direction) history.move(direction);
+  onNavigate?.();
+  if (readDesktopPath() !== target) navigateToUiPath(target);
+};
+
 export const useDesktopNativeCommands = ({
   app,
   state,
   instanceChooserBlocked,
+  onNavigate,
   onManageInstances,
   onChooseInstances,
+  onConnectInstance,
+  onDiagnostics,
   onReconnect,
 }: DesktopNativeCommandOptions): void => {
   const [pendingCommand, setPendingCommand] = useState<DesktopNativeCommandDelivery | null>(null);
+
+  const history = useRef(new NativeNavigationHistory());
+  const connection = state.phase === 'connected' ? state.result : null;
+  const profileId = connection?.profileId;
+  const transportScope = connection?.transportScope;
+  const canManageInstances = !instanceChooserBlocked
+    && !['loading', 'connecting', 'authenticating'].includes(state.phase);
+
+  useEffect(() => {
+    // Every reauthentication gets a fresh transport scope, including another
+    // account on the same instance. Never traverse the document's older history.
+    const routes = new NativeNavigationHistory();
+    history.current = routes;
+    const report = () => {
+      if (profileId && transportScope) routes.record(readDesktopPath());
+      void app.setNativeNavigationState?.({
+        connectionScope: profileId && transportScope ? { profileId, transportScope } : null,
+        canManageInstances, ...routes.state,
+      }).catch(() => undefined);
+    };
+    report();
+    window.addEventListener('hashchange', report);
+    window.addEventListener(DESKTOP_NAVIGATION_EVENT, report);
+    return () => {
+      window.removeEventListener('hashchange', report);
+      window.removeEventListener(DESKTOP_NAVIGATION_EVENT, report);
+    };
+  }, [app, profileId, transportScope, canManageInstances]);
 
   useEffect(() => app.onNativeCommand?.(setPendingCommand), [app]);
 
@@ -61,44 +125,46 @@ export const useDesktopNativeCommands = ({
       setPendingCommand(null);
       return;
     }
-    if (command === 'manage-instances') {
-      if (state.phase === 'loading' || state.phase === 'connecting' || state.phase === 'authenticating') return;
+    if (command === 'diagnostics') {
+      onDiagnostics();
+      setPendingCommand(null);
+      return;
+    }
+    if (command === 'manage-instances' || command === 'connect-instance') {
+      if (!canManageInstances) {
+        setPendingCommand(null);
+        return;
+      }
       if (!confirmPlanStudioDiscard()) {
         setPendingCommand(null);
         return;
       }
-      if (state.phase === 'connected') onManageInstances();
-      else {
-        if (instanceChooserBlocked) return;
-        onChooseInstances();
-      }
+      if (command === 'connect-instance') onConnectInstance();
+      else if (state.phase === 'connected') onManageInstances();
+      else onChooseInstances();
       setPendingCommand(null);
       return;
     }
-    if (state.phase !== 'connected') return;
+    if (state.phase !== 'connected') {
+      setPendingCommand(null);
+      return;
+    }
     if (!matchesConnectedScope(connectionScope, state)) {
       setPendingCommand(null);
       return;
     }
-    const target = commandPaths[command];
-    const current = new URL(
-      window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash || '/',
-      'https://desktop.propr.invalid',
-    ).pathname;
-    if (current !== target && current.startsWith('/studio/')
-      && !confirmPlanStudioDiscard()) {
-      setPendingCommand(null);
-      return;
-    }
-    if (current !== target) navigateToUiPath(target);
+    if (command === 'search' || command === 'toggle-sidebar') {
+      onNavigate?.();
+      window.dispatchEvent(new CustomEvent(DESKTOP_UI_COMMAND_EVENT, { detail: command }));
+    } else navigateNativeCommand(command, history.current, onNavigate);
     setPendingCommand(null);
-  }, [app, instanceChooserBlocked, onChooseInstances, onManageInstances, pendingCommand, state]);
+  }, [app, canManageInstances, onConnectInstance, onDiagnostics, onChooseInstances, onManageInstances, onNavigate, pendingCommand, state]);
 
   // Effect Events expose only the latest committed render, and update before
   // layout effects can dispatch a shortcut for that commit.
   const handleKeyboard = useEffectEvent((event: KeyboardEvent) => {
     if (state.phase !== 'connected') return;
-    if (!app.onNativeCommand && (event.metaKey || event.ctrlKey)
+    if (canManageInstances && !app.onNativeCommand && (event.metaKey || event.ctrlKey)
         && event.shiftKey && event.key.toLowerCase() === 'i') {
       event.preventDefault();
       if (confirmPlanStudioDiscard()) onManageInstances();

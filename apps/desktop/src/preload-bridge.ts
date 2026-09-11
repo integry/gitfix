@@ -153,6 +153,7 @@ export const createDesktopBridge = (
         pendingDeepLinks.splice(0).forEach(delivery => { void consume(delivery).catch(() => undefined); });
         return () => deepLinkListeners.delete(listener);
       },
+      setNativeNavigationState: state => invoke(ipc, IPC_CHANNELS.nativeNavigationState, state),
       onNativeCommand: listener => {
         nativeCommandListeners.add(listener);
         pendingNativeCommands.splice(0).forEach(command => listener(command));

@@ -20,6 +20,7 @@ import {
   normalizeDesktopRuntimeManifestMode,
   readDesktopRuntimeManifest,
 } from './scripts/desktop-runtime-manifest.mjs';
+import { brandMacOSPackage } from './src/macos-branding';
 import { DESKTOP_MICROPHONE_USAGE_DESCRIPTION } from './src/microphone-consent';
 import { copyPackagedNativeAuthority } from './src/package-native-authority';
 
@@ -130,8 +131,12 @@ const config: ForgeConfig = {
       ] : []),
     ],
     ...linuxSetupResources,
+    ...(process.platform === 'darwin' ? { afterCopyExtraResources: [brandMacOSPackage] } : {}),
     appBundleId: 'dev.propr.desktop',
-    extendInfo: { NSMicrophoneUsageDescription: DESKTOP_MICROPHONE_USAGE_DESCRIPTION },
+    extendInfo: {
+      NSMicrophoneUsageDescription: DESKTOP_MICROPHONE_USAGE_DESCRIPTION,
+      ...(process.platform === 'darwin' ? { CFBundleDevelopmentRegion: 'en' } : {}),
+    },
     appCategoryType: 'public.app-category.developer-tools',
     appVersion: releaseVersion,
     buildVersion: releaseVersion,

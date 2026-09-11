@@ -274,14 +274,14 @@ async function createDraftForRepoChange({ newRepo, resolvedBaseBranch, config, d
   return true;
 }
 
-function useSetupWizardConfig(draft: PlannerDraft | undefined, locationState: LocationState | undefined) {
+function useSetupWizardConfig(draft: PlannerDraft | undefined, locationState: LocationState | undefined, singleTask: boolean) {
   const savedSettings = useMemo(() => getPlannerSettings(), []);
   const draftContextConfig = getDraftContextConfig(draft);
   const initialConfiguredBaseBranch = draftContextConfig?.baseBranch ?? locationState?.initialBaseBranch ?? '';
   const [config, setConfig] = useState<PlannerConfig>(() => ({
     prompt: draft?.initial_prompt ?? locationState?.initialPrompt ?? '',
     baseBranch: initialConfiguredBaseBranch,
-    granularity: draftContextConfig?.granularity ?? savedSettings.lastGranularity,
+    granularity: draftContextConfig?.granularity ?? (singleTask ? 'single' : savedSettings.lastGranularity),
     contextLevel: draftContextConfig?.contextLevel ?? savedSettings.lastContextLevel,
     compress: draftContextConfig?.compress ?? false,
     files: ensureArray(draft?.attachments),
@@ -356,7 +356,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ draft, onGenerateCompl
   const locationState = location.state as LocationState | undefined;
   const { addToast } = useToast();
   const isNewMode = !draft;
-  const { config, setConfig, savedSettings, initialConfiguredBaseBranch } = useSetupWizardConfig(draft, locationState);
+  const { config, setConfig, savedSettings, initialConfiguredBaseBranch } = useSetupWizardConfig(draft, locationState, new URLSearchParams(location.search).get('mode') === 'task');
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);

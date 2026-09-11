@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ScrollText } from 'lucide-react';
+import { DESKTOP_UI_COMMAND_EVENT } from '../desktop/useDesktopNativeCommands';
+import { useDesktop } from '../desktop/DesktopContext';
 import GlobalSearch from './GlobalSearch';
 import QuickAddTodo from './QuickAddTodo';
 import { useHeaderStats, type HeaderStats } from '../hooks/useHeaderStats';
@@ -65,8 +67,10 @@ function useHeaderKeyboardShortcuts(
 
 const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggle, MenuIcon, isDemoMode = false, headerStatsOverride, newPlanPressedOverride = false, inboxUnreadCount = null }) => {
   const navigate = useNavigate();
+  const desktop = useDesktop();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [searchRequest, setSearchRequest] = useState(0);
 
   const headerStats = useHeaderStats();
   const { activePlans, reviewGroups, systemHealth, dismissPlan, dismissTask } = resolveHeaderStats(headerStatsOverride, headerStats);
@@ -77,6 +81,18 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggl
   }, [isDemoMode, navigate]);
 
   useHeaderKeyboardShortcuts(searchInputRef, setQuickAddOpen);
+  useEffect(() => {
+    if (!desktop) return;
+    const handleCommand = (event: Event) => {
+      if ((event as CustomEvent).detail === 'search') setSearchRequest(value => value + 1);
+    };
+    window.addEventListener(DESKTOP_UI_COMMAND_EVENT, handleCommand);
+    return () => window.removeEventListener(DESKTOP_UI_COMMAND_EVENT, handleCommand);
+  }, [desktop]);
+
+  useEffect(() => {
+    if (searchRequest) searchInputRef.current?.focus();
+  }, [searchRequest]);
 
   const newPlanBg = newPlanPressedOverride ? 'bg-teal-800' : 'bg-teal-600';
   const newPlanTitle = isDemoMode ? 'Demo mode is read-only' : 'New Plan';

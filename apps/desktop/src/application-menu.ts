@@ -29,35 +29,6 @@ export const createApplicationMenuTemplate = (
 ): MenuItemConstructorOptions[] => {
   const state = commands.getState();
   const authenticated = state.authenticated;
-  const appActions: MenuItemConstructorOptions[] = [
-    commandItem(commands, 'new-plan', 'New Plan', 'CmdOrCtrl+N', authenticated),
-    { type: 'separator' },
-    commandItem(commands, 'open', 'Open ProPR', 'CmdOrCtrl+O'),
-    commandItem(commands, 'manage-instances', 'Switch / Manage Instances…', 'CmdOrCtrl+Shift+I'),
-    { type: 'separator' },
-    commandItem(commands, 'notification-settings', 'Notification Settings…', 'CmdOrCtrl+,', authenticated),
-    commandItem(
-      commands,
-      'toggle-native-notifications',
-      state.nativeNotificationsEnabled ? 'Pause Native Notifications' : 'Resume Native Notifications',
-      'CmdOrCtrl+Shift+N',
-      state.nativeNotificationsAvailable,
-    ),
-  ];
-  const notificationToggle = appActions.at(-1);
-  if (notificationToggle) {
-    notificationToggle.type = 'checkbox';
-    notificationToggle.checked = state.nativeNotificationsEnabled;
-  }
-
-  const goMenu: MenuItemConstructorOptions = {
-    label: 'Go',
-    submenu: [
-      commandItem(commands, 'tasks', 'Tasks', 'CmdOrCtrl+1', authenticated),
-      commandItem(commands, 'plans', 'Plans', 'CmdOrCtrl+2', authenticated),
-      commandItem(commands, 'inbox', 'Inbox', 'CmdOrCtrl+3', authenticated),
-    ],
-  };
   const editMenu: MenuItemConstructorOptions = {
     label: 'Edit',
     submenu: [
@@ -70,45 +41,75 @@ export const createApplicationMenuTemplate = (
   const viewMenu: MenuItemConstructorOptions = {
     label: 'View',
     submenu: [
+      commandItem(commands, 'toggle-sidebar', 'Toggle Sidebar', undefined, authenticated),
+      { type: 'separator' },
       { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
       { type: 'separator' }, { role: 'togglefullscreen' },
     ],
   };
 
-  if (platform === 'darwin') {
-    return [
-      {
-        label: 'ProPR',
-        submenu: [
-          { role: 'about' }, { type: 'separator' },
-          ...appActions,
-          { type: 'separator' }, { role: 'services' },
-          { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
-          { type: 'separator' }, commandItem(commands, 'quit', 'Quit ProPR', 'CmdOrCtrl+Q'),
-        ],
-      },
-      editMenu,
-      goMenu,
-      viewMenu,
-      {
-        label: 'Window',
-        submenu: [
-          { role: 'close' }, { role: 'minimize' }, { role: 'zoom' },
-          { type: 'separator' }, { role: 'front' },
-        ],
-      },
-    ];
-  }
-
+  const mac = platform === 'darwin';
   return [
     {
       label: 'ProPR',
-      submenu: [...appActions, { type: 'separator' }, commandItem(commands, 'quit', 'Quit ProPR', 'CmdOrCtrl+Q')],
+      submenu: [
+        commandItem(commands, 'about', 'About ProPR', undefined),
+        { type: 'separator' },
+        commandItem(commands, 'settings', 'Settings…', 'CmdOrCtrl+,', authenticated),
+        ...(mac ? [
+          { type: 'separator' as const }, { role: 'services' as const },
+          { type: 'separator' as const }, { role: 'hide' as const, label: 'Hide ProPR' },
+          { role: 'hideOthers' as const }, { role: 'unhide' as const },
+        ] : []),
+        { type: 'separator' }, commandItem(commands, 'quit', 'Quit ProPR', 'CmdOrCtrl+Q'),
+      ],
+    },
+    {
+      label: 'File',
+      submenu: [
+        commandItem(commands, 'new-plan', 'New Plan', 'CmdOrCtrl+N', authenticated),
+        commandItem(commands, 'new-task', 'New Task…', undefined, authenticated),
+        { type: 'separator' },
+        commandItem(commands, 'connect-instance', 'Connect Instance…', undefined, state.canManageInstances !== false),
+        commandItem(commands, 'manage-instances', 'Switch Account / Instance…', 'CmdOrCtrl+Shift+I', state.canManageInstances !== false),
+        { type: 'separator' }, { role: 'close' },
+      ],
     },
     editMenu,
-    goMenu,
     viewMenu,
-    { label: 'Window', submenu: [{ role: 'minimize' }] },
+    {
+      label: 'Navigate',
+      submenu: [
+        commandItem(commands, 'back', 'Back', 'CmdOrCtrl+[', state.canGoBack === true),
+        commandItem(commands, 'forward', 'Forward', 'CmdOrCtrl+]', state.canGoForward === true),
+        commandItem(commands, 'search', 'Search / Go To…', 'CmdOrCtrl+K', authenticated),
+        { type: 'separator' },
+        commandItem(commands, 'dashboard', 'Dashboard', undefined, authenticated),
+        commandItem(commands, 'inbox', 'Inbox', undefined, authenticated),
+        commandItem(commands, 'plans', 'Plans', undefined, authenticated),
+        commandItem(commands, 'goals', 'Goals', undefined, authenticated),
+        commandItem(commands, 'tasks', 'Tasks', undefined, authenticated),
+        commandItem(commands, 'repositories', 'Repositories', undefined, authenticated),
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        ...(mac ? [{ role: 'zoom' as const }, { type: 'separator' as const }, { role: 'front' as const }] : []),
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        commandItem(commands, 'website', 'ProPR Website', undefined),
+        commandItem(commands, 'documentation', 'Documentation', undefined),
+        commandItem(commands, 'connection-help', 'Connection Help', undefined),
+        commandItem(commands, 'diagnostics', 'Connection Diagnostics…', undefined),
+        { type: 'separator' },
+        commandItem(commands, 'report-problem', 'Report a Problem…', undefined),
+      ],
+    },
   ];
 };
 

@@ -78,7 +78,7 @@ export const createBrowserWindowOptions = (
   }
   const sizing = clampBrowserWindowSizing(workArea);
   return {
-    title: 'ProPR Desktop',
+    title: platform === 'darwin' ? 'ProPR' : 'ProPR Desktop',
     ...sizing,
     x: workArea.x + Math.floor((workArea.width - sizing.width) / 2),
     y: workArea.y + Math.floor((workArea.height - sizing.height) / 2),

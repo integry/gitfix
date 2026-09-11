@@ -43,6 +43,8 @@ const ShortcutDuringSupersededRender = ({
     state,
     instanceChooserBlocked: false,
     onManageInstances: () => undefined,
+    onConnectInstance: () => undefined,
+    onDiagnostics: () => undefined,
     onChooseInstances: () => undefined,
     onReconnect,
   });

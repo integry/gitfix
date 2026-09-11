@@ -159,6 +159,52 @@ or re-pair profiles. Non-secret profile metadata survives relaunch. Offline prof
 or expired profile requires browser pairing again. If a managed tunnel origin or public identity changes, treat it as a
 new trust generation and confirm and pair again.
 
+## macOS branding and application navigation (#2306)
+
+The visible application name is **ProPR**. The package productName remains `ProPR Desktop` to preserve Electron's
+existing storage defaults; startup retains the resolved userData, sessionData and logs paths before setting the runtime
+and About name. Forge's `name`, `executableName`, output directories, `propr-desktop.app`, `Contents/MacOS/propr-desktop`,
+`dev.propr.desktop`, helper identities, and `propr://` registration remain unchanged.
+
+Finder compares the unlocalized display name against the bundle's on-disk name before using its localized name
+([Apple documentation](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html#//apple_ref/doc/uid/TP40009249-SW9)).
+Therefore the unlocalized `CFBundleName`/`CFBundleDisplayName` stay `propr-desktop`, while
+`Resources/en.lproj/InfoPlist.strings`, Base and each existing app localization supply **ProPR** for both keys.
+The development language is English. This avoids renaming the bundle or executable. The packager's
+`afterCopyExtraResources` hook writes this metadata after plist generation and before integrity processing, signing,
+and notarization. The final signing hook from #2303 still runs last; nothing here edits its signed result.
+
+| Menu | Actions and shortcuts |
+| --- | --- |
+| ProPR | About ProPR, Settings… (`Cmd+,`), Services, Hide, Quit ProPR |
+| File | New Plan (`Cmd+N`), Switch / Manage Instances… (`Cmd+Shift+I`), Close Window |
+| Go | Back (`Cmd+[`), Forward (`Cmd+]`), Dashboard (`Cmd+1`), Inbox (`Cmd+2`), Plans (`Cmd+3`), Goals (`Cmd+4`), Tasks (`Cmd+5`), Repositories (`Cmd+6`), LLM Log (`Cmd+7`) |
+| Edit / View / Window | Native editing, zoom/fullscreen, minimize, zoom window, bring all to front |
+
+Settings opens the actual Settings page. Section navigation closes the instance manager. History includes ordinary
+in-app links, filters and detail routes and is reset for every authenticated transport scope, including switching accounts
+on the same instance. It does not traverse the document's history from a previous account. Native commands retain the
+unsaved Plan Studio confirmation. Authenticated destinations disable while disconnected; instance management disables
+while setup, connection or authentication is busy. Permission-restricted administration pages remain in the app UI.
+Linux window framing and Windows' deferred application menus are unchanged.
+
+**Root real-Mac verification required before closing #2306:** build the final artifact using the existing desktop build
+and #2303 signing procedure; do not patch an already signed app. On an actual Mac:
+
+1. Launch with the existing saved profiles. Check the menu-bar app name, About title, Dock tooltip, Finder display name,
+   and native window title. All should show ProPR; verify the stored profiles and accounts survived. Repeat under a
+   non-English system language to exercise localization fallback. The shell pathname remains `propr-desktop.app`.
+2. Inspect the raw plist identity/executable and localized InfoPlist.strings. Verify the final outer bundle with
+   `codesign --verify --deep --strict --verbose=2` and the existing nested-native verification procedure from #2303.
+   Test both local ARM64 and the normal certificate-signed release path when producing those artifacts.
+3. From a hidden/minimized app and with the instance manager open, exercise every File/Go command and shortcut above.
+   Check the destination page, existing-window focus, and current account. Confirm Cmd+, opens all Settings.
+4. Open task details and filtered lists through ordinary UI links, then use Back/Forward. Navigate after Back and check
+   Forward disables. Switch instance/account (including another account on the same instance), reconnect, log out and
+   simulate offline; old history must not be available. During setup/approval check disabled states.
+5. Decline and accept leaving an unsaved plan through Settings, Back, instance management and Quit. Check native
+   Edit/View/Window behavior, relaunch and `propr://` links. Capture the changed native menus, About and Dock as evidence.
+
 ## Native tray and menu verification
 
 Use a real Linux desktop panel or the macOS menu bar. Automated tests cover the application-owned activation and window
@@ -175,16 +221,17 @@ activation.
    ProPR** work from that menu, while account actions and the notification toggle are disabled. On macOS, confirm ordinary
    menu-bar activation continues to open the native menu.
 3. Connect and sign in. Confirm **New Plan**, **Tasks**, **Plans**, **Inbox**, **Switch / Manage Instances…**,
-   **Notification Settings…**, and **Pause/Resume Native Notifications** appear in the tray and application menus.
+   **Notification Settings…**, and **Pause/Resume Native Notifications** appear in the tray and Linux application menus.
+   For the macOS application menu use the section below.
    Task and plan counts must open their matching destinations; unavailable counts must say unavailable rather than zero.
 4. Minimize and then hide the window. On Linux, left-click the tray icon after each state and confirm the window is
    restored and focused. Invoke each destination from the tray and application menu and confirm the same restoration
    behavior. In a plan composer, confirm leaving through a native command asks before navigating.
 5. Verify `CmdOrCtrl+N`, `CmdOrCtrl+1`, `CmdOrCtrl+2`, `CmdOrCtrl+3`, `CmdOrCtrl+Shift+I`, `CmdOrCtrl+,`, and
-   `CmdOrCtrl+Shift+N`. On macOS also confirm About, Services, Hide, Window, and standard Edit roles remain native.
+   `CmdOrCtrl+Shift+N` on Linux. macOS application shortcuts are listed below.
 6. Pause native notifications and confirm the item becomes unchecked and reads **Resume Native Notifications** while
    delivery is disabled. Resume and confirm it becomes checked and reads **Pause Native Notifications** while delivery is
-   enabled. Make the same change in Settings and reopen both menus to confirm they agree. Per-event choices must remain
+   enabled. Make the same change in Settings and reopen the tray menu (and Linux application menu) to confirm they agree. Per-event choices must remain
    unchanged.
 7. Open **Switch / Manage Instances…**, switch through the existing manager, and confirm the next command targets only the
    new instance. Sign out or disconnect and confirm stale counts disappear and account actions disable. Quit and confirm

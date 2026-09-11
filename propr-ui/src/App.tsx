@@ -1,3 +1,4 @@
+import { DesktopNativeNavigationObserver } from './desktop/DesktopNativeNavigationObserver'
 import React, { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, HashRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom'
 import Layout from './components/Layout'
@@ -164,6 +165,7 @@ const AppContent: React.FC = () => {
                 <NotificationCenterProvider key={currentUser?.id ?? (isDemoMode ? 'demo' : 'anonymous')}>
                   <Router>
                 <HostedFlowRouteSync />
+                {isDesktopRuntime() && <DesktopNativeNavigationObserver />}
                 <ConnectAccountProvider disabled={isDemoMode || currentUser === null}>
                   <RouteChunkErrorBoundary>
                     <Suspense fallback={<LoadingSpinner />}>

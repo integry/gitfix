@@ -213,6 +213,9 @@ const DraftView: React.FC<{ currentStage: StudioStage; draft: PlannerDraft; onRe
   </div>
 );
 
+const getNewDraftTitle = (search: string): string =>
+  new URLSearchParams(search).get('mode') === 'task' ? 'New Task' : 'New Plan';
+
 const getDocumentTitle = (draft: PlannerDraft | null): string => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const draftAny = draft as any;
@@ -238,14 +241,16 @@ const isGeneratingStatus = (status: string | undefined): boolean => {
 // New Draft View - for /studio/new route
 // Now accepts optional draft and callbacks to support seamless auto-save without navigation
 const NewDraftView: React.FC<{
+  singleTask?: boolean;
   draft?: PlannerDraft;
   onDraftCreated?: (draft: PlannerDraft) => void;
   onRefetch?: () => void;
   onGenerationStarted?: (runId: string) => void;
-}> = ({ draft, onDraftCreated, onRefetch, onGenerationStarted }) => (
+}> = ({ draft, onDraftCreated, onRefetch, onGenerationStarted, singleTask }) => (
   <div className="planner-studio-viewport flex flex-col">
     {/* Fixed Header */}
     <div className="bg-gray-100 px-4 py-2 md:px-6 md:py-4 border-b border-gray-300">
+      {singleTask && <div className="mb-3"><h1 className="text-lg font-semibold">New Task</h1><p className="text-sm text-slate-600">Describe one task, review the generated plan, then create and run its issue.</p></div>}
       <StudioStepper currentStage="draft" />
     </div>
 
@@ -400,7 +405,7 @@ const PlanStudioPage: React.FC<PlanStudioPageProps> = ({ isNew = false }) => {
   // The actual draft to use - prefer the in-place draft when available
   const activeDraft = inPlaceDraft || draft;
 
-  useDocumentTitle(isNew && !inPlaceDraft ? 'New Plan' : getDocumentTitle(activeDraft));
+  useDocumentTitle(isNew && !inPlaceDraft ? getNewDraftTitle(location.search) : getDocumentTitle(activeDraft));
 
   // Determine effective draft and status for rendering decisions
   // After refetch, 'draft' from useDraft contains the latest status
@@ -413,6 +418,8 @@ const PlanStudioPage: React.FC<PlanStudioPageProps> = ({ isNew = false }) => {
   if (isNew && (!effectiveDraft || isDraftStatus(effectiveDraft.status))) {
     return (
       <NewDraftView
+        key={location.key}
+        singleTask={new URLSearchParams(location.search).get('mode') === 'task'}
         draft={inPlaceDraft || undefined}
         onDraftCreated={handleDraftCreatedInPlace}
         onRefetch={refetch}

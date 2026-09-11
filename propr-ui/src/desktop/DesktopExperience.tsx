@@ -16,11 +16,9 @@ import type { DesktopAdapters, DesktopConnectionResult, DesktopProfile } from '.
 import { useDesktopDeepLinks } from './useDesktopDeepLinks';
 import { useConnectCandidatePresentation } from './useConnectCandidatePresentation';
 import { useDesktopNativeCommands } from './useDesktopNativeCommands';
+import { DesktopConnectionDiagnostics } from './DesktopConnectionDiagnostics';
 import { PackagedAcceptanceLocalSetup } from './PackagedAcceptanceLocalSetup';
-import {
-  packagedAcceptanceSetupSurface,
-  type PackagedAcceptanceSetupSurface,
-} from './packagedAcceptanceLocalSetupSurface';
+import { packagedAcceptanceSetupSurface, type PackagedAcceptanceSetupSurface } from './packagedAcceptanceLocalSetupSurface';
 import './desktop.css';
 
 interface DesktopExperienceProps {
@@ -34,6 +32,7 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
   const [state, setState] = useState<ExperienceState>({ phase: 'loading' });
   const [editing, setEditing] = useState<DesktopProfile | 'new' | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [acceptanceSetup, setAcceptanceSetup] = useState<PackagedAcceptanceSetupSurface | null>(null);
@@ -185,11 +184,25 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     setState({ phase: 'choose' });
   }, [cancelDiscovery, clearConnectCandidate]);
 
+  const openEditor = (profile: DesktopProfile | 'new') => {
+    cancelDiscovery();
+    clearConnectCandidate();
+    setOperationError(null);
+    setEditing(profile);
+  };
+
   useDesktopNativeCommands({
     app: adapters.app,
     state,
     instanceChooserBlocked: localSetupOpen || Boolean(acceptanceSetup),
-    onManageInstances: openManager,
+    onManageInstances: () => { setEditing(null); openManager(); },
+    onConnectInstance: () => {
+      openEditor('new');
+      if (state.phase === 'connected') openManager();
+      else setState({ phase: 'choose' });
+    },
+    onDiagnostics: () => setDiagnosticsOpen(true),
+    onNavigate: () => { setDiagnosticsOpen(false); closeManager(); },
     onChooseInstances: showInstanceChooser,
     onReconnect: connect,
   });
@@ -331,13 +344,6 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
 
   const retry = () => { if ('profile' in state) void connect(state.profile); };
 
-  const openEditor = (profile: DesktopProfile | 'new') => {
-    cancelDiscovery();
-    clearConnectCandidate();
-    setOperationError(null);
-    setEditing(profile);
-  };
-
   const closeEditor = () => {
     cancelDiscovery();
     clearConnectCandidate();
@@ -408,10 +414,12 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
     return <InstanceChooser onAddAccount={addAccount} profiles={profiles} busy={busy} error={operationError} localSetupSupported={adapters.platform === 'linux' && adapters.localSetup.supported} networkDiscoverySupported={adapters.discovery.supported} onLocalSetup={() => void setupLocal()} onConnectNew={() => openEditor('new')} onDiscover={() => void discover()} onConnect={profile => void connect(profile)} onEdit={openEditor} onRemove={profile => void removeProfile(profile)} />;
   };
 
-  if (state.phase !== 'connected') return <div className={`desktop-entry desktop-platform-${adapters.platform}`}><div className="desktop-entry-drag-region" aria-hidden="true" />{adapters.platform === 'linux' && <DesktopWindowControls actions={adapters.app} />}{deepLinkError && <div className="desktop-inline-error" role="alert">{deepLinkError}</div>}{content()}</div>;
+  const diagnostics = diagnosticsOpen ? <DesktopConnectionDiagnostics state={state} platform={adapters.platform} onClose={() => setDiagnosticsOpen(false)} /> : null;
+
+  if (state.phase !== 'connected') return <>{diagnostics}<div className={`desktop-entry desktop-platform-${adapters.platform}`}><div className="desktop-entry-drag-region" aria-hidden="true" />{adapters.platform === 'linux' && <DesktopWindowControls actions={adapters.app} />}{deepLinkError && <div className="desktop-inline-error" role="alert">{deepLinkError}</div>}{content()}</div></>;
 
   return (
-    <DesktopConnectedExperience
+    <>{diagnostics}<DesktopConnectedExperience
       adapters={adapters} profile={state.profile} result={state.result} profiles={profiles}
       managerOpen={managerOpen} managerRef={managerRef} editing={editing}
       operationError={operationError} deepLinkError={deepLinkError} editorNotice={editorNotice}
@@ -421,6 +429,6 @@ export const DesktopExperience: React.FC<DesktopExperienceProps> = ({ adapters, 
       addAccount={addAccount} connect={connect} removeProfile={removeProfile} saveProfile={saveProfile} retry={retry}
       setManagerOpen={setManagerOpen}
       windowControls={adapters.platform === 'linux' ? adapters.app : undefined}
-    >{children}</DesktopConnectedExperience>
+    >{children}</DesktopConnectedExperience></>
   );
 };

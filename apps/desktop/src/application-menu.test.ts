@@ -40,48 +40,53 @@ const items = (template: MenuItemConstructorOptions[]): MenuItemConstructorOptio
 ]);
 
 describe('desktop application menu', () => {
-  it('installs task-oriented Linux commands with discoverable accelerators', () => {
-    const value = fixture();
-    configureApplicationMenu(value.host, value.commands, 'linux');
-    const all = items(value.template());
-    for (const [label, accelerator] of [
-      ['New Plan', 'CmdOrCtrl+N'], ['Tasks', 'CmdOrCtrl+1'], ['Plans', 'CmdOrCtrl+2'],
-      ['Inbox', 'CmdOrCtrl+3'], ['Switch / Manage Instances…', 'CmdOrCtrl+Shift+I'],
-      ['Notification Settings…', 'CmdOrCtrl+,'],
-    ]) {
-      assert.equal(all.find(item => item.label === label)?.accelerator, accelerator);
-    }
-    assert.deepEqual(
-      all.filter(item => item.accelerator === 'CmdOrCtrl+,').map(item => item.label),
-      ['Notification Settings…'],
-    );
-    (all.find(item => item.label === 'Tasks')?.click as (() => void))();
-    assert.deepEqual(value.dispatched, ['tasks']);
-    assert.ok(all.some(item => item.role === 'copy'));
-    assert.ok(all.some(item => item.role === 'zoomIn'));
-  });
-
-  it('keeps macOS conventions and synchronizes notification/auth state', () => {
-    const value = fixture({ authenticated: false, nativeNotificationsAvailable: false });
-    const controller = configureApplicationMenu(value.host, value.commands, 'darwin');
-    let all = items(value.template());
-    assert.ok(all.some(item => item.role === 'about'));
-    assert.ok(all.some(item => item.role === 'services'));
-    assert.ok(all.some(item => item.role === 'close'));
-    assert.equal(all.find(item => item.label === 'Quit ProPR')?.accelerator, 'CmdOrCtrl+Q');
-    assert.equal(all.find(item => item.label === 'New Plan')?.enabled, false);
-    assert.equal(all.find(item => item.label === 'Resume Native Notifications')?.enabled, false);
-    assert.equal(all.find(item => item.label === 'Resume Native Notifications')?.checked, false);
-    assert.equal(value.listeners.size, 1);
-    controller.close();
-    assert.equal(value.listeners.size, 0);
-
-    const enabled = fixture({ nativeNotificationsEnabled: true });
-    configureApplicationMenu(enabled.host, enabled.commands, 'darwin');
-    const toggle = items(enabled.template()).find(item => item.label === 'Pause Native Notifications');
-    assert.equal(toggle?.type, 'checkbox');
-    assert.equal(toggle?.checked, true);
-  });
+  for (const platform of ['darwin', 'linux'] as const) {
+    it(`${platform} exposes shared real actions, conservative accelerators and native conventions`, () => {
+      const value = fixture({ canGoBack: true, canGoForward: false });
+      configureApplicationMenu(value.host, value.commands, platform);
+      const template = value.template();
+      assert.deepEqual(template.map(item => item.label), ['ProPR', 'File', 'Edit', 'View', 'Navigate', 'Window', 'Help']);
+      const all = items(template);
+      const accelerators = all.flatMap(item => item.accelerator ? [item.accelerator] : []);
+      assert.equal(new Set(accelerators).size, accelerators.length);
+      assert.ok(!accelerators.some(accelerator => /CmdOrCtrl\+[1-7]/.test(accelerator)));
+      for (const [label, command] of [
+        ['New Plan', 'new-plan'], ['New Task…', 'new-task'],
+        ['Connect Instance…', 'connect-instance'], ['Switch Account / Instance…', 'manage-instances'],
+        ['Toggle Sidebar', 'toggle-sidebar'], ['Search / Go To…', 'search'],
+        ['Dashboard', 'dashboard'], ['Inbox', 'inbox'], ['Plans', 'plans'],
+        ['Goals', 'goals'], ['Tasks', 'tasks'], ['Repositories', 'repositories'],
+        ['About ProPR', 'about'], ['ProPR Website', 'website'], ['Documentation', 'documentation'],
+        ['Connection Help', 'connection-help'], ['Connection Diagnostics…', 'diagnostics'], ['Report a Problem…', 'report-problem'],
+      ]) {
+        (all.find(item => item.label === label)?.click as () => void)();
+        assert.equal(value.dispatched.at(-1), command);
+      }
+      assert.equal(all.find(item => item.label === 'Search / Go To…')?.accelerator, 'CmdOrCtrl+K');
+      assert.equal(all.find(item => item.label === 'Settings…')?.accelerator, 'CmdOrCtrl+,');
+      assert.equal(all.find(item => item.label === 'Back')?.enabled, true);
+      assert.equal(all.find(item => item.label === 'Forward')?.enabled, false);
+      assert.equal(all.some(item => item.role === 'services'), platform === 'darwin');
+      assert.equal(all.find(item => item.role === 'hide')?.label, platform === 'darwin' ? 'Hide ProPR' : undefined);
+      assert.ok(all.some(item => item.role === 'copy'));
+      assert.ok(all.some(item => item.role === 'zoomIn'));
+      assert.ok(!all.some(item => item.label === 'Open ProPR'));
+    });
+    it(`${platform} disables unavailable actions and unsubscribes on close`, () => {
+      const value = fixture({ authenticated: false, canManageInstances: false });
+      const controller = configureApplicationMenu(value.host, value.commands, platform);
+      const all = items(value.template());
+      for (const label of ['New Plan', 'New Task…', 'Settings…', 'Back', 'Forward', 'Toggle Sidebar', 'Search / Go To…', 'Connect Instance…', 'Switch Account / Instance…']) {
+        assert.equal(all.find(item => item.label === label)?.enabled, false);
+      }
+      for (const label of ['About ProPR', 'ProPR Website', 'Connection Diagnostics…']) {
+        assert.equal(all.find(item => item.label === label)?.enabled, true);
+      }
+      assert.equal(value.listeners.size, 1);
+      controller.close();
+      assert.equal(value.listeners.size, 0);
+    });
+  }
 
   it('leaves the deferred Windows application menu untouched', () => {
     const value = fixture();

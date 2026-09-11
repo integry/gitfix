@@ -241,6 +241,24 @@ Electron `safeStorage` before they are written separately. If OS encryption is u
 `basic_text` backend—the app reports that state and refuses to persist credentials; there is no plaintext
 fallback. Profiles remain usable because they contain only a display label and validated API endpoint.
 
+On macOS, keep `package.json`'s `productName` and Electron's internal app name as **ProPR Desktop**.
+Electron initializes the Safe Storage Keychain namespace from the app name before `ready`, independently of
+`userData`. Branding must never call `app.setName('ProPR')`, even if it restores all data paths. Visible ProPR
+names come from explicit application menu labels, About options and localized bundle metadata.
+
+The native branding continuity regression uses real Electron `safeStorage` in four fresh processes: legacy
+encrypt, deliberately renamed negative control, branded decrypt/encrypt, then legacy decrypt. It reuses one
+temporary profile and prefixes both native app names with a random UUID, so neither real ProPR Keychain
+namespace is accessed. It deletes only its own synthetic Keychain items and temporary files, leaves Keychain
+defaults/search lists/ACLs alone, and emits status only. Run in an unlocked macOS test session:
+
+```sh
+PROPR_DESKTOP_MAC_SAFE_STORAGE_TEST=1 node --test apps/desktop/scripts/macos-branding-safe-storage.test.mjs
+```
+
+The normal test suite skips this native test unless explicitly enabled; Linux crypto is not evidence of macOS
+Keychain continuity. Existing-user signed-build verification remains a separate, unlock-dependent check.
+
 Opaque instance tokens and the strict-discovery public identity are bound to profile ID, normalized origin, and
 credential generation in encrypted main-process storage. The renderer cannot provide or override the identity.
 Launch, profile switch, pairing, revocation, and every Socket.IO reconnect perform credential-free strict discovery;
