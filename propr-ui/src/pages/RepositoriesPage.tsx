@@ -8,6 +8,7 @@ import { AddRepositoryModal } from '../components/AddRepositoryModal';
 import { RepoActionContainer } from '../components/Repositories';
 import { RepositorySaveStatusFooter } from '../components/RepositorySaveStatusFooter';
 import { RepositoriesPageHeader } from '../components/RepositoriesPageHeader';
+import { getRepoStatusKey } from '../api/repoIndexingApi';
 import { RepositorySettingsBar } from '../components/RepositorySettingsBar';
 import { RepositoryListContent } from '../components/RepositoryListContent';
 import { useDemoMode } from '../contexts/DemoModeContext';
@@ -85,9 +86,17 @@ const RepositoriesPage: React.FC = () => {
   };
 
   const selectedRepo = repos.find(r => r.id === selectedRepoId);
-  const settingsBar = selectedRepo ? (
+  const settingsContent = selectedRepo ? (
     <RepositorySettingsBar
+      key={selectedRepo.id}
       repo={selectedRepo}
+      indexingStatus={indexingStatuses[getRepoStatusKey(selectedRepo.name, selectedRepo.baseBranch)]}
+      onToggle={handleToggleRepo}
+      onRemove={handleRemoveRepo}
+      onStopIndexing={handleStopIndexing}
+      onReindex={handleReindexRepo}
+      onToggleStar={handleToggleStar}
+      onToggleHidden={handleToggleHidden}
       onToggleAutoCiFollowup={handleToggleAutoCiFollowup}
       onUpdateVisualPreview={handleUpdateVisualPreview}
       isReadOnly={isReadOnly}
@@ -122,7 +131,7 @@ const RepositoriesPage: React.FC = () => {
               </span>
             </div>
             <div className="flex-1 min-h-0">
-              <RepoActionContainer selectedRepo={selectedRepo} initialTab={navActiveTab} settingsBar={settingsBar} />
+              <RepoActionContainer selectedRepo={selectedRepo} initialTab={navActiveTab} settingsContent={settingsContent} />
             </div>
             <RepositorySaveStatusFooter saveStatus={saveStatus} error={error} />
           </div>
@@ -135,15 +144,8 @@ const RepositoriesPage: React.FC = () => {
                 error={error}
                 indexingStatuses={indexingStatuses}
                 selectedRepoId={selectedRepoId}
-                onToggle={handleToggleRepo}
-                onRemove={handleRemoveRepo}
-                onStopIndexing={handleStopIndexing}
-                onReindex={handleReindexRepo}
-                onToggleStar={handleToggleStar}
-                onToggleHidden={handleToggleHidden}
                 onSelect={handleSelectRepo}
                 onRetry={handleRetry}
-                isReadOnly={isReadOnly}
               />
             </div>
             <RepositorySaveStatusFooter saveStatus={saveStatus} error={error} />
@@ -163,15 +165,8 @@ const RepositoriesPage: React.FC = () => {
                   error={error}
                   indexingStatuses={indexingStatuses}
                   selectedRepoId={selectedRepoId}
-                  onToggle={handleToggleRepo}
-                  onRemove={handleRemoveRepo}
-                  onStopIndexing={handleStopIndexing}
-                  onReindex={handleReindexRepo}
-                  onToggleStar={handleToggleStar}
-                  onToggleHidden={handleToggleHidden}
                   onSelect={handleSelectRepo}
                   onRetry={handleRetry}
-                  isReadOnly={isReadOnly}
                 />
               </div>
               <RepositorySaveStatusFooter saveStatus={saveStatus} error={error} />
@@ -185,7 +180,7 @@ const RepositoriesPage: React.FC = () => {
           <Panel defaultSize={60} minSize={30}>
             <div className="h-full bg-[#F8FAFC] flex flex-col">
               <div className="flex-1 min-h-0">
-                <RepoActionContainer selectedRepo={selectedRepo || null} initialTab={navActiveTab} settingsBar={settingsBar} />
+                <RepoActionContainer selectedRepo={selectedRepo || null} initialTab={navActiveTab} settingsContent={settingsContent} />
               </div>
             </div>
           </Panel>

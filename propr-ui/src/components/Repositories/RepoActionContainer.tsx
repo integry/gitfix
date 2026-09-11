@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { MessageSquareText, Sparkles, Book, ListTodo } from 'lucide-react';
+import { MessageSquareText, Sparkles, Book, ListTodo, Settings } from 'lucide-react';
 import RepoChatPanel, { ChatResponse, Message } from './RepoChatPanel';
 import RepoImprovementsPanel, { ImprovementCategory, SuggestionItem, GenerateSuggestionsResult } from './RepoImprovementsPanel';
 import RepoBrowsePanel from './RepoBrowsePanel';
@@ -18,7 +18,7 @@ import type { InstanceCatalogAgent } from '@propr/shared';
 import { generateRepoImprovements } from '../../api/repoImprovementsApi';
 import { useDemoMode } from '../../contexts/DemoModeContext';
 
-type ActionTab = 'chat' | 'improve' | 'browse' | 'todos';
+type ActionTab = 'chat' | 'improve' | 'browse' | 'todos' | 'settings';
 
 interface TabButtonProps {
   label: string;
@@ -49,10 +49,10 @@ export interface RepoActionContainerProps {
     baseBranch?: string;
   } | null;
   initialTab?: ActionTab;
-  settingsBar?: React.ReactNode;
+  settingsContent?: React.ReactNode;
 }
 
-const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo, initialTab, settingsBar }) => {
+const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo, initialTab, settingsContent }) => {
   const [activeTab, setActiveTab] = useState<ActionTab>(initialTab || 'chat');
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
@@ -267,13 +267,20 @@ const RepoActionContainer: React.FC<RepoActionContainerProps> = ({ selectedRepo,
             isActive={activeTab === 'todos'}
             onClick={() => setActiveTab('todos')}
           />
+          {settingsContent && (
+            <TabButton
+              label="Settings"
+              icon={<Settings className="h-3 w-3" />}
+              isActive={activeTab === 'settings'}
+              onClick={() => setActiveTab('settings')}
+            />
+          )}
         </div>
       </div>
 
-      {settingsBar}
-
       {/* Tab Content */}
       <div className="flex-1 min-h-0 min-w-0">
+        {activeTab === 'settings' && settingsContent}
         {activeTab === 'chat' && (
           <RepoChatPanel
             onSendMessage={handleSendMessage}
