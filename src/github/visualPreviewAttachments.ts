@@ -134,6 +134,11 @@ export const uploadVisualPreviewAsset: VisualPreviewAssetUploader = async ({
   }
 
   if (!response.ok) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Discard best-effort: cancellation failure must not expose or replace the upload error.
+    }
     const message = response.status === 404
       ? `GitHub could not upload ${path.basename(absolutePath)} because the token owner does not have write access to the repository`
       : `GitHub could not upload ${path.basename(absolutePath)} (HTTP ${response.status})`;

@@ -635,3 +635,23 @@ test('preview path redaction covers native and encoded worktree and staging refe
     const safe = 'https://github.com/user-attachments/assets/123 https://connect.propr.dev/previews/123';
     assert.equal(redactSecrets(safe), safe);
 });
+
+test('preview path redaction preserves serialized JSON containing escaped quotes', () => {
+    const local = '/tmp/private/.propr/previews/screen.png';
+    const serialized = JSON.stringify({ message: `Captured ${local} before "the dialog" opened.` });
+    const redacted = redactSecrets(serialized);
+
+    assert.doesNotThrow(() => JSON.parse(redacted));
+    assert.equal(redacted.includes(local), false);
+    assert.match((JSON.parse(redacted) as { message: string }).message, /local preview omitted/);
+});
+
+test('redactSerializableValue redacts preview paths used as nested metadata keys', () => {
+    const local = '/tmp/private/.propr/previews/screen.png';
+    const redacted = redactSerializableValue({ metadata: { [local]: { status: 'captured' } } }) as {
+        metadata: Record<string, { status: string }>;
+    };
+
+    assert.deepEqual(Object.keys(redacted.metadata), ['[local preview omitted]']);
+    assert.equal(JSON.stringify(redacted).includes(local), false);
+});

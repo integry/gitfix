@@ -180,11 +180,10 @@ export function redactSerializableValue(obj: unknown, key: string = '', seen?: W
                 guard
             );
         }
-        const redacted: Record<string, unknown> = {};
-        for (const [k, value] of Object.entries(obj)) {
-            redacted[k] = redactSerializableValue(value, k, guard);
-        }
-        return redacted;
+        return Object.fromEntries(Object.entries(obj).map(([k, value]) => [
+            redactVisualPreviewPaths(k),
+            redactSerializableValue(value, k, guard)
+        ]));
     }
     return obj;
 }

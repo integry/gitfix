@@ -165,9 +165,11 @@ provided separately by `integry/propr-routing` and must implement this contract:
   unchanged and available until upload settles. Both passes use bounded buffers;
   neither requires a full-size `Uint8Array`/`Buffer`. The PUT is re-hashed before
   finalization to detect changed input. Node fetch uses `duplex: 'half'` and the
-  exact returned object-store headers. `Content-Type` is required; a supplied
-  `Content-Length` must match. The closed signed-header allowlist also accepts only the exact
-  create-only conditional `If-None-Match: *`; other conditional headers and values are rejected.
+  exact returned object-store headers. The signed header map must include
+  `Content-Type` exactly matching `contentType`, `Content-Length` exactly matching
+  the decimal `sizeBytes`, and the mandatory create-only conditional
+  `If-None-Match: *`. The closed signed-header allowlist rejects other conditional
+  headers and values.
   Redirects are rejected, and the relay bearer
   credential is never forwarded to the object store.
 - `POST /v1/preview-artifacts/:id/finalize` accepts version, object key,

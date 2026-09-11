@@ -647,8 +647,14 @@ test('hybrid publication isolates mixed asset outcomes and rejects untrusted vie
 });
 
 test('GitHub upload transport failures discard raw bodies, paths, and credentials', async t => {
-  for (const failure of [new Error(`${fixturePath} Bearer private-token`),
-    Response.json({ message: `${fixturePath} https://objects.example/?token=private-token` }, { status: 500 })]) {
+  let responseBodyCancelled = false;
+  const failedResponse = new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`${fixturePath} https://objects.example/?token=private-token`));
+    },
+    cancel() { responseBodyCancelled = true; },
+  }), { status: 500 });
+  for (const failure of [new Error(`${fixturePath} Bearer private-token`), failedResponse]) {
     t.mock.method(globalThis, 'fetch', async () => {
       if (failure instanceof Error) throw failure;
       return failure;
@@ -658,6 +664,7 @@ test('GitHub upload transport failures discard raw bodies, paths, and credential
       for (const forbidden of [fixturePath, 'private-token', 'objects.example']) assert.ok(!output.includes(forbidden));
       return true;
     });
+    if (failure === failedResponse) assert.equal(responseBodyCancelled, true, 'failed response body is cancelled');
     t.mock.restoreAll();
   }
 });

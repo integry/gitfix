@@ -81,6 +81,7 @@ test('task history redacts nested database history and task info without changin
       metadata: JSON.stringify({
         diagnostic: { source: sourcePath, retryable: false, attempts: 2 },
         files: [previewPath, { staged: sourcePath, exists: true }],
+        nestedMetadata: { [previewPath]: { source: sourcePath } },
       }),
     });
     const routes = createTaskHistoryRoutes({
@@ -93,7 +94,11 @@ test('task history redacts nested database history and task info without changin
     await routes.getTaskHistory({ params: { taskId: 'task-db' } } as unknown as FlatRequest, recorder.response);
 
     const body = recorder.body() as {
-      history: Array<{ metadata: { diagnostic: { retryable: boolean; attempts: number }; files: unknown[] } }>;
+      history: Array<{ metadata: {
+        diagnostic: { retryable: boolean; attempts: number };
+        files: unknown[];
+        nestedMetadata: Record<string, { source: string }>;
+      } }>;
       taskInfo: { number: number; title: string };
       usageMetrics: null;
       usageMetricRecords: unknown[];
@@ -103,6 +108,7 @@ test('task history redacts nested database history and task info without changin
     assert.equal(body.history[0].metadata.diagnostic.retryable, false);
     assert.equal(body.history[0].metadata.diagnostic.attempts, 2);
     assert.equal(body.history[0].metadata.files.length, 2);
+    assert.deepEqual(Object.keys(body.history[0].metadata.nestedMetadata), ['[local preview omitted]']);
     assert.equal(body.usageMetrics, null);
     assert.deepEqual(body.usageMetricRecords, []);
   } finally {
