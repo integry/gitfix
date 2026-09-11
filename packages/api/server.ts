@@ -2,7 +2,7 @@ import { ROUTING_STATUS_REDIS_KEY } from '@propr/shared';
 /* eslint-disable max-lines -- route registration and coordinated shutdown share startup state */
 import express, { Request, Response } from 'express';
 import { mountMcp, mcpResponseHeaders } from './mcp/server.js';
-import { getMcpOriginSync, isMcpEnabledSync } from './mcp/configResolver.js';
+import { getMcpOriginSync, isMcpEnabledSync, invalidateMcpConfigCache } from './mcp/configResolver.js';
 import { createServer, Server as HttpServer } from 'http';
 import cors from 'cors';
 import { createClient, RedisClientType } from 'redis';
@@ -464,7 +464,12 @@ async function start(): Promise<void> {
       }
       notificationProjection = new NotificationProjectionService({ database: db });
       notificationProjection.startStalledDetector();
-      configReloadSubscription = await startConfigReloadSubscription(redisClient, reloadConfigs);
+      // Every API process drops its MCP cache on a published config event, so an
+      // admin toggle applies across processes rather than waiting out the TTL.
+      configReloadSubscription = await startConfigReloadSubscription(redisClient, async () => {
+        invalidateMcpConfigCache();
+        await reloadConfigs();
+      });
       // Subscribe first, then enqueue the initial load through the same serial
       // chain so no settings update can race with the startup snapshot.
       await configReloadSubscription.reload();

@@ -35,15 +35,33 @@ let _cachedConfig: McpConfig | null | undefined = undefined;
 let _cacheTimestamp = 0;
 let _cachedOrigin: string | undefined = undefined;
 let _cachedEnabled = false;
+let _cachedScopeCeiling: McpScope[] | undefined = undefined;
 
+// Drop every derived value, not just the resolved config: the synchronous
+// readers below must not keep reporting the pre-change state until something
+// happens to re-resolve. The next resolveMcpConfig() call is authoritative.
 export function invalidateMcpConfigCache(): void {
   _cachedConfig = undefined;
   _cacheTimestamp = 0;
+  _cachedOrigin = undefined;
+  _cachedEnabled = false;
+  _cachedScopeCeiling = undefined;
 }
 
 /** Synchronous reads for middleware and CORS setup. Reflects last resolved state. */
 export function getMcpOriginSync(): string | undefined { return _cachedOrigin; }
 export function isMcpEnabledSync(): boolean { return _cachedEnabled; }
+/** Admin scope ceiling from the last resolve, or undefined when no ceiling applies. */
+export function getMcpScopeCeilingSync(): McpScope[] | undefined { return _cachedScopeCeiling; }
+
+function cacheResolved(config: McpConfig | null, now: number, origin?: string): McpConfig | null {
+  _cachedConfig = config;
+  _cacheTimestamp = now;
+  _cachedOrigin = config?.origin ?? origin;
+  _cachedEnabled = config !== null;
+  _cachedScopeCeiling = config?.scopeCeiling;
+  return config;
+}
 
 export async function loadMcpAdminSettings(database: Knex = db): Promise<McpAdminSettings> {
   const rows = await database('mcp_admin_settings').select<Array<{ key: string; value: string }>>();
@@ -64,6 +82,14 @@ export async function loadMcpAdminSettings(database: Knex = db): Promise<McpAdmi
     }
   }
   return settings;
+}
+
+/**
+ * Forget the encryption-key fingerprint so a rotated secret can be adopted.
+ * Only meaningful once the grants encrypted under the previous key are gone.
+ */
+export async function resetMcpKeyCheckValue(database: Knex = db): Promise<void> {
+  await database('mcp_admin_settings').where({ key: 'key_check_value' }).delete();
 }
 
 export async function saveMcpAdminSettingRows(updates: Record<string, string>, database: Knex = db): Promise<void> {
@@ -110,12 +136,14 @@ export async function resolveMcpConfig(database: Knex = db, env: NodeJS.ProcessE
     const config = loadMcpConfig(env) ?? null;
     _cachedOrigin = config?.origin;
     _cachedEnabled = config !== null;
+    _cachedScopeCeiling = config?.scopeCeiling;
     return config;
   }
   // hard-disabled by operator
   if (env.MCP_ENABLED === 'false' || isDemoMode()) {
     _cachedOrigin = undefined;
     _cachedEnabled = false;
+    _cachedScopeCeiling = undefined;
     return null;
   }
   // check TTL cache
@@ -124,38 +152,14 @@ export async function resolveMcpConfig(database: Knex = db, env: NodeJS.ProcessE
     return _cachedConfig;
   }
   const adminSettings = await loadMcpAdminSettings(database);
-  if (!adminSettings.enabled) {
-    _cachedConfig = null;
-    _cacheTimestamp = now;
-    _cachedOrigin = undefined;
-    _cachedEnabled = false;
-    return null;
-  }
+  if (!adminSettings.enabled) return cacheResolved(null, now);
   const origin = derivePublicOrigin(env);
-  if (!origin) {
-    _cachedConfig = null;
-    _cacheTimestamp = now;
-    _cachedOrigin = undefined;
-    _cachedEnabled = false;
-    return null;
-  }
+  if (!origin) return cacheResolved(null, now);
   const encryptionKey = deriveEncryptionKey(env);
-  if (!encryptionKey) {
-    _cachedConfig = null;
-    _cacheTimestamp = now;
-    _cachedOrigin = undefined;
-    _cachedEnabled = false;
-    return null;
-  }
+  if (!encryptionKey) return cacheResolved(null, now);
   // check key integrity
   const expectedCheck = deriveKeyCheckValue(encryptionKey);
-  if (adminSettings.keyCheckValue && adminSettings.keyCheckValue !== expectedCheck) {
-    _cachedConfig = null;
-    _cacheTimestamp = now;
-    _cachedOrigin = origin;
-    _cachedEnabled = false;
-    return null;
-  }
+  if (adminSettings.keyCheckValue && adminSettings.keyCheckValue !== expectedCheck) return cacheResolved(null, now, origin);
   // resolve instance ID
   let instanceId = env.MCP_INSTANCE_ID || adminSettings.instanceId;
   if (!instanceId) {
@@ -164,19 +168,8 @@ export async function resolveMcpConfig(database: Knex = db, env: NodeJS.ProcessE
   } else if (!adminSettings.keyCheckValue) {
     await saveMcpAdminSettingRows({ key_check_value: expectedCheck }, database);
   }
-  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(instanceId)) {
-    _cachedConfig = null;
-    _cacheTimestamp = now;
-    _cachedOrigin = undefined;
-    _cachedEnabled = false;
-    return null;
-  }
-  const config: McpConfig = { origin, resource: `${origin}/api/mcp`, instanceId, encryptionKey };
-  _cachedConfig = config;
-  _cacheTimestamp = now;
-  _cachedOrigin = origin;
-  _cachedEnabled = true;
-  return config;
+  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(instanceId)) return cacheResolved(null, now);
+  return cacheResolved({ origin, resource: `${origin}/api/mcp`, instanceId, encryptionKey, scopeCeiling: adminSettings.scopeCeiling }, now);
 }
 
 export async function resolveMcpStatus(database: Knex = db, env: NodeJS.ProcessEnv = process.env): Promise<McpStatus> {

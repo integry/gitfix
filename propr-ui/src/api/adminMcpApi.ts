@@ -52,7 +52,7 @@ export async function updateMcpAdminSettings(update: McpUpdateRequest): Promise<
   return response.json();
 }
 
-export async function revokeAllMcpConnections(): Promise<{ revoked: number }> {
+export async function revokeAllMcpConnections(): Promise<{ revoked: number; status?: McpStatus }> {
   const response = await apiFetch(`${API_BASE_URL}/api/admin/mcp/revoke-all`, {
     method: 'POST',
     credentials: 'include',

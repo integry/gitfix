@@ -162,6 +162,31 @@ function McpDetails({ data, saving, revoking, isOperatorManaged, onUpdateScopes,
   );
 }
 
+interface KeyRotationNoticeProps {
+  revoking: boolean;
+  onRevokeAll: () => void;
+}
+
+function KeyRotationNotice({ revoking, onRevokeAll }: KeyRotationNoticeProps) {
+  return (
+    <div className="mt-4 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+      <p className="font-medium">Encryption key changed</p>
+      <p className="mt-1">
+        Existing connections were encrypted with the previous secret and can no longer be used. Revoke them to clear this
+        state, then enable the MCP server again.
+      </p>
+      <button
+        type="button"
+        disabled={revoking}
+        onClick={onRevokeAll}
+        className="mt-2 rounded bg-amber-600 px-3 py-1.5 text-white disabled:opacity-50"
+      >
+        {revoking ? 'Revoking…' : 'Revoke all connections'}
+      </button>
+    </div>
+  );
+}
+
 interface McpServerSectionProps {
   onError?: (message: string) => void;
 }
@@ -197,6 +222,12 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
     try {
       const result = await updateMcpAdminSettings({ enabled });
       setData(prev => prev ? { ...prev, status: result.status, settings: { ...prev.settings, enabled } } : prev);
+      // The saved flag is only one input to the resolved state; report success
+      // against what the server actually turned on.
+      if (enabled && !result.status.enabled) {
+        onError?.('MCP could not be enabled. Resolve the reported condition and try again.');
+        return;
+      }
       setSuccessMessage(enabled ? 'MCP server enabled.' : 'MCP server disabled.');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: unknown) {
@@ -223,7 +254,9 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
     if (!window.confirm('Revoke all MCP connections? All connected clients will need to reconnect.')) return;
     setRevoking(true);
     try {
-      const { revoked } = await revokeAllMcpConnections();
+      const { revoked, status } = await revokeAllMcpConnections();
+      if (status) setData(prev => prev ? { ...prev, status } : prev);
+      else await load();
       setSuccessMessage(`Revoked ${revoked} connection${revoked !== 1 ? 's' : ''}.`);
       setTimeout(() => setSuccessMessage(null), 4000);
     } catch {
@@ -264,6 +297,10 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
             onCancelConfirm={() => setConfirmEnable(false)}
           />
         </div>
+      )}
+
+      {data?.status.keyChanged && !isOperatorManaged && !isDemoMode && (
+        <KeyRotationNotice revoking={revoking} onRevokeAll={() => void handleRevokeAll()} />
       )}
 
       {isEnabled && data && (

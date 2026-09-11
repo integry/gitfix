@@ -8,6 +8,7 @@ import {
   saveMcpAdminSettingRows,
   resolveMcpStatus,
   invalidateMcpConfigCache,
+  resetMcpKeyCheckValue,
 } from '../mcp/configResolver.js';
 
 interface AdminMcpRoutesDeps {
@@ -132,8 +133,15 @@ export function createAdminMcpRoutes({ database = db, redisClient }: AdminMcpRou
         .whereRaw('(value NOT LIKE ? OR expires_at > ?)', ['%"revoked":true%', now])
         .update({ expires_at: now - 1 });
 
+      // Every grant is now unusable, so nothing remains that was encrypted under a
+      // previous secret. Forgetting the key fingerprint clears the "Reconnect
+      // required" state and lets an admin enable MCP again after a key rotation.
+      await resetMcpKeyCheckValue(database);
+      invalidateMcpConfigCache();
+      await publishMcpUpdate(redisClient);
+
       await logActivity(redisClient, `Revoked all MCP grants (${revoked} affected)`, req.user?.username);
-      res.json({ revoked });
+      res.json({ revoked, status: await resolveMcpStatus(database) });
     } catch (error) {
       console.error('Failed to revoke MCP grants:', error);
       res.status(500).json({ error: 'Failed to revoke MCP grants' });

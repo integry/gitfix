@@ -14,7 +14,7 @@ import { McpOAuthProvider, validatePublicTokenRequest } from './oauth.js';
 import { McpPolicy, type McpPrincipal } from './policy.js';
 import { mountMcpBrowser } from './browser.js';
 import { createToolCatalog, executeTool, type McpTool, type ToolDeps } from './tools.js';
-import { resolveMcpConfig, isMcpEnabledSync } from './configResolver.js';
+import { resolveMcpConfig, isMcpEnabledSync, getMcpScopeCeilingSync } from './configResolver.js';
 
 const prompts: Record<string, string> = {
   plan_change: 'Resolve the repository and inspect indexed context. Create a draft plan, generate or refine it, and show it to the user. Publishing and implementation are separate explicit actions.',
@@ -80,6 +80,15 @@ export const mcpResponseHeaders: RequestHandler = (_req, res, next) => {
   next();
 };
 
+// Paths owned by the OAuth authorization/metadata router. Everything else must
+// fall through untouched: this router is mounted at the application root, ahead
+// of the rest of the API.
+const MCP_AUTH_PATHS = ['/authorize', '/token', '/register', '/revoke', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource'];
+
+function isMcpAuthPath(path: string): boolean {
+  return MCP_AUTH_PATHS.some(owned => path === owned || path.startsWith(`${owned}/`));
+}
+
 export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void {
   if (isDemoMode()) return;
 
@@ -99,11 +108,14 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
     const config = await resolveMcpConfig(services.db).catch(() => null);
     if (!config) return false;
     store = new McpStore(services.db, config.encryptionKey);
-    oauth = new McpOAuthProvider(store, config);
+    // Fall back to the ceiling this init resolved, so an invalidated cache never
+    // widens the grantable scopes before the next resolve repopulates it.
+    oauth = new McpOAuthProvider(store, config, () => getMcpScopeCeilingSync() ?? config.scopeCeiling);
     policy = new McpPolicy(oauth, config);
     deps = { ...services, policy };
     catalog = createToolCatalog(deps);
-    const authOptions = { provider: oauth, issuerUrl: new URL(config.origin), resourceServerUrl: new URL(config.resource), scopesSupported: [...MCP_SCOPES] };
+    const authOptions = { provider: oauth, issuerUrl: new URL(config.origin), resourceServerUrl: new URL(config.resource),
+      scopesSupported: config.scopeCeiling ? [...new Set(['read', ...config.scopeCeiling])] : [...MCP_SCOPES] };
     oauthMetadata = Object.freeze({
       ...createOAuthMetadata(authOptions),
       token_endpoint_auth_methods_supported: ['none'],
@@ -128,10 +140,17 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
     return initPromise;
   }
 
-  // Gate: initialize and then check enabled state; return 404 while disabled.
+  // The resolver is the authority on the current on/off state, so a Settings
+  // change takes effect without a restart. It is TTL-cached, so per-request
+  // cost is bounded.
+  async function mcpActive(): Promise<boolean> {
+    const config = await resolveMcpConfig(services.db).catch(() => null);
+    return config !== null && await ensureInitialized();
+  }
+
+  // Gate for MCP-owned routes: return 404 while MCP is disabled.
   const gate: RequestHandler = async (req, res, next) => {
-    if (!await ensureInitialized()) { res.status(404).end(); return; }
-    if (!isMcpEnabledSync()) { res.status(404).end(); return; }
+    if (!await mcpActive()) { res.status(404).end(); return; }
     next();
   };
 
@@ -157,16 +176,20 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
     } catch { res.status(400).json({ error: 'invalid_client' }); }
   });
   app.use('/token', gate, express.urlencoded({ extended: false, limit: '16kb' }), validatePublicTokenRequest);
-  app.use(gate, (req, res, next) => authRouter(req, res, next));
+  // The SDK router must be mounted at the application root to keep its absolute
+  // paths, so filter by path here instead of by mount point. Requests it does
+  // not own continue down the stack untouched, including while MCP is off.
+  app.use(async (req, res, next) => {
+    if (!isMcpAuthPath(req.path)) { next(); return; }
+    if (!await mcpActive()) { res.status(404).end(); return; }
+    authRouter(req, res, next);
+  });
 
   const endpoint: RequestHandler = async (req, res) => {
     // Empty 202 notifications still have an HTTP body stream at the gateway.
     res.set({ 'Cache-Control': 'no-store', 'X-ProPR-MCP-Contract': MCP_CONNECT_CONTRACT }).type('application/json');
-    if (!initialized || !isMcpEnabledSync()) {
-      res.status(404).end(); return;
-    }
     const config = await resolveMcpConfig(services.db).catch(() => null);
-    if (!config) { res.status(404).end(); return; }
+    if (!config || !await ensureInitialized()) { res.status(404).end(); return; }
     const bearer = /^Bearer ([^\s]+)$/i.exec(req.get('authorization') || '')?.[1];
     if (!bearer) {
       res.set('WWW-Authenticate', `Bearer resource_metadata="${config.origin}/.well-known/oauth-protected-resource/api/mcp"`).status(401).json({ error: 'invalid_token' }); return;
@@ -189,4 +212,9 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
     const status = error && typeof error === 'object' && 'status' in error && [400, 413, 415].includes(Number(error.status)) ? Number(error.status) : 500;
     if (!res.headersSent) res.set('X-ProPR-MCP-Contract', MCP_CONNECT_CONTRACT).status(status).json({ error: status === 500 ? 'MCP_UNAVAILABLE' : 'INVALID_REQUEST' });
   });
+
+  // Initialization also mounts the consent/apps browser routes. Start it now
+  // when the primed state says MCP is on, so those routes are reachable after a
+  // restart instead of waiting for the first OAuth request.
+  if (isMcpEnabledSync()) void ensureInitialized();
 }
