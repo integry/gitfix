@@ -108,7 +108,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   return (
-    <div className="relative z-10 flex-shrink-0 border-b border-slate-200 bg-white" ref={selectorRef}>
+    <div className="relative z-10 min-w-0 flex-shrink-0 border-b border-slate-200 bg-white" ref={selectorRef}>
       <div className="relative">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
         <input
@@ -131,12 +131,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             setActiveOptionIndex(0);
           }}
           onKeyDown={handleKeyDown}
-          placeholder={'Search and add models to compare (e.g., "Opus", "GPT-6")...'}
-          className="w-full border-b border-slate-200 bg-white py-3 pl-11 pr-4 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500"
+          placeholder="Search models to compare…"
+          className="w-full border-b border-slate-200 bg-white py-3 pl-10 pr-3 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 sm:pl-11 sm:pr-4"
         />
       </div>
 
-      <div className="flex min-h-10 items-center gap-2 px-4 py-2">
+      <div className="flex min-h-12 min-w-0 items-center gap-1 px-3 py-1.5 sm:min-h-10 sm:gap-2 sm:px-4 sm:py-2">
         <div className="scrollbar-stealth flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
           {selectedOptions.length > 0 ? selectedOptions.map(option => (
             <button
@@ -146,12 +146,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
               aria-label={`${option.agentAlias}: ${option.modelName}`}
               aria-pressed="true"
               title={`Remove ${option.modelName}`}
-              className="inline-flex flex-shrink-0 items-center gap-1.5 rounded border border-slate-200 bg-slate-100 px-2 py-1 font-mono text-[12px] text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+              className="inline-flex min-h-8 max-w-[85vw] flex-shrink-0 items-center gap-1.5 rounded border border-slate-200 bg-slate-100 px-2 py-1 font-mono text-[12px] text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 sm:max-w-none"
             >
               {option.syntheticConfigId
                 ? <Layers3 className="h-3 w-3" aria-hidden="true" />
                 : <ProviderLogo provider={option.agentAlias} className="h-3 w-3" />}
-              <span>{option.modelName}</span>
+              <span className="truncate">{option.modelName}</span>
               <X className="h-3 w-3 text-slate-400" aria-hidden="true" />
             </button>
           )) : (
@@ -163,7 +163,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         <button
           type="button"
           onClick={onClear}
-          className="flex-shrink-0 rounded px-2 py-1 text-xs text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700"
+          className="min-h-9 flex-shrink-0 rounded px-2 py-1 text-xs text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700"
           title="Clear History"
         >
           Clear
@@ -176,7 +176,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           role="listbox"
           aria-label="Available models"
           aria-multiselectable="true"
-          className="absolute left-3 right-3 top-[46px] z-20 max-h-72 overflow-y-auto rounded-md border border-slate-200 bg-white py-1 shadow-xl scrollbar-stealth"
+          className="scrollbar-stealth absolute left-2 right-2 top-[45px] z-20 max-h-[min(18rem,calc(100dvh-12rem))] overflow-y-auto overscroll-contain rounded-md border border-slate-200 bg-white py-1 shadow-xl sm:left-3 sm:right-3 sm:top-[46px] sm:max-h-72"
         >
           {filteredOptions.length > 0 ? filteredOptions.map((option, index) => {
             const isSelected = selectedModels.some(selected => isSameAgentModel(selected, option));
@@ -189,7 +189,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                 aria-selected={isSelected}
                 onMouseEnter={() => setActiveOptionIndex(index)}
                 onClick={() => selectOption(option)}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
+                className={`flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
                   index === activeOptionIndex ? 'bg-slate-100' : 'hover:bg-slate-50'
                 }`}
               >

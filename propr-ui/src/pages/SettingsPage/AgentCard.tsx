@@ -36,7 +36,7 @@ const GitHubIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' })
 );
 
 const CodeChip: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <code className={`px-1.5 py-0.5 bg-gray-100 text-gray-700 text-xs font-mono rounded-md border border-gray-200 ${className}`}>
+  <code className={`rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700 ${className}`}>
     {children}
   </code>
 );
@@ -113,7 +113,7 @@ const ModelRow: React.FC<{
   onSelect,
   selectionDisabled = false,
 }) => (
-  <div className="flex flex-wrap sm:flex-nowrap items-center py-1 px-2 hover:bg-slate-50 transition-colors text-sm">
+  <div className="flex flex-wrap items-center px-2 py-1 text-sm transition-colors hover:bg-slate-50 xl:flex-nowrap">
     <div className="flex items-center gap-1.5 flex-1 min-w-0">
       <button
         type="button"
@@ -138,19 +138,19 @@ const ModelRow: React.FC<{
       </button>
     </div>
 
-    <div className="hidden sm:block w-14 text-right flex-shrink-0 mr-3">
+    <div className="mr-3 hidden w-14 flex-shrink-0 text-right xl:block">
       {modelInfo?.contextWindow && (
         <span className="font-mono text-[11px] text-gray-500">{modelInfo.contextWindow}</span>
       )}
     </div>
 
-    <div className="flex flex-wrap items-center gap-1 w-full sm:w-[220px] mt-2 sm:mt-0 justify-start sm:justify-end">
-      <span className="inline-flex items-center gap-0.5">
+    <div className="scrollbar-stealth mt-2 flex w-full min-w-0 flex-nowrap items-center justify-start gap-1 overflow-x-auto pb-1 xl:mt-0 xl:w-[220px] xl:flex-wrap xl:justify-end xl:overflow-visible xl:pb-0">
+      <span className="inline-flex flex-shrink-0 items-center gap-0.5">
         <CodeChip className="bg-purple-50 text-purple-700 border-purple-200 text-[10px]">{modelId}</CodeChip>
         <CopyButton text={modelId} className="hover:text-purple-600" />
       </span>
       {modelInfo?.shortAlias && (
-        <span className="inline-flex items-center gap-0.5">
+        <span className="inline-flex flex-shrink-0 items-center gap-0.5">
           <CodeChip className="text-[10px]">{modelInfo.shortAlias}</CodeChip>
           <CopyButton text={modelInfo.shortAlias} />
         </span>
@@ -197,17 +197,19 @@ const AgentCard: React.FC<AgentCardProps> = ({
 
   return (
     <div className="border-b border-slate-100 py-4 first:pt-0">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <ProviderLogo provider={agent.type} className="w-5 h-5 text-gray-700 flex-shrink-0" />
-          <span className="font-semibold text-gray-900">{agent.alias}</span>
+          <span className="min-w-0 truncate font-semibold text-gray-900">{agent.alias}</span>
           <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded border capitalize ${typeBadgeColors[agent.type]}`}>
             {getAgentTypeLabel(agent.type)}
           </span>
-          <CodeChip>{agent.configPath}</CodeChip>
+          <span className="min-w-0 basis-full xl:basis-auto">
+            <CodeChip className="block max-w-full truncate">{agent.configPath}</CodeChip>
+          </span>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 self-end xl:self-auto">
           {isAgentLoginSupported(agent.type) && (
             <button
               onClick={onLogin}
@@ -254,8 +256,8 @@ const AgentCard: React.FC<AgentCardProps> = ({
         </div>
       </div>
 
-      <div className="mt-2 ml-7">
-        <div className="hidden sm:flex items-center py-1 px-2 text-[10px] text-gray-400 uppercase tracking-wide font-medium border-b border-slate-100">
+      <div className="mt-3 xl:ml-7">
+        <div className="hidden items-center border-b border-slate-100 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-gray-400 xl:flex">
           <div className="flex-1">Model</div>
           <div className="w-14 text-right flex-shrink-0 mr-3">Context</div>
           <div className="flex items-center gap-1 w-[220px] justify-end">
@@ -270,7 +272,7 @@ const AgentCard: React.FC<AgentCardProps> = ({
             type="button"
             onClick={() => setShowLegacyModels(current => !current)}
             aria-expanded={showLegacyModels}
-            className="flex w-full cursor-pointer items-center justify-center gap-1.5 border-y border-dashed border-slate-200 bg-transparent py-2 text-[11px] font-medium text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
+            className="flex min-h-11 w-full cursor-pointer items-center justify-center gap-1.5 border-y border-dashed border-slate-200 bg-transparent py-2 text-[11px] font-medium text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500 xl:min-h-0"
           >
             {showLegacyModels
               ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />

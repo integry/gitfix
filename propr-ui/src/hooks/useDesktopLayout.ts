@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 
-const DESKTOP_MEDIA_QUERY = '(min-width: 640px)';
+// Match the app shell: below `md` the global header/sidebar are replaced by
+// mobile navigation, so split-pane pages should keep using their mobile UI too.
+const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
 
 export function useDesktopLayout(): boolean {
   const getMatches = () => typeof window.matchMedia === 'function'
