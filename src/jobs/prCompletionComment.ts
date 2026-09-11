@@ -3,7 +3,7 @@ import type { UnprocessedComment } from '@propr/core';
 import { buildMetricsSection } from './prCommentJobUtils.js';
 import { buildAttributionLine, buildSlashCommandsBlock } from '../shared/slashCommandsBlock.js';
 import { buildWorkEvidenceMarker, filterRealComments } from '../shared/workEvidenceMarker.js';
-import { describeAgentTermination, resolveAgentTerminationReason, VISUAL_PREVIEW_DIRECTORY } from '@propr/core';
+import { describeAgentTermination, resolveAgentTerminationReason, VISUAL_PREVIEW_DIRECTORY, redactVisualPreviewPaths } from '@propr/core';
 
 /** Build the processing comment IDs suffix, or empty string if no real comments */
 function buildCommentIdsSuffix(comments: UnprocessedComment[]): string {
@@ -148,7 +148,7 @@ export async function buildCompletionComment(
     const partial = !claudeResult.success && terminationReason !== undefined;
 
     const cleanBody = (text: string) => {
-        return text
+        return redactVisualPreviewPaths(text)
             .replace(/^(PR|Comment by|Model):.*/gm, '')
             .split('\n')
             .filter(line => !line.replaceAll('\\', '/').includes(`${VISUAL_PREVIEW_DIRECTORY}/`))

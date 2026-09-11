@@ -436,3 +436,7 @@ export {
     scheduleRepositoryRenameCheck
 } from './services/repositoryMigrationService.js';
 export type { RepositoryRenameResult, MigrationResult } from './services/repositoryMigrationService.js';
+
+export * from './services/visualPreviewCapacityService.js';
+export * from './services/previewStorage/v1.js';
+export { createManagedPreviewStorageClient } from './services/previewStorage/runtime.js';

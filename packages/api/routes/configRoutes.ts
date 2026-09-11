@@ -12,7 +12,8 @@ import { saveSettingsWithRollback } from './configRoutesSettings.js';
 import { saveThenPublishConfigUpdate } from './configRoutesPersistence.js';
 import type { AgentPreparationDeps } from './configRoutesAgentsTypes.js';
 import type { Knex } from 'knex';
-import { normalizeRepoConfig, preserveRepoAutoFollowup, preserveRepoVisualPreview, withDefaultRepoOptions } from './configRepoValidation.js';
+import { normalizeRepoConfig, preserveRepoAutoFollowup, preserveRepoVisualPreview } from './configRepoValidation.js';
+import { loadReposWithAttachmentCapacity } from './configRoutesRepos.js';
 
 interface ConfigRoutesDeps {
   redisClient: RedisClientType;
@@ -185,7 +186,7 @@ export function createConfigRoutes(deps: ConfigRoutesDeps) {
   const postFollowupIgnoreKeywords = createJsonPostHandler({ lockKey: 'config:ignore-keywords:lock', pickValue: body => body.followup_ignore_keywords, validate: followup_ignore_keywords => parseNormalizedStringArrayResult(followup_ignore_keywords, 'followup_ignore_keywords'), save: followup_ignore_keywords => configStore.saveFollowupIgnoreKeywords(followup_ignore_keywords), subtype: 'followup_ignore_keywords_update', body: followup_ignore_keywords => ({ followup_ignore_keywords }), committedErrorMessage: 'Follow-up ignore keywords were saved, but publishing the config update notification failed. Persisted config may require a follow-up check.' });
 
   const getRepos = createJsonGetHandler(
-    async () => (await configStore.loadMonitoredReposRaw()).map(withDefaultRepoOptions),
+    () => loadReposWithAttachmentCapacity(configStore),
     repos_to_monitor => ({ repos_to_monitor }),
     'Failed to load repository configuration',
     '/api/config/repos GET'
@@ -345,14 +346,12 @@ export function createConfigRoutes(deps: ConfigRoutesDeps) {
   const getAiPrimaryTag = createJsonGetHandler(() => configStore.loadAiPrimaryTag(), ai_primary_tag => ({ ai_primary_tag }), 'Failed to load AI primary tag', '/api/config/ai-primary-tag GET');
   const postAiPrimaryTag = createJsonPostHandler<string>({ lockKey: 'config:ai-primary-tag:lock', pickValue: body => body.ai_primary_tag, validate: ai_primary_tag => typeof ai_primary_tag === 'string' && ai_primary_tag.trim() !== '' ? success(ai_primary_tag.trim()) : failure('ai_primary_tag must be a non-empty string'), save: ai_primary_tag => configStore.saveAiPrimaryTag(ai_primary_tag), subtype: 'ai_primary_tag_update', body: ai_primary_tag => ({ ai_primary_tag }), committedErrorMessage: 'AI primary tag was saved, but publishing the config update notification failed. Persisted config may require a follow-up check.', activity: { description: ai_primary_tag => `Updated AI primary tag to "${ai_primary_tag}"`, idSuffix: 'ai-primary-tag-update', type: 'config_updated' } });
 
-  async function getPrimaryProcessingLabels(_req: Request, res: Response): Promise<void> {
-    try {
-      res.json({ primary_processing_labels: await configStore.loadPrimaryProcessingLabels() });
-    } catch (error) {
-      console.error('Error in /api/config/primary-processing-labels GET:', error);
-      res.status(500).json({ error: 'Failed to load primary processing labels' });
-    }
-  }
+  const getPrimaryProcessingLabels = createJsonGetHandler(
+    () => configStore.loadPrimaryProcessingLabels(),
+    primary_processing_labels => ({ primary_processing_labels }),
+    'Failed to load primary processing labels',
+    '/api/config/primary-processing-labels GET'
+  );
 
   async function postPrimaryProcessingLabels(req: Request, res: Response): Promise<void> {
     const bodyValidation = validateJsonObjectBody(req.body);

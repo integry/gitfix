@@ -1,3 +1,4 @@
+import { ROUTING_STATUS_REDIS_KEY } from '@propr/shared';
 /* eslint-disable max-lines -- route registration and coordinated shutdown share startup state */
 import express, { Request, Response } from 'express';
 import { mountMcp, mcpResponseHeaders } from './mcp/server.js';
@@ -44,6 +45,7 @@ import {
 import { agentLoginSessionManager } from './services/agentLoginSessionManager.js';
 import { checkAndExecuteDelayedReindex } from './routes/indexingQueueHelpers.js';
 import {
+  createManagedPreviewStorageClient,
   generateCorrelationId,
   processWebhookEvent,
   initializeWebhookHandler,
@@ -322,7 +324,9 @@ function setupRoutes(): void {
   });
   const voiceRoutes = createVoiceRoutes({ briefingService: voiceBriefingService });
   const adminRoutes = createAdminRoutes();
-  const visualPreviewAuthRoutes = createVisualPreviewAuthRoutes();
+  const visualPreviewAuthRoutes = createVisualPreviewAuthRoutes({
+    managedStorage: createManagedPreviewStorageClient(() => redisClient.get(ROUTING_STATUS_REDIS_KEY)),
+  });
   const instanceCatalogRoutes = createInstanceCatalogRoutes();
   const agentVersionRoutes = createAgentVersionRoutes();
   const activeWorkRoutes = createActiveWorkRoutes({ db, taskQueue });

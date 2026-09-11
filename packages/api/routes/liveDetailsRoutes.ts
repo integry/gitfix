@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import { redactVisualPreviewValue } from '@propr/core';
 import type { FlatRequest } from '../requestTypes.js';
 import { RedisClientType } from 'redis';
 import { Knex } from 'knex';
@@ -28,6 +29,7 @@ const LIVE_EXECUTION_STATES = new Set(['claude_execution', 'codex_execution', 'a
 const EXECUTION_TIMING_STATES = new Set(['claude_execution', 'codex_execution', 'antigravity_execution', 'vibe_execution', 'opencode_execution']);
 export function createLiveDetailsRoutes(deps: LiveDetailsRoutesDeps) {
   const { redisClient, db } = deps;
+  const send = (res: Response, value: unknown) => res.json(redactVisualPreviewValue(value));
   async function getLiveDetails(req: FlatRequest, res: Response): Promise<void> {
     try {
       const { taskId: jobId } = req.params;
@@ -42,13 +44,13 @@ export function createLiveDetailsRoutes(deps: LiveDetailsRoutesDeps) {
       if (!sessionId) {
         const activeRedisResult = await parseActiveExecutionOutput(redisClient, db, taskId);
         if (activeRedisResult) {
-          res.json(activeRedisResult);
+          send(res, activeRedisResult);
           return;
         }
         const persistedGoalResult = await parsePersistedGoalOutput(db, taskId);
-        if (persistedGoalResult) { res.json(withStableResultEventIds(taskId, 'stored', taskId, persistedGoalResult)); return; }
+        if (persistedGoalResult) { send(res, withStableResultEventIds(taskId, 'stored', taskId, persistedGoalResult)); return; }
         console.log('[live-details] No sessionId found in either SQLite or Redis');
-        res.json({ events: [], todos: [], currentTask: null });
+        send(res, { events: [], todos: [], currentTask: null });
         return;
       }
       console.log(`[live-details] Using sessionId: ${sessionId}`);
@@ -58,13 +60,13 @@ export function createLiveDetailsRoutes(deps: LiveDetailsRoutesDeps) {
         console.log('[live-details] Claude conversation file not found, trying active Redis output');
         const activeRedisResult = await parseActiveExecutionOutput(redisClient, db, taskId);
         if (activeRedisResult) {
-          res.json(activeRedisResult);
+          send(res, activeRedisResult);
           return;
         }
         console.log('[live-details] Claude conversation file not found, trying stored execution output fallback');
         const fallbackResult = await parseStoredExecutionOutput(redisClient, sessionId);
         if (fallbackResult) {
-          res.json(withStableResultEventIds(taskId, 'stored', sessionId, fallbackResult));
+          send(res, withStableResultEventIds(taskId, 'stored', sessionId, fallbackResult));
           return;
         }
         console.log('[live-details] Stored execution output fallback unavailable, trying database fallback');
@@ -72,20 +74,20 @@ export function createLiveDetailsRoutes(deps: LiveDetailsRoutesDeps) {
         if (!dbFallbackResult) {
           const rawStoredOutput = await loadStoredExecutionOutput(redisClient, sessionId);
           if (rawStoredOutput?.rawFallback) {
-            res.json(withStableResultEventIds(taskId, 'stored', sessionId, rawStoredOutput.rawFallback));
+            send(res, withStableResultEventIds(taskId, 'stored', sessionId, rawStoredOutput.rawFallback));
             return;
           }
           const persistedGoalResult = await parsePersistedGoalOutput(db, taskId);
-          if (persistedGoalResult) { res.json(withStableResultEventIds(taskId, 'stored', sessionId, persistedGoalResult)); return; }
-          res.json({ events: [], todos: [], currentTask: null });
+          if (persistedGoalResult) { send(res, withStableResultEventIds(taskId, 'stored', sessionId, persistedGoalResult)); return; }
+          send(res, { events: [], todos: [], currentTask: null });
           return;
         }
-        res.json(withStableResultEventIds(taskId, 'database', sessionId, dbFallbackResult));
+        send(res, withStableResultEventIds(taskId, 'database', sessionId, dbFallbackResult));
         return;
       }
       const result = await parseConversationFile(conversationPath);
       console.log(`[live-details] Returning: ${result.events.length} events, ${result.todos.length} todos, currentTask: ${result.currentTask ? 'yes' : 'no'}`);
-      res.json({
+      send(res, {
         ...result,
         events: withStableLiveEventIds({
           taskId,

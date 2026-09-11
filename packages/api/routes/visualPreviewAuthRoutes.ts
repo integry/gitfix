@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
+import { parseManagedPreviewStorageStatus } from '@propr/shared';
 import {
   VisualPreviewOAuthCredentialService,
+  type ManagedPreviewStorageClientV1,
   isSupportedVisualPreviewUploadToken,
   type VisualPreviewOAuthCredentialStatus,
 } from '@propr/core';
@@ -16,6 +18,7 @@ const MAX_TOKEN_LENGTH = 512;
 interface VisualPreviewAuthRoutesDeps {
   service?: VisualPreviewOAuthCredentialService;
   fetchImpl?: typeof fetch;
+  managedStorage?: Pick<ManagedPreviewStorageClientV1, 'getStatus'>;
 }
 
 type CurrentLoginTokenType = 'supported' | 'github_app_user' | 'unsupported' | 'missing';
@@ -75,6 +78,7 @@ async function fetchGitHubIdentity(token: string, fetchImpl: typeof fetch): Prom
 export function createVisualPreviewAuthRoutes({
   service = visualPreviewOAuthCredentialService,
   fetchImpl = fetch,
+  managedStorage,
 }: VisualPreviewAuthRoutesDeps = {}) {
   async function getStatus(req: Request, res: Response): Promise<void> {
     try {
@@ -168,5 +172,14 @@ export function createVisualPreviewAuthRoutes({
     }
   }
 
-  return { getStatus, useCurrentLogin, usePersonalAccessToken, disconnect };
+  async function getManagedStorageStatus(_req: Request, res: Response): Promise<void> {
+    const unavailable = { version: 1, state: 'unavailable', enabled: false, effective: null };
+    try {
+      res.json(managedStorage ? parseManagedPreviewStorageStatus(await managedStorage.getStatus()) ?? unavailable : unavailable);
+    } catch {
+      res.json(unavailable);
+    }
+  }
+
+  return { getManagedStorageStatus, getStatus, useCurrentLogin, usePersonalAccessToken, disconnect };
 }

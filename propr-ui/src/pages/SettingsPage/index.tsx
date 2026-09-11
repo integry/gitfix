@@ -15,6 +15,7 @@ import VisualPreviewAuthSection from './VisualPreviewAuthSection';
 import DesktopNotificationSettingsSection from './DesktopNotificationSettingsSection';
 import DesktopVoiceSettingsSection from './DesktopVoiceSettingsSection';
 import { useDesktop } from '../../desktop/DesktopContext';
+import ManagedPreviewStorageSection from './ManagedPreviewStorageSection';
 import SettingsNavigation, { type SettingsNavigationSection } from './SettingsNavigation';
 
 const AdminSettingsPage: React.FC = () => {
@@ -272,8 +273,8 @@ const AdminSettingsPage: React.FC = () => {
     {
       id: 'visual-preview-uploads',
       category: 'integrations',
-      searchText: 'visual preview upload screenshots videos GitHub login personal access token PAT credential authentication connect',
-      content: <VisualPreviewAuthSection />
+      searchText: 'visual preview upload screenshots videos GitHub login personal access token PAT credential authentication connect managed storage quota retention Plus originals',
+      content: <><VisualPreviewAuthSection /><ManagedPreviewStorageSection /></>
     },
     ...(desktop ? [{
       id: 'desktop-voice',

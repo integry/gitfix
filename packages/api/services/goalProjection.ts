@@ -3,6 +3,7 @@ import type { RedisClientType } from 'redis';
 import {
   goalTitleFallback,
   parseGoalArtifacts,
+  redactVisualPreviewValue,
   type GoalArtifactStats,
   type GoalLaunchStrategy,
 } from '@propr/core';
@@ -149,7 +150,7 @@ export async function serializeGoal(
       .whereIn('state', ['pending', 'processing']).first('checkpoint_id')
     : null;
   const timing = goalTiming(row);
-  return {
+  const projection = {
     id: row.goal_id,
     owner: row.owner_login,
     repository: row.repository,
@@ -191,4 +192,5 @@ export async function serializeGoal(
     completedAt: row.completed_at,
     ...timing,
   };
+  return redactVisualPreviewValue(projection) as typeof projection;
 }

@@ -103,3 +103,18 @@ test('repository config rejects non-boolean automatic failed-CI follow-up values
     }
   }
 });
+
+test('validates attachment override and ignores client-supplied effective capacity', () => {
+  for (const plan of ['auto', 'free', 'paid']) {
+    const result = normalizeRepoConfig({ id: 'repo-1', name: 'integry/propr', enabled: true, visualPreview: { enabled: true, types: ['video'], githubAttachmentPlan: plan, githubAttachmentCapacity: { effectivePlan: 'paid' } } });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.value.visualPreview?.githubAttachmentPlan, plan);
+      assert.equal(result.value.visualPreview?.githubAttachmentCapacity, undefined);
+    }
+  }
+  for (const plan of ['invalid', '', null, true, 100]) {
+    const result = normalizeRepoConfig({ id: 'repo-1', name: 'integry/propr', enabled: true, visualPreview: { enabled: true, types: ['video'], githubAttachmentPlan: plan } });
+    assert.equal(result.ok, false);
+  }
+});

@@ -1,3 +1,14 @@
+import {
+    normalizeGitHubAttachmentPlanOverride,
+    ROUTING_STATUS_REDIS_KEY,
+    type GitHubAttachmentCapacity,
+    type GitHubAttachmentPlanOverride,
+    type ManagedPreviewStorageStatus,
+    type VisualPreviewOriginalCapability
+} from '@propr/shared';
+import { getIssueQueue } from '../queue/taskQueue.js';
+import { createManagedPreviewStorageClient } from '../services/previewStorage/runtime.js';
+import { loadGitHubAttachmentCapacity } from '../services/visualPreviewCapacityService.js';
 import logger from '../utils/logger.js';
 import { invalidateSettingsCache } from '../services/relevance/keywordExtractor.js';
 import { getConfig, saveConfig } from './configStore.js';
@@ -27,6 +38,11 @@ export interface RepoToMonitor {
 export type VisualPreviewType = 'image' | 'video';
 
 export interface VisualPreviewSettings {
+    githubAttachmentPlan?: GitHubAttachmentPlanOverride;
+    /** Computed at runtime; never trusted from stored settings. */
+    githubAttachmentCapacity?: GitHubAttachmentCapacity;
+    /** Trusted runtime capability supplied by managed storage; never persisted or accepted from repository settings. */
+    originalEvidenceCapability?: VisualPreviewOriginalCapability;
     enabled: boolean;
     types: VisualPreviewType[];
     instructions?: string;
@@ -47,6 +63,7 @@ export function normalizeStoredVisualPreviewSettings(value: unknown): VisualPrev
 
     return {
         enabled: candidate.enabled === true,
+        ...(candidate.githubAttachmentPlan !== undefined ? { githubAttachmentPlan: normalizeGitHubAttachmentPlanOverride(candidate.githubAttachmentPlan) } : {}),
         types: types.length > 0 ? types : ['image'],
         ...(instructions ? { instructions } : {})
     };
@@ -171,10 +188,40 @@ export async function loadRepositoryVisualPreviewSettings(repository: string): P
     try {
         const settings = resolveRepositoryVisualPreviewSettings(await loadMonitoredReposRaw(), repository);
         logger.info({ repository, enabled: settings.enabled, types: settings.types }, 'Loaded repository visual-preview settings');
-        return settings;
+        const [githubAttachmentCapacity, originalEvidenceCapability] = await Promise.all([
+            loadGitHubAttachmentCapacity(settings.githubAttachmentPlan, repository),
+            settings.enabled ? loadOriginalEvidenceCapability() : undefined
+        ]);
+        return {
+            ...settings,
+            githubAttachmentCapacity,
+            ...(originalEvidenceCapability ? { originalEvidenceCapability } : {})
+        };
     } catch (error) {
         logger.warn({ repository, error: (error as Error).message }, 'Failed to load visual-preview settings; treating previews as disabled');
         return { enabled: false, types: ['image'] };
+    }
+}
+
+async function loadManagedPreviewStorageStatus(): Promise<ManagedPreviewStorageStatus> {
+    const queue = await getIssueQueue();
+    const client = createManagedPreviewStorageClient(async () => (await queue.client).get(ROUTING_STATUS_REDIS_KEY));
+    return client.getStatus();
+}
+
+export async function loadOriginalEvidenceCapability(
+    loadStatus: () => Promise<ManagedPreviewStorageStatus> = loadManagedPreviewStorageStatus
+): Promise<VisualPreviewOriginalCapability | undefined> {
+    try {
+        const status = await loadStatus();
+        return status.state === 'enabled' && status.enabled && status.effective?.enabled
+            ? {
+                maxBytes: status.effective.maxObjectBytes,
+                allowedContentTypes: [...status.effective.allowedContentTypes]
+            }
+            : undefined;
+    } catch {
+        return undefined;
     }
 }
 
