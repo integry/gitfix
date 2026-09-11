@@ -52,10 +52,17 @@ for (const plan of ['pro', 'free', 'unknown'] as const) {
             if (pathname.endsWith('/uploads')) {
               metadata = JSON.parse(init!.body as string);
               assert.ok(!JSON.stringify(metadata).includes(root));
-              if (scenario === 'quota') return Response.json({ code: 'quota_exceeded', message: `${localPath} ${secret}` }, { status: 409 });
+              if (scenario === 'quota') return Response.json({
+                error: { code: 'quota_exceeded', message: `${localPath} ${secret}` },
+              }, { status: 413 });
               return Response.json({ ...metadata, artifactId: 'original-1', objectKey: 'private-object', put: {
                 url: `https://objects.example.test/upload?signature=${secret}`,
-                headers: { 'Content-Type': 'video/mp4' }, expiresAt: scenario === 'upload-expired' ? '2000-01-01T00:00:00Z' : '2099-01-01T00:00:00Z',
+                headers: {
+                  'Content-Type': 'video/mp4',
+                  'Content-Length': String(metadata.sizeBytes),
+                  'If-None-Match': '*',
+                },
+                expiresAt: scenario === 'upload-expired' ? '2000-01-01T00:00:00Z' : '2099-01-01T00:00:00Z',
               } });
             }
             if (init?.method === 'PUT') {

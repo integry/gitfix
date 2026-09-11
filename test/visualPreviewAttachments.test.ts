@@ -415,7 +415,10 @@ test('publishers store and link prepared originals without uploading GitHub-inel
   await Promise.all(storeOriginals.mock.calls.map(call => call.result));
   assert.equal(request.mock.callCount(), 6);
   assert.equal(uploadAsset.mock.callCount(), 0);
-  assert.ok(publishedBodies.every(body => body.includes('https://connect.example.test/previews/original-1')));
+  const publishedTargets = publishedBodies.map(body => [...body.matchAll(/\]\(([^)]+)\)/g)].map(match => match[1]));
+  assert.deepEqual(publishedTargets, Array.from({ length: 6 }, () => [
+    'https://connect.example.test/previews/original-1',
+  ]));
   assert.deepEqual(await readFile(asset.absolutePath), originalBytes, 'GitHub rejection does not consume the original');
   await cleanupPreparedVisualPreviewEvidence(prepared);
   await assert.rejects(access(asset.absolutePath));

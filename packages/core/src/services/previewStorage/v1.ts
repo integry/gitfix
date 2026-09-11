@@ -23,7 +23,7 @@ export interface ManagedPreviewStorageClientV1Options {
 }
 /** Fixed diagnostics only: raw fetch errors, response bodies, and URLs must never escape. */
 export class PreviewStorageError extends Error {
-  constructor(readonly code: PreviewStorageErrorCodeV1) {
+  constructor(readonly code: PreviewStorageErrorCodeV1 | 'plus_required') {
     super(`Managed preview storage: ${code}`);
     this.name = 'PreviewStorageError';
   }
@@ -33,8 +33,9 @@ export type ManagedPreviewUploadResult =
   | { stored: false; code: PreviewStorageErrorCodeV1 | 'plus_required' | 'disabled' };
 
 const MAX_ERROR_RESPONSE_BYTES = 4 * 1024;
-const REMOTE_ERROR_CODES = new Set<PreviewStorageErrorCodeV1>([
-  'quota_exceeded', 'object_too_large', 'content_type_not_allowed', 'object_mismatch',
+type RemotePreviewStorageErrorCode = PreviewStorageErrorCodeV1 | 'plus_required';
+const REMOTE_ERROR_CODES = new Set<RemotePreviewStorageErrorCode>([
+  'quota_exceeded', 'object_too_large', 'content_type_not_allowed', 'object_mismatch', 'plus_required',
 ]);
 
 export interface ManagedPreviewOriginalInput extends PreviewAssetMetadataV1 {
@@ -52,7 +53,11 @@ function matches(left: PreviewObjectV1, right: PreviewObjectV1): boolean {
   return left.sizeBytes === right.sizeBytes && left.contentType === right.contentType && left.sha256 === right.sha256;
 }
 
-async function boundedErrorCode(response: Response): Promise<PreviewStorageErrorCodeV1 | undefined> {
+function errorRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function boundedErrorCode(response: Response): Promise<RemotePreviewStorageErrorCode | undefined> {
   const declaredLength = Number(response.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_ERROR_RESPONSE_BYTES) {
     await response.body?.cancel().catch(() => undefined);
@@ -79,9 +84,13 @@ async function boundedErrorCode(response: Response): Promise<PreviewStorageError
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    const value = JSON.parse(new TextDecoder().decode(bytes)) as { code?: unknown };
-    return typeof value?.code === 'string' && REMOTE_ERROR_CODES.has(value.code as PreviewStorageErrorCodeV1)
-      ? value.code as PreviewStorageErrorCodeV1
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!errorRecord(value)) return undefined;
+    // Connect emits { error: { code, message } }. The top-level form remains
+    // accepted only for compatibility with older relay implementations.
+    const code = errorRecord(value.error) ? value.error.code : value.code;
+    return typeof code === 'string' && REMOTE_ERROR_CODES.has(code as RemotePreviewStorageErrorCode)
+      ? code as RemotePreviewStorageErrorCode
       : undefined;
   } catch {
     return undefined;
