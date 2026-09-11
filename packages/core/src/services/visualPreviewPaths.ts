@@ -11,6 +11,69 @@ export const VISUAL_PREVIEW_RUNTIME_DIRECTORIES = [
   VISUAL_PREVIEW_SOURCE_DIRECTORY,
 ] as const;
 
+function isDelimitedTokenStart(character: string): boolean {
+  return ['<', '"', "'", '`'].includes(character);
+}
+
+function isDelimitedTokenEnd(delimiter: string, character: string): boolean {
+  return delimiter === '<' ? character === '>' : character === delimiter;
+}
+
+function redactDelimitedTokens(text: string, containsRuntimePath: RegExp): string {
+  const output: string[] = [];
+  let tokenStart = -1;
+  let delimiter = '';
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+
+    if (tokenStart === -1) {
+      if (isDelimitedTokenStart(character)) {
+        tokenStart = index;
+        delimiter = character;
+      } else {
+        output.push(character);
+      }
+      continue;
+    }
+
+    if (character === '\r' || character === '\n') {
+      output.push(text.slice(tokenStart, index + 1));
+      tokenStart = -1;
+      delimiter = '';
+      escaped = false;
+      continue;
+    }
+
+    if (delimiter === '<' && character === '<') {
+      output.push(text.slice(tokenStart, index));
+      tokenStart = index;
+      continue;
+    }
+
+    if (delimiter !== '<' && character === '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (!isDelimitedTokenEnd(delimiter, character)) continue;
+
+    const token = text.slice(tokenStart, index + 1);
+    output.push(containsRuntimePath.test(token)
+      ? `${delimiter}[local preview omitted]${character}`
+      : token);
+    tokenStart = -1;
+    delimiter = '';
+  }
+
+  if (tokenStart !== -1) output.push(text.slice(tokenStart));
+  return output.join('');
+}
+
 /** Remove runtime file references from public prose and persisted task output. */
 export function redactVisualPreviewPaths(text: string): string {
   // Accept native, JSON-escaped, and URL-encoded separators. The staging root
@@ -19,11 +82,9 @@ export function redactVisualPreviewPaths(text: string): string {
   const runtimeDirectory = String.raw`(?:\.propr${separator}+(?:previews|preview-src)|propr-previews)`;
   const runtime = String.raw`${runtimeDirectory}(?=${separator}|$|[\s\p{P}])`;
   const containsRuntimePath = new RegExp(runtime, 'iu');
-  // Scan each token once, instead of backtracking over potentially large agent
-  // output looking for a path prefix. Quoted paths may contain spaces.
-  return text
-    .replace(/<[^<>\r\n]*>|"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|`(?:\\[^\r\n]|[^`\\\r\n])*`/g,
-      value => containsRuntimePath.test(value) ? `${value[0]}[local preview omitted]${value.at(-1)}` : value)
+  // Scan delimited tokens with a single forward pass. Quoted paths may contain
+  // spaces and escaped delimiters without exposing the scanner to backtracking.
+  return redactDelimitedTokens(text, containsRuntimePath)
     .replace(/[^\s<>"'`]+/g, value => containsRuntimePath.test(value) ? '[local preview omitted]' : value);
 }
 

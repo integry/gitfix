@@ -663,6 +663,17 @@ test('preview path redaction preserves serialized JSON containing escaped quotes
     assert.match((JSON.parse(redacted) as { message: string }).message, /local preview omitted/);
 });
 
+test('preview path redaction handles long runs of escaped quote delimiters', () => {
+    const local = '/tmp/private/.propr/previews/screen.png';
+    for (const delimiter of ['"', "'", '`']) {
+        const escapedDelimiters = `\\${delimiter}`.repeat(50_000);
+        const redacted = redactSecrets(`${delimiter}${escapedDelimiters} ${local}${delimiter}`);
+
+        assert.equal(redacted.includes(local), false);
+        assert.strictEqual(redacted, `${delimiter}[local preview omitted]${delimiter}`);
+    }
+});
+
 test('redactSerializableValue redacts preview paths used as nested metadata keys', () => {
     const local = '/tmp/private/.propr/previews/screen.png';
     const redacted = redactSerializableValue({ metadata: { [local]: { status: 'captured' } } }) as {

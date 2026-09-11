@@ -5,6 +5,7 @@ import { RedisClientType } from 'redis';
 import { Knex } from 'knex';
 import path from 'path';
 import { validateSessionId, validateTaskId, validateLogType } from './validation.js';
+import { sendSafeJson } from './jsonResponse.js';
 
 interface ExecutionRoutesDeps {
   redisClient: RedisClientType;
@@ -39,7 +40,7 @@ export function createExecutionRoutes(deps: ExecutionRoutesDeps) {
         res.status(404).json({ error: 'Prompt not found for this execution' });
         return;
       }
-      res.json(redactVisualPreviewValue({ sessionId, ...promptData }));
+      sendSafeJson(res, redactVisualPreviewValue({ sessionId, ...promptData }));
     } catch (error) {
       console.error('Error in /api/execution/:sessionId/prompt:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -71,7 +72,7 @@ export function createExecutionRoutes(deps: ExecutionRoutesDeps) {
         res.status(404).json({ error: 'Log files not found for this execution' });
         return;
       }
-      res.json(redactVisualPreviewValue({ sessionId, ...logData }));
+      sendSafeJson(res, redactVisualPreviewValue({ sessionId, ...logData }));
     } catch (error) {
       console.error('Error in /api/execution/:sessionId/logs:', error);
       res.status(500).json({ error: 'Internal server error' });

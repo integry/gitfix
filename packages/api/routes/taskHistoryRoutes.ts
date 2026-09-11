@@ -4,6 +4,7 @@ import type { FlatRequest } from '../requestTypes.js';
 import { RedisClientType } from 'redis';
 import { Queue, Job } from 'bullmq';
 import { Knex } from 'knex';
+import { sendSafeJson } from './jsonResponse.js';
 
 interface JobData {
     repoOwner?: string; repoName?: string; number?: number;
@@ -27,7 +28,6 @@ interface TaskHistoryRoutesDeps { redisClient: RedisClientType; taskQueue: Queue
 
 export function createTaskHistoryRoutes(deps: TaskHistoryRoutesDeps) {
   const { redisClient, taskQueue, db } = deps;
-  const send = (res: Response, value: unknown) => res.json(redactVisualPreviewValue(value));
 
   async function getTaskHistory(req: FlatRequest, res: Response): Promise<void> {
     try {
@@ -35,13 +35,13 @@ export function createTaskHistoryRoutes(deps: TaskHistoryRoutesDeps) {
 
       const dbResult = await getHistoryFromDb(db, taskId);
       if (dbResult) {
-        send(res, {
+        sendSafeJson(res, redactVisualPreviewValue({
           taskId,
           history: dbResult.history,
           taskInfo: dbResult.taskInfo,
           usageMetrics: dbResult.usageMetrics,
           usageMetricRecords: dbResult.usageMetricRecords
-        });
+        }));
         return;
       }
       let history: Array<Record<string, unknown>> = [];
@@ -52,7 +52,7 @@ export function createTaskHistoryRoutes(deps: TaskHistoryRoutesDeps) {
         const queueResult = await getHistoryFromQueue(taskQueue, taskId);
         if (queueResult) { if (!taskInfo) taskInfo = queueResult.taskInfo; history = queueResult.history; }
       }
-      send(res, { taskId, history, taskInfo });
+      sendSafeJson(res, redactVisualPreviewValue({ taskId, history, taskInfo }));
     } catch (error) {
       console.error('Error in /api/task/:taskId/history:', error);
       res.status(500).json({ error: 'Internal server error' });

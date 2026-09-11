@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import express, { type RequestHandler } from 'express';
 import type { Response } from 'express';
 import knex, { type Knex } from 'knex';
 import type { RedisClientType } from 'redis';
@@ -51,6 +54,8 @@ function responseRecorder(): { response: Response; body: () => unknown } {
   const response = {
     status() { return response; },
     json(value: unknown) { payload = value; return response; },
+    type() { return response; },
+    send(value: string) { payload = JSON.parse(value); return response; },
   } as unknown as Response;
   return { response, body: () => payload };
 }
@@ -155,4 +160,43 @@ test('task history redacts nested Redis history and task info without changing r
   } finally {
     await database.destroy();
   }
+});
+
+test('task history emits HTML-significant values as escaped JSON wire bytes', async t => {
+  const database = await createHistoryDatabase();
+  const attackerValue = '</script><img src=x onerror=alert(1)><&>';
+  const previewPath = '/tmp/jobs/task-xss/.propr/previews/private.png';
+  const redisClient = { get: async () => JSON.stringify({
+    history: [{
+      state: 'processing',
+      metadata: { nested: { attackerValue, symbols: '<&>', previewPath } },
+    }],
+    issueRef: { repoOwner: 'acme', repoName: 'repo', number: 2288, title: attackerValue },
+  }) } as unknown as RedisClientType;
+  const routes = createTaskHistoryRoutes({ db: database, redisClient, taskQueue: {} as never });
+  const app = express();
+  app.get('/api/task/:taskId/history', routes.getTaskHistory as RequestHandler);
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await database.destroy();
+  });
+
+  const port = (server.address() as AddressInfo).port;
+  const response = await fetch(`http://127.0.0.1:${port}/api/task/task-xss/history`);
+  const wireBody = await response.text();
+
+  assert.match(response.headers.get('content-type') ?? '', /^application\/json\b/);
+  assert.doesNotMatch(wireBody, /[<>&]/);
+  assert.match(wireBody, /\\u003c\/script\\u003e\\u003cimg/);
+  assert.match(wireBody, /\\u003c\\u0026\\u003e/);
+  const body = JSON.parse(wireBody) as {
+    history: Array<{ metadata: { nested: { attackerValue: string; symbols: string; previewPath: string } } }>;
+    taskInfo: { title: string };
+  };
+  assert.equal(body.history[0].metadata.nested.attackerValue, attackerValue);
+  assert.equal(body.history[0].metadata.nested.symbols, '<&>');
+  assert.equal(body.taskInfo.title, attackerValue);
+  assert.equal(body.history[0].metadata.nested.previewPath, '[local preview omitted]');
 });

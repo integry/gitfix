@@ -29,6 +29,13 @@ const attachmentUrl = 'https://github.com/user-attachments/assets/video-1';
 const status = { version: 1, installationId: 42, enabled: true, ...PREVIEW_STORAGE_V1_DEFAULTS,
   usedBytes: 0, reservedBytes: 0, allowedContentTypes: ['video/mp4'], deleteSupported: false };
 
+function extractMarkdownTargets(markdown: string): Set<string> {
+  const targets = new Set<string>();
+  const markdownLink = /!?\[[^\]\r\n]*\]\((?:<([^>\r\n]+)>|([^\s)\r\n]+))\)/g;
+  for (const match of markdown.matchAll(markdownLink)) targets.add(match[1] ?? match[2]);
+  return targets;
+}
+
 for (const plan of ['pro', 'free', 'unknown'] as const) {
   for (const scenario of ['plus', 'community', 'offline', 'quota', 'upload-expired', 'object-expired', 'github-failed', 'legacy'] as const) {
     for (const target of ['pr', 'follow-up'] as const) {
@@ -106,9 +113,10 @@ for (const plan of ['pro', 'free', 'unknown'] as const) {
         if (target === 'pr') await publishPullRequestVisualPreviews(options);
         else assert.equal((await publishPullRequestCommentVisualPreviews(options)).body, published);
         const githubInlineEligible = legacy || plan === 'pro';
+        const publishedTargets = extractMarkdownTargets(published);
         assert.equal(uploads, githubInlineEligible ? 1 : 0);
-        assert.equal(published.includes(attachmentUrl), githubInlineEligible && scenario !== 'github-failed');
-        assert.equal(published.includes(viewerUrl), ['plus', 'github-failed'].includes(scenario));
+        assert.equal(publishedTargets.has(attachmentUrl), githubInlineEligible && scenario !== 'github-failed');
+        assert.equal(publishedTargets.has(viewerUrl), ['plus', 'github-failed'].includes(scenario));
         if (scenario === 'plus') assert.match(published, /Connect sign-in required/);
         if (scenario === 'quota') assert.match(published, /quota exceeded/);
         if (!legacy && plan !== 'pro') assert.match(published, /Inline preview unavailable/);
