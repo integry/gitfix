@@ -402,6 +402,7 @@ const createFixture = async (mode, fixedOrigin) => {
   const expectedUrl = new URL(fixedOrigin);
   let binding = null;
   let tokenActive = false;
+  let tokenRevoked = false;
   let authChecks = 0;
   const recordCurrentUserFixture = record => {
     if (fixtureCurrentUserRecords.filter(item => item.journey === activeJourney).length >= 4) {
@@ -446,6 +447,8 @@ const createFixture = async (mode, fixedOrigin) => {
     if (request.method === 'POST' && request.url === '/api/desktop/pairings') {
       binding = body;
       tokenActive = false;
+      tokenRevoked = false;
+      authChecks = 0;
       return json(response, 200, {
         pairingId: PAIRING_ID,
         deviceSecret: DEVICE_SECRET,
@@ -504,7 +507,11 @@ const createFixture = async (mode, fixedOrigin) => {
         recordCurrentUserFixture(record);
         return json(response, 401, { code: 'INVALID_INSTANCE_TOKEN' });
       }
-      if (source === 'renderer' && mode === 'revoked' && authChecks >= 1) {
+      // Admit pairing/account confirmation and the initial native probe first.
+      // The first authenticated renderer validation then models server-side
+      // revocation, including every subsequent independent native confirmation.
+      if (source === 'renderer' && mode === 'revoked') tokenRevoked = true;
+      if (tokenRevoked || (source === 'renderer' && mode === 'renderer-only-rejection')) {
         record.responseStatus = 401;
         record.classification = 'revoked';
         recordCurrentUserFixture(record);
@@ -1596,6 +1603,19 @@ try {
   await runJourney('revoked', 'default', null, async page => {
     await pair(page, revokedOrigin, 'Revoked Lab');
     await page.getByText(/revoked or expired/i).waitFor({ timeout: 15_000 });
+    const validations = fixtureCurrentUserRecords.filter(record => record.journey === 'revoked');
+    const expected = [
+      ['account-confirmation', 200, 'success'],
+      ['main', 200, 'success'],
+      ['renderer', 401, 'revoked'],
+      ['main', 401, 'revoked'],
+    ];
+    if (currentUserEvidenceInvalid || validations.length !== expected.length
+      || validations.some((record, index) => record.source !== expected[index][0]
+        || record.responseStatus !== expected[index][1] || record.classification !== expected[index][2]
+        || !record.authorizationMatchesActivatedBearer || record.cookiePresent)) {
+      throw new Error('Acceptance revocation did not follow admission and independent native confirmation');
+    }
   });
   await runJourney('incompatible-instance', 'default', null, async page => {
     await fillEndpoint(page, incompatibleOrigin, 'Future Instance');
