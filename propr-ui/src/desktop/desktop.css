@@ -405,26 +405,34 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
 .desktop-spin { animation: desktop-spin 1s linear infinite; }
 @keyframes desktop-spin { to { transform: rotate(360deg); } }
 
-.desktop-instance-selector { flex: none; padding: .35rem .65rem .75rem; border-bottom: 1px solid #e4ebeb; }
-.desktop-instance-selector-label { display: block; margin: 0 .35rem .3rem; color: #718080; font-size: .625rem; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
-.desktop-instance-selector-button { display: grid; grid-template-columns: 1.8rem minmax(0, 1fr) .9rem; align-items: center; gap: .55rem; width: 100%; min-width: 0; border: 1px solid #d4dfdf; border-radius: .65rem; padding: .48rem .55rem; color: #354b4a; background: #fff; text-align: left; transition: border-color .15s ease, background-color .15s ease; }
-.desktop-instance-selector-button:hover { border-color: #9fc2c0; background: #f8fbfb; }
-.desktop-instance-icon { display: grid; place-items: center; width: 1.8rem; height: 1.8rem; border-radius: .48rem; color: #147b76; background: #eaf5f4; }
-.desktop-instance-icon svg, .desktop-instance-action { width: .9rem; height: .9rem; }
+/* Keep the selector flat and let identity text use the available sidebar width. */
+.desktop-instance-selector { flex: none; min-width: 0; padding: .75rem .5rem; border-bottom: 1px solid #e4ebeb; }
+.desktop-instance-selector-label { display: block; margin: 0 .5rem .25rem; color: #5e706f; font-size: .6875rem; font-weight: 650; }
+.desktop-instance-selector-button { display: grid; grid-template-columns: 1rem minmax(0, 1fr); align-items: start; gap: .625rem; width: 100%; min-width: 0; border: 0; border-radius: .375rem; padding: .5rem; color: #354b4a; background: transparent; text-align: left; transition: background-color .15s ease; -webkit-app-region: no-drag; }
+.desktop-instance-selector-button:hover { background: #edf4f3; }
+.desktop-instance-icon { display: grid; place-items: center; width: 1rem; height: 1.25rem; color: #147b76; }
+.desktop-instance-icon svg, .desktop-instance-action { width: 1rem; height: 1rem; flex: none; }
 .desktop-instance-copy { min-width: 0; }
-.desktop-instance-copy strong, .desktop-instance-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.desktop-instance-copy strong { color: #283d3c; font-size: .75rem; line-height: 1.2; }
-.desktop-instance-copy small { margin-top: .18rem; color: #71807f; font-size: .625rem; line-height: 1.2; }
-.desktop-instance-copy .desktop-instance-status { margin-top: .12rem; }
-.desktop-instance-copy .desktop-connection-dot { display: inline-block; margin-right: .32rem; vertical-align: .04rem; }
-.desktop-instance-action { color: #7c8d8c; }
-.desktop-connection-dot { width: .42rem; height: .42rem; border-radius: 50%; background: #24a36f; box-shadow: 0 0 0 2px rgba(36,163,111,.12); }
+.desktop-instance-copy strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: #283d3c; font-size: .875rem; font-weight: 650; line-height: 1.4; }
+.desktop-instance-copy small { display: block; margin-top: .125rem; color: #5e706f; font-size: .75rem; line-height: 1.4; }
+.desktop-instance-details { display: grid; grid-column: 1 / -1; min-width: 0; gap: .75rem; }
+.desktop-instance-account { display: grid; min-width: 0; gap: .25rem; }
+.desktop-instance-account-label { color: #5e706f; font-size: .6875rem; line-height: 1.4; }
+.desktop-instance-account-identity { display: block; min-width: 0; color: #283d3c; font-size: .8125rem; font-weight: 550; line-height: 1.5; }
+.desktop-instance-account-identity > span { display: flex; min-width: 0; gap: .5rem; }
+.desktop-instance-account-identity img { flex: none; width: 1.25rem; height: 1.25rem; }
+.desktop-instance-account-identity > span > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-instance-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; font-size: .75rem; line-height: 1.5; }
+.desktop-instance-status { display: inline-flex; align-items: center; gap: .4rem; color: #5e706f; }
+.desktop-instance-switch { display: inline-flex; align-items: center; gap: .25rem; color: #0f766e; font-weight: 650; }
+.desktop-instance-action { width: .875rem; height: .875rem; }
+.desktop-connection-dot { flex: none; width: .42rem; height: .42rem; border-radius: 50%; background: #24a36f; }
 .desktop-connection-reconnecting .desktop-connection-dot { background: #d47b36; }
 .desktop-connection-offline .desktop-connection-dot { background: #d47b36; }
 .desktop-connection-incompatible .desktop-connection-dot { background: #c4483b; }
-.desktop-connection-reconnecting .desktop-instance-icon { color: #a45d24; background: #fff3e8; }
-.desktop-connection-offline .desktop-instance-icon { color: #a45d24; background: #fff3e8; }
-.desktop-connection-incompatible .desktop-instance-icon { color: #ad392e; background: #fff0ed; }
+.desktop-connection-reconnecting .desktop-instance-icon { color: #a45d24; }
+.desktop-connection-offline .desktop-instance-icon { color: #a45d24; }
+.desktop-connection-incompatible .desktop-instance-icon { color: #ad392e; }
 
 .desktop-modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 1.5rem; background: rgba(18, 34, 34, .35); backdrop-filter: blur(2px); z-index: 100; }
 .desktop-profile-manager { width: min(100%, 32rem); max-height: min(42rem, calc(100vh - 3rem)); overflow-y: auto; border: 1px solid #d8e2e2; border-radius: 1rem; padding: 1.35rem; background: white; box-shadow: 0 30px 80px rgba(17, 34, 34, .25); }

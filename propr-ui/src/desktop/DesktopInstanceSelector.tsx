@@ -1,5 +1,5 @@
 import { GitHubAccountIdentity } from '../components/GitHubAccountIdentity';
-import React, { useEffect } from 'react';
+import React, { useEffect, useId } from 'react';
 import { parseProprConnectEndpoint } from '@propr/shared';
 import {
   ChevronDown,
@@ -18,6 +18,7 @@ interface DesktopInstanceSelectorProps {
 
 export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = ({ transportReady }) => {
   const desktop = useDesktop();
+  const descriptionId = useId();
   const activated = desktop?.connection.status === 'ready';
   // The startup probe establishes the active profile and credentials. Once the
   // connected app is mounted, its scoped socket is the live reachability signal.
@@ -42,6 +43,9 @@ export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = (
       ? 'Local instance'
       : 'Remote instance';
   const InstanceIcon = desktop.profile.kind === 'local' ? Computer : Cloud;
+  const action = activated
+    ? { onClick: desktop.openProfileManager, title: 'Manage instances', popup: 'dialog' as const, label: 'Switch', description: 'Switch instance or GitHub account.', Icon: ChevronDown }
+    : { onClick: desktop.retry, title: 'Retry connection', popup: undefined, label: 'Retry', description: 'Retry connection.', Icon: RefreshCw };
 
   return (
     <div className="desktop-instance-selector">
@@ -49,26 +53,43 @@ export const DesktopInstanceSelector: React.FC<DesktopInstanceSelectorProps> = (
       <button
         type="button"
         className={`desktop-instance-selector-button desktop-connection-${connectionClass}`}
-        onClick={activated ? desktop.openProfileManager : desktop.retry}
+        onClick={action.onClick}
         aria-label={`${statusLabel}: ${desktop.profile.name}`}
-        title={activated ? 'Manage instances' : 'Retry connection'}
+        aria-describedby={descriptionId}
+        aria-haspopup={action.popup}
+        title={action.title}
       >
         <span className="desktop-instance-icon" aria-hidden="true">
           {connected ? <InstanceIcon /> : reconnecting ? <RefreshCw className="desktop-spin" /> : incompatible ? <CircleAlert /> : <CloudOff />}
         </span>
         <span className="desktop-instance-copy">
-          <strong>{desktop.profile.name}</strong>
+          <strong title={desktop.profile.name}>{desktop.profile.name}</strong>
           <small>{instanceLabel}</small>
-          {desktop.profile.account && <small><GitHubAccountIdentity account={desktop.profile.account} /></small>}
-          <small className="desktop-instance-status">
-            <span className="desktop-connection-dot" aria-hidden="true" />
-            {statusLabel}
-          </small>
         </span>
-        {activated
-          ? <ChevronDown className="desktop-instance-action" aria-hidden="true" />
-          : <RefreshCw className="desktop-instance-action" aria-hidden="true" />}
+        <span className="desktop-instance-details">
+          {desktop.profile.account && (
+            <span className="desktop-instance-account">
+              <span className="desktop-instance-account-label">GitHub account</span>
+              <span className="desktop-instance-account-identity" title={`@${desktop.profile.account.username}`}>
+                <GitHubAccountIdentity account={desktop.profile.account} />
+              </span>
+            </span>
+          )}
+          <span className="desktop-instance-footer">
+            <span className="desktop-instance-status">
+              <span className="desktop-connection-dot" aria-hidden="true" />
+              {statusLabel}
+            </span>
+            <span className="desktop-instance-switch">
+              {action.label}
+              <action.Icon className="desktop-instance-action" aria-hidden="true" />
+            </span>
+          </span>
+        </span>
       </button>
+      <span id={descriptionId} className="sr-only">
+        {`${instanceLabel}. ${desktop.profile.account ? `GitHub account: @${desktop.profile.account.username}. ` : ''}${action.description}`}
+      </span>
     </div>
   );
 };
