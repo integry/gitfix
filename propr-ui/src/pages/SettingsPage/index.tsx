@@ -12,11 +12,15 @@ import { useDemoMode } from '../../contexts/DemoModeContext';
 import { useCurrentUser, userHasPermission } from '../../contexts/AuthContext';
 import NotificationSettingsSection from './NotificationSettingsSection';
 import VisualPreviewAuthSection from './VisualPreviewAuthSection';
+import DesktopNotificationSettingsSection from './DesktopNotificationSettingsSection';
+import DesktopVoiceSettingsSection from './DesktopVoiceSettingsSection';
+import { useDesktop } from '../../desktop/DesktopContext';
 import ManagedPreviewStorageSection from './ManagedPreviewStorageSection';
 import SettingsNavigation, { type SettingsNavigationSection } from './SettingsNavigation';
 
 const AdminSettingsPage: React.FC = () => {
   const { isDemoMode } = useDemoMode();
+  const desktop = useDesktop();
 
   const {
     loading,
@@ -272,6 +276,17 @@ const AdminSettingsPage: React.FC = () => {
       searchText: 'visual preview upload screenshots videos GitHub login personal access token PAT credential authentication connect managed storage quota retention Plus originals',
       content: <><VisualPreviewAuthSection /><ManagedPreviewStorageSection /></>
     },
+    ...(desktop ? [{
+      id: 'desktop-voice',
+      category: 'integrations' as const,
+      searchText: 'desktop voice experimental microphone speech briefing enable disable',
+      content: <DesktopVoiceSettingsSection />
+    }, {
+      id: 'desktop-notifications',
+      category: 'notifications' as const,
+      searchText: 'desktop native notifications operating system task started completed failed needs attention device test alert',
+      content: <DesktopNotificationSettingsSection />
+    }] : []),
     {
       id: 'personal-notifications',
       category: 'notifications',
@@ -348,6 +363,7 @@ const SettingsPage: React.FC = () => {
   useDocumentTitle('Settings');
   const user = useCurrentUser();
   const { isDemoMode } = useDemoMode();
+  const desktop = useDesktop();
 
   if (userHasPermission(user, 'instance.manage_settings')) {
     return <AdminSettingsPage />;
@@ -364,6 +380,12 @@ const SettingsPage: React.FC = () => {
         className={`flex-1 overflow-y-auto p-6 ${isDemoMode ? 'opacity-70' : ''}`}
       >
         <div className="mx-auto max-w-2xl">
+          {desktop && <>
+            <DesktopVoiceSettingsSection />
+            <div className="my-6 border-t border-gray-200" />
+            <DesktopNotificationSettingsSection />
+            <div className="my-6 border-t border-gray-200" />
+          </>}
           <NotificationSettingsSection />
         </div>
       </fieldset>

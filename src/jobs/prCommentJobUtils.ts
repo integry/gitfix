@@ -15,6 +15,7 @@ import { extractModelLabelToken } from './prModelLabelUtils.js';
 import { buildWorkEvidenceMarker, filterRealComments } from '../shared/workEvidenceMarker.js';
 import type { ReasoningLevel } from '@propr/shared';
 import { releasePRProcessingLock } from './prProcessingLock.js';
+import { schedulePRCommentUsageLimitRetry } from './prCommentUsageLimitRecovery.js';
 
 export function toClaudeResult(response: ClaudeCodeResponse): ClaudeResult {
     return {
@@ -170,6 +171,8 @@ export interface JobErrorOptions {
     startingWorkComment: { data: { id: number } } | null;
     claudeResult: ClaudeCodeResponse | null; correlationId: string;
     correlatedLogger: Logger; stateManager: WorkerStateManager; taskId: string;
+    /** Complete in-memory claim to persist in a delayed retry payload. */
+    retryComments?: UnprocessedComment[];
 }
 
 export class UsageLimitError extends Error {
@@ -214,18 +217,25 @@ async function handleUsageLimitError(error: UsageLimitError, job: Job<CommentJob
     const branchSlug = (job.data.branchName || 'main').replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 30);
     const requeueJobId = `pr-comments-batch-${repoOwner}-${repoName}-${pullRequestNumber}-${llmSlug}-${branchSlug}-ratelimit-retry`;
 
+    const retryComments = options.retryComments ?? job.data.comments ?? [];
+    const durableRetryJobId = await schedulePRCommentUsageLimitRetry(
+        job,
+        retryComments,
+        requeueJobId,
+        Math.max(0, delay),
+    );
+
     if (octokit) {
         try {
             await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
                 owner: repoOwner, repo: repoName, issue_number: pullRequestNumber,
-                body: `⌛ **Processing Delayed:** Claude's usage limit was reached while processing requests from ${authorsText}.\n\nThe job has been automatically rescheduled and will restart ${readableResetTime}.\n\n---\n*Job ID: ${requeueJobId} will run again after delay.*`
+                body: `⌛ **Processing Delayed:** Claude's usage limit was reached while processing requests from ${authorsText}.\n\nThe job has been automatically rescheduled and will restart ${readableResetTime}.\n\n---\n*Job ID: ${durableRetryJobId} will run again after delay.*`
             });
         } catch (commentError) {
             correlatedLogger.error({ error: (commentError as Error).message }, 'Failed to post usage limit delay comment to PR.');
         }
     }
 
-    await issueQueue.add(job.name, job.data, { jobId: requeueJobId, delay: Math.max(0, delay) });
 }
 
 async function handleUserCancellation(options: JobErrorOptions, errorMessage: string): Promise<void> {

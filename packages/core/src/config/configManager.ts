@@ -349,7 +349,10 @@ export {
 export {
     type CliVersionType,
     type AgentConfig,
+    AgentConfigPathUnavailableError,
     DEFAULT_CONFIG_PATHS,
+    assertCodexConfigPathAvailable,
+    resolveCodexConfigPath,
     resolveConfigPath,
     getDefaultConfigPath,
     loadAgents,

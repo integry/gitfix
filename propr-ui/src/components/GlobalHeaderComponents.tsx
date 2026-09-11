@@ -40,13 +40,7 @@ const PlansDropdown: React.FC<PlansDropdownProps> = ({ activePlans, isOpen, onCl
   const getRepoName = (repository: string): string => { const parts = repository.split('/'); return parts.length > 1 ? parts[1] : repository; };
 
   return (
-    <div
-      className="fixed w-[600px] bg-white border border-slate-200 border-t-0 shadow-xl ring-1 ring-black/5 z-50 overflow-hidden"
-      style={{
-        top: '64px',
-        left: '240px',
-      }}
-    >
+    <div className="desktop-toolbar-popover absolute left-0 top-full z-50 w-[600px] overflow-hidden border border-t-0 border-slate-200 bg-white shadow-xl ring-1 ring-black/5">
       {/* Header with View All link moved to top-right */}
       <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200">
         <div className="flex items-baseline justify-between">
@@ -161,13 +155,7 @@ const TasksDropdown: React.FC<TasksDropdownProps> = ({ taskGroups, isOpen, onClo
   const cleanTaskTitle = (title?: string): string => { if (!title) return ''; return title.replace(/^Followup:\s*/i, '').replace(/^\[.*?\]\s*/g, '').trim(); };
 
   return (
-    <div
-      className="fixed w-[600px] bg-white border border-slate-200 border-t-0 shadow-xl ring-1 ring-black/5 z-50 overflow-hidden"
-      style={{
-        top: '64px',
-        left: '240px',
-      }}
-    >
+    <div className="desktop-toolbar-popover absolute left-0 top-full z-50 w-[600px] overflow-hidden border border-t-0 border-slate-200 bg-white shadow-xl ring-1 ring-black/5">
       {/* Header with View All link moved to top-right */}
       <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200">
         <div className="flex items-baseline justify-between">
@@ -269,7 +257,11 @@ export const TasksButton: React.FC<{ taskGroups: TaskGroup[]; onDismissTask: (ta
   const containerRef = useClickOutside(() => setIsOpen(false), isOpen);
   return (
     <div className="relative h-full" ref={containerRef}>
-      <button onClick={() => setIsOpen(!isOpen)} className={`relative flex items-center gap-1.5 px-4 h-full text-sm transition-colors ${isOpen ? 'bg-white' : 'hover:bg-slate-50'}`}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`relative flex items-center gap-1.5 px-4 h-full text-sm transition-colors ${isOpen ? 'bg-white' : 'hover:bg-slate-50'}`}
+        aria-label={`${taskGroups.length} ${taskGroups.length === 1 ? 'Task' : 'Tasks'}`}
+      >
         <ListTodo className="w-4 h-4 text-slate-600" /><span className="font-bold text-slate-900">{taskGroups.length}</span><span className="text-slate-600 text-sm">{taskGroups.length === 1 ? 'Task' : 'Tasks'}</span>
         {isOpen && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-600" />}
       </button>
@@ -366,7 +358,7 @@ export const SystemHealth: React.FC<{ systemHealth: HeaderStats['systemHealth'] 
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full w-[288px] bg-white border border-slate-200 border-t-0 shadow-xl ring-1 ring-black/5 z-[100]">
+        <div className="desktop-toolbar-popover absolute right-0 top-full z-[100] w-[288px] border border-t-0 border-slate-200 bg-white shadow-xl ring-1 ring-black/5">
           <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
               Services
@@ -404,7 +396,11 @@ export const ActivePlansButton: React.FC<{ activePlans: DraftListItem[]; onDismi
   const containerRef = useClickOutside(() => setIsOpen(false), isOpen);
   return (
     <div className="relative h-full" ref={containerRef}>
-      <button onClick={() => setIsOpen(!isOpen)} className={`relative flex items-center gap-1.5 px-4 h-full text-sm transition-colors ${isOpen ? 'bg-white' : 'hover:bg-slate-50'}`}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`relative flex items-center gap-1.5 px-4 h-full text-sm transition-colors ${isOpen ? 'bg-white' : 'hover:bg-slate-50'}`}
+        aria-label={`${activePlans.length} ${activePlans.length === 1 ? 'Plan' : 'Plans'}`}
+      >
         <ScrollText className="w-4 h-4 text-slate-600" /><span className="font-bold text-slate-900">{activePlans.length}</span><span className="text-slate-600 text-sm">{activePlans.length === 1 ? 'Plan' : 'Plans'}</span>
         {isOpen && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-teal-600" />}
       </button>

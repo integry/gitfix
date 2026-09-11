@@ -1,3 +1,4 @@
+import * as runtimeMode from '../config/runtimeMode';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { voiceBriefingResponseSchema, type VoiceBriefingResponse } from '@propr/shared';
@@ -10,6 +11,11 @@ import {
 import VoiceBriefingControl, {
   VOICE_RECOGNITION_DISCLOSURE_STORAGE_KEY,
 } from './VoiceBriefingControl';
+
+vi.mock('../hooks/useDesktopVoicePreference', async importOriginal => ({
+  ...await importOriginal<typeof import('../hooks/useDesktopVoicePreference')>(),
+  useDesktopVoicePreference: () => ({ enabled: true, isEnabled: () => true, key: null, connection: null }),
+}));
 
 vi.mock('../hooks/useVoiceBriefing', () => ({
   useVoiceBriefing: vi.fn(),
@@ -73,6 +79,22 @@ describe('VoiceBriefingControl', () => {
     vi.clearAllMocks();
     vi.mocked(useVoiceBriefing).mockReset();
     window.localStorage.clear();
+  });
+
+  it('offers a separate desktop microphone check without advertising recognition support', () => {
+    const runtime = vi.spyOn(runtimeMode, 'isDesktopRuntime').mockReturnValue(true);
+    window.proprDesktop = { voice: { requestMicrophone: vi.fn(), revokeMicrophone: vi.fn() } } as never;
+    try {
+      const value = controller({ capabilities: { speechSynthesis: true, speechRecognition: false } });
+      renderControl(value);
+      fireEvent.click(screen.getByRole('button', { name: 'Voice briefing' }));
+      fireEvent.click(screen.getByRole('button', { name: 'I understand' }));
+      expect(screen.queryByRole('button', { name: 'Listen' })).not.toBeInTheDocument();
+      expect(screen.getByText(/Voice commands are unavailable in this desktop runtime/)).toBeInTheDocument();
+      expect(value.startListening).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Check microphone' }));
+      expect(value.startListening).toHaveBeenCalledOnce();
+    } finally { runtime.mockRestore(); delete window.proprDesktop; }
   });
 
   it('shows disclosure on first open without requesting a briefing or recognition', () => {

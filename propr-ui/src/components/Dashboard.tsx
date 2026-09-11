@@ -216,7 +216,7 @@ const Dashboard: React.FC = () => {
       {/* Main Content - Studio Split Layout */}
       <div className="flex flex-col lg:flex-row">
         {/* Left Column (70%) - Activity Feed */}
-        <div className="flex-1 lg:w-[70%]">
+        <div className="flex flex-1 flex-col lg:w-[70%]">
           {/* Header toolbar */}
           <div className="flex items-center justify-between px-6 py-4">
             <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Recent Activity</h3>
@@ -229,7 +229,7 @@ const Dashboard: React.FC = () => {
             </Link>
           </div>
           {/* Task list content - no card, no border */}
-          <div className="px-6 pb-6">
+          <div className="flex flex-1 px-6 pb-6">
             <TaskList
               limit={10}
               showViewAll={false}
@@ -242,7 +242,7 @@ const Dashboard: React.FC = () => {
         <div className="hidden lg:block w-px bg-gray-200" />
 
         {/* Right Column (30%) - Unified Analytics Rail */}
-        <div className="lg:w-[30%] border-t lg:border-t-0 border-gray-200 bg-[#F8FAFC]">
+        <div className="dashboard-metrics-pane lg:w-[30%] border-t lg:border-t-0 border-gray-200 bg-slate-50">
           {/* Stats Grid - Top of Analytics Column */}
           <StatsGrid
             queueStats={queueStats}

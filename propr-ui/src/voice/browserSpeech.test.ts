@@ -1,8 +1,10 @@
+import * as runtimeMode from '../config/runtimeMode';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BrowserSpeechError,
   getBrowserSpeechCapabilities,
   listenOnce,
+  normalizeBrowserSpeechError,
   speakOnce,
 } from './browserSpeech';
 
@@ -76,6 +78,19 @@ function finalResult(transcript: string): MockRecognitionResultEvent {
 }
 
 describe('browser speech adapters', () => {
+  it('does not claim Electron recognition support from API presence or start its service', async () => {
+    const runtime = vi.spyOn(runtimeMode, 'isDesktopRuntime').mockReturnValue(true);
+    try {
+      expect(getBrowserSpeechCapabilities().speechRecognition).toBe(false);
+      await expect(listenOnce()).rejects.toMatchObject({ category: 'service-unavailable' });
+      expect(MockSpeechRecognition.instances).toHaveLength(0);
+    } finally { runtime.mockRestore(); }
+  });
+
+  it('distinguishes speech service rejection from microphone denial', () => {
+    expect(normalizeBrowserSpeechError({ error: 'service-not-allowed' }).category).toBe('service-unavailable');
+    expect(normalizeBrowserSpeechError({ error: 'not-allowed' }).category).toBe('permission-denied');
+  });
   const originalRecognition = Object.getOwnPropertyDescriptor(window, 'SpeechRecognition');
   const originalWebkitRecognition = Object.getOwnPropertyDescriptor(window, 'webkitSpeechRecognition');
   const originalSynthesis = Object.getOwnPropertyDescriptor(window, 'speechSynthesis');

@@ -30,6 +30,16 @@ afterEach(() => {
 
 describe('AIActivityMonitor task navigation', () => {
   it.each([
+    ['checking', 'Checking AI activity', 'Checking activity'],
+    ['unavailable', 'AI activity unavailable', 'Activity unavailable'],
+  ] as const)('shows %s instead of presenting a cached count as live', (status, label, copy) => {
+    render(<AIActivityMonitor runningItems={[taskItem({})]} runningCount={1} status={status} />);
+
+    expect(screen.getByRole('status', { name: label })).toHaveTextContent(copy);
+    expect(screen.queryByText('Running')).not.toBeInTheDocument();
+  });
+
+  it.each([
     ['issue child', 'Issue child task', 'issue-task-id'],
     ['PR job', 'Pull request task', 'pr-job-id'],
   ])('navigates a %s using its proven task ID', (_kind, label, navigationId) => {

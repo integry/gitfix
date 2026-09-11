@@ -19,7 +19,11 @@ import {
   revokePushSubscription,
 } from '../api/notificationApi';
 import { useCurrentUser } from '../contexts/AuthContext';
-import { registerServiceWorker } from '../serviceWorkerRegistration';
+import {
+  browserSupportsServiceWorkerOrigin,
+  browserSupportsServiceWorkers,
+  getOrRegisterServiceWorker,
+} from '../serviceWorkerRegistration';
 
 const PUSH_OWNER_STORAGE_KEY = 'propr:push-subscription-owner';
 
@@ -27,6 +31,7 @@ export type BrowserNotificationPermission = NotificationPermission | 'unsupporte
 export type BrowserPushOperation = 'idle' | 'enabling' | 'disabling';
 
 export interface BrowserPushState {
+  serviceWorkerOriginSupported: boolean;
   serviceWorkerSupported: boolean;
   pushApiSupported: boolean;
   notificationApiSupported: boolean;
@@ -50,10 +55,6 @@ export interface BrowserPushContextValue extends BrowserPushState {
 
 interface NavigatorWithStandalone extends Navigator {
   standalone?: boolean;
-}
-
-function browserSupportsServiceWorkers(): boolean {
-  return typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
 }
 
 function browserSupportsPush(): boolean {
@@ -125,6 +126,7 @@ function initialState(): BrowserPushState {
   const isIos = typeof navigator !== 'undefined' && isIosBrowser();
   const isInstalled = typeof navigator !== 'undefined' && isStandaloneWebApp();
   return {
+    serviceWorkerOriginSupported: browserSupportsServiceWorkerOrigin(),
     serviceWorkerSupported: browserSupportsServiceWorkers(),
     pushApiSupported: browserSupportsPush(),
     notificationApiSupported: browserSupportsNotifications(),
@@ -162,16 +164,13 @@ function storePushOwner(userId: string | null): void {
   }
 }
 
-async function getOrRegisterServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (!browserSupportsServiceWorkers()) return null;
-  const existing = await navigator.serviceWorker.getRegistration('/');
-  return existing ?? registerServiceWorker();
-}
-
 async function subscribe(
   registration: ServiceWorkerRegistration,
   vapidPublicKey: string,
 ): Promise<globalThis.PushSubscription> {
+  if (!browserSupportsServiceWorkers() || !browserSupportsPush()) {
+    throw new Error('This app origin does not support browser Web Push.');
+  }
   return registration.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
@@ -197,9 +196,14 @@ export const BrowserPushProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
     setState(previous => ({ ...previous, isLoading: true, error: null }));
+    const serviceWorkerSupported = browserSupportsServiceWorkers();
+    const pushApiSupported = browserSupportsPush();
+    const notificationApiSupported = browserSupportsNotifications();
     const [capabilityResult, registrationResult] = await Promise.allSettled([
       getNotificationCapabilities(),
-      getOrRegisterServiceWorker(),
+      serviceWorkerSupported && pushApiSupported && notificationApiSupported
+        ? getOrRegisterServiceWorker()
+        : Promise.resolve(null),
     ]);
     const capabilities = capabilityResult.status === 'fulfilled'
       ? capabilityResult.value
@@ -207,7 +211,10 @@ export const BrowserPushProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const registration = registrationResult.status === 'fulfilled'
       ? registrationResult.value
       : null;
-    let localSubscription = registration && browserSupportsPush() && registration.pushManager
+    let localSubscription = registration
+      && serviceWorkerSupported
+      && pushApiSupported
+      && registration.pushManager
       ? await registration.pushManager.getSubscription().catch(() => null)
       : null;
     let reconciliationError: unknown = capabilityResult.status === 'rejected'
@@ -259,9 +266,10 @@ export const BrowserPushProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const isInstalled = isStandaloneWebApp();
     setState(previous => ({
       ...previous,
-      serviceWorkerSupported: browserSupportsServiceWorkers(),
-      pushApiSupported: browserSupportsPush(),
-      notificationApiSupported: browserSupportsNotifications(),
+      serviceWorkerOriginSupported: browserSupportsServiceWorkerOrigin(),
+      serviceWorkerSupported,
+      pushApiSupported,
+      notificationApiSupported,
       serviceWorkerRegistration: registration,
       permission: currentPermission(),
       isIos,
@@ -298,7 +306,13 @@ export const BrowserPushProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (current.requiresIosInstallation) {
         throw new Error('Add ProPR to your Home Screen before enabling notifications.');
       }
-      if (!current.notificationApiSupported || !current.pushApiSupported) {
+      if (
+        !browserSupportsServiceWorkers()
+        || !current.serviceWorkerOriginSupported
+        || !current.serviceWorkerSupported
+        || !current.notificationApiSupported
+        || !current.pushApiSupported
+      ) {
         throw new Error('This browser does not support Web Push.');
       }
       const vapidPublicKey = current.capabilities?.push.vapidPublicKey;

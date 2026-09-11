@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- browser, bearer, and socket authentication share session state */
+/* eslint-disable max-lines -- browser, GitHub bearer, instance-token, Socket.IO, and preview auth share one policy boundary */
 import passport from 'passport';
 import { Strategy as GitHubStrategy, Profile } from 'passport-github2';
 import session from 'express-session';
@@ -6,8 +6,10 @@ import { RedisStore } from 'connect-redis';
 import { createClient } from 'redis';
 import { randomBytes } from 'node:crypto';
 import type { Express, Request, Response, NextFunction, RequestHandler } from 'express';
+import { issueOAuthGrantRevision } from '@propr/core';
 import { validateSessionSecret } from '@propr/shared';
 import { validateGitHubToken } from './authBearer.js';
+import { desktopAuthService, INSTANCE_TOKEN_PREFIX } from './desktopAuthService.js';
 import { configureDemoMode, getDemoUser, isDemoMode } from './demoMode.js';
 import { clearSessionForReauth, isGitHubTokenExpired, refreshGitHubTokenWithResult } from './authGithubTokens.js';
 import { getValidatedRedirectTo, getDefaultRedirectUrl } from './authRedirect.js';
@@ -34,6 +36,7 @@ import {
     type InstanceAuthorization,
 } from './authorization.js';
 import { captureVisualPreviewCredentialFromAdminLogin } from './services/visualPreviewOAuth.js';
+import { githubUserGrantService } from './githubUserGrantService.js';
 import './authTypes.js';
 
 export { refreshGitHubTokenIfNeeded } from './authGithubTokens.js';
@@ -52,6 +55,7 @@ export interface SocketPrincipal {
 
 export interface SocketAuthenticationDependencies {
     validateToken: typeof validateGitHubToken;
+    validateInstanceToken?: typeof desktopAuthService.validateToken;
     isWhitelisted: typeof isUserWhitelisted;
     resolveInstanceAuthorization: typeof resolveInstanceAuthorization;
     refreshToken: typeof refreshGitHubTokenWithResult;
@@ -59,6 +63,7 @@ export interface SocketAuthenticationDependencies {
 
 const defaultSocketAuthenticationDependencies: SocketAuthenticationDependencies = {
     validateToken: validateGitHubToken,
+    validateInstanceToken: token => desktopAuthService.validateToken(token),
     isWhitelisted: isUserWhitelisted,
     resolveInstanceAuthorization,
     refreshToken: refreshGitHubTokenWithResult,
@@ -153,13 +158,26 @@ export function createConnectCallbackHandler(
 
 async function completeAuthenticatedSessionWithPreviewCredential(req: Request, res: Response): Promise<void> {
     if (req.user && isUserWhitelisted(req.user.username)) {
+        const grantRevision = issueOAuthGrantRevision();
         try {
-            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user);
+            // Both stores receive the same revision. If this optional write
+            // fails, the durable capture below is still newer than any prior
+            // singleton credential and remains authoritative.
+            const captured = await captureVisualPreviewCredentialFromAdminLogin(req.user, grantRevision);
             if (captured) console.log(`[visual-preview] Captured OAuth upload credential for administrator ${req.user.username}`);
         } catch (error) {
             // Preview uploads are optional; a storage or encryption issue must not
             // prevent an otherwise valid administrator from logging in.
             console.warn('[visual-preview] Could not capture OAuth upload credential during login:', (error as Error).message);
+        }
+        try {
+            const captured = await githubUserGrantService.capture(req.user, grantRevision);
+            if (captured) console.log(`Captured server-side GitHub grant for ${req.user.username}`);
+        } catch (error) {
+            // Browser sessions remain usable even if durable desktop metadata
+            // authorization cannot be stored. Desktop callers receive bounded
+            // reauthorization guidance from the metadata routes.
+            console.warn('Could not capture GitHub user grant during login:', (error as Error).message);
         }
     }
     completeAuthenticatedSession(req, res);
@@ -255,6 +273,8 @@ export function setupAuth(app: Express, demoModeAtStartup = isDemoMode()): Socke
 
         if (redirectTo) {
             (req.session as AuthSession).redirectTo = redirectTo;
+        } else {
+            delete (req.session as AuthSession).redirectTo;
         }
 
         if (browserAuthMode === 'connect') {
@@ -295,7 +315,21 @@ export function setupAuth(app: Express, demoModeAtStartup = isDemoMode()): Socke
         });
     } else if (browserAuthMode === 'github') {
         app.get('/api/auth/github/callback',
-            passport.authenticate('github', { failureRedirect: '/login' }),
+            (req: Request, res: Response, next: NextFunction) => {
+                // Passport regenerates the session on login. Carry only the
+                // validated return intent across it, without retaining other
+                // anonymous session data or accepting callback query overrides.
+                const redirectTo = getValidatedRedirectTo((req.session as AuthSession).redirectTo);
+                delete (req.session as AuthSession).redirectTo;
+                passport.authenticate('github', { failureRedirect: '/login' })(req, res, (error?: unknown) => {
+                    if (error) {
+                        next(error);
+                        return;
+                    }
+                    if (redirectTo) (req.session as AuthSession).redirectTo = redirectTo;
+                    next();
+                });
+            },
             completeAuthenticatedSessionWithPreviewCredential
         );
     } else if (browserAuthMode === 'connect') {
@@ -346,6 +380,8 @@ export function setupAuth(app: Express, demoModeAtStartup = isDemoMode()): Socke
  * HTTP API. Browser clients normally arrive with a Passport session cookie;
  * non-browser clients may provide the normal Authorization: Bearer header.
  */
+// Session refresh and two bearer credential classes intentionally fail closed here.
+// eslint-disable-next-line complexity
 export async function authenticateSocketRequest(
     req: Request,
     dependencies: SocketAuthenticationDependencies = defaultSocketAuthenticationDependencies,
@@ -372,19 +408,40 @@ export async function authenticateSocketRequest(
             throw new SocketAuthenticationError('USER_NOT_WHITELISTED', 'GitHub user is not allowed');
         }
 
+        req.authenticationMethod = 'session';
         return {
             user: req.user,
             authorization: await dependencies.resolveInstanceAuthorization(req.user),
         };
     }
 
-    const bearerEnabled = process.env.ENABLE_BEARER_AUTH !== 'false';
     const rawAuthHeader = req.headers.authorization;
     const authHeader = Array.isArray(rawAuthHeader) ? rawAuthHeader[0] : rawAuthHeader;
-    if (bearerEnabled && authHeader?.startsWith('Bearer ')) {
+    if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.slice(7).trim();
         if (!token) {
             throw new SocketAuthenticationError('INVALID_BEARER_TOKEN', 'Bearer token is empty');
+        }
+        if (token.startsWith(INSTANCE_TOKEN_PREFIX)) {
+            const identity = await (dependencies.validateInstanceToken
+                ? dependencies.validateInstanceToken(token)
+                : desktopAuthService.validateToken(token));
+            if (!identity) {
+                throw new SocketAuthenticationError('INVALID_INSTANCE_TOKEN', 'Instance token is invalid');
+            }
+            if (!dependencies.isWhitelisted(identity.user.username)) {
+                throw new SocketAuthenticationError('USER_NOT_WHITELISTED', 'GitHub user is not allowed');
+            }
+            req.authenticationMethod = 'instance_token';
+            req.instanceTokenId = identity.tokenId;
+            return {
+                user: identity.user,
+                authorization: await dependencies.resolveInstanceAuthorization(identity.user),
+            };
+        }
+        const bearerEnabled = process.env.ENABLE_BEARER_AUTH !== 'false';
+        if (!bearerEnabled) {
+            throw new SocketAuthenticationError('AUTHENTICATION_REQUIRED', 'Authentication required');
         }
         const user = await dependencies.validateToken(token);
         if (!user) {
@@ -393,6 +450,7 @@ export async function authenticateSocketRequest(
         if (!dependencies.isWhitelisted(user.username)) {
             throw new SocketAuthenticationError('USER_NOT_WHITELISTED', 'GitHub user is not allowed');
         }
+        req.authenticationMethod = 'github_bearer';
         return {
             user,
             authorization: await dependencies.resolveInstanceAuthorization(user),
@@ -402,14 +460,20 @@ export async function authenticateSocketRequest(
     throw new SocketAuthenticationError('AUTHENTICATION_REQUIRED', 'Authentication required');
 }
 
-// Session, bearer, demo, and refresh outcomes are intentionally centralized.
+// Keep REST precedence identical to Socket.IO: demo, session, instance token, GitHub bearer.
 // eslint-disable-next-line complexity
-export async function ensureAuthenticated(req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function ensureAuthenticated(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+    validateInstanceToken: (token: string) => ReturnType<typeof desktopAuthService.validateToken> = token => desktopAuthService.validateToken(token),
+): Promise<void> {
     if (isDemoMode()) {
         res.set('X-ProPR-Demo-Mode', 'true');
         // Demo mode is deployment-wide: browser callers receive the synthetic read-only user.
         // Stale bearer headers are ignored so public demo visitors are treated consistently.
         (req as Request & { user: GitHubUser }).user = getDemoUser();
+        req.authenticationMethod = 'demo';
         return next();
     }
 
@@ -457,15 +521,42 @@ export async function ensureAuthenticated(req: Request, res: Response, next: Nex
                 console.warn('Proactive GitHub token refresh was temporarily unavailable; continuing with the unexpired session token');
             }
         }
+        req.authenticationMethod = 'session';
         return next();
     }
 
-    // Bearer token auth (CLI)
-    const bearerEnabled = process.env.ENABLE_BEARER_AUTH !== 'false';
+    // Bearer token auth (desktop instance token or optional GitHub token for CLI)
     const authHeader = req.headers.authorization;
 
-    if (bearerEnabled && authHeader?.startsWith('Bearer ')) {
-        const token = authHeader.slice(7);
+    if (authHeader?.startsWith('Bearer ')) {
+        const token = authHeader.slice(7).trim();
+
+        if (token.startsWith(INSTANCE_TOKEN_PREFIX)) {
+            try {
+                const identity = await validateInstanceToken(token);
+                if (!identity) {
+                    res.status(401).json({ error: 'Unauthorized: invalid instance token', code: 'INVALID_INSTANCE_TOKEN' });
+                    return;
+                }
+                if (!isUserWhitelisted(identity.user.username)) {
+                    res.status(403).json({ error: 'Forbidden', code: 'USER_NOT_WHITELISTED', message: 'Your GitHub account is not authorized for this ProPR instance. Ask an admin to add you to the user whitelist.' });
+                    return;
+                }
+                (req as Request & { user: GitHubUser }).user = identity.user;
+                req.authenticationMethod = 'instance_token';
+                req.instanceTokenId = identity.tokenId;
+                return next();
+            } catch {
+                res.status(401).json({ error: 'Unauthorized: instance token validation failed', code: 'INVALID_INSTANCE_TOKEN' });
+                return;
+            }
+        }
+
+        const bearerEnabled = process.env.ENABLE_BEARER_AUTH !== 'false';
+        if (!bearerEnabled) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
 
         try {
             const user = await validateGitHubToken(token);
@@ -476,6 +567,7 @@ export async function ensureAuthenticated(req: Request, res: Response, next: Nex
                 }
                 // Populate req.user so downstream handlers work the same way
                 (req as Request & { user: GitHubUser }).user = user;
+                req.authenticationMethod = 'github_bearer';
                 return next();
             }
             res.status(401).json({ error: 'Unauthorized: invalid token' });

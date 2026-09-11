@@ -248,7 +248,7 @@ const PlansPage: React.FC = () => {
 
   if (loading && drafts.length === 0 && totalAllDrafts === 0) {
     return (
-      <div className="flex flex-col h-full">
+      <div className="flex h-full w-full min-w-0 flex-col bg-white">
         <div className="flex-shrink-0 bg-slate-50 border-b border-gray-200 px-4 sm:px-6 py-2 sm:py-4">
           <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Implementation Plans</h1>
         </div>
@@ -261,7 +261,7 @@ const PlansPage: React.FC = () => {
 
   if (error) {
     return (
-      <div className="flex flex-col h-full">
+      <div className="flex h-full w-full min-w-0 flex-col bg-white">
         <div className="flex-shrink-0 bg-slate-50 border-b border-gray-200 px-4 sm:px-6 py-2 sm:py-4">
           <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Implementation Plans</h1>
         </div>
@@ -314,7 +314,7 @@ const PlansPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full w-full min-w-0 flex-col bg-white">
       {/* Anchored Header - compact on mobile */}
       <div className="flex-shrink-0 bg-slate-50 border-b border-gray-200 px-4 sm:px-6 py-2 sm:py-4">
         <div className="flex items-center justify-between gap-2 sm:gap-4">
@@ -373,7 +373,7 @@ const PlansPage: React.FC = () => {
       </div>
 
       {/* Scrollable Content Area */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 w-full max-w-full">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden w-full max-w-full">
         {renderContent()}
       </div>
 

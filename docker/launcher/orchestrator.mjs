@@ -19,7 +19,10 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createECDH, timingSafeEqual } from 'node:crypto';
-import { readFileSync, existsSync, statSync, accessSync, constants as fsConstants } from 'node:fs';
+import {
+    readFileSync, writeFileSync, renameSync, unlinkSync, lstatSync, chmodSync,
+    existsSync, statSync, accessSync, constants as fsConstants,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,10 +30,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Hosted UI tunnel naming. These mirror the shared TypeScript constants in
-// packages/shared/src/proprServiceUrls.ts (PROPR_UI_PROXY_SUFFIX,
-// PROPR_UI_PROXY_LABEL_PREFIX, DEFAULT_CLOUDFLARED_IMAGE,
-// DEFAULT_PROPR_UI_ORIGIN) — kept as plain literals here because this module is
-// dependency-free .mjs (Node stdlib only) and cannot import the TS package.
+// packages/shared/src/proprServiceUrls.ts (DEFAULT_LOCAL_API_PORT,
+// DEFAULT_LOCAL_API_BINDING, PROPR_UI_PROXY_SUFFIX, PROPR_UI_PROXY_LABEL_PREFIX,
+// DEFAULT_CLOUDFLARED_IMAGE, DEFAULT_PROPR_UI_ORIGIN) — kept as plain literals
+// here because this module is dependency-free .mjs (Node stdlib only) and cannot
+// import the TS package.
 // Change one, change the other;
 // test/orchestratorProprUrlsDrift.test.ts guards against the copies diverging.
 export const PROPR_UI_PROXY_SUFFIX = 'propr.dev';
@@ -41,13 +45,15 @@ export const PROPR_UI_PROXY_LABEL_PREFIX = 't-';
 // operator docs can then describe a single, pinned default.
 export const DEFAULT_CLOUDFLARED_IMAGE = 'cloudflare/cloudflared:2024.12.2';
 export const DEFAULT_PROPR_UI_ORIGIN = 'https://app.propr.dev';
+export const DEFAULT_LOCAL_API_PORT = '4000';
+export const DEFAULT_LOCAL_API_BINDING = `127.0.0.1:${DEFAULT_LOCAL_API_PORT}`;
 
 // Whether an instance id is a valid single DNS label for the proxy hostname
-// (t-<id>.propr.dev): 1–63 chars, ASCII letters/digits/hyphens only, no
-// leading/trailing hyphen. Mirrors isValidProprInstanceId() in the shared pkg.
+// (t-<id>.propr.dev): 1–61 chars (leaving room for `t-`), ASCII
+// letters/digits/hyphens only, no leading/trailing hyphen.
 export function isValidProprInstanceId(instanceId) {
     const id = (instanceId ?? '').trim();
-    return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(id);
+    return /^[a-z0-9]([a-z0-9-]{0,59}[a-z0-9])?$/i.test(id);
 }
 
 // Derive the per-instance public API/UI URL (https://t-<instanceId>.propr.dev)
@@ -61,36 +67,40 @@ export function proprInstanceProxyUrl(instanceId) {
     return isValidProprInstanceId(id) ? `https://${PROPR_UI_PROXY_LABEL_PREFIX}${id.toLowerCase()}.${PROPR_UI_PROXY_SUFFIX}` : undefined;
 }
 
+export function canonicalProprProxyUrl(url) {
+    if (!url || url !== url.trim() || /[^\x20-\x7e]/.test(url)) return undefined;
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== ''
+            || parsed.port !== '' || parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '') return undefined;
+        const suffix = `.${PROPR_UI_PROXY_SUFFIX}`;
+        if (!parsed.hostname.endsWith(suffix)) return undefined;
+        const label = parsed.hostname.slice(0, -suffix.length);
+        if (label.length > 63 || label.includes('.') || !label.startsWith(PROPR_UI_PROXY_LABEL_PREFIX)) return undefined;
+        const id = label.slice(PROPR_UI_PROXY_LABEL_PREFIX.length);
+        if (!isValidProprInstanceId(id)) return undefined;
+        const canonical = `https://${PROPR_UI_PROXY_LABEL_PREFIX}${id.toLowerCase()}.${PROPR_UI_PROXY_SUFFIX}`;
+        return url === canonical ? canonical : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 // Whether a URL is a hosted per-instance proxy URL (https://t-<id>.propr.dev).
 // propr-routing only forwards /api/* and /socket.io/* on these hosts, so the
 // tunnel base URL must be one of them. Requires exactly one t-<instance-id>
 // label before the suffix (other propr.dev hosts and nested hosts are rejected)
-// and a bare origin (a non-root path/query/fragment is rejected so
+// and the exact lowercase ASCII bare origin (a slash/path/query/fragment is rejected so
 // proprTunnelEndpoints does not double up the /api prefix). Mirrors
 // isProprProxyUrl() in the shared pkg.
 export function isProprProxyUrl(url) {
-    if (!url) return false;
-    try {
-        const { protocol, hostname, pathname, search, hash } = new URL(url);
-        if (protocol !== 'https:') return false;
-        // Trailing slashes are tolerated; any real path segment/query/fragment
-        // is rejected so a base path can't double up the appended /api prefix.
-        if (/[^/]/.test(pathname) || search || hash) return false;
-        const suffix = `.${PROPR_UI_PROXY_SUFFIX}`;
-        if (!hostname.endsWith(suffix)) return false;
-        const label = hostname.slice(0, -suffix.length);
-        if (label.includes('.') || !label.startsWith(PROPR_UI_PROXY_LABEL_PREFIX)) {
-            return false;
-        }
-        return isValidProprInstanceId(label.slice(PROPR_UI_PROXY_LABEL_PREFIX.length));
-    } catch {
-        return false;
-    }
+    return typeof url === 'string'
+        && /^https:\/\/t-(?:[a-z0-9]|[a-z0-9][a-z0-9-]{0,59}[a-z0-9])\.propr\.dev$/.test(url);
 }
 
 function normalizeProprInstanceId(instanceId) {
     const id = (instanceId ?? '').trim();
-    return id.startsWith(PROPR_UI_PROXY_LABEL_PREFIX)
+    return id.toLowerCase().startsWith(PROPR_UI_PROXY_LABEL_PREFIX)
         ? id.slice(PROPR_UI_PROXY_LABEL_PREFIX.length)
         : id;
 }
@@ -216,9 +226,14 @@ function envFileValueFrom(envFileLocal, name) {
  * `check`/`init` commands to inspect HOST_*_DIR settings without re-reading.
  */
 export function readEnvFile(envFilePath) {
+    if (!envFilePath || !isReadableFile(envFilePath)) return {};
+    return parseEnvFileContents(readFileSync(envFilePath, 'utf8'));
+}
+
+/** Parse already-authorized env bytes without reopening their pathname. */
+export function parseEnvFileContents(contents) {
     const out = {};
-    if (!envFilePath || !isReadableFile(envFilePath)) return out;
-    for (const rawLine of readFileSync(envFilePath, 'utf8').split(/\r?\n/)) {
+    for (const rawLine of contents.split(/\r?\n/)) {
         const parsed = parseEnvAssignment(rawLine);
         if (parsed) out[parsed.name] = parsed.value;
     }
@@ -251,10 +266,15 @@ export function resolveConfig(env = process.env, overrides = {}) {
     // from the CLI/launcher process environment. Inspect that exact source so a
     // developer's shell NODE_ENV cannot accidentally describe (or alter) the
     // packaged container runtime.
-    const nodeEnv = readEnvFile(envFileLocal).NODE_ENV || undefined;
+    const authorizedEnvFileValues = overrides.envFileValues;
+    const nodeEnv = (authorizedEnvFileValues ?? readEnvFile(envFileLocal)).NODE_ENV || undefined;
 
     // value precedence: explicit override → process env → .env file
-    const get = (name) => env[name] !== undefined ? env[name] : envFileValueFrom(envFileLocal, name) || undefined;
+    const get = (name) => env[name] !== undefined
+        ? env[name]
+        : authorizedEnvFileValues
+            ? authorizedEnvFileValues[name] || undefined
+            : envFileValueFrom(envFileLocal, name) || undefined;
 
     const hostData = overrides.hostData ?? env.PROPR_DATA_DIR;
     const hostLogs = overrides.hostLogs ?? env.PROPR_LOGS_DIR;
@@ -271,7 +291,7 @@ export function resolveConfig(env = process.env, overrides = {}) {
     // Published service ports are host-loopback-only unless an operator chooses
     // an explicit binding. Preserve every explicit form verbatim: a bare port is
     // an intentional all-interface opt-in, while host:port supports custom binds.
-    const apiPort = overrides.apiPort ?? get('API_PORT') ?? '127.0.0.1:4000';
+    const apiPort = overrides.apiPort ?? get('API_PORT') ?? DEFAULT_LOCAL_API_BINDING;
     const uiPort = overrides.uiPort ?? get('UI_PORT') ?? '127.0.0.1:5173';
     const docsPort = overrides.docsPort ?? get('DOCS_PORT') ?? '8080';
     const redisExternalPort = overrides.redisExternalPort ?? get('REDIS_EXTERNAL_PORT') ?? '';
@@ -338,12 +358,10 @@ export function resolveConfig(env = process.env, overrides = {}) {
     const cloudflaredImage = get('PROPR_CLOUDFLARED_IMAGE') || manifest.images.cloudflared || DEFAULT_CLOUDFLARED_IMAGE;
     // Explicit URL wins; otherwise derive from the instance id's proxy hostname.
     // Falls back to undefined for local development (no instance id), where
-    // API_PUBLIC_URL / FRONTEND_URL keep their localhost defaults below. Trailing
-    // slashes are stripped once here so every consumer (API/worker/UI env, status
-    // output, endpoint rendering) sees one canonical form — the derived URL never
-    // has one, but an explicit PROPR_UI_PUBLIC_API_URL might.
-    const uiPublicApiUrl =
-        (get('PROPR_UI_PUBLIC_API_URL') || proprInstanceProxyUrl(proprInstanceId))?.replace(/\/+$/, '') || undefined;
+    // API_PUBLIC_URL / FRONTEND_URL keep their localhost defaults below. Preserve
+    // explicit raw spelling so validation cannot turn an alternate reserved
+    // Connect spelling into a trusted canonical endpoint.
+    const uiPublicApiUrl = get('PROPR_UI_PUBLIC_API_URL') || proprInstanceProxyUrl(proprInstanceId) || undefined;
 
     return Object.freeze({
         stack, network, envFileLocal, envFileHost, nodeEnv,
@@ -507,11 +525,13 @@ export function validateDockerBindPath(name, value, { containerPath = false } = 
 
 const REMOTE_IMAGE_CHECK_TIMEOUT_MS = 5000;
 
-export function docker(args, { capture = false, timeout } = {}) {
+export function docker(args, { capture = false, timeout, env, maxBuffer } = {}) {
     const res = spawnSync('docker', args, {
         stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
         encoding: 'utf8',
         timeout,
+        env,
+        maxBuffer,
     });
     if (res.status !== 0 && !capture) {
         const detail = res.error?.message || (res.signal ? `signal ${res.signal}` : `code ${res.status}`);
@@ -527,18 +547,37 @@ export function docker(args, { capture = false, timeout } = {}) {
  * On timeout it kills the child and reports an ETIMEDOUT error, matching the
  * spawnSync timeout contract that `dockerError` inspects.
  */
-export function dockerAsync(args, { timeout } = {}) {
-    return new Promise((resolveResult) => {
+export function dockerAsync(args, { timeout, signal } = {}) {
+    signal?.throwIfAborted();
+    return new Promise((resolveResult, reject) => {
         const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });
         let stdout = '';
         let stderr = '';
         let settled = false;
         let timeoutError = null;
+        let aborted = false;
+        let killTimer = null;
         const finish = (res) => {
             if (settled) return;
             settled = true;
             if (timer) clearTimeout(timer);
-            resolveResult(res);
+            if (killTimer) clearTimeout(killTimer);
+            signal?.removeEventListener('abort', abort);
+            if (aborted) {
+                const error = signal?.reason instanceof Error
+                    ? signal.reason
+                    : Object.assign(new Error('docker command aborted'), { name: 'AbortError' });
+                reject(error);
+            } else {
+                resolveResult(res);
+            }
+        };
+        const abort = () => {
+            if (settled || aborted) return;
+            aborted = true;
+            child.kill('SIGTERM');
+            killTimer = setTimeout(() => child.kill('SIGKILL'), 100);
+            killTimer.unref?.();
         };
         const timer = timeout
             ? setTimeout(() => {
@@ -549,7 +588,9 @@ export function dockerAsync(args, { timeout } = {}) {
         child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
         child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
         child.on('error', (error) => finish({ status: null, stdout, stderr, error }));
-        child.on('close', (code, signal) => finish({ status: code, stdout, stderr, signal, error: timeoutError || undefined }));
+        child.on('close', (code, closeSignal) => finish({ status: code, stdout, stderr, signal: closeSignal, error: timeoutError || undefined }));
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
     });
 }
 
@@ -614,6 +655,11 @@ function imagePresentLocally(tag) {
     return res.stdout.trim().length > 0;
 }
 
+async function imagePresentLocallyAsync(tag, signal) {
+    const res = await dockerAsync(['images', '-q', tag], { signal });
+    return res.stdout.trim().length > 0;
+}
+
 function firstLine(value) {
     return (value || '').trim().split('\n')[0] || '';
 }
@@ -627,6 +673,17 @@ export function normalizeDigest(value) {
 
 function localRepoDigests(tag) {
     const res = docker(['image', 'inspect', '--format', '{{json .RepoDigests}}', tag], { capture: true });
+    if (res.status !== 0) return null;
+    try {
+        const parsed = JSON.parse(res.stdout.trim() || '[]');
+        return Array.isArray(parsed) ? parsed.map(normalizeDigest).filter(Boolean) : [];
+    } catch {
+        return [];
+    }
+}
+
+async function localRepoDigestsAsync(tag, signal) {
+    const res = await dockerAsync(['image', 'inspect', '--format', '{{json .RepoDigests}}', tag], { signal });
     if (res.status !== 0) return null;
     try {
         const parsed = JSON.parse(res.stdout.trim() || '[]');
@@ -764,8 +821,8 @@ export function inspectImageFreshness(tag, { skipRemoteCheck = false } = {}) {
 }
 
 /** Async mirror of remoteManifestDigest using non-blocking docker exec. */
-async function remoteManifestDigestAsync(tag) {
-    const res = await dockerAsync(['manifest', 'inspect', '--verbose', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS });
+async function remoteManifestDigestAsync(tag, signal) {
+    const res = await dockerAsync(['manifest', 'inspect', '--verbose', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS, signal });
     if (res.status !== 0) {
         return { ok: false, error: dockerError(res, 'docker manifest inspect failed') };
     }
@@ -774,13 +831,13 @@ async function remoteManifestDigestAsync(tag) {
         if (digests.length > 0) {
             let allDigests = digests;
             if (res.stdout.trim().startsWith('[')) {
-                const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS });
+                const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS, signal });
                 if (buildx.status === 0) allDigests = appendDigest(allDigests, remoteDigestFromImagetoolsInspectOutput(buildx.stdout));
             }
             return { ok: true, digests: allDigests, digest: allDigests[0] };
         }
 
-        const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS });
+        const buildx = await dockerAsync(['buildx', 'imagetools', 'inspect', tag], { timeout: REMOTE_IMAGE_CHECK_TIMEOUT_MS, signal });
         if (buildx.status !== 0) {
             return { ok: false, error: dockerError(buildx, 'docker buildx imagetools inspect failed') };
         }
@@ -794,16 +851,16 @@ async function remoteManifestDigestAsync(tag) {
 }
 
 /**
- * Async mirror of inspectImageFreshness. The local (fast) docker calls stay
- * synchronous; only the remote registry probe is awaited, so many tags can be
- * checked concurrently without blocking the event loop.
+ * Async mirror of inspectImageFreshness. Every Docker call accepts the same
+ * abort signal so setup can cancel local metadata and remote registry probes.
  */
-export async function inspectImageFreshnessAsync(tag, { skipRemoteCheck = false } = {}) {
-    if (!imagePresentLocally(tag)) {
+export async function inspectImageFreshnessAsync(tag, { skipRemoteCheck = false, signal } = {}) {
+    signal?.throwIfAborted();
+    if (!await imagePresentLocallyAsync(tag, signal)) {
         return { status: 'missing', tag };
     }
 
-    const localDigests = localRepoDigests(tag);
+    const localDigests = await localRepoDigestsAsync(tag, signal);
     if (!localDigests) {
         return { status: 'unknown', tag, error: 'local image metadata could not be inspected' };
     }
@@ -816,7 +873,7 @@ export async function inspectImageFreshnessAsync(tag, { skipRemoteCheck = false 
         return { status: 'unknown', tag, localDigests, localOnly: true, error: 'local image has no registry digest; pull the tag to verify freshness' };
     }
 
-    return classifyImageFreshness(tag, localDigests, await remoteManifestDigestAsync(tag));
+    return classifyImageFreshness(tag, localDigests, await remoteManifestDigestAsync(tag, signal));
 }
 
 function cachedImageFreshness(cache, tag, opts) {
@@ -1122,6 +1179,7 @@ export function stopService(cfg, service, { remove = true, onLog } = {}) {
  * prompt before restarting (e.g. `propr start`).
  */
 export function isStackRunning(cfg) {
+    if (isStackReplacementPending(cfg)) return false;
     const status = getStackStatus(cfg);
     return status.services.some((s) => CORE_SERVICES.includes(s.service) && s.running);
 }
@@ -1132,6 +1190,9 @@ export function isStackRunning(cfg) {
  * rethrown, so a failed startup doesn't leave a half-running stack behind.
  */
 export function startStack(cfg, { ui = true, docs = cfg.docsEnabled, tunnel = cfg.uiTunnelEnabled, onLog } = {}) {
+    if (isStackReplacementPending(cfg)) {
+        throw new Error('Desktop-managed stack replacement was interrupted; re-run `propr setup` to resume it before starting the stack');
+    }
     const toStart = [...CORE_SERVICES, ...(ui ? ['ui'] : []), ...(docs ? ['docs'] : []), ...(tunnel ? ['tunnel'] : [])];
     const started = [];
     const freshnessCache = new Map();
@@ -1272,77 +1333,77 @@ export function runMigrationPhase(cfg, { onLog, freshnessCache } = {}) {
 // one, change the other.
 // ---------------------------------------------------------------------------
 
-async function containerExistsAsync(cfg, name) {
-    const res = await dockerAsync(['ps', '-a', '--filter', `name=^${name}$`, '--format', '{{.Names}}']);
+async function containerExistsAsync(cfg, name, signal) {
+    const res = await dockerAsync(['ps', '-a', '--filter', `name=^${name}$`, '--format', '{{.Names}}'], { signal });
     return res.stdout.trim() === name;
 }
 
-async function removeIfExistsAsync(cfg, name, onLog) {
-    if (await containerExistsAsync(cfg, name)) {
+async function removeIfExistsAsync(cfg, name, onLog, signal) {
+    if (await containerExistsAsync(cfg, name, signal)) {
         onLog?.(`  · removing stale ${name}`);
-        await dockerAsync(['rm', '-f', name]);
+        await dockerAsync(['rm', '-f', name], { signal });
     }
 }
 
-async function containerRunningAsync(cfg, name) {
-    const res = await dockerAsync(['ps', '--filter', `name=^${name}$`, '--format', '{{.Names}}']);
+async function containerRunningAsync(cfg, name, signal) {
+    const res = await dockerAsync(['ps', '--filter', `name=^${name}$`, '--format', '{{.Names}}'], { signal });
     if (res.status !== 0) {
         throw new Error(`Cannot safely inspect ${name} before database migration: ${firstLine(res.stderr || res.error?.message || 'docker ps failed')}`);
     }
     return res.stdout.trim().split('\n').includes(name);
 }
 
-async function assertNoLiveMigrationOwnerAsync(cfg, service) {
+async function assertNoLiveMigrationOwnerAsync(cfg, service, signal) {
     if (!DATABASE_SERVICES.has(service)) return;
     const migrationName = `${cfg.stack}-migrate`;
-    if (await containerRunningAsync(cfg, migrationName)) {
+    if (await containerRunningAsync(cfg, migrationName, signal)) {
         throw new Error(`Refusing to start ${cfg.stack}-${service} while database migration owner ${migrationName} is running; the existing migration container was left untouched.`);
     }
 }
 
-async function runningDatabaseServiceNamesAsync(cfg) {
+async function runningDatabaseServiceNamesAsync(cfg, signal) {
     const running = [];
     for (const service of DATABASE_SERVICES) {
         const name = `${cfg.stack}-${service}`;
-        if (await containerRunningAsync(cfg, name)) running.push(name);
+        if (await containerRunningAsync(cfg, name, signal)) running.push(name);
     }
     return running;
 }
 
-async function assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff) {
+async function assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff, signal) {
     if (!DATABASE_SERVICES.has(service)) return;
-    await assertNoLiveMigrationOwnerAsync(cfg, service);
+    await assertNoLiveMigrationOwnerAsync(cfg, service, signal);
     if (migrationHandoff === MIGRATIONS_PREAPPLIED_HANDOFF) return;
 
-    const running = await runningDatabaseServiceNamesAsync(cfg);
+    const running = await runningDatabaseServiceNamesAsync(cfg, signal);
     if (running.length > 0) throw directDatabaseStartError(cfg, service, running);
 }
 
-async function assertMigrationCanStartAsync(cfg) {
-    const running = await runningDatabaseServiceNamesAsync(cfg);
+async function assertMigrationCanStartAsync(cfg, signal) {
+    const running = await runningDatabaseServiceNamesAsync(cfg, signal);
     if (running.length > 0) {
         throw new Error(`Refusing to run database migrations while database services are running (${running.join(', ')}). Stop the stack first (for the CLI, run \`propr stop\`) and retry; existing containers were left untouched.`);
     }
 
     const migrationName = `${cfg.stack}-migrate`;
-    if (await containerRunningAsync(cfg, migrationName)) {
+    if (await containerRunningAsync(cfg, migrationName, signal)) {
         throw new Error(`Database migration owner ${migrationName} is already running; it was left untouched. Wait for it to finish, inspect its logs, or stop it explicitly before retrying.`);
     }
 }
 
-async function prepareMigrationOwnerAsync(cfg, onLog) {
-    await assertMigrationCanStartAsync(cfg);
+async function prepareMigrationOwnerAsync(cfg, onLog, signal) {
+    await assertMigrationCanStartAsync(cfg, signal);
     const migrationName = `${cfg.stack}-migrate`;
-    if (!(await containerExistsAsync(cfg, migrationName))) return;
+    if (!(await containerExistsAsync(cfg, migrationName, signal))) return;
 
     onLog?.(`  · removing stopped migration container ${migrationName}`);
-    const removed = await dockerAsync(['rm', migrationName]);
+    const removed = await dockerAsync(['rm', migrationName], { signal });
     if (removed.status !== 0) {
         throw new Error(`Could not safely remove stopped migration container ${migrationName}; it may have started and was left untouched: ${firstLine(removed.stderr || removed.error?.message || 'docker rm failed')}`);
     }
 }
 
-async function dockerRunDetachedAsync(cfg, name, service, args, networkMode = cfg.network) {
+async function dockerRunDetachedAsync(cfg, name, service, args, networkMode = cfg.network, signal) {
     const full = [
         'run', '-d', '--init', '--name', name,
         '--network', networkMode, '--restart', 'unless-stopped',
@@ -1350,18 +1411,18 @@ async function dockerRunDetachedAsync(cfg, name, service, args, networkMode = cf
         '--label', `propr.service=${service}`,
         ...args,
     ];
-    const res = await dockerAsync(full);
+    const res = await dockerAsync(full, { signal });
     if (res.status !== 0) {
         throw new Error(`Failed to start ${name}: ${res.stderr}`);
     }
 }
 
 /** Async mirror of ensureNetwork. */
-export async function ensureNetworkAsync(cfg, onLog) {
-    const res = await dockerAsync(['network', 'inspect', cfg.network]);
+export async function ensureNetworkAsync(cfg, onLog, signal) {
+    const res = await dockerAsync(['network', 'inspect', cfg.network], { signal });
     if (res.status !== 0) {
         onLog?.(`creating network ${cfg.network}`);
-        await dockerAsync(['network', 'create', cfg.network]);
+        await dockerAsync(['network', 'create', cfg.network], { signal });
     }
 }
 
@@ -1374,11 +1435,11 @@ async function cachedImageFreshnessAsync(cache, tag, opts) {
 }
 
 /** Async mirror of ensureServiceImage — pulls a missing/stale image, awaited. */
-async function ensureServiceImageAsync(cfg, service, onLog, { freshnessCache } = {}) {
+async function ensureServiceImageAsync(cfg, service, onLog, { freshnessCache, signal } = {}) {
     const tag = imageTagForService(cfg, service);
     if (!tag) return;
     const skipFreshness = skipRemoteImageCheck() || !isProprPublishedImage(cfg, tag);
-    const freshness = await cachedImageFreshnessAsync(freshnessCache, tag, { skipRemoteCheck: skipFreshness });
+    const freshness = await cachedImageFreshnessAsync(freshnessCache, tag, { skipRemoteCheck: skipFreshness, signal });
     if (freshness.status === 'current') return;
     if (freshness.status === 'unknown') {
         if (freshness.skipped) return;
@@ -1391,35 +1452,35 @@ async function ensureServiceImageAsync(cfg, service, onLog, { freshnessCache } =
     } else {
         onLog?.(`  · pulling ${tag}`);
     }
-    const res = await dockerAsync(['pull', tag]);
+    const res = await dockerAsync(['pull', tag], { signal });
     if (res.status !== 0) {
         throw new Error(`Failed to pull ${tag}: ${(res.stderr || '').trim()}`);
     }
 }
 
 /** Async mirror of startService. */
-export async function startServiceAsync(cfg, service, { onLog, pull = true, freshnessCache, migrationHandoff } = {}) {
+export async function startServiceAsync(cfg, service, { onLog, pull = true, freshnessCache, migrationHandoff, signal } = {}) {
     const name = `${cfg.stack}-${service}`;
-    await assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff);
-    if (pull) await ensureServiceImageAsync(cfg, service, onLog, { freshnessCache });
+    await assertDatabaseServiceCanStartAsync(cfg, service, migrationHandoff, signal);
+    if (pull) await ensureServiceImageAsync(cfg, service, onLog, { freshnessCache, signal });
     const spec = withMigrationPolicy(buildServiceSpec(cfg, service), service, migrationHandoff);
-    await removeIfExistsAsync(cfg, name, onLog);
+    await removeIfExistsAsync(cfg, name, onLog, signal);
     const runArgs = [...spec.args, spec.image, ...(spec.command || [])];
-    await dockerRunDetachedAsync(cfg, name, service, runArgs, spec.networkMode);
+    await dockerRunDetachedAsync(cfg, name, service, runArgs, spec.networkMode, signal);
     onLog?.(`  [ok] started ${name}`);
-    return getServiceStateAsync(cfg, service);
+    return getServiceStateAsync(cfg, service, signal);
 }
 
 /** Async mirror of stopService (used by startStackAsync's rollback). */
-async function stopServiceAsync(cfg, service, { remove = true, onLog } = {}) {
+async function stopServiceAsync(cfg, service, { remove = true, onLog, signal } = {}) {
     const name = `${cfg.stack}-${service}`;
-    if (!(await containerExistsAsync(cfg, name))) return;
-    const stopped = await dockerAsync(['stop', '-t', '10', name]);
+    if (!(await containerExistsAsync(cfg, name, signal))) return;
+    const stopped = await dockerAsync(['stop', '-t', '10', name], { signal });
     if (stopped.status !== 0) {
         throw new Error(`Failed to stop ${name}: ${(stopped.stderr || '').trim()}`);
     }
     if (remove) {
-        const removed = await dockerAsync(['rm', name]);
+        const removed = await dockerAsync(['rm', name], { signal });
         if (removed.status !== 0) {
             throw new Error(`Stopped ${name} but failed to remove it: ${(removed.stderr || '').trim()}`);
         }
@@ -1432,61 +1493,294 @@ async function stopServiceAsync(cfg, service, { remove = true, onLog } = {}) {
  * without blocking the event loop, rolling back already-started services on a
  * mid-startup failure (best effort) before rethrowing.
  */
-export async function startStackAsync(cfg, { ui = true, docs = cfg.docsEnabled, tunnel = cfg.uiTunnelEnabled, onLog } = {}) {
+export async function startStackAsync(cfg, { ui = true, docs = cfg.docsEnabled, tunnel = cfg.uiTunnelEnabled, onLog, signal } = {}) {
+    if (isStackReplacementPending(cfg)) {
+        onLog?.('  · resuming interrupted desktop-managed stack replacement');
+        await replaceStackContainersAsync(cfg, { onLog, signal });
+    }
     const toStart = [...CORE_SERVICES, ...(ui ? ['ui'] : []), ...(docs ? ['docs'] : []), ...(tunnel ? ['tunnel'] : [])];
     const started = [];
     const freshnessCache = new Map();
     try {
-        await runMigrationPhaseAsync(cfg, { onLog, freshnessCache });
+        await runMigrationPhaseAsync(cfg, { onLog, freshnessCache, signal });
         for (const service of toStart) {
             await startServiceAsync(cfg, service, {
                 onLog,
                 freshnessCache,
                 migrationHandoff: MIGRATIONS_PREAPPLIED_HANDOFF,
                 pull: !DATABASE_SERVICES.has(service),
+                signal,
             });
             started.push(service);
         }
     } catch (err) {
+        if (signal?.aborted) throw err;
         onLog?.(`  ! startup failed (${err.message}) — rolling back already-started services`);
         for (const service of started.reverse()) {
             try {
-                await stopServiceAsync(cfg, service, { onLog });
+                await stopServiceAsync(cfg, service, { onLog, signal });
             } catch (stopErr) {
                 onLog?.(`  ! rollback: ${stopErr.message}`);
             }
         }
         throw err;
     }
-    return getStackStatusAsync(cfg);
+    return getStackStatusAsync(cfg, signal);
 }
 
 /** Async mirror of runMigrationPhase for the interactive setup UI. */
-export async function runMigrationPhaseAsync(cfg, { onLog, freshnessCache } = {}) {
-    await assertMigrationCanStartAsync(cfg);
-    await ensureServiceImageAsync(cfg, 'daemon', onLog, { freshnessCache });
-    await prepareMigrationOwnerAsync(cfg, onLog);
+export async function runMigrationPhaseAsync(cfg, { onLog, freshnessCache, signal } = {}) {
+    await assertMigrationCanStartAsync(cfg, signal);
+    await ensureServiceImageAsync(cfg, 'daemon', onLog, { freshnessCache, signal });
+    await prepareMigrationOwnerAsync(cfg, onLog, signal);
     onLog?.('  · running database migrations');
-    const res = await dockerAsync(migrationDockerArgs(cfg));
+    const res = await dockerAsync(migrationDockerArgs(cfg), { signal });
     if (res.status !== 0) throw migrationFailure(res);
     onLog?.('  [ok] database migrations completed');
 }
 
 /** Async mirror of getStackStatus. */
-export async function getStackStatusAsync(cfg) {
-    const res = await dockerAsync(STACK_STATUS_PS_ARGS);
+export async function getStackStatusAsync(cfg, signal) {
+    const res = await dockerAsync(stackStatusPsArgs(cfg), { signal });
     return parseStackStatus(cfg, res.stdout);
 }
 
 /** Async mirror of getServiceState. */
-async function getServiceStateAsync(cfg, service) {
-    return (await getStackStatusAsync(cfg)).services.find((s) => s.service === service);
+async function getServiceStateAsync(cfg, service, signal) {
+    return (await getStackStatusAsync(cfg, signal)).services.find((s) => s.service === service);
 }
 
 /** Async mirror of isStackRunning. */
-export async function isStackRunningAsync(cfg) {
-    const status = await getStackStatusAsync(cfg);
+export async function isStackRunningAsync(cfg, signal) {
+    if (isStackReplacementPending(cfg)) return false;
+    const status = await getStackStatusAsync(cfg, signal);
     return status.services.some((s) => CORE_SERVICES.includes(s.service) && s.running);
+}
+
+/**
+ * Resolve the root paths that prove a host-managed container belongs to this
+ * exact stack root. A stack label is not sufficient: different roots can use
+ * the same configured stack name.
+ */
+function replacementRootPaths(cfg) {
+    if (!cfg?.validateHostPaths || !cfg.hostData || !cfg.hostLogs || !cfg.hostRepos || !cfg.envFileHost) {
+        throw new Error('Refusing container replacement because the managed stack root is not fully resolved');
+    }
+    const data = resolve(cfg.hostData);
+    const logs = resolve(cfg.hostLogs);
+    const repos = resolve(cfg.hostRepos);
+    const envFile = resolve(cfg.envFileHost);
+    const roots = [dirname(data), dirname(logs), dirname(repos), dirname(envFile)];
+    if (new Set(roots).size !== 1
+        || data !== join(roots[0], 'data')
+        || logs !== join(roots[0], 'logs')
+        || repos !== join(roots[0], 'repos')
+        || envFile !== join(roots[0], '.env')) {
+        throw new Error('Refusing container replacement because the managed stack root paths do not agree');
+    }
+    return { root: roots[0], data, logs, repos, envFile };
+}
+
+const REPLACEMENT_MARKER_FILENAME = '.propr-stack-replacement.json';
+const REPLACEMENT_MARKER_MODE = 0o600;
+
+function replacementMarkerPath(cfg) {
+    if (!cfg?.validateHostPaths) return undefined;
+    return join(replacementRootPaths(cfg).root, REPLACEMENT_MARKER_FILENAME);
+}
+
+function validateReplacementMarker(cfg, marker) {
+    if (!marker || typeof marker !== 'object' || Array.isArray(marker)
+        || marker.schemaVersion !== 1 || marker.stack !== cfg.stack
+        || !Array.isArray(marker.containers) || marker.containers.length === 0
+        || marker.containers.length > SERVICES.length) {
+        throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is invalid`);
+    }
+    const ids = new Set();
+    const services = new Set();
+    for (const container of marker.containers) {
+        if (!container || typeof container !== 'object' || Array.isArray(container)
+            || typeof container.id !== 'string' || !/^[a-f0-9]{64}$/.test(container.id)
+            || typeof container.service !== 'string' || !SERVICES.includes(container.service)
+            || container.name !== `${cfg.stack}-${container.service}`
+            || ids.has(container.id) || services.has(container.service)) {
+            throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is invalid`);
+        }
+        ids.add(container.id);
+        services.add(container.service);
+    }
+    if (!marker.containers.some((container) => DATABASE_SERVICES.has(container.service))) {
+        throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is not root-bound`);
+    }
+    return marker;
+}
+
+function readReplacementMarker(cfg) {
+    const path = replacementMarkerPath(cfg);
+    if (!path || !existsSync(path)) return undefined;
+    const metadata = lstatSync(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()
+        || (metadata.mode & 0o777) !== REPLACEMENT_MARKER_MODE
+        || metadata.size > 64 * 1024) {
+        throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is unsafe`);
+    }
+    try {
+        return validateReplacementMarker(cfg, JSON.parse(readFileSync(path, 'utf8')));
+    } catch (error) {
+        if (error instanceof SyntaxError) {
+            throw new Error(`Refusing to resume ${cfg.stack} container replacement because its recovery marker is invalid`);
+        }
+        throw error;
+    }
+}
+
+function persistReplacementMarker(cfg, rootPaths, containers) {
+    const path = join(rootPaths.root, REPLACEMENT_MARKER_FILENAME);
+    const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+    try {
+        writeFileSync(temporary, `${JSON.stringify({
+            schemaVersion: 1,
+            stack: cfg.stack,
+            containers: containers.map(({ id, name, service }) => ({ id, name, service })),
+        })}\n`, { encoding: 'utf8', mode: REPLACEMENT_MARKER_MODE, flag: 'wx' });
+        chmodSync(temporary, REPLACEMENT_MARKER_MODE);
+        renameSync(temporary, path);
+    } finally {
+        try { unlinkSync(temporary); } catch { /* rename or cleanup already removed it */ }
+    }
+}
+
+function clearReplacementMarker(cfg) {
+    const path = replacementMarkerPath(cfg);
+    if (!path) return;
+    try { unlinkSync(path); }
+    catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+    }
+}
+
+/** Whether an earlier validated replacement must finish before startup. */
+export function isStackReplacementPending(cfg) {
+    return Boolean(readReplacementMarker(cfg));
+}
+
+const REPLACEMENT_INSPECT_FORMAT = '{{json .Id}}\t{{json .Name}}\t{{json .Config.Labels}}\t{{json .Mounts}}';
+
+function parseReplacementInspection(stdout) {
+    const fields = stdout.trim().split('\t');
+    if (fields.length !== 4) return null;
+    try {
+        const [id, name, labels, mounts] = fields.map((field) => JSON.parse(field));
+        if (typeof id !== 'string' || typeof name !== 'string'
+            || !labels || typeof labels !== 'object' || Array.isArray(labels)
+            || !Array.isArray(mounts)) return null;
+        return { id, name, labels, mounts };
+    } catch {
+        return null;
+    }
+}
+
+function hasReplacementMount(mounts, expected) {
+    return mounts.some((mount) => mount && typeof mount === 'object'
+        && mount.Type === expected.type
+        && mount.Destination === expected.destination
+        && (expected.source === undefined || resolve(String(mount.Source || '')) === expected.source)
+        && (expected.name === undefined || mount.Name === expected.name));
+}
+
+function replacementMountsMatch(cfg, service, mounts, rootPaths) {
+    if (service === 'redis') {
+        return hasReplacementMount(mounts, {
+            type: 'volume', destination: '/data', name: `${cfg.stack}-redis-data`,
+        });
+    }
+    if (DATABASE_SERVICES.has(service)) {
+        if (!hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.data, destination: '/usr/src/app/data',
+        }) || !hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.logs, destination: '/usr/src/app/logs',
+        })) return false;
+        if (service === 'worker' && !hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.repos, destination: '/usr/src/app/repos',
+        })) return false;
+        if ((service === 'daemon' || service === 'api') && !hasReplacementMount(mounts, {
+            type: 'bind', source: rootPaths.envFile, destination: '/usr/src/app/.env',
+        })) return false;
+        return true;
+    }
+    // The UI, docs, and tunnel service specifications own no mounts. Refuse a
+    // same-labelled substitute that adds one instead of inferring ownership.
+    return mounts.length === 0;
+}
+
+/**
+ * Stop and remove only containers whose immutable IDs, canonical service
+ * identity, and root mounts were all validated before the first mutation.
+ * Bind-mounted data, credentials, logs, repositories, and the network are
+ * deliberately retained so an aligned runtime can be started in place.
+ */
+export async function replaceStackContainersAsync(cfg, { onLog, signal } = {}) {
+    signal?.throwIfAborted();
+    const rootPaths = replacementRootPaths(cfg);
+    const recovery = readReplacementMarker(cfg);
+    const listed = await dockerAsync([
+        'ps', '-a', '--no-trunc', '--filter', `label=propr.stack=${cfg.stack}`, '--format', '{{.ID}}',
+    ], { signal });
+    if (listed.status !== 0) {
+        throw new Error(`Failed to list ${cfg.stack} containers: ${(listed.stderr || '').trim()}`);
+    }
+    const ids = listed.stdout.split('\n').map((id) => id.trim()).filter(Boolean);
+    if (ids.length > SERVICES.length || new Set(ids).size !== ids.length
+        || ids.some((id) => !/^[a-f0-9]{64}$/.test(id))) {
+        throw new Error(`Refusing to replace ${cfg.stack} containers because the ownership target set is invalid`);
+    }
+    const validated = [];
+    const services = new Set();
+    let rootBoundServices = 0;
+    const recoveryById = new Map((recovery?.containers ?? []).map((container) => [container.id, container]));
+    for (const listedId of ids) {
+        signal?.throwIfAborted();
+        const inspected = await dockerAsync(['inspect', '--format', REPLACEMENT_INSPECT_FORMAT, listedId], { signal });
+        const container = inspected.status === 0 ? parseReplacementInspection(inspected.stdout) : null;
+        const service = container?.labels?.['propr.service'];
+        if (!container
+            || container.id !== listedId
+            || container.name !== `/${cfg.stack}-${service}`
+            || container.labels['propr.stack'] !== cfg.stack
+            || typeof service !== 'string'
+            || !SERVICES.includes(service)
+            || services.has(service)
+            || (recovery && (recoveryById.get(container.id)?.name !== container.name.slice(1)
+                || recoveryById.get(container.id)?.service !== service))
+            || !replacementMountsMatch(cfg, service, container.mounts, rootPaths)) {
+            throw new Error(`Refusing to replace ${cfg.stack} containers because ownership metadata does not match the managed root and service set`);
+        }
+        services.add(service);
+        if (DATABASE_SERVICES.has(service)) rootBoundServices += 1;
+        validated.push({ id: container.id, name: container.name.slice(1), service });
+    }
+    if (validated.length > 0 && rootBoundServices === 0) {
+        throw new Error(`Refusing to replace ${cfg.stack} containers because no container proves ownership of the managed root`);
+    }
+    signal?.throwIfAborted();
+    if (!recovery && validated.length > 0) persistReplacementMarker(cfg, rootPaths, validated);
+    // Keep at least one root-bound service until optional containers are gone.
+    // A retry can therefore re-prove this exact root even if interruption lands
+    // between any two removals; the final root-bound removal leaves no target.
+    const replacementOrder = validated.toSorted((left, right) =>
+        Number(DATABASE_SERVICES.has(left.service)) - Number(DATABASE_SERVICES.has(right.service)));
+    for (const container of replacementOrder) {
+        const stopped = await dockerAsync(['stop', '-t', '10', container.id], { signal });
+        if (stopped.status !== 0) {
+            throw new Error(`Failed to stop ${container.name}: ${(stopped.stderr || '').trim()}`);
+        }
+        const removed = await dockerAsync(['rm', container.id], { signal });
+        if (removed.status !== 0) {
+            throw new Error(`Stopped ${container.name} but failed to remove it: ${(removed.stderr || '').trim()}`);
+        }
+        onLog?.(`  [ok] replaced ${container.name}`);
+    }
+    clearReplacementMarker(cfg);
 }
 
 /**
@@ -1565,16 +1859,76 @@ export function parseStackStatus(cfg, stdout) {
     return { stack: cfg.stack, network: cfg.network, running: anyRunning, services };
 }
 
-const STACK_STATUS_PS_ARGS = ['ps', '-a', '--format', '{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Ports}}'];
+const STACK_STATUS_MAX_BYTES = 64 * 1024;
+
+function stackStatusPsArgs(cfg) {
+    // `cfg.stack` has already passed the Docker-name validation before Connect
+    // reaches this boundary. Keep the label expression in one argv element so
+    // neither a shell nor Docker's fuzzy name matching can broaden discovery.
+    if (typeof cfg?.stack !== 'string' || cfg.stack.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(cfg.stack)) {
+        throw new Error('Docker stack status scope is invalid');
+    }
+    return [
+        'ps',
+        '-a',
+        '--filter',
+        `label=propr.stack=${cfg.stack}`,
+        '--format',
+        '{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Ports}}',
+    ];
+}
+
+/**
+ * Run and strictly validate one bounded Docker status inspection. The command
+ * result is retained so callers can distinguish an absent service (a successful
+ * empty inspection) from a missing binary, daemon error, timeout, signal, or
+ * truncated/malformed output.
+ */
+export function inspectStackStatus(cfg, { timeout, env } = {}) {
+    let args;
+    try {
+        args = stackStatusPsArgs(cfg);
+    } catch (error) {
+        return { result: { status: null, stdout: '', stderr: '', error } };
+    }
+    const result = docker(args, {
+        capture: true,
+        timeout,
+        env,
+        maxBuffer: STACK_STATUS_MAX_BYTES,
+    });
+    if (result.status !== 0 || result.error || result.signal || typeof result.stdout !== 'string') {
+        return { result };
+    }
+
+    const expectedNames = new Set(SERVICES.map((service) => `${cfg.stack}-${service}`));
+    const seenExpectedNames = new Set();
+    const validStates = new Set(['created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead']);
+    for (const line of result.stdout.split('\n')) {
+        if (line === '') continue;
+        const fields = line.endsWith('\r') ? line.slice(0, -1).split('\t') : line.split('\t');
+        if (fields.length !== 4) return { result };
+        const [name, state, status] = fields;
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || !validStates.has(state) || status.length === 0) {
+            return { result };
+        }
+        // The daemon-side label filter is a scope reduction, not an authority
+        // assertion. Every row returned for the target label must still be one
+        // of this stack's canonical service containers, exactly once.
+        if (!expectedNames.has(name) || seenExpectedNames.has(name)) return { result };
+        seenExpectedNames.add(name);
+    }
+    return { result, status: parseStackStatus(cfg, result.stdout) };
+}
 
 /** Per-service state for the whole stack, discovered by canonical container name. */
-export function getStackStatus(cfg) {
-    const res = docker(STACK_STATUS_PS_ARGS, { capture: true });
+export function getStackStatus(cfg, { timeout } = {}) {
+    const res = docker(stackStatusPsArgs(cfg), { capture: true, timeout });
     return parseStackStatus(cfg, res.stdout);
 }
 
-export function getServiceState(cfg, service) {
-    return getStackStatus(cfg).services.find((s) => s.service === service);
+export function getServiceState(cfg, service, opts) {
+    return getStackStatus(cfg, opts).services.find((s) => s.service === service);
 }
 
 // Best-effort GET <publicApiUrl>/api/status behind a hard timeout. propr-routing

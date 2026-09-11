@@ -75,8 +75,12 @@ export interface CommentJobData {
     ultrafixMeta?: UltrafixCommandMeta;
     /** Reasoning level override resolved from PR or linked issue level-* labels. */
     reasoningLevel?: ReasoningLevel;
-    /** Internal lease token persisted across BullMQ redelivery and rescheduling. */
+    /** Internal lease token persisted across BullMQ redelivery of this same job. */
     prProcessingLockToken?: string;
+    /** Legacy original task whose live container a recovery job must wait for. */
+    containerCollisionTaskId?: string;
+    /** Every preceding task whose live container a recovery job must wait for. */
+    containerCollisionTaskIds?: string[];
 }
 
 export interface UnprocessedComment {
