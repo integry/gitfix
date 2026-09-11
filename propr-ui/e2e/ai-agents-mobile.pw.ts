@@ -83,7 +83,7 @@ test('keeps the Playground usable at 320px', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Playground' })).toBeVisible();
   const search = page.getByRole('combobox', { name: 'Search and add models to compare' });
   await expect(search).toBeVisible();
-  await expect(page.getByPlaceholder('Type a message to test...')).toBeVisible();
+  await expect(page.getByPlaceholder('Type a message to test...').filter({ visible: true })).toBeVisible();
   const sendBounds = await page.getByRole('button', { name: 'Send message' }).boundingBox();
   const briefingBounds = await page.getByRole('button', { name: 'Voice briefing' }).boundingBox();
   expect(sendBounds).not.toBeNull();
