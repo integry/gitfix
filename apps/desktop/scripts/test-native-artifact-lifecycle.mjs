@@ -210,6 +210,7 @@ export const NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES = Object.freeze([
   'FAILED_EXIT',
   'SIGNALLED',
   'EVIDENCE_DEADLINE',
+  'EVIDENCE_READ_FAILED',
 ]);
 
 export const FIRST_EVIDENCE_MILESTONES = Object.freeze([
@@ -234,6 +235,19 @@ export const FIRST_EVIDENCE_FAILURE_CATEGORIES = Object.freeze([
   'RENDERER_GONE',
 ]);
 
+export const WARM_OPEN_EVIDENCE_MILESTONES = Object.freeze([
+  'NO_EVIDENCE',
+  'RENDERER',
+  'WARM_MANUAL_ACK',
+  'WARM_TUNNEL_ACK',
+  'WARM_OPEN_ACK',
+  'SHUTDOWN',
+]);
+
+const WARM_OPEN_EVIDENCE_STATES = Object.freeze([
+  'READABLE', 'MISSING', 'MALFORMED', 'UNREADABLE', 'OVERSIZED',
+]);
+
 export class NativeLifecycleEvidenceWaitFailure extends Error {
   constructor(resultClass) {
     if (!NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(resultClass)) {
@@ -241,7 +255,9 @@ export class NativeLifecycleEvidenceWaitFailure extends Error {
     }
     super(resultClass === 'EVIDENCE_DEADLINE'
       ? 'Native application evidence deadline expired'
-      : 'Native application exited before producing required evidence');
+      : resultClass === 'EVIDENCE_READ_FAILED'
+        ? 'Native application evidence could not be read'
+        : 'Native application exited before producing required evidence');
     this.name = 'NativeLifecycleEvidenceWaitFailure';
     this.resultClass = resultClass;
   }
@@ -252,26 +268,39 @@ export class NativeLifecycleOperationFailure extends Error {
     if (!NATIVE_LIFECYCLE_OPERATION_STAGES.includes(stage)) {
       throw new Error('Native lifecycle failure stage is invalid');
     }
+    const milestones = stage === 'WARM_OPEN_EVIDENCE'
+      ? WARM_OPEN_EVIDENCE_MILESTONES
+      : FIRST_EVIDENCE_MILESTONES;
     if (evidenceClassification
-      && (!FIRST_EVIDENCE_MILESTONES.includes(evidenceClassification.milestone)
+      && (!milestones.includes(evidenceClassification.milestone)
         || !NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(evidenceClassification.resultClass)
+        || (evidenceClassification.evidenceState !== undefined
+          && (stage !== 'WARM_OPEN_EVIDENCE'
+            || !WARM_OPEN_EVIDENCE_STATES.includes(evidenceClassification.evidenceState)))
         || (evidenceClassification.failureCategory !== undefined
           && !FIRST_EVIDENCE_FAILURE_CATEGORIES.includes(evidenceClassification.failureCategory)))) {
       throw new Error('Native lifecycle evidence failure classification is invalid');
     }
-    const classification = evidenceClassification
-      ? ` [milestone:${evidenceClassification.milestone}] [result:${evidenceClassification.resultClass}]${
-        evidenceClassification.failureCategory
-          ? ` [category:${evidenceClassification.failureCategory}]`
-          : ''
-      }`
-      : '';
+    // Preserve the wait outcome at later stages too, without exposing the
+    // underlying error or any child output, arguments, URLs, or profile paths.
+    const resultClass = evidenceClassification?.resultClass
+      ?? (operationError instanceof NativeLifecycleEvidenceWaitFailure ? operationError.resultClass : undefined);
+    if (resultClass !== undefined && !NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(resultClass)) {
+      throw new Error('Native lifecycle evidence result class is invalid');
+    }
+    const classification = [
+      evidenceClassification ? ` [milestone:${evidenceClassification.milestone}]` : '',
+      resultClass ? ` [result:${resultClass}]` : '',
+      evidenceClassification?.evidenceState ? ` [evidence:${evidenceClassification.evidenceState}]` : '',
+      evidenceClassification?.failureCategory ? ` [category:${evidenceClassification.failureCategory}]` : '',
+    ].join('');
     super(`Native lifecycle operation failed [stage:${stage}]${classification}`);
     this.name = 'NativeLifecycleOperationFailure';
     this.stage = stage;
+    if (resultClass) this.resultClass = resultClass;
     if (evidenceClassification) {
       this.milestone = evidenceClassification.milestone;
-      this.resultClass = evidenceClassification.resultClass;
+      if (evidenceClassification.evidenceState) this.evidenceState = evidenceClassification.evidenceState;
       if (evidenceClassification.failureCategory) {
         this.failureCategory = evidenceClassification.failureCategory;
       }
@@ -288,6 +317,7 @@ export class NativeLifecycleFailure extends AggregateError {
           ` [stage:${primaryError.stage}]`,
           ...(primaryError.milestone ? [` [milestone:${primaryError.milestone}]`] : []),
           ...(primaryError.resultClass ? [` [result:${primaryError.resultClass}]`] : []),
+          ...(primaryError.evidenceState ? [` [evidence:${primaryError.evidenceState}]`] : []),
           ...(primaryError.failureCategory ? [` [category:${primaryError.failureCategory}]`] : []),
         ].join('')
       : '';
@@ -1270,6 +1300,77 @@ const assertDefaultUserDataUntouched = async target => {
   }
 };
 
+const evidenceFailureCategory = events => {
+  if (events.has('desktop.deeplink.delivery_failed')) return 'DEEP_LINK_DELIVERY_FAILED';
+  if (events.has('desktop.renderer.gone')) return 'RENDERER_GONE';
+  if (events.has('desktop.native.cold_confirmation_not_visible')) return 'COLD_CONFIRMATION_NOT_VISIBLE';
+  if (events.has('desktop.native.cold_confirmation_inspection_failed')) return 'COLD_CONFIRMATION_INSPECTION_FAILED';
+  if (events.has('desktop.main_process.uncaught_exception')) return 'UNCAUGHT_EXCEPTION';
+  if (events.has('desktop.app.start_failed')) return 'START_FAILED';
+  return undefined;
+};
+
+export const classifyWarmOpenEvidenceFailure = async (path, resultClass) => {
+  if (!NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(resultClass)) {
+    throw new Error('Native lifecycle evidence result class is invalid');
+  }
+  let milestone = 'NO_EVIDENCE';
+  let evidenceState = 'UNREADABLE';
+  let failureCategory;
+  let handle;
+  try {
+    // This snapshot is taken before cleanup removes the private profile. Bound
+    // the read, reject links/non-files, and never publish records or parse errors.
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (stats.isFile()) {
+      const buffer = Buffer.alloc(OUTPUT_CAP + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (stats.size > OUTPUT_CAP || bytesRead > OUTPUT_CAP) {
+        evidenceState = 'OVERSIZED';
+      } else {
+        evidenceState = 'MALFORMED';
+        const records = buffer.subarray(0, bytesRead).toString('utf8').trim().split('\n')
+          .filter(Boolean).map(line => JSON.parse(line));
+        if (records.every(record => record !== null && typeof record === 'object'
+          && !Array.isArray(record) && Object.keys(record).length === 1 && typeof record.event === 'string')) {
+          evidenceState = 'READABLE';
+          const events = new Set(records.map(record => record.event));
+          if (events.has('desktop.renderer.ready')) milestone = 'RENDERER';
+          if (events.has('desktop.deeplink.warm_manual_once')) milestone = 'WARM_MANUAL_ACK';
+          if (events.has('desktop.deeplink.warm_tunnel_once')) milestone = 'WARM_TUNNEL_ACK';
+          if (events.has('desktop.deeplink.warm_open_once')) milestone = 'WARM_OPEN_ACK';
+          if (events.has('desktop.app.shutdown')) milestone = 'SHUTDOWN';
+          failureCategory = evidenceFailureCategory(events);
+        }
+      }
+    }
+  } catch (error) {
+    evidenceState = error?.code === 'ENOENT' ? 'MISSING'
+      : error instanceof SyntaxError ? 'MALFORMED' : 'UNREADABLE';
+  } finally {
+    await handle?.close().catch(() => { evidenceState = 'UNREADABLE'; });
+  }
+  return {
+    milestone, resultClass, evidenceState,
+    ...(failureCategory ? { failureCategory } : {}),
+  };
+};
+
+export const waitForWarmOpenEvidence = async (path, child, timeout = PROCESS_TIMEOUT_MS) => {
+  try {
+    await waitForEvents(path, ['desktop.deeplink.warm_open_once'], child, timeout);
+  } catch (error) {
+    // #2323's macOS job reached this wait after successful launcher exit and
+    // tunnel acknowledgement. Neither proves delivery of the subsequent open
+    // link. Keep that assertion and expose the missing outcome before cleanup;
+    // the old stage-only failure cannot establish a dispatch or renderer defect.
+    const classification = await classifyWarmOpenEvidenceFailure(path,
+      error instanceof NativeLifecycleEvidenceWaitFailure ? error.resultClass : 'EVIDENCE_READ_FAILED');
+    throw new NativeLifecycleOperationFailure('WARM_OPEN_EVIDENCE', error, classification);
+  }
+};
+
 export const classifyFirstEvidenceFailure = async (path, resultClass) => {
   if (!NATIVE_LIFECYCLE_EVIDENCE_RESULT_CLASSES.includes(resultClass)) {
     throw new Error('Native lifecycle evidence result class is invalid');
@@ -1287,18 +1388,7 @@ export const classifyFirstEvidenceFailure = async (path, resultClass) => {
     if (events.has('desktop.native.secure_storage_probe.started')) milestone = 'SECURE_STORAGE_STARTED';
     if (events.has('desktop.native.secure_storage_probe.completed')) milestone = 'SECURE_STORAGE_COMPLETED';
     if (events.has('desktop.renderer.ready')) milestone = 'RENDERER';
-    if (events.has('desktop.app.start_failed')) failureCategory = 'START_FAILED';
-    if (events.has('desktop.main_process.uncaught_exception')) failureCategory = 'UNCAUGHT_EXCEPTION';
-    if (events.has('desktop.native.cold_confirmation_inspection_failed')
-      && !events.has('desktop.deeplink.delivery_failed')) {
-      failureCategory = 'COLD_CONFIRMATION_INSPECTION_FAILED';
-    }
-    if (events.has('desktop.native.cold_confirmation_not_visible')
-      && !events.has('desktop.deeplink.delivery_failed')) {
-      failureCategory = 'COLD_CONFIRMATION_NOT_VISIBLE';
-    }
-    if (events.has('desktop.renderer.gone')) failureCategory = 'RENDERER_GONE';
-    if (events.has('desktop.deeplink.delivery_failed')) failureCategory = 'DEEP_LINK_DELIVERY_FAILED';
+    failureCategory = evidenceFailureCategory(events);
   } catch {
     // Only fixed classifications may cross the native-gate diagnostic boundary.
   }
@@ -1466,7 +1556,7 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
       launchContext.arguments,
     );
     operationStage = 'WARM_OPEN_EVIDENCE';
-    await waitForEvents(firstEvidence, ['desktop.deeplink.warm_open_once'], first.child);
+    await waitForWarmOpenEvidence(firstEvidence, first.child);
     operationStage = 'MALFORMED_DISPATCH';
     await dispatchDirect(
       application,
@@ -1556,7 +1646,7 @@ const lifecycleForArtifact = async ({ target, kind, artifact, report }) => {
         : 'OS-protected Keychain round-trip and deletion',
     });
   } catch (error) {
-    primaryError = new NativeLifecycleOperationFailure(
+    primaryError = error instanceof NativeLifecycleOperationFailure ? error : new NativeLifecycleOperationFailure(
       operationStage,
       errorFrom(error, 'Native lifecycle operation failed'),
       evidenceClassification,

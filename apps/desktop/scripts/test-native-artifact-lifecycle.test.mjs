@@ -9,6 +9,7 @@ import {
   assertArtifactSet,
   assertSafeExtractedTree,
   classifyFirstEvidenceFailure,
+  classifyWarmOpenEvidenceFailure,
   closeProfileApi,
   createNativeLaunchContext,
   DmgMountAuthority,
@@ -26,6 +27,7 @@ import {
   removeAuthorizedProfile,
   runningProcessGroupMembersFromPs,
   waitForEvents,
+  waitForWarmOpenEvidence,
 } from './test-native-artifact-lifecycle.mjs';
 
 describe('native staged artifact lifecycle authority', () => {
@@ -415,6 +417,117 @@ describe('native staged artifact lifecycle authority', () => {
       assert.doesNotMatch(inspect(aggregate), /private\/profile|secret\.invalid|private cleanup output/);
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('reports warm-open wait outcomes after tunnel acknowledgement and preserves them through cleanup', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-native-warm-open-'));
+    const evidence = join(directory, 'evidence.jsonl');
+    const writeEvents = events => writeFile(evidence, events.map(event => JSON.stringify({ event })).join('\n'));
+    const priorEvents = [
+      'desktop.renderer.ready',
+      'desktop.deeplink.warm_manual_once',
+      'desktop.deeplink.warm_tunnel_once',
+    ];
+    try {
+      for (const fixture of [
+        { exitCode: null, signalCode: null, result: 'EVIDENCE_DEADLINE' },
+        { exitCode: 0, signalCode: null, result: 'CLEAN_EXIT' },
+        { exitCode: 1, signalCode: null, result: 'FAILED_EXIT', event: 'desktop.deeplink.delivery_failed' },
+        { exitCode: null, signalCode: 'SIGTERM', result: 'SIGNALLED', event: 'desktop.renderer.gone' },
+      ]) {
+        await writeEvents([...priorEvents, ...(fixture.event ? [fixture.event] : [])]);
+        const error = await waitForWarmOpenEvidence(evidence, fixture, 10).catch(error => error);
+        assert.ok(error instanceof NativeLifecycleOperationFailure);
+        assert.equal(error.stage, 'WARM_OPEN_EVIDENCE');
+        assert.equal(error.resultClass, fixture.result);
+        assert.equal(error.milestone, 'WARM_TUNNEL_ACK');
+        assert.equal(error.evidenceState, 'READABLE');
+        assert.equal(error.failureCategory, fixture.event === 'desktop.deeplink.delivery_failed'
+          ? 'DEEP_LINK_DELIVERY_FAILED' : fixture.event ? 'RENDERER_GONE' : undefined);
+        // Cleanup removes the only private evidence; the fixed classification
+        // must remain available even if cleanup itself subsequently fails.
+        await rm(evidence);
+        const aggregate = new NativeLifecycleFailure(error, [{
+          label: 'process-groups', error: new Error('https://secret.invalid/private-cleanup'),
+        }]);
+        for (const rendered of [String(error), JSON.stringify(error), inspect(error), inspect(aggregate)]) {
+          assert.match(rendered, /WARM_OPEN_EVIDENCE/);
+          assert.match(rendered, /WARM_TUNNEL_ACK/);
+          assert.ok(rendered.includes(fixture.result));
+          assert.doesNotMatch(rendered, /secret\.invalid|private-cleanup/);
+          assert.ok(!rendered.includes(directory));
+        }
+      }
+      await writeEvents([...priorEvents, 'desktop.deeplink.warm_open_once']);
+      await assert.doesNotReject(waitForWarmOpenEvidence(evidence, { exitCode: 0, signalCode: null }, 10));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('bounds warm-open diagnostic reads and emits only fixed classifications', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'propr-native-warm-diagnostics-'));
+    const evidence = join(directory, 'evidence.jsonl');
+    const secret = 'https://secret.invalid/token';
+    try {
+      const missing = await classifyWarmOpenEvidenceFailure(evidence, 'EVIDENCE_DEADLINE');
+      assert.equal(missing.evidenceState, 'MISSING');
+      for (const fixture of [
+        { contents: JSON.stringify({ event: secret }), state: 'READABLE' },
+        { contents: JSON.stringify({ event: 'desktop.deeplink.warm_open_once', url: secret }), state: 'MALFORMED' },
+        { contents: `{"event":"${secret}`, state: 'MALFORMED' },
+        { contents: 'null', state: 'MALFORMED' },
+        { contents: '[]', state: 'MALFORMED' },
+        { contents: ' '.repeat(64 * 1024 + 1), state: 'OVERSIZED' },
+      ]) {
+        await writeFile(evidence, fixture.contents);
+        const classification = await classifyWarmOpenEvidenceFailure(evidence, 'FAILED_EXIT');
+        assert.deepEqual(classification, {
+          milestone: 'NO_EVIDENCE', resultClass: 'FAILED_EXIT', evidenceState: fixture.state,
+        });
+        const failure = new NativeLifecycleOperationFailure('WARM_OPEN_EVIDENCE', new Error(secret), classification);
+        assert.doesNotMatch(inspect(failure), /secret\.invalid/);
+      }
+      for (const [event, milestone] of [
+        ['desktop.renderer.ready', 'RENDERER'],
+        ['desktop.deeplink.warm_manual_once', 'WARM_MANUAL_ACK'],
+        ['desktop.deeplink.warm_tunnel_once', 'WARM_TUNNEL_ACK'],
+        ['desktop.deeplink.warm_open_once', 'WARM_OPEN_ACK'],
+        ['desktop.app.shutdown', 'SHUTDOWN'],
+      ]) {
+        await writeFile(evidence, JSON.stringify({ event }));
+        assert.equal((await classifyWarmOpenEvidenceFailure(evidence, 'CLEAN_EXIT')).milestone, milestone);
+      }
+      await writeFile(evidence, JSON.stringify({ event: 'desktop.deeplink.warm_open_once', url: secret }));
+      await assert.rejects(waitForWarmOpenEvidence(evidence, { exitCode: 0, signalCode: null }, 10), error => {
+        assert.equal(error.resultClass, 'EVIDENCE_READ_FAILED');
+        assert.equal(error.evidenceState, 'MALFORMED');
+        assert.doesNotMatch(inspect(error), /secret\.invalid/);
+        return true;
+      });
+      const linkedEvidence = join(directory, 'linked.jsonl');
+      await symlink(evidence, linkedEvidence);
+      assert.equal((await classifyWarmOpenEvidenceFailure(linkedEvidence, 'FAILED_EXIT')).evidenceState, 'UNREADABLE');
+      assert.equal((await classifyWarmOpenEvidenceFailure(directory, 'FAILED_EXIT')).evidenceState, 'UNREADABLE');
+      for (const field of ['milestone', 'resultClass', 'evidenceState', 'failureCategory']) {
+        assert.throws(() => new NativeLifecycleOperationFailure('WARM_OPEN_EVIDENCE', new Error(secret), {
+          ...missing, [field]: secret,
+        }), /classification is invalid/);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('retains fixed wait outcomes for later lifecycle stages without exposing underlying errors', () => {
+    for (const stage of ['WARM_MANUAL_EVIDENCE', 'PROTOCOL_EVIDENCE', 'MALFORMED_EVIDENCE', 'RELAUNCH_EVIDENCE']) {
+      const cause = new NativeLifecycleEvidenceWaitFailure('FAILED_EXIT');
+      cause.message = 'private launcher output';
+      const failure = new NativeLifecycleOperationFailure(stage, cause);
+      assert.equal(failure.resultClass, 'FAILED_EXIT');
+      assert.match(failure.message, /result:FAILED_EXIT/);
+      assert.doesNotMatch(inspect(failure), /private launcher output/);
     }
   });
 
