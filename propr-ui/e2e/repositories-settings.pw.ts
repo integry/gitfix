@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import type { MonitoredRepo } from '../src/api/proprApi';
 
-async function stubRepositoryApis(page: Page, canManage = true) {
-  let repos: MonitoredRepo[] = [
+async function stubRepositoryApis(page: Page, canManage = true, initialRepos?: MonitoredRepo[]) {
+  let repos: MonitoredRepo[] = initialRepos ?? [
     { id: 'propr', name: 'integry/propr', enabled: true, autoFollowupOnFailedCi: false, visualPreview: { enabled: true, types: ['image'] } },
     { id: 'sdk', name: 'integry/integration-sdk', enabled: true, baseBranch: 'main', visualPreview: { enabled: false, types: ['image'] } },
     { id: 'docs', name: 'integry/documentation', enabled: false, visualPreview: { enabled: true, types: ['image'] } },
@@ -51,6 +51,50 @@ async function stubRepositoryApis(page: Page, canManage = true) {
   });
   return { writes, indexingWrites, chatLoads: () => chatLoads };
 }
+
+test('shows and updates shared settings while preserving the selected branch', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const sharedPreview = { enabled: true, types: ['video'], instructions: 'Capture the repository settings.' } satisfies NonNullable<MonitoredRepo['visualPreview']>;
+  const api = await stubRepositoryApis(page, true, [
+    { id: 'propr-main', name: 'integry/propr', baseBranch: 'main', enabled: true, autoFollowupOnFailedCi: true, visualPreview: sharedPreview },
+    { id: 'propr-release', name: 'integry/propr', baseBranch: 'release', enabled: false, autoFollowupOnFailedCi: false, visualPreview: { enabled: false, types: ['image'], instructions: 'Stale branch instructions.' } },
+  ]);
+  await page.goto('/repositories');
+  await page.getByRole('button', { name: 'Select integry/propr', exact: true }).nth(1).click();
+  const settings = page.getByRole('region', { name: 'Settings for integry/propr', exact: true });
+  const autoCi = settings.getByRole('checkbox', { name: 'Automatic CI follow-up for integry/propr', exact: true });
+  const previews = settings.getByRole('checkbox', { name: 'Visual previews for integry/propr', exact: true });
+  await expect(autoCi).toBeChecked();
+  await expect(previews).toBeChecked();
+  await expect(settings.getByRole('textbox')).toHaveValue(sharedPreview.instructions);
+  await expect(settings.getByRole('button', { name: 'Videos', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(settings.getByRole('button', { name: 'Images', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(settings.getByText('release', { exact: true })).toBeVisible();
+  await expect(settings.getByRole('checkbox', { name: 'Monitor integry/propr', exact: true })).not.toBeChecked();
+  if (process.env.PROPR_CAPTURE_PREVIEWS) {
+    await mkdir('../.propr/previews', { recursive: true });
+    await page.screenshot({ animations: 'disabled', path: '../.propr/previews/repositories-shared-branch-settings.png' });
+  }
+
+  await settings.getByText('Auto CI follow-up', { exact: true }).click();
+  await expect(autoCi).not.toBeChecked();
+  await expect.poll(() => api.writes.at(-1)?.map(repo => repo.autoFollowupOnFailedCi)).toEqual([false, false]);
+  await settings.getByText('Visual previews', { exact: true }).click();
+  await expect(previews).not.toBeChecked();
+  await expect.poll(() => api.writes.at(-1)?.map(repo => repo.visualPreview)).toEqual([
+    { ...sharedPreview, enabled: false }, { ...sharedPreview, enabled: false },
+  ]);
+  await settings.getByText('Monitor repository', { exact: true }).click();
+  await expect.poll(() => api.writes.at(-1)?.map(repo => ({ id: repo.id, baseBranch: repo.baseBranch, enabled: repo.enabled }))).toEqual([
+    { id: 'propr-main', baseBranch: 'main', enabled: true },
+    { id: 'propr-release', baseBranch: 'release', enabled: true },
+  ]);
+  await settings.getByRole('button', { name: 'Reindex repository', exact: true }).click();
+  await expect.poll(() => api.indexingWrites[0]).toEqual({
+    path: '/api/config/repos/trigger-indexing',
+    body: { repository: 'integry/propr', baseBranch: 'release', fullReindex: true },
+  });
+});
 
 test('keeps navigation compact and saves settings for the selected repository', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

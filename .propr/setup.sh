@@ -25,6 +25,8 @@ if [ "${PROPR_WORKSPACE_PREPARED:-false}" != "true" ]; then
   npm run test:prepare
 fi
 
+npm exec --workspace propr-ui -- playwright install chromium
+
 cd "$WORKSPACE/docs"
 npm ci
 npm run typecheck

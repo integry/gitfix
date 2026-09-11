@@ -4,6 +4,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { GripVertical, ArrowLeft } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRepositoryManagement } from '../hooks/useRepositoryManagement';
+import { buildRepositoriesForDisplay } from '../hooks/repositoryVisualPreview';
 import { AddRepositoryModal } from '../components/AddRepositoryModal';
 import { RepoActionContainer } from '../components/Repositories';
 import { RepositorySaveStatusFooter } from '../components/RepositorySaveStatusFooter';
@@ -85,7 +86,8 @@ const RepositoriesPage: React.FC = () => {
     setSelectedRepoId(prevId => prevId === repoId ? null : repoId);
   };
 
-  const selectedRepo = repos.find(r => r.id === selectedRepoId);
+  // Match the list's shared settings, including when the selected entry is hidden.
+  const selectedRepo = buildRepositoriesForDisplay(repos).find(r => r.id === selectedRepoId);
   const settingsContent = selectedRepo ? (
     <RepositorySettingsBar
       key={selectedRepo.id}
