@@ -41,6 +41,34 @@ async function publishMcpUpdate(redisClient: AdminMcpRoutesDeps['redisClient']):
   } catch { /* non-critical */ }
 }
 
+function validatePutSettingsBody(body: Record<string, unknown>): { error: string; code: string; status: number } | null {
+  const { enabled, scopeCeiling, connectEnabled } = body;
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    return { error: 'enabled must be a boolean', code: 'INVALID_INPUT', status: 400 };
+  }
+  if (scopeCeiling !== undefined) {
+    const invalid = !Array.isArray(scopeCeiling)
+      || (scopeCeiling as unknown[]).some(s => typeof s !== 'string' || !(MCP_SCOPES as readonly string[]).includes(s as string));
+    if (invalid) return { error: 'scopeCeiling must be an array of valid MCP scopes', code: 'INVALID_INPUT', status: 400 };
+  }
+  if (connectEnabled !== undefined && typeof connectEnabled !== 'boolean') {
+    return { error: 'connectEnabled must be a boolean', code: 'INVALID_INPUT', status: 400 };
+  }
+  return null;
+}
+
+async function checkEnablePrerequisites(database: Knex): Promise<{ error: string; code: string; status: number } | null> {
+  if (process.env.MCP_ENABLED === 'false') {
+    return { error: 'MCP is disabled by operator configuration', code: 'OPERATOR_DISABLED', status: 403 };
+  }
+  if (process.env.NODE_ENV === 'test') return null;
+  const status = await resolveMcpStatus(database);
+  if (status.demoMode) return { error: 'MCP cannot be enabled in demo mode', code: 'DEMO_MODE', status: 403 };
+  if (status.missingHttpsOrigin) return { error: 'MCP requires an HTTPS origin (API_PUBLIC_URL or GH_OAUTH_CALLBACK_URL)', code: 'MISSING_HTTPS_ORIGIN', status: 400 };
+  if (status.missingSecretChain) return { error: 'MCP requires an encryption secret (PROPR_CREDENTIAL_ENCRYPTION_KEY, SYSTEM_TASK_SECRET, or SESSION_SECRET)', code: 'MISSING_SECRET_CHAIN', status: 400 };
+  return null;
+}
+
 export function createAdminMcpRoutes({ database = db, redisClient }: AdminMcpRoutesDeps = {}) {
   async function getSettings(req: Request, res: Response): Promise<void> {
     try {
@@ -62,36 +90,16 @@ export function createAdminMcpRoutes({ database = db, redisClient }: AdminMcpRou
   }
 
   async function putSettings(req: Request, res: Response): Promise<void> {
-    const { enabled, scopeCeiling, connectEnabled } = req.body ?? {};
+    const body: Record<string, unknown> = req.body ?? {};
+    const { enabled, scopeCeiling, connectEnabled } = body;
 
-    if (enabled !== undefined && typeof enabled !== 'boolean') {
-      res.status(400).json({ error: 'enabled must be a boolean', code: 'INVALID_INPUT' }); return;
-    }
-    if (scopeCeiling !== undefined) {
-      if (!Array.isArray(scopeCeiling) || scopeCeiling.some((s: unknown) => typeof s !== 'string' || !(MCP_SCOPES as readonly string[]).includes(s))) {
-        res.status(400).json({ error: 'scopeCeiling must be an array of valid MCP scopes', code: 'INVALID_INPUT' }); return;
-      }
-    }
-    if (connectEnabled !== undefined && typeof connectEnabled !== 'boolean') {
-      res.status(400).json({ error: 'connectEnabled must be a boolean', code: 'INVALID_INPUT' }); return;
-    }
+    const validationError = validatePutSettingsBody(body);
+    if (validationError) { res.status(validationError.status).json({ error: validationError.error, code: validationError.code }); return; }
 
     try {
-      // Check operator override before allowing enable
-      if (enabled === true && process.env.MCP_ENABLED === 'false') {
-        res.status(403).json({ error: 'MCP is disabled by operator configuration', code: 'OPERATOR_DISABLED' }); return;
-      }
-      if (enabled === true && process.env.NODE_ENV !== 'test') {
-        const status = await resolveMcpStatus(database);
-        if (status.demoMode) {
-          res.status(403).json({ error: 'MCP cannot be enabled in demo mode', code: 'DEMO_MODE' }); return;
-        }
-        if (status.missingHttpsOrigin) {
-          res.status(400).json({ error: 'MCP requires an HTTPS origin (API_PUBLIC_URL or GH_OAUTH_CALLBACK_URL)', code: 'MISSING_HTTPS_ORIGIN' }); return;
-        }
-        if (status.missingSecretChain) {
-          res.status(400).json({ error: 'MCP requires an encryption secret (PROPR_CREDENTIAL_ENCRYPTION_KEY, SYSTEM_TASK_SECRET, or SESSION_SECRET)', code: 'MISSING_SECRET_CHAIN' }); return;
-        }
+      if (enabled === true) {
+        const prereqError = await checkEnablePrerequisites(database);
+        if (prereqError) { res.status(prereqError.status).json({ error: prereqError.error, code: prereqError.code }); return; }
       }
 
       const updates: Record<string, string> = {};
@@ -103,7 +111,8 @@ export function createAdminMcpRoutes({ database = db, redisClient }: AdminMcpRou
         await saveMcpAdminSettingRows(updates, database);
         invalidateMcpConfigCache();
         await publishMcpUpdate(redisClient);
-        await logActivity(redisClient, `MCP server ${enabled !== undefined ? (enabled ? 'enabled' : 'disabled') : 'updated'}`, req.user?.username);
+        const desc = enabled !== undefined ? (enabled ? 'enabled' : 'disabled') : 'updated';
+        await logActivity(redisClient, `MCP server ${desc}`, req.user?.username);
       }
 
       const newStatus = await resolveMcpStatus(database);

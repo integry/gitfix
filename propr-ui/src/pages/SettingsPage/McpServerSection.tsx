@@ -30,6 +30,138 @@ function statusColor(data: McpAdminResponse | null): string {
   return 'text-gray-500';
 }
 
+function statusDescriptionSuffix(data: McpAdminResponse | null): string {
+  if (!data) return '';
+  const { status } = data;
+  if (status.operatorForced === 'off') return ' MCP is disabled by operator configuration.';
+  if (status.operatorForced === 'on') return ' MCP is enabled and managed through environment variables.';
+  if (status.missingHttpsOrigin) return ' An HTTPS public URL is required (set API_PUBLIC_URL or GH_OAUTH_CALLBACK_URL).';
+  if (status.missingSecretChain) return ' A secret is required (set PROPR_CREDENTIAL_ENCRYPTION_KEY, SYSTEM_TASK_SECRET, or SESSION_SECRET).';
+  if (status.keyChanged) return ' The encryption key has changed — existing connections need to reconnect.';
+  return '';
+}
+
+interface EnableToggleProps {
+  isEnabled: boolean;
+  saving: boolean;
+  canToggle: boolean;
+  confirmEnable: boolean;
+  onToggle: (enabled: boolean) => void;
+  onCancelConfirm: () => void;
+}
+
+function EnableToggle({ isEnabled, saving, canToggle, confirmEnable, onToggle, onCancelConfirm }: EnableToggleProps) {
+  if (confirmEnable) {
+    return (
+      <div className="rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+        <p className="font-medium">Enable MCP server?</p>
+        <p className="mt-1">This will expose an OAuth endpoint and allow AI clients to access this ProPR instance on behalf of your users.</p>
+        <div className="mt-2 flex gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onToggle(true)}
+            className="rounded bg-amber-600 px-3 py-1.5 text-white disabled:opacity-50"
+          >
+            {saving ? 'Enabling…' : 'Enable'}
+          </button>
+          <button type="button" onClick={onCancelConfirm} className="rounded border border-gray-300 px-3 py-1.5">
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <label className="flex cursor-pointer items-center gap-2">
+      <input
+        type="checkbox"
+        checked={isEnabled}
+        disabled={saving || !canToggle}
+        onChange={e => onToggle(e.target.checked)}
+        className="h-4 w-4 rounded border-gray-300"
+      />
+      <span className="text-sm text-gray-700">Enable MCP server</span>
+    </label>
+  );
+}
+
+interface McpDetailsProps {
+  data: McpAdminResponse;
+  saving: boolean;
+  revoking: boolean;
+  isOperatorManaged: boolean;
+  onUpdateScopes: (scopes: McpScope[]) => void;
+  onRevokeAll: () => void;
+}
+
+function McpDetails({ data, saving, revoking, isOperatorManaged, onUpdateScopes, onRevokeAll }: McpDetailsProps) {
+  const { status, settings } = data;
+  const connectionUrl = status.resource;
+  return (
+    <>
+      {connectionUrl && (
+        <div className="mt-4 rounded border border-gray-200 bg-gray-50 p-3">
+          <p className="text-xs font-medium text-gray-700">Connection URL</p>
+          <div className="mt-1 flex items-center gap-2">
+            <code className="flex-1 break-all rounded bg-white px-2 py-1 text-xs text-gray-900 ring-1 ring-gray-200">
+              {connectionUrl}
+            </code>
+            <button
+              type="button"
+              onClick={() => { void navigator.clipboard.writeText(connectionUrl); }}
+              className="shrink-0 text-xs text-gray-500 underline hover:text-gray-700"
+            >
+              Copy
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-gray-500">
+            Claude Code: <code className="text-gray-700">claude mcp add --transport http propr {connectionUrl}</code>
+          </p>
+        </div>
+      )}
+      {settings.scopeCeiling && !isOperatorManaged && (
+        <div className="mt-4">
+          <p className="text-xs font-medium text-gray-700">Scope ceiling</p>
+          <p className="mt-1 text-xs text-gray-500">Clients cannot be granted scopes beyond this ceiling.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {MCP_ALL_SCOPES.map(scope => (
+              <label key={scope} className="flex items-center gap-1.5 text-xs">
+                <input
+                  type="checkbox"
+                  checked={settings.scopeCeiling.includes(scope)}
+                  disabled={saving || scope === 'read'}
+                  onChange={e => {
+                    const updated = e.target.checked
+                      ? [...settings.scopeCeiling, scope]
+                      : settings.scopeCeiling.filter(s => s !== scope);
+                    onUpdateScopes(updated);
+                  }}
+                  className="h-3.5 w-3.5 rounded border-gray-300"
+                />
+                {scope}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-gray-100 pt-4">
+        <a href="/mcp/apps" className="text-xs text-blue-600 hover:underline">
+          View connected apps →
+        </a>
+        <button
+          type="button"
+          disabled={revoking}
+          onClick={onRevokeAll}
+          className="text-xs text-red-600 underline disabled:opacity-50 hover:text-red-800"
+        >
+          {revoking ? 'Revoking…' : 'Revoke all connections'}
+        </button>
+      </div>
+    </>
+  );
+}
+
 interface McpServerSectionProps {
   onError?: (message: string) => void;
 }
@@ -59,10 +191,7 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
   const isEnabled = data?.status.enabled ?? false;
 
   const toggleEnable = async (enabled: boolean) => {
-    if (enabled && !confirmEnable) {
-      setConfirmEnable(true);
-      return;
-    }
+    if (enabled && !confirmEnable) { setConfirmEnable(true); return; }
     setConfirmEnable(false);
     setSaving(true);
     try {
@@ -71,7 +200,7 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
       setSuccessMessage(enabled ? 'MCP server enabled.' : 'MCP server disabled.');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : 'Failed to update MCP settings';
+      const msg = err instanceof Error ? err.message : 'Failed to update MCP settings';
       onError?.(msg);
     } finally {
       setSaving(false);
@@ -104,7 +233,6 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
     }
   };
 
-  const connectionUrl = data?.status.resource;
   const canToggle = !isDemoMode && !isOperatorManaged && !data?.status.missingHttpsOrigin && !data?.status.missingSecretChain;
 
   return (
@@ -118,11 +246,7 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
 
       <p className="mt-2 text-xs leading-5 text-gray-600">
         Allows AI assistants like Claude Code and Claude.ai to connect to this ProPR instance via the Model Context Protocol.
-        {data?.status.operatorForced === 'off' && ' MCP is disabled by operator configuration.'}
-        {data?.status.operatorForced === 'on' && ' MCP is enabled and managed through environment variables.'}
-        {data?.status.missingHttpsOrigin && ' An HTTPS public URL is required (set API_PUBLIC_URL or GH_OAUTH_CALLBACK_URL).'}
-        {data?.status.missingSecretChain && ' A secret is required (set PROPR_CREDENTIAL_ENCRYPTION_KEY, SYSTEM_TASK_SECRET, or SESSION_SECRET).'}
-        {data?.status.keyChanged && ' The encryption key has changed — existing connections need to reconnect.'}
+        {statusDescriptionSuffix(data)}
       </p>
 
       {successMessage && (
@@ -131,105 +255,26 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
 
       {!isOperatorManaged && (
         <div className="mt-4 flex items-center gap-3">
-          {confirmEnable ? (
-            <div className="rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-              <p className="font-medium">Enable MCP server?</p>
-              <p className="mt-1">This will expose an OAuth endpoint and allow AI clients to access this ProPR instance on behalf of your users.</p>
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => void toggleEnable(true)}
-                  className="rounded bg-amber-600 px-3 py-1.5 text-white disabled:opacity-50"
-                >
-                  {saving ? 'Enabling…' : 'Enable'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmEnable(false)}
-                  className="rounded border border-gray-300 px-3 py-1.5"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <label className="flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
-                checked={isEnabled}
-                disabled={saving || !canToggle}
-                onChange={e => void toggleEnable(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
-              />
-              <span className="text-sm text-gray-700">Enable MCP server</span>
-            </label>
-          )}
+          <EnableToggle
+            isEnabled={isEnabled}
+            saving={saving}
+            canToggle={canToggle}
+            confirmEnable={confirmEnable}
+            onToggle={enabled => void toggleEnable(enabled)}
+            onCancelConfirm={() => setConfirmEnable(false)}
+          />
         </div>
       )}
 
-      {isEnabled && connectionUrl && (
-        <div className="mt-4 rounded border border-gray-200 bg-gray-50 p-3">
-          <p className="text-xs font-medium text-gray-700">Connection URL</p>
-          <div className="mt-1 flex items-center gap-2">
-            <code className="flex-1 break-all rounded bg-white px-2 py-1 text-xs text-gray-900 ring-1 ring-gray-200">
-              {connectionUrl}
-            </code>
-            <button
-              type="button"
-              onClick={() => { void navigator.clipboard.writeText(connectionUrl); }}
-              className="shrink-0 text-xs text-gray-500 underline hover:text-gray-700"
-            >
-              Copy
-            </button>
-          </div>
-          <p className="mt-2 text-[11px] text-gray-500">
-            Claude Code: <code className="text-gray-700">claude mcp add --transport http propr {connectionUrl}</code>
-          </p>
-        </div>
-      )}
-
-      {isEnabled && data?.settings.scopeCeiling && !isOperatorManaged && (
-        <div className="mt-4">
-          <p className="text-xs font-medium text-gray-700">Scope ceiling</p>
-          <p className="mt-1 text-xs text-gray-500">Clients cannot be granted scopes beyond this ceiling.</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {MCP_ALL_SCOPES.map(scope => (
-              <label key={scope} className="flex items-center gap-1.5 text-xs">
-                <input
-                  type="checkbox"
-                  checked={data.settings.scopeCeiling.includes(scope)}
-                  disabled={saving || scope === 'read'}
-                  onChange={e => {
-                    const current = data.settings.scopeCeiling;
-                    const updated = e.target.checked
-                      ? [...current, scope]
-                      : current.filter(s => s !== scope);
-                    void updateScopes(updated);
-                  }}
-                  className="h-3.5 w-3.5 rounded border-gray-300"
-                />
-                {scope}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {isEnabled && (
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-gray-100 pt-4">
-          <a href="/mcp/apps" className="text-xs text-blue-600 hover:underline">
-            View connected apps →
-          </a>
-          <button
-            type="button"
-            disabled={revoking}
-            onClick={() => void handleRevokeAll()}
-            className="text-xs text-red-600 underline disabled:opacity-50 hover:text-red-800"
-          >
-            {revoking ? 'Revoking…' : 'Revoke all connections'}
-          </button>
-        </div>
+      {isEnabled && data && (
+        <McpDetails
+          data={data}
+          saving={saving}
+          revoking={revoking}
+          isOperatorManaged={isOperatorManaged}
+          onUpdateScopes={scopes => void updateScopes(scopes)}
+          onRevokeAll={() => void handleRevokeAll()}
+        />
       )}
     </section>
   );
