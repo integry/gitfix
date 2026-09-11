@@ -4,11 +4,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import type { PreviewArtifactV1 } from '@propr/shared';
-import { storeManagedVisualPreviewOriginals } from '../src/github/managedVisualPreviewStorage.js';
 
 process.env.PROPR_DEMO_MODE = 'true';
 
-const [{ db }, {
+const [{ db }, { storeManagedVisualPreviewOriginals }, {
   publishPullRequestCommentVisualPreviews,
   publishPullRequestVisualPreviews,
   resolveVisualPreviewUploadToken,
@@ -16,6 +15,7 @@ const [{ db }, {
   uploadVisualPreviewAsset,
 }] = await Promise.all([
   import('@propr/core'),
+  import('../src/github/managedVisualPreviewStorage.js'),
   import('../src/github/visualPreviewAttachments.js')
 ]);
 
@@ -55,37 +55,47 @@ test('explains why the GitHub App credential cannot be used for attachments', as
   assert.equal(isVisualPreviewUploadAuthenticationError(caught), true);
 });
 
-test('edits a pull request with uploaded visual preview attachments', async () => {
-  let invocation: { args: string[]; authToken: string; cwd: string } | undefined;
+test('publishes a private-safe hybrid image from GitHub and authenticated finalized managed metadata', async () => {
   const requests: Array<{ endpoint: string; options: Record<string, unknown> }> = [];
+  const managedViewerUrl = 'https://connect.example.test/previews/artifact-1';
 
   await publishPullRequestVisualPreviews({
     owner: 'integry',
     repo: 'propr',
     pullRequestNumber: 42,
+    taskId: 'task-2282',
     body: 'Implementation summary',
     evidence,
     authToken: 'installation-token',
     worktreePath: '/worktree',
+    trustedConnectOrigin: 'https://connect.example.test',
+    storeOriginals: async () => [{
+      version: 1, assetIndex: 0, relativePath: evidence.assets[0].relativePath, stored: true,
+      artifact: {
+        version: 1, artifactId: 'artifact-1', state: 'ready', taskId: 'task-2282', repository: 'integry/propr',
+        pullRequestNumber: 42, displayFilename: 'desktop.png', sizeBytes: 7, contentType: 'image/png', sha256: 'a'.repeat(64),
+        viewerUrl: managedViewerUrl, retentionExpiresAt: '2099-01-01T00:00:00Z',
+      },
+    }],
     octokit: {
       request: async <T>(endpoint: string, options: Record<string, unknown>) => {
         requests.push({ endpoint, options });
-        return { data: { body: '![Desktop settings](https://github.com/user-attachments/assets/asset-id)' } } as T;
+        if (endpoint === 'GET /repos/{owner}/{repo}') return { data: { id: 987 } } as T;
+        return { data: { body: options.body } } as T;
       }
     },
-    runCommand: async options => {
-      invocation = options;
-      return { stdout: '' };
-    }
+    uploadAsset: async () => 'https://github.com/user-attachments/assets/asset-id',
   });
 
-  assert.ok(invocation);
-  assert.deepEqual(invocation.args.slice(0, 6), ['pr', 'edit', '42', '--repo', 'integry/propr', '--body']);
-  assert.ok(invocation.args[6].includes(`![Desktop settings](${fixturePath})`));
-  assert.deepEqual(invocation.args.slice(-2), ['--attach', fixturePath]);
-  assert.equal(invocation.authToken, 'installation-token');
-  assert.equal(invocation.args.includes('installation-token'), false);
-  assert.deepEqual(requests.map(request => request.endpoint), ['GET /repos/{owner}/{repo}/pulls/{pull_number}']);
+  assert.deepEqual(requests.map(request => request.endpoint), [
+    'GET /repos/{owner}/{repo}',
+    'PATCH /repos/{owner}/{repo}/pulls/{pull_number}',
+  ]);
+  const publishedBody = String(requests[1].options.body);
+  assert.match(publishedBody, /github\.com\/user-attachments\/assets\/asset-id/);
+  assert.match(publishedBody, /connect\.example\.test\/previews\/artifact-1/);
+  assert.doesNotMatch(publishedBody, /objects\.example|X-Amz-|[?&]token=/);
+  assert.equal(publishedBody.includes(fixturePath), false);
 });
 
 test('rejects a pull request upload when GitHub leaves a local path in the body', async () => {
@@ -180,16 +190,16 @@ test('uploads comment attachments serially to bound in-memory upload buffers', a
       maximumActiveUploads = Math.max(maximumActiveUploads, activeUploads);
       await new Promise(resolve => setTimeout(resolve, 1));
       activeUploads -= 1;
-      return `https://github.com/user-attachments/assets/${path.basename(absolutePath)}`;
+      return `https://github.com/user-attachments/assets/${path.basename(absolutePath, '.png')}`;
     },
   });
 
   assert.equal(maximumActiveUploads, 1);
 });
 
-test('does not update the work comment when a direct attachment upload fails', async () => {
+test('updates the work comment with a safe fallback when a direct attachment upload fails', async () => {
   const requests: string[] = [];
-  await assert.rejects(() => publishPullRequestCommentVisualPreviews({
+  const published = await publishPullRequestCommentVisualPreviews({
     owner: 'integry',
     repo: 'propr',
     pullRequestNumber: 42,
@@ -199,15 +209,18 @@ test('does not update the work comment when a direct attachment upload fails', a
     worktreePath: '/worktree',
     startingCommentId: 100,
     octokit: {
-      request: async <T>(endpoint: string) => {
+      request: async <T>(endpoint: string, options: Record<string, unknown>) => {
         requests.push(endpoint);
-        return { data: { id: 987 } } as T;
+        return endpoint === 'GET /repos/{owner}/{repo}'
+          ? { data: { id: 987 } } as T
+          : { data: { html_url: 'https://github.com/comment/100', body: options.body } } as T;
       }
     },
     uploadAsset: async () => { throw new Error('attachment upload failed'); },
-  }), /attachment upload failed/);
+  });
 
-  assert.deepEqual(requests, ['GET /repos/{owner}/{repo}']);
+  assert.deepEqual(requests, ['GET /repos/{owner}/{repo}', 'PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}']);
+  assert.match(published.body, /could not be uploaded to GitHub/);
 });
 
 test('rejects an updated work comment whose response still contains a local path', async () => {
@@ -302,24 +315,31 @@ test('direct upload rejects oversized images for paid plans and oversized videos
   }
 });
 
-test('GitHub CLI PR upload enforces the capacity policy before starting gh', async () => {
+test('oversized media is not sent to the GitHub attachment uploader', async () => {
   const { truncate } = await import('node:fs/promises');
   const directory = await mkdtemp(path.join(tmpdir(), 'propr-pr-capacity-'));
   try {
     const absolutePath = path.join(directory, 'preview.mp4');
     await writeFile(absolutePath, '');
     await truncate(absolutePath, 11 * 1024 * 1024);
-    await assert.rejects(publishPullRequestVisualPreviews({
+    let publishedBody = '';
+    await publishPullRequestVisualPreviews({
       owner: 'integry', repo: 'propr', pullRequestNumber: 42, body: '', authToken: 'existing', worktreePath: directory,
       evidence: { assets: [{ relativePath: '.propr/previews/preview.mp4', absolutePath, type: 'video', title: 'Preview' }], toolSuggestions: [] },
-      octokit: { request: async () => { assert.fail('must reject before publication'); } },
-    }), /limit of 10 MiB/);
+      storeOriginals: async () => [],
+      uploadAsset: async () => { assert.fail('must not upload oversized media'); },
+      octokit: { request: async <T>(_endpoint: string, options: Record<string, unknown>) => {
+        publishedBody = String(options.body);
+        return { data: { body: options.body } } as T;
+      } },
+    });
+    assert.match(publishedBody, /does not fit the resolved GitHub inline limit/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('publishers store prepared originals before rejecting GitHub-ineligible attachments', async t => {
+test('publishers store and link prepared originals without uploading GitHub-ineligible media', async t => {
   const { prepareVisualPreviewEvidence, cleanupPreparedVisualPreviewEvidence } = await import('@propr/core');
   const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
   const { simpleGit } = await import('simple-git');
@@ -351,7 +371,7 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
   assert.equal((await git.status()).files.length, 0);
 
   // Both publishers pass the complete staged original and task context to storage
-  // before rejecting it for GitHub inline publication.
+  // before selecting GitHub inline publication.
   const storeOriginals = t.mock.fn(async (
     originals: typeof prepared.evidence,
     context: { taskId: string; repository: string; pullRequestNumber?: number },
@@ -359,35 +379,46 @@ test('publishers store prepared originals before rejecting GitHub-ineligible att
     assert.equal(originals.originalCapacity?.source, 'managed-storage');
     assert.deepEqual(context, { taskId: 'managed-original', repository: 'integry/propr', pullRequestNumber: 42 });
     assert.deepEqual(await readFile(originals.assets[0].absolutePath), originalBytes);
-    return [];
+    return [{
+      version: 1 as const, assetIndex: 0, relativePath, stored: true as const,
+      artifact: {
+        version: 1 as const, artifactId: 'original-1', state: 'ready' as const,
+        taskId: 'managed-original', repository: 'integry/propr', pullRequestNumber: 42,
+        displayFilename: 'original.png', sizeBytes: originalBytes.length, contentType: 'image/png', sha256: 'a'.repeat(64),
+        viewerUrl: 'https://connect.example.test/previews/original-1', retentionExpiresAt: '2099-01-01T00:00:00Z',
+      },
+    }];
   });
 
   const network = t.mock.method(globalThis, 'fetch', async () => { assert.fail('must not fetch'); });
-  const request = t.mock.fn(async <T>(): Promise<T> => { assert.fail('must not call GitHub'); });
+  const publishedBodies: string[] = [];
+  const request = t.mock.fn(async <T>(_endpoint: string, requestOptions: Record<string, unknown>): Promise<T> => {
+    publishedBodies.push(String(requestOptions.body));
+    return { data: { html_url: 'https://github.com/comment/100', body: requestOptions.body } } as T;
+  });
   const uploadAsset = t.mock.fn(async (): Promise<string> => { assert.fail('must not upload'); });
-  const runCommand = t.mock.fn(async (): Promise<{ stdout: string }> => { assert.fail('must not start gh'); });
   for (const plan of ['auto', 'free', 'paid'] as const) {
     const options = {
       owner: 'integry', repo: 'propr', pullRequestNumber: 42, startingCommentId: 100,
       body: 'Complete', worktreePath: worktree,
       evidence: { ...prepared.evidence, githubAttachmentCapacity: resolveGitHubAttachmentCapacity(plan) },
-      octokit: { request }, uploadAsset, runCommand, storeOriginals,
+      octokit: { request }, uploadAsset, storeOriginals, trustedConnectOrigin: 'https://connect.example.test',
     };
-    await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
-    await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
+    await publishPullRequestVisualPreviews(options);
+    await publishPullRequestCommentVisualPreviews(options);
   }
   assert.equal(network.mock.callCount(), 0);
   assert.equal(storeOriginals.mock.callCount(), 6);
   await Promise.all(storeOriginals.mock.calls.map(call => call.result));
-  assert.equal(request.mock.callCount(), 0);
+  assert.equal(request.mock.callCount(), 6);
   assert.equal(uploadAsset.mock.callCount(), 0);
-  assert.equal(runCommand.mock.callCount(), 0);
+  assert.ok(publishedBodies.every(body => body.includes('https://connect.example.test/previews/original-1')));
   assert.deepEqual(await readFile(asset.absolutePath), originalBytes, 'GitHub rejection does not consume the original');
   await cleanupPreparedVisualPreviewEvidence(prepared);
   await assert.rejects(access(asset.absolutePath));
 });
 
-test('GitHub publishers revalidate files despite stale eligible metadata before publishing any asset', async t => {
+test('GitHub publishers revalidate stale metadata and upload only actually eligible assets', async t => {
   const { MIB } = await import('@propr/shared');
   const directory = await mkdtemp(path.join(tmpdir(), 'propr-stale-inline-'));
   t.after(async () => rm(directory, { recursive: true, force: true }));
@@ -404,12 +435,19 @@ test('GitHub publishers revalidate files despite stale eligible metadata before 
         sizeBytes: 1, githubInline: { eligible: true as const, limitBytes: 10 * MIB },
       }],
     },
-    octokit: { request: async <T>(): Promise<T> => { assert.fail('must not call GitHub'); } },
-    uploadAsset: async (): Promise<string> => { assert.fail('must not upload even the first eligible asset'); },
-    runCommand: async (): Promise<{ stdout: string }> => { assert.fail('must not start gh'); },
+    storeOriginals: async () => [],
+    octokit: { request: async <T>(endpoint: string, requestOptions: Record<string, unknown>): Promise<T> => endpoint === 'GET /repos/{owner}/{repo}'
+      ? { data: { id: 987 } } as T
+      : { data: { html_url: 'https://github.com/comment/100', body: requestOptions.body } } as T },
   };
-  await assert.rejects(publishPullRequestVisualPreviews(options), /limit of 10 MiB/);
-  await assert.rejects(publishPullRequestCommentVisualPreviews(options), /limit of 10 MiB/);
+  const uploadedPaths: string[] = [];
+  const withUploader = { ...options, uploadAsset: async ({ absolutePath }: { absolutePath: string }) => {
+    uploadedPaths.push(absolutePath);
+    return 'https://github.com/user-attachments/assets/eligible';
+  } };
+  await publishPullRequestVisualPreviews(withUploader);
+  await publishPullRequestCommentVisualPreviews(withUploader);
+  assert.deepEqual(uploadedPaths, [fixturePath, fixturePath]);
 });
 
 test('managed storage failure still publishes GitHub attachments without exposing its error', async () => {
@@ -424,16 +462,98 @@ test('managed storage failure still publishes GitHub attachments without exposin
       attempted = true;
       throw new Error('https://signed.example/?token=secret');
     },
-    runCommand: async ({ args }) => {
+    uploadAsset: async () => {
       assert.equal(attempted, true);
-      assert.ok(args.includes('--attach'));
-      assert.ok(!args.join(' ').includes('signed.example'));
       published = true;
-      return { stdout: '' };
+      return 'https://github.com/user-attachments/assets/1';
     },
-    octokit: { request: async <T>() => ({ data: { body: '![Preview](https://github.com/user-attachments/assets/1)' } }) as T },
+    octokit: { request: async <T>(endpoint: string, requestOptions: Record<string, unknown>) => endpoint === 'GET /repos/{owner}/{repo}'
+      ? { data: { id: 1 } } as T
+      : { data: { body: requestOptions.body } } as T },
   });
   assert.equal(published, true);
+});
+
+test('a video between 10 and 100 MiB is inline only with resolved paid capacity and is never transcoded', async t => {
+  const { MIB, resolveGitHubAttachmentCapacity } = await import('@propr/shared');
+  const directory = await mkdtemp(path.join(tmpdir(), 'propr-hybrid-video-'));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const absolutePath = path.join(directory, 'walkthrough.mp4');
+  await writeFile(absolutePath, '');
+  await truncate(absolutePath, 11 * MIB);
+  const videoEvidence = {
+    taskId: 'video-task',
+    assets: [{
+      relativePath: '.propr/previews/walkthrough.mp4', absolutePath, type: 'video' as const,
+      title: 'Walkthrough', sizeBytes: 11 * MIB,
+    }],
+    toolSuggestions: [],
+  };
+  const original = {
+    version: 1 as const, assetIndex: 0, relativePath: videoEvidence.assets[0].relativePath, stored: true as const,
+    artifact: {
+      version: 1 as const, artifactId: 'video-original', state: 'ready' as const,
+      taskId: 'video-task', repository: 'integry/propr', pullRequestNumber: 42,
+      displayFilename: 'walkthrough.mp4', sizeBytes: 11 * MIB, contentType: 'video/mp4', sha256: 'b'.repeat(64),
+      viewerUrl: 'https://connect.example.test/previews/video-original', retentionExpiresAt: '2099-01-01T00:00:00Z',
+    },
+  };
+  for (const plan of ['free', 'paid'] as const) {
+    const uploads: string[] = [];
+    const bodies: string[] = [];
+    await publishPullRequestVisualPreviews({
+      owner: 'integry', repo: 'propr', pullRequestNumber: 42, body: '', taskId: 'video-task',
+      evidence: { ...videoEvidence, githubAttachmentCapacity: resolveGitHubAttachmentCapacity(plan) },
+      authToken: 'existing', worktreePath: directory, trustedConnectOrigin: 'https://connect.example.test',
+      storeOriginals: async () => [original],
+      uploadAsset: async ({ absolutePath: uploadedPath }) => {
+        uploads.push(uploadedPath);
+        assert.equal((await access(uploadedPath).then(() => true)), true);
+        return 'https://github.com/user-attachments/assets/video-inline';
+      },
+      octokit: { request: async <T>(endpoint: string, requestOptions: Record<string, unknown>) => {
+        if (endpoint === 'GET /repos/{owner}/{repo}') return { data: { id: 987 } } as T;
+        bodies.push(String(requestOptions.body));
+        return { data: { body: requestOptions.body } } as T;
+      } },
+    });
+    assert.equal(uploads.length, plan === 'paid' ? 1 : 0);
+    assert.match(bodies[0], /connect\.example\.test\/previews\/video-original/);
+    assert.equal(bodies[0].includes('github.com/user-attachments'), plan === 'paid');
+  }
+  assert.equal((await readFile(absolutePath)).byteLength, 11 * MIB, 'publisher leaves the original bytes unchanged');
+});
+
+test('staged evidence remains until storage, inline upload, and fallback publication have settled', async t => {
+  const { cleanupPreparedVisualPreviewEvidence } = await import('@propr/core');
+  const directory = await mkdtemp(path.join(tmpdir(), 'propr-cleanup-order-'));
+  const absolutePath = path.join(directory, 'preview.png');
+  await writeFile(absolutePath, 'preview');
+  const stagedEvidence = {
+    assets: [{ relativePath: '.propr/previews/preview.png', absolutePath, type: 'image' as const, title: 'Preview', sizeBytes: 7 }],
+    toolSuggestions: [],
+  };
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const events: string[] = [];
+  try {
+    await publishPullRequestCommentVisualPreviews({
+      owner: 'integry', repo: 'propr', pullRequestNumber: 42, startingCommentId: 100,
+      body: '', evidence: stagedEvidence, authToken: 'existing', worktreePath: directory,
+      storeOriginals: async () => { await access(absolutePath); events.push('managed'); return []; },
+      uploadAsset: async () => { await access(absolutePath); events.push('github'); throw new Error('rejected'); },
+      octokit: { request: async <T>(endpoint: string, requestOptions: Record<string, unknown>) => {
+        if (endpoint === 'GET /repos/{owner}/{repo}') return { data: { id: 987 } } as T;
+        await access(absolutePath);
+        events.push('fallback');
+        return { data: { html_url: 'https://github.com/comment/100', body: requestOptions.body } } as T;
+      } },
+    });
+    await access(absolutePath);
+  } finally {
+    await cleanupPreparedVisualPreviewEvidence({ evidence: stagedEvidence, temporaryDirectory: directory });
+  }
+  assert.deepEqual(events, ['managed', 'github', 'fallback']);
+  await assert.rejects(access(absolutePath));
 });
 
 

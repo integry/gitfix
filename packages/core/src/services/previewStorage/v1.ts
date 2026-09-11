@@ -32,6 +32,11 @@ export type ManagedPreviewUploadResult =
   | { stored: true; artifact: PreviewArtifactV1 }
   | { stored: false; code: PreviewStorageErrorCodeV1 | 'plus_required' | 'disabled' };
 
+const MAX_ERROR_RESPONSE_BYTES = 4 * 1024;
+const REMOTE_ERROR_CODES = new Set<PreviewStorageErrorCodeV1>([
+  'quota_exceeded', 'object_too_large', 'content_type_not_allowed', 'object_mismatch',
+]);
+
 export interface ManagedPreviewOriginalInput extends PreviewAssetMetadataV1 {
   /** Replayable staged regular file. Keep it available and unchanged until this call settles. */
   filePath: string;
@@ -45,6 +50,44 @@ function matchesMetadata(left: PreviewAssetMetadataV1, right: PreviewAssetMetada
 
 function matches(left: PreviewObjectV1, right: PreviewObjectV1): boolean {
   return left.sizeBytes === right.sizeBytes && left.contentType === right.contentType && left.sha256 === right.sha256;
+}
+
+async function boundedErrorCode(response: Response): Promise<PreviewStorageErrorCodeV1 | undefined> {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_ERROR_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
+  if (!response.body) return undefined;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_ERROR_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return undefined;
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as { code?: unknown };
+    return typeof value?.code === 'string' && REMOTE_ERROR_CODES.has(value.code as PreviewStorageErrorCodeV1)
+      ? value.code as PreviewStorageErrorCodeV1
+      : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function prepareOriginal(file: FileHandle, input: ManagedPreviewOriginalInput, limits: PreviewStorageStatusV1) {
@@ -107,16 +150,10 @@ export class ManagedPreviewStorageClientV1 {
 
   private async checkResponse(response: Response, fallback: PreviewStorageErrorCodeV1): Promise<void> {
     if (response.ok) return;
+    // Parse only a bounded allowlisted code. Messages and unknown fields are discarded.
+    const code = await boundedErrorCode(response);
+    if (code) throw new PreviewStorageError(code);
     if (response.status === 413) throw new PreviewStorageError('object_too_large');
-    // Only known codes survive. Server messages can contain signed URLs or credentials.
-    try {
-      const value = await response.json() as { code?: unknown };
-      if (['quota_exceeded', 'object_too_large', 'content_type_not_allowed', 'object_mismatch'].includes(value?.code as string)) {
-        throw new PreviewStorageError(value.code as PreviewStorageErrorCodeV1);
-      }
-    } catch (error) {
-      if (error instanceof PreviewStorageError) throw error;
-    }
     throw new PreviewStorageError(fallback);
   }
 

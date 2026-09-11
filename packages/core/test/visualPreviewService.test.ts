@@ -10,6 +10,7 @@ import {
   buildVisualPreviewPrompt,
   cleanupPreparedVisualPreviewEvidence,
   collectVisualPreviewEvidence,
+  createPublishedVisualPreviewMetadata,
   prepareVisualPreviewEvidence,
   renderVisualPreviewSection,
   renderVisualPreviewUploadFailureSection,
@@ -148,6 +149,53 @@ test('renders videos only as local upload references', () => {
   });
   assert.match(local, /!\[\]\(\/worktree\/\.propr\/previews\/walkthrough\.mp4\)/);
   assert.equal(renderVisualPreviewSection(evidence, {}), '');
+});
+
+test('renders hybrid previews only from validated structured publication metadata', () => {
+  const previewEvidence = {
+    taskId: 'task-2282',
+    assets: [{
+      relativePath: '.propr/previews/desktop.png', absolutePath: '/staged/desktop.png',
+      type: 'image' as const, title: 'Desktop', description: 'Changed controls.', sizeBytes: 7,
+    }],
+    toolSuggestions: [],
+  };
+  const artifact = {
+    version: 1 as const, artifactId: 'artifact-1', state: 'ready' as const,
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    displayFilename: 'desktop.png', sizeBytes: 7, contentType: 'image/png', sha256: 'a'.repeat(64),
+    viewerUrl: 'https://connect.example.test/previews/artifact-1', retentionExpiresAt: '2099-01-01T00:00:00Z',
+  };
+  const published = createPublishedVisualPreviewMetadata(previewEvidence, {
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    trustedConnectOrigin: 'https://connect.example.test',
+    assets: [{
+      assetIndex: 0, relativePath: '.propr/previews/desktop.png',
+      githubAttachmentUrl: 'https://github.com/user-attachments/assets/github-asset',
+      managedOriginal: artifact,
+    }],
+  });
+  const section = renderVisualPreviewSection(previewEvidence, { published });
+  assert.match(section, /!\[Desktop\]\(https:\/\/github\.com\/user-attachments\/assets\/github-asset\)/);
+  assert.match(section, /\[View the full-resolution original in ProPR Connect\]\(https:\/\/connect\.example\.test\/previews\/artifact-1\)/);
+  assert.deepEqual(parsePublishedVisualPreviews(section), [{
+    type: 'image', title: 'Desktop', description: 'Changed controls.',
+    url: 'https://github.com/user-attachments/assets/github-asset',
+  }]);
+
+  const untrusted = createPublishedVisualPreviewMetadata(previewEvidence, {
+    taskId: 'task-2282', repository: 'integry/propr', pullRequestNumber: 42,
+    trustedConnectOrigin: 'https://connect.example.test',
+    assets: [{
+      assetIndex: 0, relativePath: '.propr/previews/desktop.png',
+      githubAttachmentUrl: 'https://example.com/agent.png',
+      managedOriginal: { ...artifact, viewerUrl: 'https://public.example.com/original.png' },
+      unavailableReason: 'github-inline-limit',
+    }],
+  });
+  const safeSection = renderVisualPreviewSection(previewEvidence, { published: untrusted });
+  assert.doesNotMatch(safeSection, /example\.com\/agent|public\.example/);
+  assert.match(safeSection, /does not fit the resolved GitHub inline limit/);
 });
 
 test('removing an empty preview slot preserves unrelated body whitespace', () => {

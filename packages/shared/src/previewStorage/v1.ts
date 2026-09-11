@@ -140,10 +140,13 @@ export function parsePreviewUploadV1(value: unknown): PreviewUploadV1 | undefine
   const headers: Record<string, string> = {};
   const normalized: Record<string, string> = {};
   for (const [key, value] of Object.entries(put.headers)) {
+    const normalizedKey = key.toLowerCase();
     // Only object-store signed headers. In particular, never forward relay Authorization or cookies.
-    if (!/^(content-type|content-length|x-amz-[a-z0-9-]+|x-goog-[a-z0-9-]+)$/i.test(key)
-      || typeof value !== 'string' || /[\r\n]/.test(value) || key.toLowerCase() in normalized) return undefined;
-    normalized[key.toLowerCase()] = value;
+    // R2 create-only grants sign this exact conditional header and value.
+    const allowedHeader = /^(content-type|content-length|x-amz-[a-z0-9-]+|x-goog-[a-z0-9-]+)$/i.test(key)
+      || (normalizedKey === 'if-none-match' && value === '*');
+    if (!allowedHeader || typeof value !== 'string' || /[\r\n]/.test(value) || normalizedKey in normalized) return undefined;
+    normalized[normalizedKey] = value;
     headers[key] = value;
   }
   if (normalized['content-type'] !== original.contentType
