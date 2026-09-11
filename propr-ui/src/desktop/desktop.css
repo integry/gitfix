@@ -33,7 +33,7 @@
 
 /* hiddenInset keeps the native traffic lights over the renderer. Let the
    welcome background continue through their row without a separate strip. */
-.desktop-platform-darwin .desktop-entry-drag-region {
+.desktop-platform-macos .desktop-entry-drag-region {
   border-bottom: 0;
   background: transparent;
 }
@@ -454,13 +454,15 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
   transform: translateY(-50%);
   pointer-events: none;
 }
-.desktop-app.desktop-platform-darwin .desktop-sidebar-header {
-  padding-left: max(1rem, env(titlebar-area-x, 5rem));
+.desktop-app.desktop-platform-macos .desktop-sidebar-header {
+  /* env() can be present but zero (for example during fullscreen changes).
+     Keep a physical minimum for the native traffic lights at any text size. */
+  padding-left: max(80px, env(titlebar-area-x, 0px));
   padding-top: 0;
   padding-bottom: 0;
 }
 /* One quiet surface across the native controls, sidebar and content toolbar. */
-.desktop-app.desktop-platform-darwin :is(.desktop-connected-drag-region, .desktop-sidebar-header, .desktop-content-toolbar) {
+.desktop-app.desktop-platform-macos :is(.desktop-connected-drag-region, .desktop-sidebar-header, .desktop-content-toolbar) {
   border-bottom: 1px solid #dce5e5;
   background: #f4f7f7;
 }
