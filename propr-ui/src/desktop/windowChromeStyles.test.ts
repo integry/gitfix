@@ -39,8 +39,8 @@ describe('desktop window chrome styles', () => {
     expect(desktopStyles).toContain(
       '.desktop-app .desktop-content-toolbar {\n  padding-right: calc(var(--desktop-window-controls-end-inset) + var(--desktop-window-controls-gap));',
     );
-    expect(ruleFor('.desktop-app.desktop-platform-darwin .desktop-sidebar-header')).toContain(
-      'env(titlebar-area-x, 5rem)',
+    expect(ruleFor('.desktop-app.desktop-platform-macos .desktop-sidebar-header')).toContain(
+      'padding-left: max(80px, env(titlebar-area-x, 0px))',
     );
     expect(ruleFor('.desktop-window-controls')).toContain('-webkit-app-region: no-drag');
     expect(ruleFor('.desktop-window-controls')).toContain('height: var(--desktop-titlebar-height)');
