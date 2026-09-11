@@ -120,8 +120,8 @@ function appendLocalAsset(parts: string[], asset: VisualPreviewAsset): void {
 function unavailableMessage(item: PublishedVisualPreviewAsset): string | undefined {
   if (item.unavailableReason === 'github-authentication-failed') {
     return item.managedViewerUrl
-      ? 'The GitHub inline attachment could not be published. An instance administrator can reconnect it in **Settings → Visual preview uploads**; the authenticated original remains available above.'
-      : 'The preview could not be uploaded to GitHub. An instance administrator can reconnect it in **Settings → Visual preview uploads**.';
+      ? 'The GitHub inline attachment could not be published; the authenticated original remains available above.'
+      : 'The preview could not be uploaded to GitHub.';
   }
   if (item.unavailableReason === 'github-inline-failed') {
     return item.managedViewerUrl
@@ -161,6 +161,17 @@ function appendToolSuggestions(parts: string[], evidence: VisualPreviewEvidence)
     .join('\n'));
 }
 
+function appendRestorePreviewUploadsGuidance(parts: string[]): void {
+  parts.push('### Restore preview uploads');
+  parts.push(
+    'An instance administrator must open the ProPR Web UI, go to **Settings → Visual preview uploads**, '
+    + 'and add or replace the personal access token. The token must have access to this repository. GitHub '
+    + 'rejects GitHub App user (`ghu_`) and installation (`ghs_`) tokens for attachments. A server operator can '
+    + 'alternatively set `GITHUB_VISUAL_PREVIEW_TOKEN`; that environment override takes precedence over the Web '
+    + 'UI credential. Then request the visual preview again.',
+  );
+}
+
 export function renderVisualPreviewSection(
   evidence: VisualPreviewEvidence,
   options: RenderVisualPreviewOptions,
@@ -172,6 +183,9 @@ export function renderVisualPreviewSection(
 
   for (const asset of localAssets) appendLocalAsset(parts, asset);
   for (const item of published) appendPublishedAsset(parts, evidence, item);
+  if (published.some(item => item.unavailableReason === 'github-authentication-failed')) {
+    appendRestorePreviewUploadsGuidance(parts);
+  }
   appendToolSuggestions(parts, evidence);
   return parts.join('\n\n');
 }
@@ -188,14 +202,7 @@ export function renderVisualPreviewUploadFailureSection(
     'Preview media was generated but could not be uploaded to GitHub. No preview files were committed.',
   ];
   if (options.authenticationFailure) {
-    parts.push('### Restore preview uploads');
-    parts.push(
-      'An instance administrator must open the ProPR Web UI, go to **Settings → Visual preview uploads**, '
-      + 'and add or replace the personal access token. The token must have access to this repository. GitHub '
-      + 'rejects GitHub App user (`ghu_`) and installation (`ghs_`) tokens for attachments. A server operator can '
-      + 'alternatively set `GITHUB_VISUAL_PREVIEW_TOKEN`; that environment override takes precedence over the Web '
-      + 'UI credential. Then request the visual preview again.',
-    );
+    appendRestorePreviewUploadsGuidance(parts);
   }
   appendToolSuggestions(parts, evidence);
   return parts.join('\n\n');
