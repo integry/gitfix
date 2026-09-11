@@ -77,6 +77,28 @@ interface ProfileEditorProps {
   onSave(profile: DesktopProfile): void;
 }
 
+interface ConnectDiscoveryControlsProps {
+  discovering: boolean;
+  message: string | null;
+  candidates: DesktopProfile[];
+  onDiscover(): Promise<void>;
+  onCancel(): void;
+  onSelect(profile: DesktopProfile): void;
+}
+
+const ConnectDiscoveryControls: React.FC<ConnectDiscoveryControlsProps> = ({ discovering, message, candidates, onDiscover, onCancel, onSelect }) => <>
+  <div className="flex flex-wrap items-center gap-3">
+    <button type="button" className="desktop-secondary-button" disabled={discovering} onClick={() => void onDiscover()}><Cloud aria-hidden="true" /> Use ProPR Connect</button>
+    {(discovering || candidates.length > 0) && <button type="button" className="desktop-link-button" onClick={onCancel}>Cancel discovery</button>}
+  </div>
+  {discovering && <div role="status">Looking for a shared ProPR Connect API URL…</div>}
+  {message && <div className="desktop-version-note" role="status">{message}</div>}
+  {candidates.length > 0 && <fieldset className="mt-3">
+    <legend className="mb-2 text-sm font-semibold">Choose a ProPR Connect endpoint</legend>
+    <div className="desktop-profile-list">{candidates.map(profile => <button key={profile.id} type="button" className="desktop-secondary-button" onClick={() => onSelect(profile)}>{profile.baseUrl}</button>)}</div>
+  </fieldset>}
+</>;
+
 export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate = false, notice, operationError, discovery, onPresented, onCancel, onSave }) => {
   const [name, setName] = useState(initial?.name || 'My ProPR');
   const [baseUrl, setBaseUrl] = useState(initial ? initial.baseUrl : DEFAULT_LOCAL_API_BASE_URL);
@@ -160,18 +182,14 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initial, candidate
       <h2>{candidate || !initial ? 'Connect to an instance' : 'Edit instance'}</h2>
       <p>Enter the address shown by your ProPR server.</p>
       {notice && <div className="desktop-version-note" role="status">{notice}</div>}
-      {!initial && discovery?.supported && <>
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="button" className="desktop-secondary-button" disabled={discovering} onClick={() => void discoverConnect()}><Cloud aria-hidden="true" /> Use ProPR Connect</button>
-          {(discovering || candidates.length > 0) && <button type="button" className="desktop-link-button" onClick={cancelDiscovery}>Cancel discovery</button>}
-        </div>
-        {discovering && <div role="status">Looking for a shared ProPR Connect API URL…</div>}
-        {discoveryMessage && <div className="desktop-version-note" role="status">{discoveryMessage}</div>}
-        {candidates.length > 0 && <fieldset className="mt-3">
-          <legend className="mb-2 text-sm font-semibold">Choose a ProPR Connect endpoint</legend>
-          <div className="desktop-profile-list">{candidates.map(profile => <button key={profile.id} type="button" className="desktop-secondary-button" onClick={() => prefill(profile)}>{profile.baseUrl}</button>)}</div>
-        </fieldset>}
-      </>}
+      {!initial && discovery?.supported && <ConnectDiscoveryControls
+        discovering={discovering}
+        message={discoveryMessage}
+        candidates={candidates}
+        onDiscover={discoverConnect}
+        onCancel={cancelDiscovery}
+        onSelect={prefill}
+      />}
       <label>
         Display name
         <input autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="Team ProPR" maxLength={80} />
