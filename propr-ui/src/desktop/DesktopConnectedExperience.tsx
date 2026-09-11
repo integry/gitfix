@@ -89,7 +89,7 @@ export const DesktopConnectedExperience: React.FC<DesktopConnectedExperienceProp
           <section ref={managerRef} className="desktop-profile-manager" role="dialog" aria-modal="true" aria-labelledby="desktop-manager-title" tabIndex={-1}>
             <header><div><span className="desktop-eyebrow">Desktop</span><h2 id="desktop-manager-title">Manage instances</h2></div><button type="button" className="desktop-icon-button" onClick={closeManager} aria-label="Close instance manager"><X /></button></header>
             {editing ? (
-              <ProfileEditor key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate && editing !== 'new' ? () => onConnectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={editedProfile => void saveProfile(editedProfile, hasPendingConnectCandidate || editing === 'new' || profile.id === editedProfile.id)} />
+              <ProfileEditor discovery={adapters.platform !== 'windows' ? adapters.discovery : undefined} key={editing === 'new' ? editing : editing.id} initial={editing === 'new' ? undefined : editing} candidate={hasPendingConnectCandidate} notice={editorNotice} operationError={operationError} onPresented={hasPendingConnectCandidate && editing !== 'new' ? () => onConnectCandidatePresented(editing) : undefined} onCancel={closeEditor} onSave={editedProfile => void saveProfile(editedProfile, hasPendingConnectCandidate || editing === 'new' || profile.id === editedProfile.id)} />
             ) : (
               <>
                 {operationError && <div className="desktop-inline-error" role="alert">{operationError}</div>}

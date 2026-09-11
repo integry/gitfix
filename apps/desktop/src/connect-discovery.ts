@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { isPublicInstanceIdentity, parseProprConnectEndpoint } from '@propr/shared';
 import type { ConnectStatusDocument } from '@propr/cli/desktop-discovery';
 import type { ProfileStore } from './profile-store';
@@ -35,7 +36,7 @@ export interface ConnectDiscoverySource {
   discover(): Promise<ConnectStatusDocument>;
 }
 
-const candidateFromStatus = (status: ConnectStatusDocument): DesktopDiscoveryCandidate | null => {
+const candidateFromStatus = (status: ConnectStatusDocument, profileId: string): DesktopDiscoveryCandidate | null => {
   const endpoint = status.canonicalEndpoint === null
     ? null
     : parseProprConnectEndpoint(status.canonicalEndpoint);
@@ -46,9 +47,8 @@ const candidateFromStatus = (status: ConnectStatusDocument): DesktopDiscoveryCan
     || !isPublicInstanceIdentity(status.publicInstanceIdentity)
   ) return null;
   return {
-    // One fixed main-owned CLI configuration selects one native stack root.
-    // A constant UI identity avoids projecting even a hash of native evidence.
-    id: 'propr-connect-discovered',
+    // Keep identity evidence bound to a fresh account slot, never a saved one.
+    id: profileId,
     label: 'ProPR Connect',
     apiBaseUrl: endpoint.origin,
   };
@@ -62,6 +62,7 @@ const sameRediscoveryProfile = (left: RediscoveryProfile, right: RediscoveryProf
   && left.updatedAt === right.updatedAt;
 
 export class DesktopConnectDiscoveryService {
+  #discoveryAttempt = 0;
   readonly #identityClaims = new Map<string, {
     origin: string;
     publicInstanceIdentity: string;
@@ -84,14 +85,15 @@ export class DesktopConnectDiscoveryService {
 
   async discover(): Promise<DesktopDiscoveryCandidate[]> {
     if (!this.source.supported) throw new Error('Connect discovery is unavailable');
-    const profileId = 'propr-connect-discovered';
+    const profileId = randomUUID();
+    const attempt = ++this.#discoveryAttempt;
     const intentGeneration = this.#beginClaimIntent(profileId);
     try {
       const pendingCommit = this.#waitForClaimCommit(profileId);
       if (pendingCommit) await pendingCommit;
       const status = await this.source.discover();
-      const candidate = candidateFromStatus(status);
-      if (!this.#claimIntentIsCurrent(profileId, intentGeneration)) return [];
+      const candidate = candidateFromStatus(status, profileId);
+      if (attempt !== this.#discoveryAttempt || !this.#claimIntentIsCurrent(profileId, intentGeneration)) return [];
       if (candidate) this.#publishIdentityClaim(
         candidate.id, candidate.apiBaseUrl, status.publicInstanceIdentity!, intentGeneration,
       );
@@ -113,7 +115,7 @@ export class DesktopConnectDiscoveryService {
       const currentEndpoint = current ? parseProprConnectEndpoint(current.apiBaseUrl) : null;
       if (!current || !currentEndpoint) return null;
       const status = await this.source.discover();
-      const candidate = candidateFromStatus(status);
+      const candidate = candidateFromStatus(status, profileId);
       if (!candidate) return null;
       const revalidated = (await this.profiles.list()).profiles.find(profile => profile.id === profileId);
       const revalidatedEndpoint = revalidated ? parseProprConnectEndpoint(revalidated.apiBaseUrl) : null;

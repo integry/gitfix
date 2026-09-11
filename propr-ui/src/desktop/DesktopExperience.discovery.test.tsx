@@ -67,13 +67,17 @@ const adaptersWithDiscovery = (discover: DesktopAdapters['discovery']['discover'
 });
 
 describe('DesktopExperience production Connect discovery pipeline', () => {
-  it('flows fixed-root main discovery through IPC, preload, and Electron adapters without persistence', async () => {
+  it.each(['MacIntel', 'Linux x86_64'])('prefills through main discovery, IPC, preload, and the %s Electron adapter before explicit confirmation', async platform => {
+    const navigatorPlatform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
     type InvokeHandler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
     const handlers = new Map<string, InvokeHandler>();
     const invocations: Array<{ channel: string; args: unknown[] }> = [];
     const credentials = {
       listProfiles: vi.fn(async () => ({ profiles: [], activeProfileId: null })),
       saveProfile: vi.fn(),
+      probe: vi.fn(async () => ({ status: 'authentication-required', message: 'Sign in required' })),
+      setActiveProfile: vi.fn(),
+      pair: vi.fn(),
     } as unknown as DesktopCredentialService;
     const connectDiscovery = new DesktopConnectDiscoveryService({
       list: async () => ({ profiles: [], activeProfileId: null }),
@@ -109,10 +113,15 @@ describe('DesktopExperience production Connect discovery pipeline', () => {
     const adapters = createElectronDesktopAdapters(createDesktopBridge(ipc, true));
 
     render(<DesktopExperience adapters={adapters}><div>Connected app</div></DesktopExperience>);
-    fireEvent.click(await screen.findByRole('button', { name: /Search for instances on this network/i }));
-
-    expect(await screen.findByRole('heading', { name: 'Edit instance' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Verified ProPR Connect endpoint');
+    expect(adapters.platform).toBe(platform === 'MacIntel' ? 'macos' : 'linux');
+    fireEvent.click(await screen.findByRole('button', { name: /Connect to an existing instance/ }));
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Shared development' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use ProPR Connect' }));
+    await screen.findByText(/Address filled from ProPR Connect/);
+    expect(screen.getByLabelText('Display name')).toHaveValue('Shared development');
+    expect(credentials.probe).not.toHaveBeenCalled();
+    expect(credentials.pair).not.toHaveBeenCalled();
+    expect(credentials.setActiveProfile).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Instance URL')).toHaveValue('https://t-discovered123.propr.dev');
     expect(credentials.saveProfile).not.toHaveBeenCalled();
     await waitFor(() => expect(invocations).toContainEqual({
@@ -120,7 +129,17 @@ describe('DesktopExperience production Connect discovery pipeline', () => {
       args: [],
     }));
     expect(invocations.find(item => item.channel === IPC_CHANNELS.connectDiscover)?.args).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(credentials.probe).toHaveBeenCalled());
+    const proposed = vi.mocked(credentials.probe).mock.calls[0][0];
+    expect(proposed.label).toBe('Shared development');
+    const claim = connectDiscovery.snapshotIdentityClaim(proposed.id!, proposed.apiBaseUrl!);
+    expect(claim.status).toBe('claimed');
+    if (claim.status === 'claimed') expect(claim.publicInstanceIdentity).toBe(readyStatus.publicInstanceIdentity);
+    expect(credentials.pair).not.toHaveBeenCalled();
+    expect(credentials.saveProfile).not.toHaveBeenCalled();
     registered.dispose();
+    navigatorPlatform.mockRestore();
   });
 
   it('discards a late discovery success after an editor action', async () => {
