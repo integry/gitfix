@@ -36,6 +36,17 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
     ensureRepoCloned: async () => root, fetchLatestChanges: async () => ({ success: true }), publishIndexingStatus: async () => {},
     getStoredFileChanges: async (taskId: string) => { cacheReads.push(taskId); return { taskId, lastUpdated: new Date().toISOString(), files: [{ path: 'src/retry.ts', linesAdded: 1, linesRemoved: 0, status: 'modified', diff: '+Handle transient failures\n' }] }; },
   } });
+  const plannerSignals = new Map<string, string>();
+  const abortHandlers = await import('../routes/plannerAbortHandlers.js');
+  const signals = {
+    setAbortSignal: async (draftId: string, runId?: string) => { plannerSignals.set(core.buildPlannerAbortSignalKey(draftId, runId), '1'); },
+    clearAbortSignal: async (draftId: string, runId?: string) => { plannerSignals.delete(core.buildPlannerAbortSignalKey(draftId, runId)); },
+  };
+  const redisBoundary = await mock.module('../routes/plannerAbortHandlers.js', { namedExports: { ...abortHandlers,
+    createAbortGenerationHandler: (db: ToolDeps['db']) => abortHandlers.createAbortGenerationHandler(db, signals),
+    createAbortRefinementHandler: (db: ToolDeps['db']) => abortHandlers.createAbortRefinementHandler(db, signals),
+  } });
+  const { verifyCancellation } = await import('./fixtures/mcpCancellation.js');
   const { McpStore } = await import('../mcp/store.js');
   const { McpOAuthProvider } = await import('../mcp/oauth.js');
   const { McpPolicy } = await import('../mcp/policy.js');
@@ -86,6 +97,7 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
     const scopes = ['read', 'plan', 'publish', 'execute', 'review', 'merge', 'manage'] as const;
     const principal = { user: { id: '123', username: 'fixture-user', login: 'fixture-user', displayName: 'Fixture user', email: null, avatarUrl: null, accessToken: 'fixture-github' }, authorization: { role: 'admin', source: 'local', permissions: [...permissions] },
       scopes: [...scopes], github, grant: { id: 'workflow-grant', ownerId: '123', clientId: 'fixture-client', clientName: 'Fixture', instanceId: config.instanceId, resource: config.resource, scopes: [...scopes], repositories: ['acme/repo'], createdAt: Date.now(), expiresAt: Date.now() + 60000, revoked: false, membershipSource: 'local' } } as McpPrincipal;
+    let stopGoalImmediately = true;
     const jobs: Array<Record<string, unknown>> = [];
     const redisValues = new Map<string, string>();
     const pendingComments = new Map<string, string[]>();
@@ -95,9 +107,9 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
     const correlatedLogger = core.logger.withCorrelation('mcp-pending-regression');
     const stateManager = { updateIssueRef: async () => {} } as unknown as InstanceType<typeof core.WorkerStateManager>;
     const deps: ToolDeps = { db, policy, taskQueue: { add: async (_name: string, data: Record<string, unknown>) => { jobs.push(data); return { id: String(jobs.length) }; }, getJobs: async () => [] } as never,
-      redisClient: { lPush: async () => 1, lTrim: async () => 'OK', sMembers: async () => [], get: async (key: string) => redisValues.get(key) || null, llen: async (key: string) => pendingComments.get(key)?.length || 0, lrange: async (key: string) => pendingComments.get(key) || [], del: async (key: string) => { pendingComments.delete(key); return 1; }, publish: async () => 1, set: async () => 'OK', eval: async () => 1 } as never, runtimeBuildQueue: {} as never,
+      redisClient: { rPush: async () => 1, lPush: async () => 1, lTrim: async () => 'OK', sMembers: async () => [], get: async (key: string) => redisValues.get(key) || null, llen: async (key: string) => pendingComments.get(key)?.length || 0, lrange: async (key: string) => pendingComments.get(key) || [], del: async (key: string) => { pendingComments.delete(key); return 1; }, publish: async () => 1, set: async () => 'OK', eval: async () => 1 } as never, runtimeBuildQueue: {} as never,
       goalServices: { generateTitle: async () => 'Fixture goal', loadVisualPreviewSettings: async () => ({ enabled: false, types: ['image'] }), getOctokit: async () => github as never,
-        stopExecution: async () => ({ success: true, containerStopped: true, removedQueuedJobs: 1 }) as never,
+        stopExecution: async () => ({ success: true, containerStopped: stopGoalImmediately, removedQueuedJobs: stopGoalImmediately ? 1 : 0 }) as never,
         getCapabilities: async () => [{ agentId: agent.config.id, agentAlias: 'claude', agentType: 'claude', goalCapable: true, lifecycle: { launch: 'goal-prompt', resume: 'whole-session', runningInput: 'safe-boundary-resume' }, controls: { liveInput: false, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true } }] } };
     // Exercise the worker's Redis pickup, command normalization and durable title update.
     // Only Redis/queue transport and the Redis issue-ref update are fixtures.
@@ -226,8 +238,11 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
         await call('pause_goal', { repository, goalId }, true); assert.equal((await db('goals').where({ goal_id: goalId }).first()).desired_state, 'paused');
         const resume = await call('resume_goal', { repository, goalId }, true); assert.equal(resume.state, 'completed', JSON.stringify(resume));
         assert.equal((await db('goals').where({ goal_id: goalId }).first()).desired_state, 'running');
+        await verifyCancellation({ call, client, principal, deps, agentId: agent.config.id, modern, root, taskId, issueNumber, redisValues, plannerSignals, setStopGoalImmediately: value => { stopGoalImmediately = value; } });
         const cancel = await call('cancel_goal', { repository, goalId }, true); assert.equal(cancel.state, 'accepted');
         assert.equal((await db('goals').where({ goal_id: goalId }).first()).desired_state, 'cancelled');
+        assert.equal((await call('get_operation', { operationId: cancel.operationId })).result.cancellation, 'confirmed');
+
         const category = await call('create_todo_category', { repository, name: 'Reliability' }, true); assert.equal(category.state, 'completed', JSON.stringify(category));
         const todo = await call('create_todo', { repository, content: 'Handle transient errors' }, true); assert.equal(todo.state, 'completed', JSON.stringify(todo));
         const todoId = todo.result.todoId, categoryId = category.result.categoryId;
@@ -367,7 +382,7 @@ test('both SDK eras drive persisted goal, TODO, notification, settings and guard
     }
   } finally {
     stubs.forEach(stub => stub.mock.restore());
-    boundary.restore();
+    redisBoundary.restore(); boundary.restore();
     if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); }
     await Promise.all(attachmentDirectories.map(directory => rm(directory, { recursive: true, force: true })));
     await core.closeConnection(); await rm(root, { recursive: true, force: true });

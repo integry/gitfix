@@ -2,10 +2,72 @@ import { getIssueQueue, getIndexingQueue } from '@propr/core';
 import type { ToolDeps } from './tools.js';
 import type { Operation } from './operations.js';
 import type { McpPrincipal } from './policy.js';
+import { McpError } from './config.js';
 
 const commentTools = ['review_pull_request', 'fix_review_findings', 'run_ultrafix'];
 const trackedTools = [...commentTools, 'send_task_followup', 'revert_pull_request_commit', 'index_repository'];
 const terminalStates = ['completed', 'failed', 'cancelled'];
+
+/** Resolve only an owned target in the receipt's currently authorized repository. */
+export async function cancellationTarget(deps: ToolDeps, principal: McpPrincipal, repository: string | null, target: Record<string, unknown>) {
+  let state: Record<string, unknown> | undefined;
+  if (target.goalId) state = await deps.db('goals').where({ goal_id: target.goalId, owner_id: principal.user.id, repository }).first('desired_state', 'result_state', 'current_task_id');
+  else if (target.taskId) {
+    const task = await deps.db('tasks').where({ task_id: target.taskId, repository }).whereNot('task_type', 'goal').first('task_id');
+    const goal = await deps.db('goals').where({ current_task_id: target.taskId }).first('goal_id');
+    if (task && !goal) state = await deps.db('task_history').where({ task_id: target.taskId }).orderBy('history_id', 'desc').first('state', 'timestamp') || {};
+  } else if (target.planId) state = await deps.db('task_drafts').where({ draft_id: target.planId, user_id: principal.user.id, repository }).first('status', 'generation_trace', 'refinement_result');
+  if (!state) throw new McpError('NOT_FOUND', 'Cancellation target not found in your authorized repository.', 404);
+  return state;
+}
+
+export function assertPlannerCancellationIdentity(row: Operation, target: Record<string, unknown>, result: { runId?: string }): void {
+  if (!['generate_plan', 'refine_plan'].includes(row.tool)) return;
+  const metadata = JSON.parse(String(target[row.tool === 'generate_plan' ? 'generation_trace' : 'refinement_result'] || '{}'));
+  if (!result.runId || metadata.runId !== result.runId) throw new McpError('NOT_CANCELLABLE', 'Planner execution identity changed or is unavailable. Inspect the plan directly.', 409);
+}
+
+export function cancellationOutcome(target: Record<string, unknown>, tool?: string): string | undefined {
+  const state = target.result_state || target.state;
+  if (terminalStates.includes(String(state))) return String(state);
+  if (tool === 'generate_plan' && target.status === 'failed') return 'failed';
+  if (tool === 'generate_plan' && target.status === 'review') return 'completed';
+  if (tool === 'refine_plan' && target.status === 'review') {
+    const metadata = JSON.parse(String(target.refinement_result || '{}'));
+    if (metadata.status === 'failed') return 'failed';
+    if (metadata.status === 'completed') return 'completed';
+  }
+  return undefined;
+}
+
+export async function trackCancellation(deps: ToolDeps, row: Operation, principal: McpPrincipal, receipt: Record<string, unknown>): Promise<void> {
+  if (!['cancel_operation', 'cancel_goal', 'cancel_task'].includes(row.tool) || !row.result) return;
+  const result = JSON.parse(row.result);
+  if (result.error) return;
+  // Owner/grant and current repository authorization precede this projection.
+  // Historical evidence survives deletion; do not substitute a later run's state.
+  if (result.executionResolved) { receipt.targetState = result.targetState; return; }
+  const target = await cancellationTarget(deps, principal, row.repository, result.continuation || result);
+  receipt.targetState = Object.fromEntries(Object.entries(target).filter(([key]) => !['generation_trace', 'refinement_result'].includes(key)));
+  result.cancellation ||= 'requested';
+  let outcome = result.targetOutcome || cancellationOutcome(target, result.targetTool);
+  if (result.plannerRunId && result.cancellation === 'requested') {
+    // Abort acceptance only fences writes; the background finally block confirms stop.
+    const record = await deps.db('mcp_records').where({ kind: 'planner_stop', id: result.plannerRunId }).first('value');
+    const stopped = record && JSON.parse(record.value);
+    outcome = stopped?.draftId === result.continuation.planId ? 'cancelled' : undefined;
+    if (outcome) receipt.targetState = { planId: stopped.draftId, runId: result.plannerRunId, state: 'cancelled', stoppedAt: stopped.stoppedAt };
+  }
+  if (outcome) {
+    receipt.state = 'completed';
+    result.cancellation = outcome === 'cancelled' ? 'confirmed' : 'not_applied';
+    result.targetOutcome = outcome;
+    result.executionResolved = true;
+    result.targetState = receipt.targetState;
+  }
+  receipt.result = result;
+  await deps.db('mcp_operations').where({ id: row.id }).whereNotIn('state', terminalStates).update({ state: receipt.state, result: JSON.stringify(result), updated_at: Date.now() });
+}
 
 /** Resolve the execution from the actual job or the exact triggering comment. */
 export async function trackExecution(deps: ToolDeps, row: Operation, principal: McpPrincipal, receipt: Record<string, unknown>): Promise<void> {

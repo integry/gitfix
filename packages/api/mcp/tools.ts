@@ -1,4 +1,4 @@
-import { trackExecution } from './operationTracking.js';
+import { assertPlannerCancellationIdentity, cancellationTarget, cancellationOutcome, trackCancellation, trackExecution } from './operationTracking.js';
 import { z } from 'zod';
 import packageInfo from '../package.json' with { type: 'json' };
 import type { Knex } from 'knex';
@@ -148,6 +148,11 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
     if (row.repository) await policy.repository(principal, row.repository, false, { includeDisabled: row.tool.endsWith('_repository_configuration'), allowUnconfigured: row.tool === 'remove_repository_configuration' });
     const original = tools.find(tool => tool.name === row.tool);
     if (original?.permission) policy.requirePermission(principal, original.permission);
+    if (row.tool === 'cancel_operation' && row.result && JSON.parse(row.result).operationId) {
+      const source = await operations.get(principal, JSON.parse(row.result).operationId);
+      if (source.repository) await policy.repository(principal, source.repository);
+      row.repository = source.repository;
+    }
     const receipt = operations.project(row);
     const result = row.result ? JSON.parse(row.result) : {};
     const continuation = result.continuation || result;
@@ -156,6 +161,7 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
     if (continuation.taskId) receipt.targetState = await db('task_history').where({ task_id: continuation.taskId }).orderBy('history_id', 'desc').first('state', 'timestamp');
     updateReceiptState(row, receipt);
     await trackExecution(deps, row, principal, receipt);
+    await trackCancellation(deps, row, principal, receipt);
     if (row.state === 'accepted' && row.tool === 'implement_plan' && Array.isArray(result.issues)) {
       const issues = await db('plan_issues').where({ draft_id: result.planId }).whereIn('issue_number', result.issues).select('issue_number', 'status', 'task_id', 'pr_number');
       receipt.targetState = { issues };
@@ -168,21 +174,34 @@ export function createToolCatalog(deps: ToolDeps): McpTool[] {
   tools.push({ name: 'cancel_operation', description: 'Request cancellation of an accepted plan generation, goal or task operation. Completed external effects cannot be undone.', scope: 'execute', schema: z.object({ ...mutationShape, operationId: z.uuid() }).strict(), run: async ({ principal, args }) => {
     const row = await operations.get(principal, args.operationId);
     if (row.repository) await policy.repository(principal, row.repository, true);
-    if (!['running', 'accepted', 'posted', 'queued'].includes(row.state)) throw new McpError('NOT_CANCELLABLE', 'This receipt is terminal or uncertain; inspect its target directly.', 409);
     const result = row.result ? JSON.parse(row.result) : {};
     const target = result.continuation || result;
-    if (target.goalId) await callWorkflow(goals.cancel, principal, { params: { goalId: target.goalId }, idempotencyKey: args.idempotencyKey });
-    else if (target.taskId) {
-      const task = await db('tasks').where({ task_id: target.taskId, repository: row.repository }).first();
-      const goal = await db('goals').where({ current_task_id: target.taskId }).first();
-      if (!task || goal || task.task_type === 'goal') throw new McpError('NOT_FOUND', 'Cancellable task not found in this repository.', 404);
-      await callWorkflow(docker.stopTask, principal, { params: { taskId: target.taskId } });
+    const current = await cancellationTarget(deps, principal, row.repository, target);
+    assertPlannerCancellationIdentity(row, current, result);
+    const terminal = cancellationOutcome(current, row.tool);
+    const cancellation = { operationId: args.operationId, cancellation: 'requested', continuation: target, targetTool: row.tool,
+      ...(target.planId ? { plannerRunId: result.runId } : {}) };
+    if (terminal) return { status: 202, data: { ...cancellation, targetOutcome: terminal, cancellation: 'not_applied' } };
+    if (!['running', 'accepted', 'posted', 'queued'].includes(row.state)) throw new McpError('NOT_CANCELLABLE', 'This receipt is terminal or uncertain; inspect its target directly.', 409);
+    try {
+      if (target.goalId) await callWorkflow(goals.cancel, principal, { params: { goalId: target.goalId }, idempotencyKey: args.idempotencyKey });
+      else if (target.taskId) await callWorkflow(docker.stopTask, principal, { params: { taskId: target.taskId } });
+      else if (target.planId && ['generate_plan', 'refine_plan'].includes(row.tool)) {
+        policy.requireScope(principal, 'plan');
+        if (!result.runId) throw new McpError('NOT_CANCELLABLE', 'This legacy receipt has no planner run identity. Inspect the plan directly.', 409);
+        await callWorkflow(row.tool === 'generate_plan' ? planner.abortGeneration : planner.abortRefinement, principal,
+          { body: { draftId: target.planId, expectedRunId: result.runId } });
+      } else throw new McpError('NOT_CANCELLABLE', 'No cancellable backend execution has been associated with this receipt yet. Inspect the returned target.', 409);
+    } catch (error) {
+      // A terminal write can win the backend's conditional cancellation claim.
+      if (!(error instanceof McpError) || !['PRECONDITION_FAILED', 'WORKFLOW_REJECTED'].includes(error.code)) throw error;
+      const latest = await cancellationTarget(deps, principal, row.repository, target);
+      assertPlannerCancellationIdentity(row, latest, result);
+      const outcome = cancellationOutcome(latest, row.tool);
+      if (!outcome) throw error;
+      return { status: 202, data: { ...cancellation, targetOutcome: outcome, cancellation: 'not_applied' } };
     }
-    else if (target.planId && ['generate_plan', 'refine_plan'].includes(row.tool)) {
-      policy.requireScope(principal, 'plan');
-      await callWorkflow(row.tool === 'generate_plan' ? planner.abortGeneration : planner.abortRefinement, principal, { body: { draftId: target.planId } });
-    } else throw new McpError('NOT_CANCELLABLE', 'No cancellable backend execution has been associated with this receipt yet. Inspect the returned target.', 409);
-    return { status: 202, data: { operationId: args.operationId, cancellation: 'requested', continuation: target } };
+    return { status: 202, data: cancellation };
   } });
   return tools;
 }
@@ -193,8 +212,6 @@ function updateReceiptState(row: Operation, receipt: Record<string, unknown>): v
     if (['generate_plan', 'refine_plan'].includes(row.tool) && target.status === 'review') receipt.state = 'completed';
     if (['generate_plan', 'refine_plan'].includes(row.tool) && target.status === 'failed') receipt.state = 'failed';
     if (row.tool === 'create_goal' && target.result_state) receipt.state = target.result_state;
-    if (row.tool === 'cancel_goal' && target.result_state === 'cancelled') receipt.state = 'completed';
-    if (row.tool === 'cancel_task' && ['cancelled', 'completed', 'failed'].includes(String(target.state))) receipt.state = 'completed';
   }
 }
 
@@ -246,9 +263,22 @@ export async function executeTool(tool: McpTool, raw: unknown, principal: McpPri
     ? await new McpOperations(deps.db).replay(principal, tool.name, args) : undefined;
   if (tool.name === 'send_task_followup' && /^\s*\/(?:merge|review|fix|ultrafix|deploy)\b/im.test(args.message)) throw new McpError('USE_EXPLICIT_TOOL', 'Use the dedicated PR lifecycle tool for slash commands so its scope and head preconditions can be checked.');
   if (tool.target && !deletedReplay) await authorizeTarget(tool, args, principal, deps);
-  const result = deletedReplay ?? (tool.readOnly
+  let operationRepository = args.repository;
+  let cancellationReplay: Record<string, unknown> | undefined;
+  if (tool.name === 'cancel_operation') {
+    const source = await new McpOperations(deps.db).get(principal, args.operationId);
+    operationRepository = source.repository;
+    if (operationRepository) await deps.policy.repository(principal, operationRepository, true);
+    if (['generate_plan', 'refine_plan'].includes(source.tool)) deps.policy.requireScope(principal, 'plan');
+    cancellationReplay = await new McpOperations(deps.db).replay(principal, tool.name, args);
+    if (!cancellationReplay) {
+      const sourceResult = source.result ? JSON.parse(source.result) : {};
+      await cancellationTarget(deps, principal, source.repository, sourceResult.continuation || sourceResult);
+    }
+  }
+  const result = deletedReplay ?? cancellationReplay ?? (tool.readOnly
     ? (await tool.run({ principal, args })).data
-    : await new McpOperations(deps.db).run(principal, { tool: tool.name, args, repository: args.repository }, operationId => tool.run({ principal, args, operationId })));
+    : await new McpOperations(deps.db).run(principal, { tool: tool.name, args, repository: operationRepository }, operationId => tool.run({ principal, args, operationId })));
   const data = redact(result) as Record<string, unknown>;
   if (Buffer.byteLength(JSON.stringify(data)) > 256 * 1024) throw new McpError('RESULT_TOO_LARGE', 'Request a smaller page or narrower target.');
   return { ...presentResult(tool, args, data, deps.policy.config), data };

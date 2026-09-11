@@ -216,7 +216,7 @@ export function createRefineHandler(db: Knex) {
       }
 
       // Return 202 Accepted immediately - client should poll for status
-      res.status(202).json({ success: true, status: 'refining', message: 'Plan refinement started' });
+      res.status(202).json({ success: true, status: 'refining', message: 'Plan refinement started', runId: correlationId });
 
       // Run refinement in background
       void runBackgroundRefinement({

@@ -1,3 +1,4 @@
+import { recordPlannerStop } from './executionStop.js';
 /**
  * Utility functions for planner helpers.
  */
@@ -164,6 +165,8 @@ export async function runBackgroundGeneration(
     } catch (dbError) {
       console.error('[generate] Failed to update draft status after error', { draftId, error: dbError });
     }
+  } finally {
+    await recordPlannerStop(db, draftId, runId);
   }
 }
 

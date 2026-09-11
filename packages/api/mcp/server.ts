@@ -3,9 +3,10 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { mcpAuthRouter, createOAuthMetadata } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { type Express, type RequestHandler } from 'express';
 import { z } from 'zod';
+import { rateLimit } from 'express-rate-limit';
 import packageInfo from '../package.json' with { type: 'json' };
 import { isDemoMode } from '../demoMode.js';
-import { createAuthRequestRateLimiter } from '../requestRateLimits.js';
+import { requestRateLimitOptions, resolveRequestRateLimitPolicies } from '../requestRateLimits.js';
 import { loadMcpConfig, MCP_SCOPES, McpError } from './config.js';
 import { MCP_CONNECT_CONTRACT } from './connect.js';
 import { McpStore } from './store.js';
@@ -95,7 +96,8 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
   // contract requires byte-for-byte redirect matching, including loopback.
   // Protect the client lookup before the SDK router, using the same explicit
   // trusted-proxy policy and configurable quota as other authentication routes.
-  app.use('/authorize', createAuthRequestRateLimiter(), express.urlencoded({ extended: false, limit: '16kb' }), async (req, res, next) => {
+  // Keep limiter construction at registration so CodeQL can follow routing order.
+  app.use('/authorize', rateLimit(requestRateLimitOptions(resolveRequestRateLimitPolicies().auth)), express.urlencoded({ extended: false, limit: '16kb' }), async (req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'POST') { next(); return; }
     const args = req.method === 'POST' ? req.body : req.query;
     if (typeof args.client_id !== 'string') { next(); return; }

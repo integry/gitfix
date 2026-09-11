@@ -262,27 +262,6 @@ jobs:
           RELEASE_CANDIDATE: 'true'
         run: npm run release:verify
 
-      - name: Check Connect fixture credentials
-        id: mcp_fixture_credentials
-        env:
-          MCP_ROUTING_READ_TOKEN: ${{ secrets.MCP_ROUTING_READ_TOKEN }}
-        run: |
-          if [ -z "$MCP_ROUTING_READ_TOKEN" ]; then
-            echo "MCP_ROUTING_READ_TOKEN must be configured with contents:read access to integry/propr-routing; this repository's GITHUB_TOKEN cannot read the private Connect fixture." | tee -a build_log.txt >&2
-            exit 1
-          fi
-
-      - name: Check out the merged Connect integration fixture
-        id: mcp_fixture
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: integry/propr-routing
-          ref: 1fcf82fd1a843fbdf199d79b8f92843dc74a89e0
-          path: .mcp-routing-fixture
-          # Read-only access to the private companion; GITHUB_TOKEN is scoped to core.
-          token: ${{ secrets.MCP_ROUTING_READ_TOKEN }}
-          persist-credentials: false
-
       - name: Build MCP test dependencies
         id: mcp_prepare
         run: npm run test:prepare
@@ -291,10 +270,9 @@ jobs:
         id: mcp_browser_setup
         run: npx playwright install --with-deps chromium
 
-      - name: Verify MCP OAuth, policy, workflows and paired Connect
+      - name: Verify core MCP OAuth, workflows, browser and security
         id: mcp_tests
         env:
-          MCP_ROUTING_REPOSITORY: ${{ github.workspace }}/.mcp-routing-fixture
           DATA_DIR: ${{ runner.temp }}/mcp-ci
           DB_FILENAME: ${{ runner.temp }}/mcp-ci/isolated.sqlite
         run: |
@@ -302,7 +280,6 @@ jobs:
           mkdir -p "$DATA_DIR"
           {
             npm run test:mcp
-            npm run test:mcp:connect
             npm run test:mcp:browser
           } > >(tee -a build_log.txt) 2>&1
 
@@ -711,14 +688,9 @@ jobs:
             echo "Toolchain: ${{ steps.toolchain.outcome }}"
             echo "Dependency install: ${{ steps.install.outcome }}"
             echo "Release metadata: ${{ steps.release_metadata.outcome }}"
-            echo "Connect fixture credentials: ${{ steps.mcp_fixture_credentials.outcome }}"
-            echo "Connect fixture checkout: ${{ steps.mcp_fixture.outcome }}"
-            if [ "${{ steps.mcp_fixture.outcome }}" = "failure" ]; then
-              echo "Connect fixture checkout failed. Verify MCP_ROUTING_READ_TOKEN has contents:read access to integry/propr-routing and the pinned commit is available; see the checkout step for details."
-            fi
             echo "MCP dependency build: ${{ steps.mcp_prepare.outcome }}"
             echo "MCP browser setup: ${{ steps.mcp_browser_setup.outcome }}"
-            echo "MCP integration: ${{ steps.mcp_tests.outcome }}"
+            echo "Core MCP tests: ${{ steps.mcp_tests.outcome }}"
             echo "Fast tests: ${{ steps.unit_tests.outcome }}"
             echo "Hosted tunnel tests: ${{ steps.tunnel_tests.outcome }}"
             echo "CLI packaging: ${{ steps.cli_pack.outcome }}"

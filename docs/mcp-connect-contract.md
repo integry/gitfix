@@ -179,17 +179,21 @@ Malformed array entries/preferences fail validation. An omitted legacy CIMD meth
 ## Executable cross-repository evidence
 
 Run `MCP_ROUTING_REPOSITORY=/path/to/propr-routing npm run test:mcp:connect`.
-The runner archives the pinned Git commit into a temporary directory, installs
+Optionally set `MCP_ROUTING_REVISION` to a full lowercase commit SHA to test a
+private routing candidate; the merged SHA above remains the manual default.
+The runner verifies and archives that exact Git commit into a temporary directory, installs
 its lockfile, bundles its **actual Worker entry point** and runs core's actual
 HTTP/auth/tool implementation. It reports both source identities and SDK
 versions. No routing source or policy is rewritten. See
 [mcp-coverage.md](mcp-coverage.md#connect-integration-follow-up-evidence) for exact
 commands, results, isolation and remaining gates.
 
-No routing source change is required by the passing pinned integration. Root
-should dispatch a **documentation-only** follow-up to routing PR #180: replace
-the stale statement that no core PR is available with core PR #2291, record its
-system-generated follow-up commit and this harness evidence, and reconcile
-`docs/mcp-verification.md`. Site PR #90 still needs final capability reconciliation.
+Core required CI runs self-contained core MCP tests. Real paired CI belongs in
+the private routing repository, delegated separately as routing issue #186.
+It must supply its candidate SHA and an authorized checkout and pin the public
+core candidate. Root requires passing paired evidence for both exact commits
+before merge. Never copy or publish private routing source/archives into core.
+See [the CI division and refresh procedure](mcp-coverage.md#full-chat-follow-up-verification-and-required-ci).
+Site PR #90 still needs final capability reconciliation.
 Core PR #2291 and the larger full-chat epic remain open for root's independent
 coverage review. No new companion task, PR, deployment or merge was started.

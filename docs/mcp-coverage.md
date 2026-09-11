@@ -254,17 +254,43 @@ real target was merged; no new companion task, PR, commit or deployment was made
 
 ## Full-chat follow-up verification and required CI
 
-The existing `Build & Lint Check` → `Validate Changes` job now builds the shared,
-core and CLI dependencies, installs Playwright Chromium, and runs `test:mcp`,
-`test:mcp:connect` and `test:mcp:browser`. Any failure fails that existing check.
-Tests use isolated temporary SQLite/data directories and outbound fixtures;
-they do not configure a production instance. Browser tests fail with an
-installation instruction if Chromium is missing. OAuth, policy, both SDK eras,
-real workflow handlers, concurrent configuration persistence, review/fix state
-transitions, and the actual paired Worker/core integration are exercised.
+The public core repository's required `Build & Lint Check` → `Validate Changes`
+job builds shared/core/CLI dependencies, installs Playwright Chromium, and runs
+`test:mcp` and `test:mcp:browser`. These self-contained checks cover core OAuth,
+policy/security, both SDK eras, workflow persistence, cancellation and command
+identity, concurrency, and real TLS browser consent/revocation. Any failure
+fails the existing required job; missing Chromium is a failure, not a skip.
+They require no private checkout, extra token, or permission change.
 
-The routing checkout and harness pin are the merged commit
-`1fcf82fd1a843fbdf199d79b8f92843dc74a89e0`, so CI does not require the old PR branch.
+**Core CI is not paired gateway coverage.** Actual cross-repository paired CI
+belongs in the **private** routing repository (companion
+[routing issue #186](https://github.com/integry/propr-routing/issues/186), delegated
+separately by root). Its existing `GITHUB_TOKEN` can check out routing and the
+public core commit. The private job must check out the exact core candidate SHA,
+pass its routing candidate's full SHA as `MCP_ROUTING_REVISION`, and run core's
+unchanged actual Worker/core harness with `MCP_ROUTING_REPOSITORY` pointing to
+that authorized checkout. Do not upload its private source archive/bundle to
+core or vendor routing implementation into this public repository.
+
+Before merging either companion change, root must require passing **private
+paired evidence for both exact candidate commits**, plus core's required checks
+and hosted CodeQL on the system-generated core commit. A local paired pass or
+core-only CI pass does not satisfy that private CI gate. This task does not
+implement or claim completion of the separately delegated routing workflow.
+
+Manual verification defaults to routing's merged implementation at
+`1fcf82fd1a843fbdf199d79b8f92843dc74a89e0`. An explicit full lowercase 40-character
+`MCP_ROUTING_REVISION` overrides it; abbreviations, refs, revision expressions,
+missing objects and non-commit objects are rejected before extraction/install.
+The harness verifies exact commit identity, disables Git replacement objects,
+archives that commit locally, installs its own dependency lockfile and reports
+`routingHead`, its lockfile SHA-256, `coreHead`, the core implementation digest
+and SDK versions. The archive is temporary private runtime data, never a public
+artifact. To refresh manual verification, fetch an authorized routing checkout,
+select the reviewed full SHA, run the paired command and record both identities
+and its result. Update the default pin only after merged routing evidence is
+reviewed; private candidate CI must always pass its candidate explicitly.
+
 For local paired verification:
 
 ```sh
@@ -285,10 +311,59 @@ uncertainty/failure, and persist posted reviews/F# findings before selecting and
 observing a fix. No live agent credits, merges, deployments or permission changes
 are part of these tests. Root still owns independent verification and merge.
 
-Local verification of this uncommitted follow-up (2026-09-10): 13 MCP tests,
+Historical local verification of the preceding follow-up (2026-09-10): 13 MCP tests,
 the paired Connect scenario and Chromium consent test passed without skips;
 288 fast unit tests and eight related configuration/review/authorization test
 files passed. Full build, API typecheck, changed-code ESLint and workflow
 `actionlint` passed. The previous CI correction at `420aad1bf` and Connect
 implementation at `6147abc9b` are the base of this worktree. The CodeQL workflow is unchanged; its hosted result must be checked on the system’s
 resulting commit (the CodeQL CLI is not installed in this implementation image).
+
+
+## Cancellation and security follow-up (2026-09-11)
+
+Cancellation receipts remain `accepted` while the goal only has
+`desired_state='cancelled'`, the task only has an abort signal, or a planner abort
+has reset the draft without background exit. Confirmed stop resolves the receipt
+to `completed` with `result.cancellation='confirmed'` and
+`result.targetOutcome='cancelled'`. If the target completed or failed first, the
+receipt resolves with `cancellation='not_applied'` and that actual `targetOutcome`.
+This describes resolution of the cancellation request, not successful execution
+of the target. Terminal outcomes are persisted for idempotent replay.
+
+Plan generation/refinement cancellation is bound to the start response's `runId`;
+a conditional abort cannot cancel a replacement run. Background exit writes a
+minimal durable `planner_stop` record in `mcp_records` (run/draft IDs and stop
+time only), surviving draft edits and restart. An unavailable stop record never
+means a confirmed stop. Legacy planner receipts without a run identity require
+inspection rather than risking cancellation of a replacement. Existing goal/task
+cancellation receipts still resolve from their persisted targets; older
+`cancel_operation` receipts also reauthorize their source repository when their
+own repository field is absent.
+
+The `/authorize` limiter is constructed directly in the Express middleware list,
+with shared quota/header/proxy-key options. The previous two factory returns hid
+the middleware construction from CodeQL's routing model. Its
+[ExpressRateLimit model](https://github.com/github/codeql/blob/main/javascript/ql/lib/semmle/javascript/security/dataflow/MissingRateLimiting.qll)
+recognizes the package constructor and maps that node into routing order. No
+query is disabled or dismissed; runtime rejection still precedes body parsing
+and client lookup. The existing Secure-cookie TLS browser fixture is preserved.
+
+These edits start from core `c6b5ee96a6bce023b8d680ff937b534dc08b7330` and preserve
+its queued review/fix/ultrafix command-identity regressions. Hosted alert #126
+inspection returned HTTP 403 (`Resource not accessible by integration`) in this
+implementation environment, and the CodeQL CLI is unavailable. Consequently no
+hosted CodeQL pass is claimed: inspect the normal CodeQL workflow and alerts
+#126/#127 on the resulting system-generated commit before merge. No commit,
+merge, deployment, added credential, or companion task was created here.
+
+
+Local validation of this working tree: 14 MCP tests, two browser/security tests,
+26 planner lifecycle/abort/proxy-limit tests, dependency builds, full TypeScript
+build, API typecheck, changed-file ESLint and workflow actionlint passed without
+skips. The actual paired harness passed both with the default merged routing
+SHA and with explicit `MCP_ROUTING_REVISION=0c8ca02044c88b181395ca8e15425c0821e588e4`
+(the previously reviewed routing PR head), demonstrating candidate selection.
+These are local results on uncommitted core changes; the paired runner reports
+the base `coreHead` plus an implementation digest. They are not hosted CI results
+for the future system-generated commit.
