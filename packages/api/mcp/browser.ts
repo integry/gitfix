@@ -13,8 +13,36 @@ import type { Artifact } from './toolsArtifacts.js';
 const escape = (text: unknown): string => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 type ConsentSession = Request['session'] & { mcpCsrf?: string };
 
-export function renderMcpPage(title: string, body: string): string {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · ProPR</title><style>body{font:16px system-ui;background:#10151e;color:#edf2fa;margin:0;padding:24px}main{max-width:640px;margin:5vh auto;padding:28px;border:1px solid #344158;border-radius:16px;background:#192230}h1{font-size:28px}p,li{line-height:1.6;overflow-wrap:anywhere}label{display:block;padding:12px;border:1px solid #344158;border-radius:8px;margin:8px 0}input{margin-right:10px}button,a{font:inherit}button{background:#99d8be;color:#10231b;border:0;border-radius:8px;padding:12px 18px;margin:12px 12px 0 0;cursor:pointer}a{color:#a6d5ff}.secondary{background:#334155;color:white}small{color:#b4c2d8}article{border-top:1px solid #344158;margin-top:24px;padding-top:8px}@media(max-width:480px){body{padding:12px}main{margin:12px auto;padding:20px}button{width:100%}}</style><main><small>ProPR · Connected apps</small><h1>${escape(title)}</h1>${body}</main></html>`;
+// Static script: client names, scopes and repository names are only rendered as escaped HTML.
+const consentScript = `
+document.querySelectorAll('[data-selection-group]').forEach(group => {
+  const checkboxes = Array.from(group.querySelectorAll('input[type="checkbox"]'));
+  const editable = checkboxes.filter(checkbox => !checkbox.disabled);
+  const controls = group.querySelector('.selection-tools');
+  const count = group.querySelector('[role="status"]');
+  const update = () => {
+    count.textContent = checkboxes.filter(checkbox => checkbox.checked).length + ' of ' +
+      checkboxes.length + ' ' + group.dataset.selectionGroup + ' selected';
+  };
+  controls.querySelectorAll('button').forEach(button => {
+    button.disabled = editable.length === 0;
+    button.addEventListener('click', () => {
+      editable.forEach(checkbox => { checkbox.checked = button.dataset.selection === 'all'; });
+      update();
+    });
+  });
+  group.addEventListener('change', update);
+  window.addEventListener('pageshow', update);
+  update();
+  controls.hidden = false;
+});`;
+
+function selectionControls(group: string): string {
+  return `<div class="selection-tools" hidden><div><button type="button" class="secondary" data-selection="all" aria-label="Select all ${group}">Select all</button><button type="button" class="secondary" data-selection="clear" aria-label="Clear ${group}">Clear</button></div><small role="status" aria-live="polite" aria-atomic="true"></small></div>`;
+}
+
+export function renderMcpPage(title: string, body: string, nonce?: string): string {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · ProPR</title><style${nonce ? ` nonce="${escape(nonce)}"` : ''}>body{font:16px system-ui;background:#10151e;color:#edf2fa;margin:0;padding:24px}main{max-width:640px;margin:5vh auto;padding:28px;border:1px solid #344158;border-radius:16px;background:#192230}h1{font-size:28px}p,li{line-height:1.6;overflow-wrap:anywhere}label{display:block;padding:12px;border:1px solid #344158;border-radius:8px;margin:8px 0}input{margin-right:10px}button,a{font:inherit}button{background:#99d8be;color:#10231b;border:0;border-radius:8px;padding:12px 18px;margin:12px 12px 0 0;cursor:pointer}a{color:#a6d5ff}.secondary{background:#334155;color:white}small{color:#b4c2d8}.selection-tools:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:12px}.selection-tools button{width:auto;margin:0 8px 0 0;min-height:44px}.selection-tools small{display:block}button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible{outline:3px solid #a6d5ff;outline-offset:3px}label{overflow-wrap:anywhere}article{border-top:1px solid #344158;margin-top:24px;padding-top:8px}@media(max-width:480px){body{padding:12px}main{margin:12px auto;padding:20px}button{width:100%}}</style><main><small>ProPR · Connected apps</small><h1>${escape(title)}</h1>${body}</main></html>`;
 }
 
 export function mountMcpBrowser(app: Express, oauth: McpOAuthProvider, overrides: { accessibleRepositories?: (user: GitHubUser) => Promise<string[]> } = {}): void {
@@ -54,8 +82,28 @@ export function mountMcpBrowser(app: Express, oauth: McpOAuthProvider, overrides
     const pending = await oauth.store.get<PendingAuthorization>('pending', digest(id));
     if (!pending) { res.status(400).send(renderMcpPage('Request expired', '<p>Return to your chat client and connect again.</p>')); return; }
     const repos = await repositories(req);
-    res.set('Content-Security-Policy', `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${new URL(pending.params.redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`);
-    res.type('html').send(renderMcpPage('Connect an app', `<p><strong>${escape(pending.client.client_name || pending.client.client_id)}</strong> wants access to this ProPR instance as <strong>${escape(req.user!.username)}</strong>.</p><p>Instance: ${escape(oauth.config.instanceId)}</p><p>Choose permissions below. Read is required; leave optional permissions unchecked for read-only access. Execute can start work; publish creates GitHub issues; merge can merge reviewed changes; manage changes instance configuration.</p><p>Choose repositories. Access always remains limited by your current permissions. You can revoke this connection at any time.</p><form method="post">${csrf(req)}<input type="hidden" name="request" value="${escape(id)}"><h2>Permissions</h2>${pending.params.scopes?.map(scope => `<label><input type="checkbox" name="scopes" value="${escape(scope)}"${scope === 'read' ? ' checked disabled' : ''}>${escape(scope)}${scope === 'read' ? ' (required)' : ''}</label>`).join('')}<input type="hidden" name="scopes" value="read"><h2>Repositories</h2>${repos.map(repo => `<label><input type="checkbox" name="repositories" value="${escape(repo)}">${escape(repo)}</label>`).join('')}<p><small>Return address: ${escape(pending.params.redirectUri)}</small></p><button name="decision" value="approve">Allow selected access</button><button class="secondary" name="decision" value="deny">Deny</button></form>`));
+    const nonce = secret();
+    res.set('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; form-action 'self' ${new URL(pending.params.redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`);
+    res.type('html').send(renderMcpPage('Connect an app', `
+      <p><strong>${escape(pending.client.client_name || pending.client.client_id)}</strong> wants access to this ProPR instance as <strong>${escape(req.user!.username)}</strong>.</p>
+      <p>Instance: ${escape(oauth.config.instanceId)}</p>
+      <p>Choose permissions below. Read is required; leave optional permissions unchecked for read-only access. Execute can start work; publish creates GitHub issues; merge can merge reviewed changes; manage changes instance configuration.</p>
+      <p>Choose repositories. Access always remains limited by your current permissions. You can revoke this connection at any time.</p>
+      <form method="post">${csrf(req)}<input type="hidden" name="request" value="${escape(id)}">
+        <section role="group" aria-labelledby="permissions-heading" data-selection-group="permissions">
+          <h2 id="permissions-heading">Permissions</h2>${selectionControls('permissions')}
+          ${pending.params.scopes?.map(scope => `<label><input type="checkbox" name="scopes" value="${escape(scope)}"${scope === 'read' ? ' checked disabled' : ''}>${escape(scope)}${scope === 'read' ? ' (required)' : ''}</label>`).join('')}
+          <input type="hidden" name="scopes" value="read">
+          ${pending.params.scopes?.some(scope => scope !== 'read') ? '' : '<p><small>This app only requests required read access.</small></p>'}
+        </section>
+        <section role="group" aria-labelledby="repositories-heading" data-selection-group="repositories">
+          <h2 id="repositories-heading">Repositories</h2>${selectionControls('repositories')}
+          ${repos.map(repo => `<label><input type="checkbox" name="repositories" value="${escape(repo)}">${escape(repo)}</label>`).join('')}
+          ${repos.length ? '' : '<p>No accessible repositories are available. At least one is required to allow access.</p>'}
+        </section>
+        <p><small>Return address: ${escape(pending.params.redirectUri)}</small></p>
+        <button name="decision" value="approve"${repos.length ? '' : ' disabled'}>Allow selected access</button><button class="secondary" name="decision" value="deny">Deny</button>
+      </form><script nonce="${nonce}">${consentScript}</script>`, nonce));
   });
 
   app.post('/mcp/consent', async (req, res) => {
