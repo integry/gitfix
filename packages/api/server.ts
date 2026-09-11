@@ -2,7 +2,7 @@ import { ROUTING_STATUS_REDIS_KEY } from '@propr/shared';
 /* eslint-disable max-lines -- route registration and coordinated shutdown share startup state */
 import express, { Request, Response } from 'express';
 import { mountMcp, mcpResponseHeaders } from './mcp/server.js';
-import { getMcpOriginSync, isMcpEnabledSync, invalidateMcpConfigCache } from './mcp/configResolver.js';
+import { getMcpOriginSync, isMcpEnabledSync, invalidateMcpConfigCache, resolveMcpConfig } from './mcp/configResolver.js';
 import { createServer, Server as HttpServer } from 'http';
 import cors from 'cors';
 import { createClient, RedisClientType } from 'redis';
@@ -466,8 +466,12 @@ async function start(): Promise<void> {
       notificationProjection.startStalledDetector();
       // Every API process drops its MCP cache on a published config event, so an
       // admin toggle applies across processes rather than waiting out the TTL.
+      // Re-resolve immediately: authRedirect and the CORS/header middleware read
+      // the resolved state synchronously and cannot trigger a resolve themselves,
+      // so dropping the cache alone would leave them on the pre-change values.
       configReloadSubscription = await startConfigReloadSubscription(redisClient, async () => {
         invalidateMcpConfigCache();
+        await resolveMcpConfig(db).catch(() => undefined);
         await reloadConfigs();
       });
       // Subscribe first, then enqueue the initial load through the same serial
@@ -489,7 +493,6 @@ async function start(): Promise<void> {
     // Prime MCP config cache before route registration so authRedirect and CORS
     // middleware see the correct origin on the first request after startup.
     if (!demoMode) {
-      const { resolveMcpConfig } = await import('./mcp/configResolver.js');
       await resolveMcpConfig(db).catch(() => undefined);
     }
     setupRoutes();

@@ -37,15 +37,16 @@ let _cachedOrigin: string | undefined = undefined;
 let _cachedEnabled = false;
 let _cachedScopeCeiling: McpScope[] | undefined = undefined;
 
-// Drop every derived value, not just the resolved config: the synchronous
-// readers below must not keep reporting the pre-change state until something
-// happens to re-resolve. The next resolveMcpConfig() call is authoritative.
+// Only drop the resolved config, forcing the next resolve to re-read. The
+// derived values below stay at their last resolved state: the synchronous
+// readers have no way to resolve for themselves, and blanking them would make
+// invalidation itself report MCP as off (dropping the consent origin from the
+// redirect allowlist) until something unrelated happened to re-resolve. The
+// next resolveMcpConfig() replaces them; callers that need that promptly
+// (the config-reload subscriber) re-resolve right after invalidating.
 export function invalidateMcpConfigCache(): void {
   _cachedConfig = undefined;
   _cacheTimestamp = 0;
-  _cachedOrigin = undefined;
-  _cachedEnabled = false;
-  _cachedScopeCeiling = undefined;
 }
 
 /** Synchronous reads for middleware and CORS setup. Reflects last resolved state. */
@@ -90,6 +91,24 @@ export async function loadMcpAdminSettings(database: Knex = db): Promise<McpAdmi
  */
 export async function resetMcpKeyCheckValue(database: Knex = db): Promise<void> {
   await database('mcp_admin_settings').where({ key: 'key_check_value' }).delete();
+}
+
+/**
+ * Persist a freshly generated instance identity without overwriting one that
+ * another process (or an earlier concurrent resolve) already claimed, then
+ * adopt whatever value actually won. The identity has to be single-valued:
+ * McpOAuthProvider.grant() rejects grants minted under any other ID, so a
+ * last-writer-wins merge here would strand the loser's in-memory config.
+ */
+async function claimMcpInstanceId(candidate: string, database: Knex): Promise<string> {
+  await database('mcp_admin_settings')
+    .insert({ key: 'instance_id', value: candidate, updated_at: Date.now() })
+    .onConflict('key')
+    .ignore();
+  const row = await database('mcp_admin_settings')
+    .where({ key: 'instance_id' })
+    .first<{ value: string } | undefined>('value');
+  return row?.value ?? candidate;
 }
 
 export async function saveMcpAdminSettingRows(updates: Record<string, string>, database: Knex = db): Promise<void> {
@@ -163,9 +182,9 @@ export async function resolveMcpConfig(database: Knex = db, env: NodeJS.ProcessE
   // resolve instance ID
   let instanceId = env.MCP_INSTANCE_ID || adminSettings.instanceId;
   if (!instanceId) {
-    instanceId = randomBytes(16).toString('base64url').slice(0, 24);
-    await saveMcpAdminSettingRows({ instance_id: instanceId, key_check_value: expectedCheck }, database);
-  } else if (!adminSettings.keyCheckValue) {
+    instanceId = await claimMcpInstanceId(randomBytes(16).toString('base64url').slice(0, 24), database);
+  }
+  if (!adminSettings.keyCheckValue) {
     await saveMcpAdminSettingRows({ key_check_value: expectedCheck }, database);
   }
   if (!/^[a-zA-Z0-9_-]{8,128}$/.test(instanceId)) return cacheResolved(null, now);

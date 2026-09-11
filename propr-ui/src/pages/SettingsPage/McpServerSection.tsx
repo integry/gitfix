@@ -197,16 +197,25 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
   const [saving, setSaving] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [confirmEnable, setConfirmEnable] = useState(false);
+
+  // Every failure is reported in-section as well as through onError: the parent
+  // callback is optional, and an admin toggling a security-sensitive server has
+  // to be told why it did not take effect.
+  const reportError = useCallback((message: string) => {
+    setErrorMessage(message);
+    onError?.(message);
+  }, [onError]);
 
   const load = useCallback(async () => {
     try {
       const result = await getMcpAdminSettings();
       setData(result);
     } catch {
-      onError?.('Failed to load MCP settings');
+      reportError('Failed to load MCP settings');
     }
-  }, [onError]);
+  }, [reportError]);
 
   useEffect(() => {
     void load();
@@ -219,20 +228,21 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
     if (enabled && !confirmEnable) { setConfirmEnable(true); return; }
     setConfirmEnable(false);
     setSaving(true);
+    setErrorMessage(null);
     try {
       const result = await updateMcpAdminSettings({ enabled });
       setData(prev => prev ? { ...prev, status: result.status, settings: { ...prev.settings, enabled } } : prev);
       // The saved flag is only one input to the resolved state; report success
       // against what the server actually turned on.
       if (enabled && !result.status.enabled) {
-        onError?.('MCP could not be enabled. Resolve the reported condition and try again.');
+        reportError('MCP could not be enabled. Resolve the reported condition and try again.');
         return;
       }
       setSuccessMessage(enabled ? 'MCP server enabled.' : 'MCP server disabled.');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to update MCP settings';
-      onError?.(msg);
+      reportError(msg);
     } finally {
       setSaving(false);
     }
@@ -240,11 +250,12 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
 
   const updateScopes = async (scopes: McpScope[]) => {
     setSaving(true);
+    setErrorMessage(null);
     try {
       const result = await updateMcpAdminSettings({ scopeCeiling: scopes });
       setData(prev => prev ? { ...prev, status: result.status, settings: { ...prev.settings, scopeCeiling: scopes } } : prev);
     } catch {
-      onError?.('Failed to update scope settings');
+      reportError('Failed to update scope settings');
     } finally {
       setSaving(false);
     }
@@ -253,6 +264,7 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
   const handleRevokeAll = async () => {
     if (!window.confirm('Revoke all MCP connections? All connected clients will need to reconnect.')) return;
     setRevoking(true);
+    setErrorMessage(null);
     try {
       const { revoked, status } = await revokeAllMcpConnections();
       if (status) setData(prev => prev ? { ...prev, status } : prev);
@@ -260,7 +272,7 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
       setSuccessMessage(`Revoked ${revoked} connection${revoked !== 1 ? 's' : ''}.`);
       setTimeout(() => setSuccessMessage(null), 4000);
     } catch {
-      onError?.('Failed to revoke MCP connections');
+      reportError('Failed to revoke MCP connections');
     } finally {
       setRevoking(false);
     }
@@ -284,6 +296,10 @@ export default function McpServerSection({ onError }: McpServerSectionProps) {
 
       {successMessage && (
         <p className="mt-2 text-xs text-green-700" role="status">{successMessage}</p>
+      )}
+
+      {errorMessage && (
+        <p className="mt-2 text-xs text-red-600" role="alert">{errorMessage}</p>
       )}
 
       {!isOperatorManaged && (
