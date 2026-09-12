@@ -16,6 +16,7 @@ import {
   parseInstalledLinuxContainerEvidence,
   runInstalledLinuxPackageAcceptance,
 } from './run-installed-linux-package-acceptance.mjs';
+import { CONNECT_DEEP_LINK } from './packaged-smoke-plan.mjs';
 
 const canonicalArguments = directory => [
   '--arch', 'x64',
@@ -132,6 +133,53 @@ printf '%s\\n' "$@" > "$PROPR_UNSHARE_ARGUMENT_LOG"
         '--mount', '--propagation', 'unchanged', '--pid', '--net', '--fork', '/bin/true',
       ]);
       assert.equal(await readFile(namespacePreflightLog, 'utf8'), '');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('launches the installed smoke with the canonical cold Connect confirmation intent', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    const source = await readFile(new URL('./test-installed-linux-package.sh', import.meta.url), 'utf8');
+    const launchScript = source.match(
+      /dbus-run-session -- bash -euo pipefail -c '([\s\S]*?)' bash \/usr\/bin\/propr-desktop "\$smoke_root"/u,
+    )?.[1];
+    assert.ok(launchScript, 'installed smoke launch script must remain executable coverage');
+
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'propr-installed-smoke-launch-')));
+    const keyring = join(directory, 'gnome-keyring-daemon');
+    const xvfbRun = join(directory, 'xvfb-run');
+    const argumentLog = join(directory, 'arguments');
+    const executable = join(directory, 'propr-desktop');
+    const smokeRoot = join(directory, 'propr-desktop-smoke-installed');
+    try {
+      await writeFile(keyring, `#!/bin/sh
+[ "$*" = '--unlock --components=secrets' ] || exit 91
+cat >/dev/null
+`);
+      await writeFile(xvfbRun, `#!/bin/sh
+printf '%s\\n' "$@" > "$PROPR_XVFB_ARGUMENT_LOG"
+`);
+      await Promise.all([chmod(keyring, 0o755), chmod(xvfbRun, 0o755)]);
+      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', launchScript, 'bash', executable, smokeRoot], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${directory}:${process.env.PATH ?? ''}`,
+          PROPR_XVFB_ARGUMENT_LOG: argumentLog,
+        },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual((await readFile(argumentLog, 'utf8')).trim().split('\n'), [
+        '--auto-servernum',
+        executable,
+        '--disable-gpu',
+        '--propr-smoke-test',
+        `--user-data-dir=${smokeRoot}`,
+        '--password-store=gnome-libsecret',
+        CONNECT_DEEP_LINK,
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -256,11 +304,15 @@ printf '%s\\n' "$@" > "$PROPR_UNSHARE_ARGUMENT_LOG"
     assert.match(source, /XDG_RUNTIME_DIR="\$xdg_runtime_dir"/);
     assert.match(source, /gnome-keyring-daemon --unlock --components=secrets/);
     assert.match(source, /--password-store=gnome-libsecret/);
+    assert.equal(source.match(/propr:\/\/connect\?api=https%3A%2F%2Fconnect\.propr\.dev/g)?.length, 1);
     assert.match(source, /dbus-run-session -- bash -euo pipefail -c '[\s\S]*gnome-keyring-daemon[\s\S]*xvfb-run/);
     assert.match(source, /"\$xdg_cache_home" "\$xdg_config_home" "\$xdg_data_parent" "\$xdg_data_home"[\s\S]*"\$xdg_runtime_dir"/);
     assert.match(source, /install -d -m 700 -o "\$test_user" -g "\$test_user" "\$synthetic_directory"/);
     assert.match(source, /stat -c '%a:%U:%G' "\$synthetic_directory"/);
     assert.doesNotMatch(source, /install -d[^\n]*"\$smoke_root"[^\n]*"\$test_home\/\.config\/propr-desktop"/);
-    assert.doesNotMatch(source, /--no-sandbox|--password-store=basic|setenforce|sysctl|chmod .*\/proc|\.propr/);
+    assert.doesNotMatch(
+      source.replace(CONNECT_DEEP_LINK, ''),
+      /--no-sandbox|--password-store=basic|setenforce|sysctl|chmod .*\/proc|\.propr/,
+    );
   });
 });

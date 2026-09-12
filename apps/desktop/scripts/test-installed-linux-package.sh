@@ -319,7 +319,8 @@ run_installed_smoke() {
     dbus-run-session -- bash -euo pipefail -c '
       eval "$(printf "%s\n" "propr-installed-package-smoke" | gnome-keyring-daemon --unlock --components=secrets)"
       exec xvfb-run --auto-servernum "$1" --disable-gpu --propr-smoke-test \
-        "--user-data-dir=$2" --password-store=gnome-libsecret
+        "--user-data-dir=$2" --password-store=gnome-libsecret \
+        "propr://connect?api=https%3A%2F%2Fconnect.propr.dev"
     ' bash /usr/bin/propr-desktop "$smoke_root" \
     2>&1 | tee "$launch_log"
   launch_status="${PIPESTATUS[0]}"
