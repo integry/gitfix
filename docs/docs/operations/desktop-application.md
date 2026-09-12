@@ -333,6 +333,35 @@ macOS x64/arm64 artifacts, requires Windows artifacts to be absent from canonica
 install/relaunch/uninstall behavior, protocol delivery, credential persistence/deletion, clean shutdown, and fail-closed
 signing/update configuration. Linux x64 also produces deterministic packaged visual/accessibility evidence.
 
+For Linux preview downloads, use the manually dispatched **Desktop Linux Preview Release** workflow. Its
+`stage-draft` operation must be dispatched from `main` with a full commit already reachable from `main` and exact
+digest-pinned `propr/app:<commit>@sha256:<digest>` and `propr/ui:<commit>@sha256:<digest>` runtime images. Both images
+must publish `linux/amd64` and `linux/arm64`. The workflow builds and revalidates only x64/arm64 DEB and RPM assets,
+then creates a private draft with `linux-preview.json`, `INSTALL.md`, and `SHA256SUMS`. Missing or unaligned runtime
+images fail preflight instead of silently packaging the older checked-in runtime manifest.
+
+Draft staging never publishes a release or creates a tag. Public preview publication requires a separate
+`publish-draft` dispatch, approval through the protected `desktop-linux-preview-publication` environment, its
+`PROPR_DESKTOP_LINUX_PREVIEW_PUBLICATION_AUTHORIZED=1` environment variable, and a non-movable
+`desktop-linux-preview-v*` tag ruleset. The publication job downloads, hashes, and architecture-inspects the staged
+bytes again and publishes them only as a prerelease, never as the latest release. This preview environment contains no
+production signing credential. GitHub Actions release write permission, the two native Linux runner labels, the two
+published runtime image manifests, environment reviewers, and preview tag protection are the remaining external setup;
+Apple credentials and macOS/Windows jobs are not involved.
+
+Preview users verify `SHA256SUMS`, install the matching package with `apt install ./<asset>.deb` or
+`dnf install ./<asset>.rpm`, and upgrade only after manually downloading a newer preview with
+`apt install ./<new-asset>.deb` or `dnf upgrade ./<new-asset>.rpm`. Linux self-update remains disabled and this channel
+uses `apt install --reinstall` or `dnf reinstall` when the newer source preview retains the same package version. It
+does not configure an apt/dnf repository. A later public stable Linux channel should use signed apt and dnf repositories
+after package/repository signing keys, protected signing custody, signed metadata, HTTPS hosting, retention, key rotation,
+and bootstrap instructions exist.
+
+Snap and Flatpak remain follow-up candidates, not blockers. Host Docker socket access, Secret Service/keyring custody,
+browser and `propr://` Connect handoffs, terminal authentication, and StatusNotifier/XEmbed tray behavior all cross
+their confinement/portal boundaries. Do not add classic or broad socket/filesystem access until those behaviors and the
+security model have been validated in real installed packages.
+
 Production publication is allowed only from a new protected `desktop-v<major>.<minor>.<patch>` tag at an immutable commit.
 Approval-protected jobs sign and notarize both macOS architectures, sign the release manifest, aggregate the exact ten
 packages plus `SHA256SUMS` and `desktop-release.json`, and fail closed before publication if any target, hash, signer,
