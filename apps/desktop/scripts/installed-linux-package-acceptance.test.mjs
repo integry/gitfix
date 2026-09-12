@@ -10,7 +10,10 @@ import {
   createInstalledLinuxContainerInvocation,
   DEFAULT_LINUX_PACKAGE_IMAGES,
   INSTALLED_LINUX_ACCEPTANCE_OPT_IN,
+  INSTALLED_LINUX_EVIDENCE_PREFIX,
+  INSTALLED_LINUX_SANDBOX_ISOLATIONS,
   parseInstalledLinuxAcceptanceArguments,
+  parseInstalledLinuxContainerEvidence,
   runInstalledLinuxPackageAcceptance,
 } from './run-installed-linux-package-acceptance.mjs';
 
@@ -22,6 +25,7 @@ const canonicalArguments = directory => [
   '--deb', join(directory, 'ProPR-Desktop-1.2.3-linux-x64.deb'),
   '--previous-rpm', join(directory, 'ProPR-Desktop-1.2.2-linux-x64.rpm'),
   '--rpm', join(directory, 'ProPR-Desktop-1.2.3-linux-x64.rpm'),
+  '--sandbox-isolation', 'docker-cap-sys-admin',
 ];
 
 describe('installed Linux package acceptance authority', () => {
@@ -30,6 +34,8 @@ describe('installed Linux package acceptance authority', () => {
     assert.equal(target.arch, 'x64');
     assert.equal(target.previousVersion, '1.2.2');
     assert.equal(target.version, '1.2.3');
+    assert.equal(target.sandboxIsolation, 'docker-cap-sys-admin');
+    assert.deepEqual(INSTALLED_LINUX_SANDBOX_ISOLATIONS, ['docker-default', 'docker-cap-sys-admin']);
     assert.deepEqual(target.images, DEFAULT_LINUX_PACKAGE_IMAGES);
     assert.equal(target.artifacts.deb.current, '/private/artifacts/ProPR-Desktop-1.2.3-linux-x64.deb');
 
@@ -40,6 +46,7 @@ describe('installed Linux package acceptance authority', () => {
       ['--version', '1.2.3-beta.1'],
       ['--deb', '/private/artifacts/renamed.deb'],
       ['--rpm-image', 'registry.invalid/image@sha256:unsafe'],
+      ['--sandbox-isolation', 'privileged'],
     ]) {
       const args = canonicalArguments('/private/artifacts');
       const index = args.indexOf(replacement[0]);
@@ -47,6 +54,10 @@ describe('installed Linux package acceptance authority', () => {
       else args.push(...replacement);
       assert.throws(() => parseInstalledLinuxAcceptanceArguments(args), /invalid|canonical/);
     }
+
+    assert.throws(() => parseInstalledLinuxAcceptanceArguments(
+      canonicalArguments('/private/artifacts').slice(0, -2),
+    ), /explicit sandbox isolation/);
   });
 
   test('rejects empty files and linked artifact aliases', async () => {
@@ -104,7 +115,16 @@ describe('installed Linux package acceptance authority', () => {
     assert.match(command, /ProPR-Desktop-1\.2\.3-linux-x64\.deb/);
     assert.doesNotMatch(command, /\.rpm/);
     assert.equal(command.match(/readonly/g)?.length, 3);
-    assert.doesNotMatch(command, /--privileged|--no-sandbox|\/var\/run\/docker\.sock/);
+    assert.equal(command.match(/--cap-add=SYS_ADMIN/g)?.length, 1);
+    assert.doesNotMatch(command, /--privileged|--no-sandbox|seccomp=unconfined|\/var\/run\/docker\.sock/);
+
+    const defaultTarget = { ...target, sandboxIsolation: 'docker-default' };
+    const defaultInvocation = createInstalledLinuxContainerInvocation({
+      family: 'deb',
+      target: defaultTarget,
+      isolationId: 'fedcba9876543210',
+    });
+    assert.doesNotMatch(defaultInvocation.args.join('\n'), /--cap-add/);
   });
 
   test('fails before daemon or package operations without explicit opt-in', async () => {
@@ -114,6 +134,41 @@ describe('installed Linux package acceptance authority', () => {
       runCommand: async () => { calls += 1; },
     }), new RegExp(INSTALLED_LINUX_ACCEPTANCE_OPT_IN));
     assert.equal(calls, 0);
+  });
+
+  test('retains real failed-launch progress without accepting it as lifecycle success', () => {
+    const failedLaunch = {
+      schemaVersion: 1,
+      family: 'deb',
+      architecture: 'x64',
+      sandboxIsolation: 'docker-cap-sys-admin',
+      outcome: 'environment-limited',
+      lastCompletedPhase: 'previous-package-payload',
+      failedPhase: 'before-upgrade-launch',
+      artifactMetadataVerified: true,
+      installedPayloadsVerified: 1,
+      launchesAttempted: 1,
+      launchesPassed: 0,
+      upgradeCompleted: false,
+      uninstallCompleted: false,
+      userDataPreserved: false,
+      environmentLimitation: 'Container namespace boundary denied the real launch.',
+    };
+    const parsed = parseInstalledLinuxContainerEvidence(
+      `application output\n${INSTALLED_LINUX_EVIDENCE_PREFIX}${JSON.stringify(failedLaunch)}\n`,
+      { family: 'deb', architecture: 'x64', sandboxIsolation: 'docker-cap-sys-admin' },
+    );
+    assert.deepEqual(parsed, failedLaunch);
+
+    assert.throws(() => parseInstalledLinuxContainerEvidence(
+      `${INSTALLED_LINUX_EVIDENCE_PREFIX}${JSON.stringify({
+        ...failedLaunch,
+        outcome: 'passed',
+        failedPhase: '',
+        environmentLimitation: null,
+      })}\n`,
+      { family: 'deb', architecture: 'x64', sandboxIsolation: 'docker-cap-sys-admin' },
+    ), /incomplete success claim/);
   });
 
   test('removes only the exact labelled acceptance container', async () => {
@@ -142,6 +197,8 @@ describe('installed Linux package acceptance authority', () => {
     assert.match(source, /\[ ! -f \/\.dockerenv \].*\/run\/\.containerenv/);
     assert.match(source, /apt-get install -y "\$package"/);
     assert.match(source, /dnf install -y "\$package"/);
+    assert.match(source, /unshare --mount --pid --net --fork \/bin\/true/);
+    assert.match(source, /outcome='environment-limited'[\s\S]*no application launch, upgrade, or uninstall acceptance was reached/);
     assert.match(source, /assert_mode_owner "\$sandbox" 4755/);
     assert.match(source, /assert_mode_owner "\$native_addon" 755/);
     assert.match(source, /x-scheme-handler\/propr/);
@@ -149,6 +206,8 @@ describe('installed Linux package acceptance authority', () => {
     assert.match(source, /remove_package[\s\S]*package manager still reports propr-desktop installed/);
     assert.match(source, /snapshot_owned_system_entries[\s\S]*database-owned system file behind/);
     assert.match(source, /package removal changed synthetic user configuration/);
+    assert.match(source, /launches_attempted=\$\(\(launches_attempted \+ 1\)\)[\s\S]*launches_passed=\$\(\(launches_passed \+ 1\)\)/);
+    assert.match(source, /PROPR_INSTALLED_LINUX_EVIDENCE=.*"launchesAttempted":%s,"launchesPassed":%s/);
     assert.doesNotMatch(source, /--no-sandbox|setenforce|sysctl|chmod .*\/proc|keyring|\.propr/);
   });
 });

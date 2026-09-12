@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-if [ "$#" -ne 9 ]; then
+if [ "$#" -ne 10 ]; then
   echo 'Installed Linux package acceptance received invalid arguments' >&2
   exit 64
 fi
@@ -15,6 +15,7 @@ previous_artifact="$6"
 artifact="$7"
 desktop_icon_sha256="$8"
 tray_icon_sha256="$9"
+sandbox_isolation="${10}"
 package_name='propr-desktop'
 test_user='propr-acceptance'
 test_home="/home/$test_user"
@@ -30,8 +31,21 @@ tray_icon="$application_root/resources/propr-tray.png"
 native_addon="$application_root/resources/app.asar.unpacked/.vite/native/prebuilds/linux-$architecture/directory-operations.node"
 owned_system_entries='/tmp/propr-package-owned-system-entries'
 owned_system_directories='/tmp/propr-package-owned-system-directories'
+current_phase='argument-validation'
+last_completed_phase='none'
+failed_phase=''
+outcome='failed'
+environment_limitation=''
+artifact_metadata_verified=false
+installed_payloads_verified=0
+launches_attempted=0
+launches_passed=0
+upgrade_completed=false
+uninstall_completed=false
+user_data_preserved=false
 
 fail() {
+  if [ -z "$failed_phase" ]; then failed_phase="$current_phase"; fi
   echo "Installed Linux package acceptance failed: $1" >&2
   exit 1
 }
@@ -45,6 +59,10 @@ fi
 case "$family:$architecture:$package_architecture" in
   deb:x64:amd64|deb:arm64:arm64|rpm:x64:x86_64|rpm:arm64:aarch64) ;;
   *) fail 'package family or architecture is invalid' ;;
+esac
+case "$sandbox_isolation" in
+  docker-default|docker-cap-sys-admin) ;;
+  *) fail 'sandbox isolation mode is invalid' ;;
 esac
 case "$(uname -m):$architecture" in
   x86_64:x64|aarch64:arm64|arm64:arm64) ;;
@@ -84,13 +102,42 @@ remove_package() {
   fi
 }
 
+emit_lifecycle_evidence() {
+  local limitation_json='null'
+  if [ -n "$environment_limitation" ]; then
+    limitation_json="\"$environment_limitation\""
+  fi
+  printf 'PROPR_INSTALLED_LINUX_EVIDENCE={"schemaVersion":1,"family":"%s","architecture":"%s","sandboxIsolation":"%s","outcome":"%s","lastCompletedPhase":"%s","failedPhase":"%s","artifactMetadataVerified":%s,"installedPayloadsVerified":%s,"launchesAttempted":%s,"launchesPassed":%s,"upgradeCompleted":%s,"uninstallCompleted":%s,"userDataPreserved":%s,"environmentLimitation":%s}\n' \
+    "$family" "$architecture" "$sandbox_isolation" "$outcome" "$last_completed_phase" "$failed_phase" \
+    "$artifact_metadata_verified" "$installed_payloads_verified" "$launches_attempted" "$launches_passed" \
+    "$upgrade_completed" "$uninstall_completed" "$user_data_preserved" "$limitation_json"
+}
+
 cleanup() {
+  local exit_status="$?"
+  trap - EXIT INT TERM
+  set +e
   remove_package || true
   pkill -KILL -u "$test_user" 2>/dev/null || true
   userdel --remove "$test_user" >/dev/null 2>&1 || true
+  if [ "$exit_status" -eq 0 ]; then
+    outcome='passed'
+    failed_phase=''
+  elif [ -z "$failed_phase" ]; then
+    failed_phase="$current_phase"
+  fi
+  emit_lifecycle_evidence
+  if [ "$exit_status" -eq 0 ]; then
+    printf '{"schemaVersion":1,"family":"%s","architecture":"%s","installProof":"package-manager-database","launches":2,"upgrade":true,"userDataPreserved":true,"ownedSystemEntriesRemoved":true}\n' \
+      "$family" "$architecture"
+  fi
+  exit "$exit_status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'failed_phase="${failed_phase:-interrupted}"; exit 130' INT
+trap 'failed_phase="${failed_phase:-interrupted}"; exit 143' TERM
 
+current_phase='prerequisites'
 if [ "$family" = deb ]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
@@ -99,6 +146,25 @@ else
   dnf install -y binutils ca-certificates dbus-x11 procps-ng util-linux xorg-x11-server-Xvfb xorg-x11-xauth
 fi
 package_present && fail 'container image already contains propr-desktop'
+last_completed_phase='prerequisites'
+
+current_phase='sandbox-preflight'
+namespace_preflight_log='/tmp/propr-package-namespace-preflight.log'
+set +e
+unshare --mount --pid --net --fork /bin/true >"$namespace_preflight_log" 2>&1
+namespace_preflight_status="$?"
+set -e
+if [ "$namespace_preflight_status" -ne 0 ]; then
+  outcome='environment-limited'
+  if [ "$sandbox_isolation" = docker-default ]; then
+    environment_limitation='Container runtime denied the mount, PID, and network namespaces required by the Electron sandbox under Docker default capabilities; no application launch, upgrade, or uninstall acceptance was reached. Use the explicit docker-cap-sys-admin mode on an authorized host or a disposable native VM.'
+  else
+    environment_limitation='Container runtime or host policy denied the mount, PID, and network namespaces required by the Electron sandbox even with the explicit SYS_ADMIN capability; no application launch, upgrade, or uninstall acceptance was reached. Use a disposable native VM.'
+  fi
+  head -c 4096 "$namespace_preflight_log" >&2 || true
+  fail 'Electron sandbox namespace preflight is unavailable in this environment'
+fi
+last_completed_phase='sandbox-preflight'
 
 metadata_field() {
   local package="$1"
@@ -230,6 +296,10 @@ assert_installed_payload() {
 run_installed_smoke() {
   local phase="$1"
   local evidence="$smoke_root/application.smoke-evidence.jsonl"
+  local launch_log="/tmp/propr-package-$phase-launch.log"
+  local launch_status
+  launches_attempted=$((launches_attempted + 1))
+  set +e
   runuser -u "$test_user" -- env -i \
     HOME="$test_home" USER="$test_user" LOGNAME="$test_user" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     PATH=/usr/local/bin:/usr/bin:/bin XDG_CACHE_HOME="$test_home/.cache" \
@@ -237,7 +307,17 @@ run_installed_smoke() {
     PROPR_DESKTOP_SMOKE_TEST=1 \
     timeout --signal=TERM --kill-after=10s 120s \
     xvfb-run --auto-servernum dbus-run-session -- \
-    /usr/bin/propr-desktop --disable-gpu --propr-smoke-test "--user-data-dir=$smoke_root"
+    /usr/bin/propr-desktop --disable-gpu --propr-smoke-test "--user-data-dir=$smoke_root" \
+    2>&1 | tee "$launch_log"
+  launch_status="${PIPESTATUS[0]}"
+  set -e
+  if [ "$launch_status" -ne 0 ]; then
+    if grep -Eq 'Failed to move to new namespace|zygote_host_impl_linux\.cc[^:]*:[0-9]+.*Zygote process exited prematurely' "$launch_log"; then
+      outcome='environment-limited'
+      environment_limitation='Electron reached a container namespace or seccomp boundary during a real installed-package launch; this is an execution-environment limitation, not package acceptance. Upgrade and uninstall acceptance were not reached.'
+    fi
+    fail "installed application launch exited $launch_status"
+  fi
   [ -f "$evidence" ] && [ ! -L "$evidence" ] || fail 'installed application did not emit smoke evidence'
   for event in desktop.smoke.authorized desktop.app.ready desktop.renderer.mvp_flows.ready \
     desktop.renderer.ready desktop.app.shutdown; do
@@ -247,17 +327,27 @@ run_installed_smoke() {
     fail 'installed application reported a smoke failure'
   fi
   mv "$evidence" "$smoke_root/application.smoke-evidence.$phase.jsonl"
+  launches_passed=$((launches_passed + 1))
 }
 
+current_phase='artifact-metadata'
 verify_artifact_metadata "$previous_artifact" "$previous_version"
 verify_artifact_metadata "$artifact" "$version"
+artifact_metadata_verified=true
+last_completed_phase='artifact-metadata'
 useradd --create-home --home-dir "$test_home" --shell /bin/bash "$test_user"
 install -d -m 700 -o "$test_user" -g "$test_user" "$smoke_root" "$test_home/.config/propr-desktop"
 
+current_phase='previous-package-payload'
 install_artifact "$previous_artifact"
 assert_installed_payload "$previous_version" "$previous_artifact"
+installed_payloads_verified=1
+last_completed_phase='previous-package-payload'
+current_phase='before-upgrade-launch'
 run_installed_smoke before-upgrade
+last_completed_phase='before-upgrade-launch'
 
+current_phase='user-configuration'
 printf '%s\n' '{"schemaVersion":1,"synthetic":"preserve-across-package-upgrade-and-removal"}' > "$user_configuration"
 chown "$test_user:$test_user" "$user_configuration"
 chmod 600 "$user_configuration"
@@ -269,15 +359,23 @@ runuser -u "$test_user" -- env -i HOME="$test_home" PATH=/usr/bin:/bin \
   XDG_CONFIG_HOME="$test_home/.config" XDG_DATA_HOME="$test_home/.local/share" \
   xdg-mime query default x-scheme-handler/propr)" = 'propr-desktop.desktop' ] \
   || fail 'installed desktop entry did not register as the synthetic user scheme handler'
+last_completed_phase='user-configuration'
 
+current_phase='upgrade-and-payload'
 install_artifact "$artifact"
 assert_installed_payload "$version" "$artifact"
+installed_payloads_verified=2
 [ "$(sha256sum "$user_configuration" | cut -d ' ' -f 1)" = "$configuration_sha256" ] \
   || fail 'package upgrade changed synthetic user configuration'
 [ "$(stat -c '%a:%U:%G' "$user_configuration")" = "600:$test_user:$test_user" ] \
   || fail 'package upgrade changed synthetic user configuration authority'
+upgrade_completed=true
+last_completed_phase='upgrade-and-payload'
+current_phase='after-upgrade-launch'
 run_installed_smoke after-upgrade
+last_completed_phase='after-upgrade-launch'
 
+current_phase='uninstall'
 snapshot_owned_system_entries
 remove_package
 package_present && fail 'package manager still reports propr-desktop installed after removal'
@@ -296,6 +394,7 @@ done
 [ -f "$smoke_root/application.smoke-evidence.before-upgrade.jsonl" ] \
   && [ -f "$smoke_root/application.smoke-evidence.after-upgrade.jsonl" ] \
   || fail 'package removal deleted synthetic application user data'
-
-printf '{"schemaVersion":1,"family":"%s","architecture":"%s","installProof":"package-manager-database","launches":2,"upgrade":true,"userDataPreserved":true,"ownedSystemEntriesRemoved":true}\n' \
-  "$family" "$architecture"
+uninstall_completed=true
+user_data_preserved=true
+last_completed_phase='uninstall'
+current_phase='complete'

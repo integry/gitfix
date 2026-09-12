@@ -15,6 +15,11 @@ export const DEFAULT_LINUX_PACKAGE_IMAGES = Object.freeze({
   deb: 'debian:12-slim',
   rpm: 'rockylinux:9',
 });
+export const INSTALLED_LINUX_SANDBOX_ISOLATIONS = Object.freeze([
+  'docker-default',
+  'docker-cap-sys-admin',
+]);
+export const INSTALLED_LINUX_EVIDENCE_PREFIX = 'PROPR_INSTALLED_LINUX_EVIDENCE=';
 
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const IMAGE = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)(?::[A-Za-z0-9][A-Za-z0-9._-]{0,127})?$/;
@@ -43,7 +48,7 @@ export const parseInstalledLinuxAcceptanceArguments = args => {
   }
   const allowed = new Set([
     '--arch', '--previous-version', '--version', '--previous-deb', '--deb',
-    '--previous-rpm', '--rpm', '--deb-image', '--rpm-image',
+    '--previous-rpm', '--rpm', '--deb-image', '--rpm-image', '--sandbox-isolation',
   ]);
   if ([...values.keys()].some(name => !allowed.has(name))) {
     throw new Error('Installed Linux package acceptance argument is unknown');
@@ -62,6 +67,10 @@ export const parseInstalledLinuxAcceptanceArguments = args => {
   if (!IMAGE.test(images.deb) || !IMAGE.test(images.rpm)) {
     throw new Error('Installed Linux package acceptance image reference is invalid');
   }
+  const sandboxIsolation = values.get('--sandbox-isolation');
+  if (!INSTALLED_LINUX_SANDBOX_ISOLATIONS.includes(sandboxIsolation)) {
+    throw new Error('Installed Linux package acceptance requires an explicit sandbox isolation mode; value is missing or invalid');
+  }
   const artifacts = {};
   for (const family of ['deb', 'rpm']) {
     const extension = family;
@@ -74,10 +83,17 @@ export const parseInstalledLinuxAcceptanceArguments = args => {
     }
     artifacts[family] = { previous: resolve(previous), current: resolve(current) };
   }
-  if (values.size < 7 || values.size > 9) {
+  if (values.size < 8 || values.size > 10) {
     throw new Error('Installed Linux package acceptance arguments are incomplete');
   }
-  return Object.freeze({ arch, previousVersion, version, images: Object.freeze(images), artifacts: Object.freeze(artifacts) });
+  return Object.freeze({
+    arch,
+    previousVersion,
+    version,
+    sandboxIsolation,
+    images: Object.freeze(images),
+    artifacts: Object.freeze(artifacts),
+  });
 };
 
 export const assertInstalledLinuxAcceptanceArtifact = async path => {
@@ -100,8 +116,52 @@ const packageArchitecture = (family, arch) => family === 'deb'
 
 const mount = (source, target) => `type=bind,src=${source},dst=${target},readonly`;
 
+export const parseInstalledLinuxContainerEvidence = (stdout, expected) => {
+  const line = String(stdout).split(/\r?\n/u)
+    .filter(candidate => candidate.startsWith(INSTALLED_LINUX_EVIDENCE_PREFIX)).at(-1);
+  if (!line) throw new Error('Installed Linux package acceptance container emitted no lifecycle evidence');
+  let evidence;
+  try { evidence = JSON.parse(line.slice(INSTALLED_LINUX_EVIDENCE_PREFIX.length)); }
+  catch { throw new Error('Installed Linux package acceptance container emitted malformed lifecycle evidence'); }
+  const keys = [
+    'architecture', 'artifactMetadataVerified', 'environmentLimitation', 'failedPhase', 'family',
+    'installedPayloadsVerified', 'lastCompletedPhase', 'launchesAttempted', 'launchesPassed', 'outcome',
+    'sandboxIsolation', 'schemaVersion', 'uninstallCompleted', 'upgradeCompleted', 'userDataPreserved',
+  ];
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)
+    || JSON.stringify(Object.keys(evidence).sort()) !== JSON.stringify(keys)
+    || evidence.schemaVersion !== 1 || evidence.family !== expected.family
+    || evidence.architecture !== expected.architecture || evidence.sandboxIsolation !== expected.sandboxIsolation
+    || !['passed', 'failed', 'environment-limited'].includes(evidence.outcome)
+    || typeof evidence.lastCompletedPhase !== 'string' || typeof evidence.failedPhase !== 'string'
+    || !Number.isInteger(evidence.installedPayloadsVerified) || evidence.installedPayloadsVerified < 0
+    || evidence.installedPayloadsVerified > 2 || !Number.isInteger(evidence.launchesAttempted)
+    || evidence.launchesAttempted < 0 || evidence.launchesAttempted > 2
+    || !Number.isInteger(evidence.launchesPassed) || evidence.launchesPassed < 0
+    || evidence.launchesPassed > evidence.launchesAttempted
+    || !['artifactMetadataVerified', 'upgradeCompleted', 'uninstallCompleted', 'userDataPreserved']
+      .every(name => typeof evidence[name] === 'boolean')
+    || (evidence.environmentLimitation !== null
+      && (typeof evidence.environmentLimitation !== 'string' || evidence.environmentLimitation.length > 1024))) {
+    throw new Error('Installed Linux package acceptance container emitted invalid lifecycle evidence');
+  }
+  if (evidence.outcome === 'passed') {
+    if (evidence.failedPhase !== '' || evidence.environmentLimitation !== null
+      || !evidence.artifactMetadataVerified || evidence.installedPayloadsVerified !== 2
+      || evidence.launchesAttempted !== 2 || evidence.launchesPassed !== 2
+      || !evidence.upgradeCompleted || !evidence.uninstallCompleted || !evidence.userDataPreserved) {
+      throw new Error('Installed Linux package acceptance container emitted an incomplete success claim');
+    }
+  } else if (!evidence.failedPhase
+    || (evidence.outcome === 'environment-limited' && !evidence.environmentLimitation)) {
+    throw new Error('Installed Linux package acceptance container emitted an incomplete failure claim');
+  }
+  return Object.freeze(evidence);
+};
+
 export const createInstalledLinuxContainerInvocation = ({ family, target, isolationId }) => {
-  if (!['deb', 'rpm'].includes(family) || !/^[a-f0-9]{16}$/.test(isolationId ?? '')) {
+  if (!['deb', 'rpm'].includes(family) || !/^[a-f0-9]{16}$/.test(isolationId ?? '')
+    || !INSTALLED_LINUX_SANDBOX_ISOLATIONS.includes(target.sandboxIsolation)) {
     throw new Error('Installed Linux package acceptance container identity is invalid');
   }
   const name = `propr-package-${family}-${isolationId}`;
@@ -113,6 +173,7 @@ export const createInstalledLinuxContainerInvocation = ({ family, target, isolat
     args: Object.freeze([
       'run', '--rm', '--init', `--platform=${dockerPlatform(target.arch)}`,
       '--name', name, '--label', `dev.propr.acceptance=${isolationId}`,
+      ...(target.sandboxIsolation === 'docker-cap-sys-admin' ? ['--cap-add=SYS_ADMIN'] : []),
       '--mount', mount(scriptPath, '/propr-acceptance/test-installed-linux-package.sh'),
       '--mount', mount(target.artifacts[family].previous, beforeTarget),
       '--mount', mount(target.artifacts[family].current, afterTarget),
@@ -120,7 +181,7 @@ export const createInstalledLinuxContainerInvocation = ({ family, target, isolat
       '/bin/bash', '/propr-acceptance/test-installed-linux-package.sh',
       family, target.arch, packageArchitecture(family, target.arch),
       target.previousVersion, target.version, beforeTarget, afterTarget,
-      DESKTOP_ICON_SHA256, TRAY_ICON_SHA256,
+      DESKTOP_ICON_SHA256, TRAY_ICON_SHA256, target.sandboxIsolation,
     ]),
   });
 };
@@ -216,13 +277,22 @@ export const runInstalledLinuxPackageAcceptance = async (target, {
     });
     let primaryError;
     try {
-      await runCommand(docker, invocation.args);
-      evidence.push({
+      const result = await runCommand(docker, invocation.args, { allowFailure: true });
+      const containerEvidence = parseInstalledLinuxContainerEvidence(result.stdout, {
         family,
-        image: target.images[family],
         architecture: target.arch,
-        lifecycle: 'package-manager-install/launch/upgrade/relaunch/remove',
+        sandboxIsolation: target.sandboxIsolation,
       });
+      evidence.push(Object.freeze({
+        ...containerEvidence,
+        image: target.images[family],
+        lifecycle: 'package-manager-install/launch/upgrade/relaunch/remove',
+      }));
+      if (result.code !== 0 || containerEvidence.outcome !== 'passed') {
+        const limitation = containerEvidence.environmentLimitation
+          ? ` Environment limitation: ${containerEvidence.environmentLimitation}` : '';
+        throw new Error(`Installed Linux ${family.toUpperCase()} acceptance failed at ${containerEvidence.failedPhase}.${limitation}`);
+      }
     } catch (error) {
       primaryError = error;
     }
@@ -238,6 +308,7 @@ export const runInstalledLinuxPackageAcceptance = async (target, {
     target: `linux-${target.arch}`,
     previousVersion: target.previousVersion,
     version: target.version,
+    sandboxIsolation: target.sandboxIsolation,
     evidence,
     limitations: target.arch === 'arm64'
       ? 'Native ARM64 host evidence; this does not infer coverage from x64 emulation.'
