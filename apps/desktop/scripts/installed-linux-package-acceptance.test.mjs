@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -49,7 +50,7 @@ describe('installed Linux package acceptance authority', () => {
   });
 
   test('rejects empty files and linked artifact aliases', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'propr-installed-package-artifact-'));
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'propr-installed-package-artifact-')));
     const artifact = join(directory, 'artifact.deb');
     const linked = join(directory, 'linked.deb');
     try {
@@ -62,6 +63,25 @@ describe('installed Linux package acceptance authority', () => {
       await assert.rejects(assertInstalledLinuxAcceptanceArtifact(artifact), /non-empty/);
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('accepts DEB and RPM GTK dependency metadata with POSIX ERE', { skip: process.platform === 'win32' }, async () => {
+    const source = await readFile(new URL('./test-installed-linux-package.sh', import.meta.url), 'utf8');
+    const gtkExpression = source.match(
+      /grep -Eq '([^']+)' \\\n\s+\|\| fail 'package dependency metadata is missing GTK'/,
+    )?.[1];
+    assert.ok(gtkExpression, 'GTK dependency expression must remain executable coverage');
+
+    for (const [family, dependencies] of [
+      ['DEB', 'libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils'],
+      ['RPM', 'gtk3\nlibnotify\nnss\nlibXScrnSaver\nxdg-utils'],
+    ]) {
+      const result = spawnSync('grep', ['-Eq', gtkExpression], {
+        encoding: 'utf8',
+        input: `${dependencies}\n`,
+      });
+      assert.equal(result.status, 0, `${family} GTK dependency metadata was rejected: ${result.stderr}`);
     }
   });
 

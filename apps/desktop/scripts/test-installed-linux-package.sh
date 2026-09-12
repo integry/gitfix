@@ -129,7 +129,7 @@ verify_artifact_metadata() {
   local dependencies
   dependencies="$(metadata_field "$package" Depends)"
   [ -n "$dependencies" ] || fail 'package dependency metadata is empty'
-  printf '%s\n' "$dependencies" | grep -Eq '(^|[ ,])(?:gtk3|libgtk-3-[0-9a-z]+)([ ,]|$|[[:space:]])' \
+  printf '%s\n' "$dependencies" | grep -Eq '(^|[ ,])(gtk3|libgtk-3-[0-9a-z]+)([ ,]|$|[[:space:]])' \
     || fail 'package dependency metadata is missing GTK'
   printf '%s\n' "$dependencies" | grep -Eq '(^|[ ,])xdg-utils([ ,]|$|[[:space:]])' \
     || fail 'package dependency metadata is missing xdg-utils'
