@@ -335,6 +335,13 @@ signing/update configuration. Linux x64 also produces deterministic packaged vis
 
 Linux previews use two manual workflows in this order:
 
+The native runtime smoke starts the actual API, daemon, BullMQ worker, and UI from the candidate images. Its disposable
+database contains one explicitly configured disabled direct agent, the supported no-work state; unlike an absent agent
+configuration, that state does not request the default agent image. The smoke therefore proves the app/UI contracts and
+real daemon/worker startup and liveness without mounting the host Docker socket or building an agent image. It does not
+claim to validate agent execution. Normal installations with no saved agent configuration still use the default-agent
+fallback, and any enabled direct agent still requires its execution image as before.
+
 1. From the `main` branch version of **Preview Runtime Images**, enter a full lowercase commit SHA that is already
    reachable from `main` and leave `operation` set to `prepare`. This default, validation-only operation builds only
    `propr/app` and `propr/ui` on native `linux/amd64` and `linux/arm64` runners, exercises the app desktop-discovery

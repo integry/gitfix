@@ -85,6 +85,14 @@ docker run -d --name "$REDIS_CONTAINER" --label "$LABEL=$STACK" --network "$NETW
 docker run --rm --network "$NETWORK" --env-file "$SMOKE_ROOT/runtime.env" \
   -v "$SMOKE_ROOT/data:/usr/src/app/data" "$APP_IMAGE" \
   sh -c "npx knex migrate:latest --knexfile /usr/src/app/dist/knexfile.js"
+# An absent agents row means "create the default agent", which legitimately
+# requires Docker access. Persist one explicitly disabled direct agent instead:
+# this is the supported no-work configuration and lets the real worker prove it
+# can initialize BullMQ and remain live without a Docker socket or agent image.
+docker run --rm --network "$NETWORK" --env-file "$SMOKE_ROOT/runtime.env" \
+  -v "$SMOKE_ROOT/data:/usr/src/app/data" "$APP_IMAGE" \
+  node --input-type=module -e \
+  "import { closeConnection, saveAgents } from '@propr/core'; try { await saveAgents([{ id: '00000000-0000-4000-8000-000000000001', type: 'claude', alias: 'preview-runtime-no-work', enabled: false, dockerImage: 'propr/agent:preview-runtime-no-work', configPath: '/tmp/preview-runtime-no-work', supportedModels: ['claude-sonnet-4-6'] }]); } finally { await closeConnection(); }"
 docker run -d --name "$API_CONTAINER" --label "$LABEL=$STACK" --network "$NETWORK" \
   -p 127.0.0.1::4000 --env-file "$SMOKE_ROOT/runtime.env" \
   -v "$SMOKE_ROOT/data:/usr/src/app/data" -v "$SMOKE_ROOT/logs:/usr/src/app/logs" \

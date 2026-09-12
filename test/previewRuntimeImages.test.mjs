@@ -294,6 +294,19 @@ describe('preview runtime artifact and immutable publication scope', () => {
     assert.match(smoke, /config\.js/);
   });
 
+  test('boots the real no-work worker without Docker socket or agent-image access', () => {
+    const migration = smoke.indexOf('npx knex migrate:latest');
+    const noWorkBootstrap = smoke.indexOf("saveAgents([{ id: '00000000-0000-4000-8000-000000000001'");
+    const workerStart = smoke.indexOf('node dist/src/worker.js');
+    const workerLiveness = smoke.indexOf('"$DAEMON_CONTAINER" "$WORKER_CONTAINER"');
+
+    assert.ok(migration !== -1 && migration < noWorkBootstrap, 'schema migration must precede fixture configuration');
+    assert.ok(noWorkBootstrap < workerStart, 'the explicit no-work configuration must precede worker startup');
+    assert.match(smoke, /alias: 'preview-runtime-no-work', enabled: false/);
+    assert.doesNotMatch(smoke, /\/var\/run\/docker\.sock|Dockerfile\.agent|propr\/agent:(?!preview-runtime-no-work)/);
+    assert.ok(workerStart < workerLiveness, 'the real worker process must be covered by the final liveness gate');
+  });
+
   test('shell entry points are syntactically executable', () => {
     for (const path of ['scripts/build-images.sh', 'scripts/smoke-test-preview-runtime-images.sh']) {
       const result = spawnSync('bash', ['-n', path], { encoding: 'utf8' });
