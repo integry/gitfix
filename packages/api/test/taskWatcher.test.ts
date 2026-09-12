@@ -95,6 +95,45 @@ describe('TaskWatcherManager', () => {
     await manager.closeAll();
   });
 
+  test('switches a file-creation watcher to Redis when output arrives after dispatch', async () => {
+    // --no-session-persistence tasks never write the conversation file, and a
+    // subscription can land after onSessionId but before the first Redis
+    // flush - hasRedisOutput is false at dispatch time. The fallback poll must
+    // move the subscriber onto the Redis watcher once output appears.
+    mock.method(fs, 'pathExists', async () => false);
+    mock.method(fs, 'ensureDir', async () => undefined);
+    let redisOutput: string | null = null;
+    const manager = new TaskWatcherManager(createIo());
+    (manager as unknown as { redisFallbackPollMs: number }).redisFallbackPollMs = 20;
+    manager.setDeps({
+      redisClient: createRedis(async key => {
+        if (key.startsWith('worker:state:')) return taskState();
+        if (key.startsWith('agent:output:')) return redisOutput;
+        return null;
+      }),
+      db: {} as Knex,
+    });
+
+    await manager.startTaskWatcher('task-with-late-redis-output');
+
+    const watchers = (manager as unknown as {
+      taskWatchers: Map<string, { watcher: unknown; watchingForCreation: boolean; subscriberCount: number }>;
+    }).taskWatchers;
+    assert.strictEqual(watchers.get('task-with-late-redis-output')?.watchingForCreation, true);
+
+    redisOutput = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-late' });
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && watchers.get('task-with-late-redis-output')?.watchingForCreation !== false) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+
+    const switched = watchers.get('task-with-late-redis-output');
+    assert.strictEqual(switched?.watchingForCreation, false);
+    assert.strictEqual(switched?.watcher, null);
+    assert.strictEqual(switched?.subscriberCount, 1);
+    await manager.closeAll();
+  });
+
   test('falls back to Redis when the Claude log directory is read-only', async () => {
     mock.method(fs, 'pathExists', async () => false);
     const ensureDir = mock.method(fs, 'ensureDir', async () => {

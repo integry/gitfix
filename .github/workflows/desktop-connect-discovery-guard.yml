@@ -45,14 +45,8 @@ jobs:
             runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - target: win32-x64
-            runner: windows-2025
-            platform: win32
-            arch: x64
-          - target: win32-arm64
-            runner: windows-11-arm
-            platform: win32
-            arch: arm64
+          # Windows package validation is paused alongside Windows delivery.
+          # Keep platform-specific steps below for when these targets return.
 
     steps:
       - name: Checkout repository

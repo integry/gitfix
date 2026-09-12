@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { Server as SocketIOServer } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { Knex } from 'knex';
@@ -7,7 +8,7 @@ import os from 'os';
 import fs from 'fs-extra';
 import { TASK_LIVE_UPDATE, type TaskLiveUpdatePayload } from '@propr/shared';
 import { parseConversationFile } from './conversationParser.js';
-import { parseRedisOutput } from './redisOutputParser.js';
+import { parseAgentStreamOutput } from './agentStreamProjection.js';
 import { withStableLiveEventIds } from './liveEventIds.js';
 import { resolveConfigPath } from '@propr/core';
 import { findAgentConfigForTask, findExecutionStartTimestampForTask } from './taskWatcherLookup.js';
@@ -47,6 +48,8 @@ export class TaskWatcherManager {
   private io: SocketIOServer;
   private taskWatchers: Map<string, TaskWatcherInfo> = new Map();
   private deps: TaskWatcherDeps | null = null;
+  /** Poll cadence while a file-creation watcher waits for late Redis output. */
+  private redisFallbackPollMs = 2000;
 
   constructor(io: SocketIOServer) {
     this.io = io;
@@ -174,7 +177,8 @@ export class TaskWatcherManager {
         lastSize: 0,
         subscriberCount: 1,
         lastSentEventCount: 0,
-        watchingForCreation: true
+        watchingForCreation: true,
+        redisPollingInterval: this.startRedisFallbackPolling(taskId)
       });
 
       console.log(`[TaskWatcher] Started watching directory for Claude log creation for task ${taskId}`);
@@ -228,9 +232,12 @@ export class TaskWatcherManager {
     const existing = this.taskWatchers.get(taskId);
     if (!existing) return;
 
-    // Close the directory watcher
+    // Close the directory watcher and the Redis fallback poll that ran with it
     if (existing.watcher) {
       await existing.watcher.close();
+    }
+    if (existing.redisPollingInterval) {
+      clearInterval(existing.redisPollingInterval);
     }
 
     // Create a new watcher for the file itself
@@ -371,7 +378,7 @@ export class TaskWatcherManager {
   }
 
   /**
-   * Check if task has Redis output (indicates Codex/non-Claude agent)
+   * Check if task has Redis output (every Docker-backed agent streams there)
    */
   private async hasRedisOutput(taskId: string): Promise<boolean> {
     if (!this.deps) return false;
@@ -384,9 +391,45 @@ export class TaskWatcherManager {
   }
 
   /**
+   * Watch for Redis output appearing after a file-creation watcher started.
+   *
+   * `claude --no-session-persistence` tasks never write the conversation file
+   * that watcher waits for, and a subscription can arrive after onSessionId
+   * fired but before the first interval-based Redis flush - so hasRedisOutput
+   * was false at dispatch time. Keep re-checking and switch to the Redis
+   * watcher once output shows up, instead of leaving the subscriber on a
+   * directory watch that will never fire.
+   */
+  private startRedisFallbackPolling(taskId: string): ReturnType<typeof setInterval> {
+    let switching = false;
+    const interval = setInterval(async () => {
+      if (switching) return;
+      const watcherInfo = this.taskWatchers.get(taskId);
+      if (!watcherInfo || !watcherInfo.watchingForCreation) {
+        clearInterval(interval);
+        return;
+      }
+      if (!(await this.hasRedisOutput(taskId))) return;
+      switching = true;
+      clearInterval(interval);
+      console.log(`[TaskWatcher] Redis output appeared for task ${taskId}, switching from file-creation watcher`);
+      try {
+        if (watcherInfo.watcher) {
+          await watcherInfo.watcher.close();
+        }
+        this.taskWatchers.delete(taskId);
+        await this.startRedisWatcher(taskId, watcherInfo.subscriberCount);
+      } catch (error) {
+        console.error(`[TaskWatcher] Failed to switch task ${taskId} to Redis watcher:`, error);
+      }
+    }, this.redisFallbackPollMs);
+    return interval;
+  }
+
+  /**
    * Start Redis-based watcher for agents that stream output to Redis
    */
-  private async startRedisWatcher(taskId: string): Promise<void> {
+  private async startRedisWatcher(taskId: string, subscriberCount = 1): Promise<void> {
     console.log(`[TaskWatcher] Starting Redis watcher for task ${taskId}`);
 
     // Poll Redis every 2 seconds for output changes
@@ -399,7 +442,7 @@ export class TaskWatcherManager {
       sessionId: taskId, // Use taskId as identifier
       taskId,
       lastSize: 0,
-      subscriberCount: 1,
+      subscriberCount,
       lastSentEventCount: 0,
       watchingForCreation: false,
       redisPollingInterval: interval,
@@ -429,10 +472,10 @@ export class TaskWatcherManager {
       }
       watcherInfo.lastRedisLength = output.length;
 
-      // Parse the output using the Redis output parser
-      const lines = output.trim().split('\n').filter((line: string) => line.trim());
+      // Parse the output with the provider-aware projection (Claude's
+      // stream-json needs its own parser, every other agent uses the Redis one).
       const executionStartTimestamp = await this.findExecutionStartTimestampForTask(taskId);
-      const result = parseRedisOutput(lines, { executionStartTimestamp });
+      const result = parseAgentStreamOutput(output, { executionStartTimestamp });
 
       // Determine which events to send
       const stableEvents = withStableLiveEventIds({
