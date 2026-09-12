@@ -6,6 +6,7 @@ import type { AgentTankUsage, AgentValidationRow } from "./agentValidation.js";
 import {
   configurationErrorCheck,
   createCheckCommand,
+  isLiveRendererFallbackError,
   printAgentTankUsage,
   type AgentValidationFlowDependencies,
 } from "./checkCommands.js";
@@ -19,6 +20,30 @@ test("propr check presents VAPID validation as a clear failure without key mater
     detail,
     group: "Configuration",
   });
+});
+
+test("live renderer fallback recognizes the existing terminal error messages", () => {
+  const matching = [
+    new Error("Raw mode is unavailable"),
+    new Error("setRawMode is not a function"),
+    new Error("stdin cannot access this TTY"),
+    new Error("input is not a tty"),
+    new Error("Ink renderer failed"),
+    "STDIN is unavailable on the current TTY",
+  ];
+
+  for (const error of matching) assert.equal(isLiveRendererFallbackError(error), true, String(error));
+});
+
+test("live renderer fallback rejects unrelated and cross-line stdin/tty messages", () => {
+  const nonMatching = [
+    new Error("renderer failed unexpectedly"),
+    new Error("tty was checked before stdin"),
+    new Error("stdin is unavailable\ntty is available"),
+    new Error(`stdin${" unavailable".repeat(10_000)}`),
+  ];
+
+  for (const error of nonMatching) assert.equal(isLiveRendererFallbackError(error), false, String(error));
 });
 
 function usageFixture(): unknown {

@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- voice session state and lifecycle remain centralized in this controller */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   VoiceBriefingItem,
   VoiceBriefingResponse,
@@ -13,11 +13,15 @@ import {
   refinePlan,
   stopTaskExecution,
 } from '../api/proprApi';
+import { useDesktopVoicePreference, subscribeDesktopVoicePreference } from './useDesktopVoicePreference';
+import { subscribeDesktopConnectionScope } from '../api/apiClient';
+import { isDesktopRuntime } from '../config/runtimeMode';
 import { getVoiceBriefing } from '../api/voiceApi';
 import {
   BrowserSpeechError,
   getBrowserSpeechCapabilities,
   listenOnce,
+  normalizeBrowserSpeechError,
   speakOnce,
   type BrowserSpeechCapabilities,
   type CancellableSpeech,
@@ -71,6 +75,30 @@ function messageFrom(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+function desktopVoiceBridge() {
+  return isDesktopRuntime() ? window.proprDesktop?.voice : undefined;
+}
+
+/** Consent and device availability are checked without invoking a transcription service. */
+async function checkDesktopMicrophone(
+  voice: NonNullable<Window['proprDesktop']>['voice'],
+  signal: AbortSignal,
+): Promise<void> {
+  if (!voice) throw new BrowserSpeechError('service-unavailable');
+  const allowed = await voice.requestMicrophone();
+  if (signal.aborted) throw new BrowserSpeechError('cancelled');
+  if (!allowed) throw new BrowserSpeechError('permission-denied');
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  stream.getTracks().forEach(track => track.stop());
+  if (signal.aborted) throw new BrowserSpeechError('cancelled');
+}
+
+function desktopMicrophoneError(error: unknown): string {
+  const normalized = normalizeBrowserSpeechError(error);
+  return normalized.message + (normalized.category === 'permission-denied'
+    ? ' Check your operating system microphone privacy settings. On macOS, restart ProPR after changing a denied permission.' : '');
+}
+
 function confirmationPrompt(action: PendingVoiceBriefingAction): string {
   if (action.action === 'stop') {
     return `Stop ${action.item.reference}, ${action.item.title}? Say confirm to stop it, or cancel.`;
@@ -110,10 +138,11 @@ function unsupportedPlanStopMessage(action: PendingVoiceBriefingAction): string 
 async function executePlanAction(
   action: PendingVoiceBriefingAction,
   draftId: string,
+  isCurrent: () => boolean,
 ): Promise<void> {
   if (action.action === 'follow_up') {
     const draft = await getDraftWithPlan(draftId);
-    await refinePlan(draftId, draft.plan_json, action.instruction);
+    if (isCurrent()) await refinePlan(draftId, draft.plan_json, action.instruction);
     return;
   }
 
@@ -136,6 +165,9 @@ async function executePlanAction(
 export function useVoiceBriefing(
   options: UseVoiceBriefingOptions = {},
 ): VoiceBriefingController {
+  const preference = useDesktopVoicePreference();
+  const preferenceRef = useRef(preference);
+  preferenceRef.current = preference;
   const [phase, setPhaseState] = useState<VoiceBriefingPhase>('idle');
   const [briefing, setBriefing] = useState<VoiceBriefingResponse | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingVoiceBriefingAction | null>(null);
@@ -144,6 +176,9 @@ export function useVoiceBriefing(
   const capabilities = useMemo(getBrowserSpeechCapabilities, []);
 
   const mountedRef = useRef(true);
+  const sessionRunRef = useRef(0);
+  const briefingRequestRef = useRef<AbortController | null>(null);
+  const activityAllowed = useCallback(() => mountedRef.current && preferenceRef.current.isEnabled(), []);
   const phaseRef = useRef<VoiceBriefingPhase>('idle');
   const briefingRef = useRef<VoiceBriefingResponse | null>(null);
   const pendingActionRef = useRef<PendingVoiceBriefingAction | null>(null);
@@ -187,6 +222,7 @@ export function useVoiceBriefing(
     settledPhase: VoiceBriefingPhase,
     exposeSpeakingPhase = true,
   ): Promise<void> => {
+    if (!activityAllowed()) return;
     cancelSpeech();
     if (suppressSpeechRef.current
       || !capabilities.speechSynthesis
@@ -214,7 +250,7 @@ export function useVoiceBriefing(
         setPhase(settledPhase);
       }
     }
-  }, [cancelSpeech, capabilities.speechSynthesis, setPhase]);
+  }, [activityAllowed, cancelSpeech, capabilities.speechSynthesis, setPhase]);
 
   const storeBriefing = useCallback((next: VoiceBriefingResponse) => {
     briefingRef.current = next;
@@ -225,7 +261,7 @@ export function useVoiceBriefing(
   const requestBriefing = useCallback(async (
     scope: VoiceBriefingScope = 'all',
   ): Promise<void> => {
-    if (mutationInFlightRef.current) return;
+    if (!activityAllowed() || mutationInFlightRef.current) return;
     suppressSpeechRef.current = false;
     const run = requestRunRef.current + 1;
     requestRunRef.current = run;
@@ -239,26 +275,30 @@ export function useVoiceBriefing(
     }
     setPhase('loading');
 
+    briefingRequestRef.current?.abort();
+    const controller = new AbortController();
+    briefingRequestRef.current = controller;
     let next: VoiceBriefingResponse;
     try {
-      next = await getVoiceBriefing(scope);
+      next = await getVoiceBriefing(scope, controller.signal);
     } catch (requestError) {
-      if (!mountedRef.current || requestRunRef.current !== run) return;
+      if (!activityAllowed() || requestRunRef.current !== run) return;
       showError(messageFrom(requestError, 'The voice briefing could not be loaded.'));
       return;
     } finally {
+      if (briefingRequestRef.current === controller) briefingRequestRef.current = null;
       if (unresolvedBriefingRequestRunRef.current === run) {
         unresolvedBriefingRequestRunRef.current = null;
       }
     }
 
-    if (!mountedRef.current || requestRunRef.current !== run) return;
+    if (!activityAllowed() || requestRunRef.current !== run) return;
     storeBriefing(next);
     await speak(next.speechText, 'idle');
-  }, [cancelRecognition, cancelSpeech, setPhase, showError, speak, storeBriefing]);
+  }, [activityAllowed, cancelRecognition, cancelSpeech, setPhase, showError, speak, storeBriefing]);
 
   const repeatBriefing = useCallback(async (): Promise<void> => {
-    if (mutationInFlightRef.current) return;
+    if (!activityAllowed() || mutationInFlightRef.current) return;
     suppressSpeechRef.current = false;
     cancelRecognition();
     const latest = briefingRef.current;
@@ -268,7 +308,7 @@ export function useVoiceBriefing(
     }
     if (mountedRef.current) setError(null);
     await speak(latest.speechText, pendingActionRef.current ? 'confirming' : 'idle');
-  }, [cancelRecognition, showError, speak]);
+  }, [activityAllowed, cancelRecognition, showError, speak]);
 
   const cancelPendingAction = useCallback(() => {
     cancelRecognition();
@@ -283,7 +323,9 @@ export function useVoiceBriefing(
 
   const confirmPendingAction = useCallback(async (): Promise<void> => {
     const action = pendingActionRef.current;
-    if (!action || mutationInFlightRef.current) return;
+    if (!activityAllowed() || !action || mutationInFlightRef.current) return;
+    const session = sessionRunRef.current;
+    const isCurrent = () => activityAllowed() && sessionRunRef.current === session;
     suppressSpeechRef.current = false;
     const unsupportedMessage = unsupportedPlanStopMessage(action);
     if (unsupportedMessage) {
@@ -308,48 +350,48 @@ export function useVoiceBriefing(
 
     try {
       if (action.item.kind === 'plan') {
-        await executePlanAction(action, targetId);
+        await executePlanAction(action, targetId, isCurrent);
       } else if (action.action === 'stop') {
         await stopTaskExecution(targetId);
       } else {
         await postTaskFollowup(targetId, action.instruction);
       }
     } catch (mutationError) {
-      if (mountedRef.current) {
-        showError(messageFrom(mutationError, 'The action could not be completed.'));
-      }
+      if (!isCurrent()) return;
+      showError(messageFrom(mutationError, 'The action could not be completed.'));
       mutationInFlightRef.current = false;
       return;
     }
 
-    if (!mountedRef.current) {
-      mutationInFlightRef.current = false;
-      return;
-    }
+    if (!isCurrent()) return;
 
+    const controller = new AbortController();
+    briefingRequestRef.current?.abort();
+    briefingRequestRef.current = controller;
     try {
       // This is a single fresh snapshot, not task-completion polling.
-      const refreshed = await getVoiceBriefing(scopeRef.current);
-      if (!mountedRef.current) return;
+      const refreshed = await getVoiceBriefing(scopeRef.current, controller.signal);
+      if (!isCurrent() || controller.signal.aborted) return;
       storeBriefing(refreshed);
       // The mutation and its required refresh are settled before optional speech.
       // This lets hidden-tab cancellation return the controller to idle immediately.
       mutationInFlightRef.current = false;
       await speak(refreshed.speechText, 'idle');
     } catch (refreshError) {
-      if (mountedRef.current) {
+      if (isCurrent() && !controller.signal.aborted) {
         showError(messageFrom(
           refreshError,
           'The task action completed, but the briefing could not be refreshed.',
         ));
       }
     } finally {
-      mutationInFlightRef.current = false;
+      if (briefingRequestRef.current === controller) briefingRequestRef.current = null;
+      if (isCurrent()) mutationInFlightRef.current = false;
     }
-  }, [cancelRecognition, cancelSpeech, setPhase, showError, speak, storeBriefing]);
+  }, [activityAllowed, cancelRecognition, cancelSpeech, setPhase, showError, speak, storeBriefing]);
 
   const handleTranscript = useCallback(async (spokenText: string): Promise<void> => {
-    if (!mountedRef.current
+    if (!activityAllowed()
       || mutationInFlightRef.current
       || unresolvedBriefingRequestRunRef.current !== null) return;
     setTranscript(spokenText);
@@ -403,6 +445,7 @@ export function useVoiceBriefing(
         showError(command.reason);
     }
   }, [
+    activityAllowed,
     cancelPendingAction,
     confirmPendingAction,
     repeatBriefing,
@@ -413,7 +456,8 @@ export function useVoiceBriefing(
   ]);
 
   const startListening = useCallback(async (): Promise<void> => {
-    if (recognitionRef.current
+    if (!activityAllowed()
+      || recognitionRef.current
       || mutationInFlightRef.current
       || unresolvedBriefingRequestRunRef.current !== null) return;
     suppressSpeechRef.current = false;
@@ -427,26 +471,45 @@ export function useVoiceBriefing(
     const controller = new AbortController();
     recognitionRef.current = controller;
 
+    const isCurrentRecognition = () => activityAllowed() && recognitionRef.current === controller;
+    const desktopVoice = desktopVoiceBridge();
+    const revokeMicrophone = () => { void desktopVoice?.revokeMicrophone().catch(() => undefined); };
+    controller.signal.addEventListener('abort', revokeMicrophone, { once: true });
     let spokenText: string;
     try {
+      if (isDesktopRuntime()) {
+        await checkDesktopMicrophone(desktopVoice, controller.signal);
+        if (isCurrentRecognition()) {
+          recognitionRef.current = null;
+          showError('Microphone access is allowed. Voice commands are unavailable in this desktop runtime. Use Catch me up for text, or voice commands in a supported browser.');
+        }
+        return;
+      }
       // listenOnce starts recognition synchronously here, preserving user-gesture activation.
       spokenText = await listenOnce({
         signal: controller.signal,
         lang: optionsRef.current.language,
         timeoutMs: optionsRef.current.recognitionTimeoutMs,
       });
-      if (!mountedRef.current || recognitionRef.current !== controller) return;
+      if (!isCurrentRecognition()) return;
       recognitionRef.current = null;
     } catch (recognitionError) {
-      if (!mountedRef.current || recognitionRef.current !== controller) return;
+      if (!isCurrentRecognition()) return;
       recognitionRef.current = null;
       if (recognitionError instanceof BrowserSpeechError
         && recognitionError.category === 'cancelled') {
         setPhase(pendingActionRef.current ? 'confirming' : 'idle');
         return;
       }
-      showError(messageFrom(recognitionError, 'The voice command could not be recognized.'));
+      showError(isDesktopRuntime()
+        ? desktopMicrophoneError(recognitionError)
+        : messageFrom(recognitionError, 'The voice command could not be recognized.'));
       return;
+    } finally {
+      controller.signal.removeEventListener('abort', revokeMicrophone);
+      // Cancellation already revoked this grant. A late completion must not
+      // revoke a newer attempt that began after cancellation.
+      if (!controller.signal.aborted) revokeMicrophone();
     }
 
     try {
@@ -456,7 +519,7 @@ export function useVoiceBriefing(
         showError(messageFrom(commandError, 'The voice command could not be processed.'));
       }
     }
-  }, [cancelSpeech, handleTranscript, setPhase, showError]);
+  }, [activityAllowed, cancelSpeech, handleTranscript, setPhase, showError]);
 
   const stopAudio = useCallback(() => {
     // Suppress speech that an already-running confirmed mutation may otherwise
@@ -464,6 +527,12 @@ export function useVoiceBriefing(
     suppressSpeechRef.current = true;
     requestRunRef.current += 1;
     unresolvedBriefingRequestRunRef.current = null;
+    // A normal panel close retains the confirmed action's refresh lifecycle.
+    // Opt-out/account reset clears mutationInFlight first and aborts it too.
+    if (!mutationInFlightRef.current) {
+      briefingRequestRef.current?.abort();
+      briefingRequestRef.current = null;
+    }
     cancelRecognition();
     cancelSpeech();
     if (!mutationInFlightRef.current) {
@@ -476,7 +545,37 @@ export function useVoiceBriefing(
     setPhase(pendingActionRef.current ? 'confirming' : 'idle');
   }, [setPhase]);
 
-  useEffect(() => {
+  const resetSession = useCallback(() => {
+    sessionRunRef.current += 1;
+    mutationInFlightRef.current = false;
+    pendingActionRef.current = null;
+    briefingRef.current = null;
+    scopeRef.current = 'all';
+    stopAudio();
+    if (mountedRef.current) {
+      setBriefing(null);
+      setPendingAction(null);
+      setTranscript(null);
+      setError(null);
+      setPhase('idle');
+    }
+  }, [setPhase, stopAudio]);
+
+  // Subscribe directly as well as rendering the preference. Opt-out must cancel
+  // work synchronously, before React commits the hidden entry points.
+  useLayoutEffect(() => {
+    const unsubscribePreference = subscribeDesktopVoicePreference(() => {
+      if (!preferenceRef.current.isEnabled()) resetSession();
+    });
+    const unsubscribeConnection = subscribeDesktopConnectionScope(resetSession);
+    return () => { unsubscribePreference(); unsubscribeConnection(); };
+  }, [resetSession]);
+
+  useLayoutEffect(() => {
+    resetSession();
+  }, [preference.enabled, preference.key, preference.connection, resetSession]);
+
+  useLayoutEffect(() => {
     mountedRef.current = true;
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'hidden') return;
@@ -491,6 +590,9 @@ export function useVoiceBriefing(
     return () => {
       mountedRef.current = false;
       requestRunRef.current += 1;
+      sessionRunRef.current += 1;
+      briefingRequestRef.current?.abort();
+      briefingRequestRef.current = null;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       cancelRecognition();
       cancelSpeech();

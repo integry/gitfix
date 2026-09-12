@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
 import { planAgentLogin, validateAgentFilter, validateAgents } from "../packages/cli/src/commands/agentValidation.js";
@@ -62,8 +62,19 @@ function fakeConfig(overrides: Partial<OrchestratorConfig> = {}): OrchestratorCo
 function fakeOrchestrator(): OrchestratorModule {
   return {
     docker: () => ({ status: 0, stdout: "image-id\n", stderr: "" }),
+    dockerAsync: async () => ({ status: 0, stdout: "image-id\n", stderr: "" }),
     validateDockerBindPath: (name, value) => (!value || value.startsWith("/") ? null : `${name} must be absolute`),
   } as unknown as OrchestratorModule;
+}
+
+async function waitForLog(logFile: string, predicate: (contents: string) => boolean): Promise<string> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const contents = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+    if (predicate(contents)) return contents;
+    await new Promise(resolve => setTimeout(resolve, 2));
+  }
+  throw new Error(`timed out waiting for validation log:\n${existsSync(logFile) ? readFileSync(logFile, "utf8") : "(empty)"}`);
 }
 
 test("validateAgents skips image validation when the stack credential mount is not configured", async () => {
@@ -143,6 +154,85 @@ test("Antigravity image validation leaves the prompt on stdin", async () => {
     assert.doesNotMatch(logged, /--print -/);
   } finally {
     restore();
+  }
+});
+
+test("validateAgents drains staggered version, host, and image children before cleanup and cancellation", async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), "propr-cli-agent-drain-"));
+  const eventLog = join(fixtureDir, "events.log");
+  const executable = `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const isDocker = path.basename(process.argv[1]) === "docker";
+const kind = isDocker
+  ? (args.includes("--network=none") ? "image-version" : "image-check")
+  : (args[0] === "--version" ? "host-version" : "host-check");
+const delay = { "host-version": 5, "host-check": 20, "image-check": 40, "image-version": 90 }[kind];
+const record = event => fs.appendFileSync(process.env.PROPR_VALIDATION_EVENT_LOG,
+  [event, kind, process.pid, process.cwd()].join("|") + "\\n");
+process.on("SIGTERM", () => setTimeout(() => { record("exit"); process.exit(0); }, delay));
+record("start");
+setInterval(() => undefined, 1000);
+`;
+  const dockerPath = join(fixtureDir, "docker");
+  const claudePath = join(fixtureDir, "claude");
+  writeFileSync(dockerPath, executable, { mode: 0o700 });
+  writeFileSync(claudePath, executable, { mode: 0o700 });
+  chmodSync(dockerPath, 0o700);
+  chmodSync(claudePath, 0o700);
+  const hostDir = join(fixtureDir, "claude-creds");
+  mkdirSync(hostDir);
+  const previousPath = process.env.PATH;
+  const previousEventLog = process.env.PROPR_VALIDATION_EVENT_LOG;
+  process.env.PATH = `${fixtureDir}${delimiter}${previousPath ?? ""}`;
+  process.env.PROPR_VALIDATION_EVENT_LOG = eventLog;
+  const controller = new AbortController();
+  const cancellation = Object.assign(new Error("staggered cancellation"), { name: "AbortError" });
+  let validation: Promise<unknown> | undefined;
+  let settled = false;
+  try {
+    validation = validateAgents(fakeOrchestrator(), fakeConfig({ hostClaudeDir: hostDir }), {
+      agents: ["claude"],
+      signal: controller.signal,
+    });
+    void validation.then(() => { settled = true; }, () => { settled = true; });
+    const started = await waitForLog(eventLog, contents =>
+      ["host-version", "host-check", "image-version", "image-check"]
+        .every(kind => contents.includes(`start|${kind}|`))
+    );
+    const hostCheck = started.split("\n").find(line => line.startsWith("start|host-check|"));
+    assert.ok(hostCheck);
+    const temporaryRoot = dirname(hostCheck.split("|")[3]);
+
+    controller.abort(cancellation);
+    const partiallyClosed = await waitForLog(eventLog, contents => contents.includes("exit|image-check|"));
+    assert.doesNotMatch(partiallyClosed, /exit\|image-version\|/);
+    assert.equal(settled, false, "cancellation settled before the slow version child closed");
+    assert.equal(existsSync(temporaryRoot), true, "temporary validation resources were removed while a child was still running");
+
+    await assert.rejects(validation, error => error === cancellation);
+    const completed = readFileSync(eventLog, "utf8");
+    for (const kind of ["host-version", "host-check", "image-version", "image-check"]) {
+      assert.match(completed, new RegExp(`exit\\|${kind}\\|`));
+    }
+    assert.equal(existsSync(temporaryRoot), false);
+    for (const line of completed.split("\n").filter(line => line.startsWith("start|"))) {
+      const pid = Number(line.split("|")[2]);
+      assert.throws(() => process.kill(pid, 0), (error: unknown) => (error as NodeJS.ErrnoException).code === "ESRCH");
+    }
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousEventLog === undefined) delete process.env.PROPR_VALIDATION_EVENT_LOG;
+    else process.env.PROPR_VALIDATION_EVENT_LOG = previousEventLog;
+    controller.abort(cancellation);
+    await validation?.catch(() => undefined);
+    if (existsSync(eventLog)) {
+      for (const line of readFileSync(eventLog, "utf8").split("\n").filter(line => line.startsWith("start|"))) {
+        try { process.kill(Number(line.split("|")[2]), "SIGKILL"); } catch { /* already reaped */ }
+      }
+    }
+    rmSync(fixtureDir, { recursive: true, force: true });
   }
 });
 

@@ -979,9 +979,22 @@ async function runChecksInteractive(
   }
 }
 
-function isLiveRendererFallbackError(error: unknown): boolean {
+export function isLiveRendererFallbackError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /raw mode|setRawMode|stdin.*tty|not a tty|ink/i.test(message);
+  const normalizedMessage = message.toLowerCase();
+  if (
+    normalizedMessage.includes("raw mode")
+    || normalizedMessage.includes("setrawmode")
+    || normalizedMessage.includes("not a tty")
+    || normalizedMessage.includes("ink")
+  ) return true;
+
+  return normalizedMessage
+    .split(/[\n\r\u2028\u2029]/u)
+    .some(line => {
+      const stdinIndex = line.indexOf("stdin");
+      return stdinIndex !== -1 && line.indexOf("tty", stdinIndex + "stdin".length) !== -1;
+    });
 }
 
 function collectRemediationActions(outcome: ChecksOutcome): RemediationAction[] {

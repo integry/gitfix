@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, ScrollText, ListTodo, ChevronRight } from 'lucide-react';
+import { Bot, ScrollText, ListTodo, ChevronRight, RefreshCw, WifiOff } from 'lucide-react';
 import { RunningItem } from '../hooks/useHeaderStats';
 
 // Utility function for formatting time ago
@@ -39,14 +39,33 @@ const useClickOutside = (onClose: () => void, isOpen: boolean) => {
 interface AIActivityMonitorProps {
   runningItems: RunningItem[];
   runningCount: number;
+  status?: 'checking' | 'available' | 'unavailable';
 }
 
-const AIActivityMonitor: React.FC<AIActivityMonitorProps> = ({ runningItems, runningCount }) => {
+const AIActivityMonitor: React.FC<AIActivityMonitorProps> = ({ runningItems, runningCount, status = 'available' }) => {
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useClickOutside(() => setIsOpen(false), isOpen);
 
-  // Don't render if nothing is running
+  if (status !== 'available') {
+    const checking = status === 'checking';
+    return (
+      <div
+        className="flex h-full items-center px-3"
+        role="status"
+        aria-label={checking ? 'Checking AI activity' : 'AI activity unavailable'}
+      >
+        <div className="flex items-center gap-1.5 border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-700">
+          {checking
+            ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            : <WifiOff className="h-3.5 w-3.5" aria-hidden="true" />}
+          <span className="text-xs font-medium">{checking ? 'Checking activity' : 'Activity unavailable'}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't render if a current snapshot proves nothing is running.
   if (runningCount === 0) {
     return null;
   }

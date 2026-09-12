@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
-import type { MonitoredRepo } from '../src/api/proprApi';
+import type { CurrentUser, MonitoredRepo } from '../src/api/proprApi';
 
 async function stubRepositoryApis(page: Page, canManage = true, initialRepos?: MonitoredRepo[]) {
   let repos: MonitoredRepo[] = initialRepos ?? [
@@ -18,7 +18,17 @@ async function stubRepositoryApis(page: Page, canManage = true, initialRepos?: M
     switch (path) {
       case '/api/auth/demo-mode': json = { demoMode: false }; break;
       case '/api/auth/user':
-        json = { id: 'preview-user', username: 'preview', displayName: 'Preview User', permissions: canManage ? ['instance.manage_settings'] : [] };
+        json = {
+          id: 'preview-user',
+          login: 'preview',
+          username: 'preview',
+          displayName: 'Preview User',
+          email: null,
+          avatarUrl: null,
+          role: canManage ? 'admin' : 'member',
+          permissions: canManage ? ['instance.manage_settings'] : [],
+          authorizationSource: 'local',
+        } satisfies CurrentUser;
         break;
       case '/api/config/repos':
         if (route.request().method() === 'POST') {

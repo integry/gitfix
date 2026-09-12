@@ -1,10 +1,10 @@
 /* eslint-disable max-lines -- goal list and split-pane console intentionally share this route-level surface */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Activity, CheckCircle2, Circle, CircleDot, CirclePause, CirclePlay, CircleStop, Clock3,
+  Activity, CheckCircle2, CircleDot, CirclePause, CirclePlay, CircleStop, Clock3,
   Coins, ExternalLink, FileText, Filter, GitPullRequest, Github, ListTodo, LoaderCircle, Plus, Send,
-  MoreHorizontal, Terminal, Trash2,
+  MoreHorizontal, Terminal, Trash2, X,
 } from 'lucide-react';
 import { getInstanceCatalog } from '../api/proprApi';
 import type { InstanceCatalogRepository } from '../api/proprTypes';
@@ -167,8 +167,15 @@ function CheckpointDeclaration({ checkpoint }: { checkpoint: NonNullable<Goal['c
 }
 
 // The create surface coordinates persisted settings, runtime capabilities, attachments, and demo-mode access.
+interface CreateGoalFormProps {
+  onCancel: () => void;
+  onCreated: (goal: Goal) => void;
+  onDirtyChange: (dirty: boolean) => void;
+  onSubmittingChange: (submitting: boolean) => void;
+}
+
 // eslint-disable-next-line complexity
-function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
+function CreateGoalForm({ onCancel, onCreated, onDirtyChange, onSubmittingChange }: CreateGoalFormProps) {
   const { isDemoMode } = useDemoMode();
   const previousSettings = useMemo(readGoalFormSettings, []);
   const [repositories, setRepositories] = useState<InstanceCatalogRepository[]>([]);
@@ -194,6 +201,7 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
     ...(repo.alias ? { displayName: repo.alias } : {}),
     ...(repo.baseBranch ? { baseBranch: repo.baseBranch } : {}),
   })), [repositories]);
+  const markDirty = useCallback(() => onDirtyChange(true), [onDirtyChange]);
 
   const applyCapabilities = useCallback((capabilities: GoalCapability[]) => {
     setAgents(capabilities);
@@ -232,6 +240,7 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
     event.preventDefault();
     if (isDemoMode) return;
     setSubmitting(true);
+    onSubmittingChange(true);
     setError(null);
     try {
       const createBody = {
@@ -252,15 +261,15 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
       });
       onCreated(result.goal);
     } catch (err) { setError((err as Error).message); }
-    finally { setSubmitting(false); }
+    finally { setSubmitting(false); onSubmittingChange(false); }
   };
 
   return (
-    <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold"><Plus className="h-5 w-5" /> Start a goal</h2>
-      {isDemoMode && <p className="mb-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800">Demo mode is read-only. You can inspect existing goals, but cannot start a new one.</p>}
+    <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-7">
+      {isDemoMode && <p className="mb-4 border-l-2 border-amber-400 bg-amber-50 p-3 text-sm text-amber-800">Demo mode is read-only. You can inspect existing goals, but cannot start a new one.</p>}
       {error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}
-      {showRuntimeDiagnostics && <div className="mb-3 rounded bg-amber-50 p-3 text-sm text-amber-800">
+      {showRuntimeDiagnostics && <div className="mb-3 border-l-2 border-amber-400 bg-amber-50 p-3 text-sm text-amber-800">
         <p>No configured coding-agent runtime currently supports goals.</p>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           {unsupportedAgents.map(agent => <li key={agent.agentId}><span className="font-medium">{agent.agentAlias}:</span> {agent.reason || 'Required goal/session transport is unavailable'}</li>)}
@@ -270,27 +279,27 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
       <fieldset disabled={isDemoMode} aria-label="Goal creation controls" className={`min-w-0 border-0 p-0 ${isDemoMode ? 'opacity-70' : ''}`}>
         <div className="grid gap-4 md:grid-cols-2">
         <div className="text-sm font-medium text-slate-700">Repository
-          <RepositorySelector repos={repositoryOptions} selectedRepo={repository} onRepoChange={setRepository} className="mt-1" />
+          <RepositorySelector repos={repositoryOptions} selectedRepo={repository} onRepoChange={value => { markDirty(); setRepository(value); }} className="mt-1" />
         </div>
         <label className="text-sm font-medium text-slate-700">Coding agent
-          <select aria-label="Coding agent" value={agentId} onChange={event => setAgentId(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 p-2" required>
+          <select aria-label="Coding agent" value={agentId} onChange={event => { markDirty(); setAgentId(event.target.value); }} className="mt-1 w-full rounded-md border border-slate-300 p-2" required>
             {agents.map(agent => <option key={agent.agentId} value={agent.agentId} disabled={!agent.goalCapable}>{capabilityAgentLabel(agent, agents)}{agent.goalCapable ? '' : ' — unsupported'}</option>)}
           </select>
         </label>
         <label className="text-sm font-medium text-slate-700">Model
-          <select aria-label="Model" value={model} onChange={event => setModel(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 p-2" required>
+          <select aria-label="Model" value={model} onChange={event => { markDirty(); setModel(event.target.value); }} className="mt-1 w-full rounded-md border border-slate-300 p-2" required>
             {(selectedAgent?.models || []).map(item => <option key={item} value={item}>{getModelDisplayName(item)}</option>)}
           </select>
         </label>
         <label className="text-sm font-medium text-slate-700">Maximum parallel tasks (optional)
-          <input aria-label="Maximum parallel tasks" type="number" min="1" max="32" value={parallelism} onChange={event => setParallelism(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 p-2" />
+          <input aria-label="Maximum parallel tasks" type="number" min="1" max="32" value={parallelism} onChange={event => { markDirty(); setParallelism(event.target.value); }} className="mt-1 w-full rounded-md border border-slate-300 p-2" />
         </label>
         </div>
         <fieldset className="mt-4">
         <legend className="text-sm font-medium text-slate-700">Goal launch strategy</legend>
         <div className="mt-2 grid gap-3 md:grid-cols-2">
-          <label className="flex cursor-pointer gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-700"><input aria-label="Agent implements directly" type="radio" name="launch-strategy" value="direct" checked={launchStrategy === 'direct'} onChange={() => setLaunchStrategy('direct')} /><span><strong className="block text-slate-900">Agent implements directly</strong>ProPR opens the draft PR before work begins and safely commits the agent's changes at checkpoints.</span></label>
-          <label className="flex cursor-pointer gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-700"><input aria-label="Agent orchestrates through ProPR" type="radio" name="launch-strategy" value="orchestrate" checked={launchStrategy === 'orchestrate'} onChange={() => setLaunchStrategy('orchestrate')} /><span><strong className="block text-slate-900">Agent orchestrates through ProPR</strong>The agent owns decomposition, creates issues, and starts and monitors their implementation through ProPR.</span></label>
+          <label className="flex cursor-pointer gap-3 border border-slate-200 p-3 text-sm text-slate-700"><input aria-label="Agent implements directly" type="radio" name="launch-strategy" value="direct" checked={launchStrategy === 'direct'} onChange={() => { markDirty(); setLaunchStrategy('direct'); }} /><span><strong className="block text-slate-900">Agent implements directly</strong>ProPR opens the draft PR before work begins and safely commits the agent's changes at checkpoints.</span></label>
+          <label className="flex cursor-pointer gap-3 border border-slate-200 p-3 text-sm text-slate-700"><input aria-label="Agent orchestrates through ProPR" type="radio" name="launch-strategy" value="orchestrate" checked={launchStrategy === 'orchestrate'} onChange={() => { markDirty(); setLaunchStrategy('orchestrate'); }} /><span><strong className="block text-slate-900">Agent orchestrates through ProPR</strong>The agent owns decomposition, creates issues, and starts and monitors their implementation through ProPR.</span></label>
         </div>
         </fieldset>
         {launchStrategy === 'direct' && <div className="mt-4 max-w-xl">
@@ -307,7 +316,7 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
           max={checkpointIntervalOptions.length - 1}
           step="1"
           value={checkpointIntervalOptions.indexOf(checkpointInterval)}
-          onChange={event => setCheckpointInterval(checkpointIntervalOptions[Number(event.target.value)])}
+          onChange={event => { markDirty(); setCheckpointInterval(checkpointIntervalOptions[Number(event.target.value)]); }}
           className="mt-3 h-2 w-full cursor-pointer accent-primary-600"
         />
         <div aria-label="Checkpoint target cadence options" className="mt-1 flex justify-between text-xs text-slate-500">
@@ -316,26 +325,164 @@ function CreateGoalForm({ onCreated }: { onCreated: (goal: Goal) => void }) {
         <p className="mt-2 text-xs text-slate-500">Guidance for the agent, not a timer. ProPR commits only when the agent declares a coherent checkpoint ready.</p>
         </div>}
         <div className="mt-4 text-sm font-medium text-slate-700">Objective
-        <textarea aria-label="Objective" value={objective} onChange={event => setObjective(event.target.value)} onPaste={event => {
+        <textarea aria-label="Objective" value={objective} onChange={event => { markDirty(); setObjective(event.target.value); }} onPaste={event => {
           const pasted = clipboardImageFiles(event);
           if (!pasted.length) return;
           event.preventDefault();
+          markDirty();
           void addGoalFiles(files, pasted, setFiles, setError);
         }} rows={5} className="mt-1 w-full rounded-md border border-slate-300 p-2" required />
-        <GoalAttachmentInput files={files} onChange={setFiles} onError={setError} disabled={submitting} />
+        <GoalAttachmentInput files={files} onFilesSelected={markDirty} onChange={nextFiles => { markDirty(); setFiles(nextFiles); }} onError={setError} disabled={submitting} />
         </div>
-        <label className="mt-3 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={ultrafix} onChange={event => setUltrafix(event.target.checked)} /> Ask the coding agent to use Ultrafix</label>
-        <button type="submit" disabled={isDemoMode || submitting || !repository || !agentId || !model || !objective.trim() || !selectedAgent?.goalCapable} title={isDemoMode ? 'Demo mode is read-only' : undefined} className={`${buttonClass} mt-4 bg-primary-600 text-white hover:bg-primary-700`}>{submitting ? 'Starting…' : 'Start goal'}</button>
+        <label className="mt-3 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={ultrafix} onChange={event => { markDirty(); setUltrafix(event.target.checked); }} /> Ask the coding agent to use Ultrafix</label>
       </fieldset>
+      </div>
+      <div className="flex flex-none justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:px-7">
+        <button type="button" onClick={onCancel} disabled={submitting} className={`${buttonClass} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50`}>Cancel</button>
+        <button type="submit" disabled={isDemoMode || submitting || !repository || !agentId || !model || !objective.trim() || !selectedAgent?.goalCapable} title={isDemoMode ? 'Demo mode is read-only' : undefined} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}>{submitting ? 'Starting…' : 'Start goal'}</button>
+      </div>
     </form>
   );
 }
 
+interface CreateGoalDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onCreated: (goal: Goal) => void;
+}
+
+function CreateGoalDialog({ isOpen, onClose, onCreated }: CreateGoalDialogProps) {
+  const paneRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const dirtyRef = useRef(false);
+  const submittingRef = useRef(submitting);
+  submittingRef.current = submitting;
+  const setDirty = useCallback((dirty: boolean) => { dirtyRef.current = dirty; }, []);
+
+  const requestClose = useCallback(() => {
+    if (submittingRef.current) return;
+    if (dirtyRef.current && !window.confirm('Discard this unsaved goal? Your objective, attachments, and form changes will be lost.')) return;
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    dirtyRef.current = false;
+    setSubmitting(false);
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const frame = window.requestAnimationFrame(() => {
+      if (paneRef.current && !paneRef.current.contains(document.activeElement)) paneRef.current.focus();
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (event.defaultPrevented) return;
+        event.preventDefault();
+        requestClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !paneRef.current) return;
+      const focusable = Array.from(paneRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const activeElement = document.activeElement;
+      if (!paneRef.current.contains(activeElement)) { event.preventDefault(); first.focus(); }
+      else if (event.shiftKey && (activeElement === first || activeElement === paneRef.current)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus();
+    };
+  }, [isOpen, requestClose]);
+
+  if (!isOpen) return null;
+  return <div
+    className="fixed inset-0 z-50 flex justify-end bg-slate-950/40 sm:p-3 lg:p-5"
+    onMouseDown={event => { if (event.target === event.currentTarget) requestClose(); }}
+  >
+    <div
+      ref={paneRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-goal-title"
+      aria-describedby="create-goal-description"
+      tabIndex={-1}
+      className="flex h-full w-full min-w-0 flex-col bg-white shadow-2xl outline-none sm:max-w-3xl sm:border sm:border-slate-200"
+    >
+      <header className="flex flex-none items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-7">
+        <div>
+          <h2 id="create-goal-title" className="flex items-center gap-2 text-lg font-semibold text-slate-900"><Plus className="h-5 w-5 text-primary-600" />Start a goal</h2>
+          <p id="create-goal-description" className="mt-1 text-sm text-slate-500">Configure a dedicated coding-agent session. Your reusable settings are remembered after creation.</p>
+        </div>
+        <button type="button" onClick={requestClose} disabled={submitting} aria-label="Close goal creation" className="inline-flex h-10 w-10 flex-none items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50"><X className="h-5 w-5" /></button>
+      </header>
+      <CreateGoalForm onCancel={requestClose} onCreated={onCreated} onDirtyChange={setDirty} onSubmittingChange={setSubmitting} />
+    </div>
+  </div>;
+}
+
+function GoalQueueRow({ goal, goalAgents }: { goal: Goal; goalAgents: Array<{ type: string; alias: string }> }) {
+  const activity = goal.liveSummary.currentTask
+    || goal.liveSummary.todos.find(todo => todo.status === 'in_progress')?.content
+    || goal.taskState;
+  const openTodos = goal.liveSummary.todos.filter(todo => todo.status !== 'completed').length;
+  const tokens = goal.liveSummary.nativeGoal?.tokensUsed ?? tokenTotal(goal.liveSummary.tokenUsage);
+  const activeMs = goal.liveSummary.nativeGoal ? goal.liveSummary.nativeGoal.timeUsedSeconds * 1000 : goal.activeMs;
+  return <li className="border-b border-slate-200 last:border-b-0">
+    <Link to={`/goals/${goal.id}`} className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-4 px-4 py-4 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 sm:px-5 xl:grid-cols-[minmax(240px,2fr)_120px_minmax(140px,1fr)_minmax(180px,1.4fr)_160px] xl:items-center xl:gap-x-5 xl:gap-y-0 xl:py-3.5">
+      <div className="col-span-2 min-w-0 xl:col-span-1">
+        <h3 className="line-clamp-2 font-semibold leading-5 text-slate-900" title={goal.title}>{goal.title}</h3>
+        <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-500" title={goal.objective}>{goal.objective}</p>
+      </div>
+      <div className="min-w-0">
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Status</span>
+        <GoalState goal={goal} />
+        <span className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
+          <ProviderLogo provider={goal.agent.type} className="h-3.5 w-3.5 flex-none" />
+          <span className="truncate">{formatAgentLabel(goal.agent, goalAgents)}</span>
+        </span>
+        <span className="mt-0.5 block truncate text-xs text-slate-500" title={getModelDisplayName(goal.requestedModel)}>{getModelDisplayName(goal.requestedModel)}</span>
+      </div>
+      <div className="min-w-0">
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Repository</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-sm text-slate-700"><Github className="h-3.5 w-3.5 flex-none text-slate-400" /><span className="truncate" title={goal.repository}>{goal.repository}</span></span>
+      </div>
+      <div className="col-span-2 min-w-0 xl:col-span-1">
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Current activity</span>
+        <span className="flex min-w-0 items-start gap-1.5 text-sm text-slate-700"><Activity className="mt-0.5 h-3.5 w-3.5 flex-none text-blue-500" /><span className="line-clamp-2" title={activity}>{activity}</span></span>
+        {goal.liveSummary.todos.length > 0 && <span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><ListTodo className="h-3.5 w-3.5" />{openTodos} open of {goal.liveSummary.todos.length} steps</span>}
+      </div>
+      <div className="col-span-2 min-w-0 xl:col-span-1">
+        <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400 xl:hidden">Usage</span>
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
+          <span className="inline-flex items-center gap-1"><Coins className="h-3.5 w-3.5 text-amber-500" />{tokens.toLocaleString()} tokens</span>
+          <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5 text-indigo-500" />{duration(activeMs)} active</span>
+        </span>
+        <span className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-xs text-slate-500">
+          <span className="inline-flex items-center gap-1"><CircleDot className="h-3.5 w-3.5" />{goal.artifactStats.openIssues}/{goal.artifactStats.issues} open issues</span>
+          <span className="inline-flex items-center gap-1"><GitPullRequest className="h-3.5 w-3.5" />{goal.artifactStats.openPullRequests}/{goal.artifactStats.pullRequests} open PRs</span>
+        </span>
+      </div>
+    </Link>
+  </li>;
+}
+
 function GoalList() {
   const navigate = useNavigate();
+  const newGoalButtonRef = useRef<HTMLButtonElement>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
   const repositoryFilter = searchParams.get('repository') || 'all';
   useDocumentTitle('Goals');
   const refresh = useCallback(() => listGoals().then(data => setGoals(data.goals)).catch(err => setError((err as Error).message)), []);
@@ -361,43 +508,45 @@ function GoalList() {
     }, { replace: true });
   }, [setSearchParams]);
   const goalAgents = goals.map(goal => ({ type: goal.agent.type, alias: goal.agent.alias }));
-  return <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
-    <div><h1 className="text-2xl font-bold text-slate-900">Goals</h1><p className="mt-1 text-sm text-slate-600">Long-running work kept in one exact coding-agent session.</p></div>
-    <CreateGoalForm onCreated={goal => navigate(`/goals/${goal.id}`)} />
-    {error && <p role="alert" className="text-red-600">{error}</p>}
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Your goals</h2>
-        {goals.length > 0 && <div role="group" aria-label="Filter goals by repository" className="flex min-w-0 items-center gap-2">
-          <Filter className="hidden h-4 w-4 flex-none text-slate-500 sm:block" />
-          <RepositorySelector
-            repos={repositoryOptions}
-            selectedRepo={repositoryFilter}
-            onRepoChange={setRepositoryFilter}
-            labelLayout="stacked"
-            className="w-[220px] max-w-full sm:w-[280px]"
-          />
-        </div>}
+  const closeCreator = useCallback(() => {
+    setIsCreating(false);
+    newGoalButtonRef.current?.focus();
+  }, []);
+  const openCreator = useCallback(() => setIsCreating(true), []);
+  return <div className="min-h-full w-full min-w-0 bg-white p-4 sm:p-6">
+    <div className="border-b border-slate-200 pb-5">
+      <div><h1 className="text-2xl font-bold text-slate-900">Goals</h1><p className="mt-1 text-sm text-slate-600">Long-running work kept in one exact coding-agent session.</p></div>
+    </div>
+    {error && <p role="alert" className="mt-4 border-l-2 border-red-500 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    <section aria-labelledby="goal-work-queue-title" className="mt-5">
+      <div className="flex flex-col gap-3 pb-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-baseline gap-2"><h2 id="goal-work-queue-title" className="text-base font-semibold text-slate-900">Work queue</h2><span className="text-xs text-slate-500">{visibleGoals.length} of {goals.length}</span></div>
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+          {goals.length > 0 && <div role="group" aria-label="Filter goals by repository" className="flex min-w-0 items-center gap-2">
+            <Filter className="h-4 w-4 flex-none text-slate-400" aria-hidden="true" />
+            <RepositorySelector
+              repos={repositoryOptions}
+              selectedRepo={repositoryFilter}
+              onRepoChange={setRepositoryFilter}
+              labelLayout="stacked"
+              className="min-w-0 flex-1 sm:w-[240px] sm:flex-none"
+            />
+          </div>}
+          <button ref={newGoalButtonRef} type="button" onClick={openCreator} className={`${buttonClass} min-h-10 justify-center bg-primary-600 text-white hover:bg-primary-700`}><Plus className="h-4 w-4" />New goal</button>
+        </div>
       </div>
       {goals.length === 0
-        ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No goals yet.</p>
+        ? <div className="border-y border-dashed border-slate-300 py-10 text-center"><p className="text-sm font-medium text-slate-700">No goals yet</p><p className="mt-1 text-sm text-slate-500">Start a goal to add dedicated agent work to this queue.</p></div>
         : visibleGoals.length === 0
-          ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No goals for this repository.</p>
-          : visibleGoals.map(goal => <Link key={goal.id} to={`/goals/${goal.id}`} className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-primary-300 hover:shadow-md">
-        <div className="flex items-start justify-between gap-4"><h3 className="line-clamp-2 min-w-0 font-semibold leading-5 text-slate-900" title={goal.title}>{goal.title}</h3><GoalState goal={goal} /></div>
-        <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-500">{goal.objective}</p>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1"><Github className="h-3.5 w-3.5 text-slate-500" />{goal.repository}</span>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-2.5 py-1 text-violet-700"><ProviderLogo provider={goal.agent.type} className="h-3.5 w-3.5" />{formatAgentLabel(goal.agent, goalAgents)}</span>
-          <span className="inline-flex items-center rounded-full bg-cyan-50 px-2.5 py-1 text-cyan-700">{getModelDisplayName(goal.requestedModel)}</span>
-        </div>
-        <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
-          <span className="flex items-center gap-1.5"><Activity className="h-3.5 w-3.5 flex-none text-blue-500" />Current: {goal.liveSummary.currentTask || goal.taskState}</span>
-          <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1"><span className="inline-flex items-center gap-1.5"><Coins className="h-3.5 w-3.5 text-amber-500" />{(goal.liveSummary.nativeGoal?.tokensUsed ?? tokenTotal(goal.liveSummary.tokenUsage)).toLocaleString()} tokens</span><span aria-hidden="true">·</span><span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5 text-indigo-500" />{duration(goal.liveSummary.nativeGoal ? goal.liveSummary.nativeGoal.timeUsedSeconds * 1000 : goal.activeMs)} active</span></span>
-          <span className="flex flex-wrap items-center gap-2"><span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-blue-700"><CircleDot className="h-3.5 w-3.5" />{goal.artifactStats.openIssues}/{goal.artifactStats.issues} open issues</span><span className="inline-flex items-center gap-1.5 rounded-full bg-purple-50 px-2 py-1 text-purple-700"><GitPullRequest className="h-3.5 w-3.5" />{goal.artifactStats.openPullRequests}/{goal.artifactStats.pullRequests} open PRs</span></span>
-        </div>
-        {goal.liveSummary.todos.length > 0 && <div className="mt-3 flex gap-2 border-t border-slate-100 pt-3"><ListTodo className="mt-0.5 h-3.5 w-3.5 flex-none text-slate-400" /><ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">{goal.liveSummary.todos.map(todo => <li key={todo.id} className="inline-flex items-center gap-1.5">{todo.status === 'completed' ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> : todo.status === 'in_progress' ? <LoaderCircle className="h-3.5 w-3.5 text-blue-500" /> : <Circle className="h-3.5 w-3.5 text-slate-400" />}{todo.content}</li>)}</ul></div>}
-      </Link>)}</section>
+          ? <div className="border-y border-dashed border-slate-300 py-10 text-center"><p className="text-sm font-medium text-slate-700">No goals in {repositoryFilter}</p><button type="button" onClick={() => setRepositoryFilter('all')} className="mt-2 text-sm font-medium text-primary-700 hover:underline">Show all goals</button></div>
+          : <div className="border-y border-slate-200 bg-white">
+            <div aria-hidden="true" className="hidden grid-cols-[minmax(240px,2fr)_120px_minmax(140px,1fr)_minmax(180px,1.4fr)_160px] gap-x-5 border-b border-slate-200 bg-slate-50 px-5 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 xl:grid">
+              <span>Goal</span><span>Status / runtime</span><span>Repository</span><span>Current activity</span><span>Usage</span>
+            </div>
+            <ul aria-label="Goal work queue">{visibleGoals.map(goal => <GoalQueueRow key={goal.id} goal={goal} goalAgents={goalAgents} />)}</ul>
+          </div>}
+    </section>
+    <CreateGoalDialog isOpen={isCreating} onClose={closeCreator} onCreated={goal => navigate(`/goals/${goal.id}`)} />
   </div>;
 }
 

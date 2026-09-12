@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 # Copy root package files for workspace resolution
 COPY package*.json ./
 COPY packages/shared/package*.json ./packages/shared/
+COPY packages/client/package*.json ./packages/client/
 COPY propr-ui/package*.json ./propr-ui/
 
 RUN npm install
@@ -23,6 +24,17 @@ RUN npm install
 # Copy shared package source and build it
 COPY packages/shared ./packages/shared
 RUN cd packages/shared && npm run build
+
+# The UI imports the shared client workspace source through its Vite alias.
+COPY packages/client ./packages/client
+RUN cd packages/client && npm run build
+
+# Desktop presentation code imports the browser-safe deep-link validators from
+# the desktop source boundary. Include that module's complete runtime-relative
+# closure; type-only desktop setup imports are erased by Vite and stay outside
+# the production UI image.
+COPY apps/desktop/src/security.ts ./apps/desktop/src/security.ts
+COPY apps/desktop/src/shared/contract.ts ./apps/desktop/src/shared/contract.ts
 
 # Copy UI source and build it
 COPY propr-ui ./propr-ui

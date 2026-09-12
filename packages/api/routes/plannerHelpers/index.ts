@@ -14,6 +14,7 @@ export { VALID_GRANULARITIES, validateContextRepositories, validatePreviewInput,
 
 // Repository setup utilities
 export { setupRepoContext, getRefineRepoContext } from './repoSetup.js';
+export { resolveEffectiveContextRepositories, verifyPlannerRepositoryAccess } from './repositoryAuthorization.js';
 
 // Background refinement
 export { runBackgroundRefinement } from './refineBackground.js';

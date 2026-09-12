@@ -9,7 +9,7 @@ import { createClient, RedisClientType } from 'redis';
 import { Queue } from 'bullmq';
 import 'dotenv/config';
 import { Redis, RedisOptions } from 'ioredis';
-import { authenticateSocketRequest, setupAuth, ensureAuthenticated } from './auth.js';
+import { authenticateSocketRequest, setupAuth } from './auth.js';
 import { configureDemoMode, createDemoRedisClient, demoModeReadOnlyMiddleware } from './demoMode.js';
 import { resolveGithubAuthMode, resolveGithubEventIntakeMode, validateIntakeModePrerequisites } from '@propr/shared';
 import { initSocketService, closeSocketService } from './services/socketService.js';
@@ -39,6 +39,8 @@ import {
   createVisualPreviewAuthRoutes,
   createVoiceRoutes,
   createInstanceCatalogRoutes,
+  createDesktopAuthRoutes,
+  createActiveWorkRoutes,
   attachmentUpload,
   goalAttachmentUpload
 } from './routes/index.js';
@@ -70,9 +72,16 @@ import { stopTaskExecution } from './routes/dockerRoutes.js';
 import { initializePushSubscriptionMaintenance } from './services/pushSubscriptionMaintenance.js';
 import { NotificationProjectionService } from './services/notificationProjectionService.js';
 import { WebPushDispatcher } from './services/webPushDispatcher.js';
-import { assertInstanceAdministratorConfigured, resolveAuthorization } from './authorization.js';
+import { assertInstanceAdministratorConfigured } from './authorization.js';
 import { resolveApiListenHost } from './listenAddress.js';
-import { configureApiProxyTrust, createApiRequestRateLimiter, createWebhookRequestRateLimiter } from './requestRateLimits.js';
+import {
+  configureApiProxyTrust,
+  createApiRequestRateLimiter,
+  createDiscoveryRequestRateLimiter,
+  createWebhookRequestRateLimiter,
+} from './requestRateLimits.js';
+import { desktopAuthService } from './desktopAuthService.js';
+import { prohibitApiResponseCaching } from './apiCacheControl.js';
 import { startConfigReloadSubscription, type ConfigReloadSubscription } from './services/configReloadSubscription.js';
 import {
   assertNoDuplicateRoutes,
@@ -82,6 +91,7 @@ import {
   type RouteEntry
 } from './routeRegistry.js';
 import { createTaskDeleteRouteEntries } from './taskDeleteRouteRegistry.js';
+import { registerDesktopApiBoundary } from './desktopApiBoundary.js';
 import {
   startVisualPreviewOAuthRefreshScheduler,
   type VisualPreviewOAuthRefreshScheduler,
@@ -156,6 +166,11 @@ const HOST = resolveApiListenHost();
 
 configureApiProxyTrust(app);
 
+// This is the earliest `/api` response boundary. Keep it before CORS and every
+// global or route limiter so success, failure, and saturation responses cannot
+// be cached by a browser or intermediary.
+app.use('/api', prohibitApiResponseCaching);
+
 if (!process.env.FRONTEND_URL) {
   console.error('FRONTEND_URL environment variable is required');
   process.exit(1);
@@ -191,14 +206,6 @@ app.use(corsRejectionHandler);
 app.use('/api', createApiRequestRateLimiter());
 setupWebhookRoute();
 
-// Prevent caching of API responses to avoid stale CORS issues
-app.use('/api', (_req, res, next) => {
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.set('Pragma', 'no-cache');
-  res.set('Expires', '0');
-  next();
-});
-
 app.use(express.json({ limit: '1mb' }));
 
 // Register demo read-only protection before routes so future mutating /api routes,
@@ -214,6 +221,7 @@ let configReloadSubscription: ConfigReloadSubscription | undefined;
 let notificationProjection: NotificationProjectionService | undefined;
 let webPushDispatcher: WebPushDispatcher | undefined;
 let webPushDispatcherConfigured = false;
+let desktopPairingCleanupTimer: NodeJS.Timeout | undefined;
 let visualPreviewOAuthRefreshScheduler: VisualPreviewOAuthRefreshScheduler | undefined;
 
 function createDemoTaskQueue(): Queue {
@@ -267,16 +275,27 @@ function setupRoutes(): void {
       ) => notificationProjection!.projectSystemSnapshot(snapshot, additionalAdministratorIds),
     }),
   });
-  // INTENTIONALLY UNAUTHENTICATED: /api/compatibility is registered BEFORE the
-  // `ensureAuthenticated` guard below so the hosted UI can run its pre-auth
-  // version-gate before the user logs in. This is the one deliberate exception to
-  // "everything under /api/* requires auth" — do not move it after the guard, and
-  // keep its handler returning only non-sensitive build metadata (version +
-  // compatibility dates). All other /api routes registered after this line are
-  // authenticated.
-  app.get('/api/compatibility', statusRoutes.getCompatibility);
+  const desktopAuthRoutes = createDesktopAuthRoutes();
+  // INTENTIONALLY UNAUTHENTICATED: compatibility/discovery and the bounded
+  // pairing bootstrap, poll, and browser entry are registered before the guard.
+  // They return only compatibility/capability metadata or pairing state gated by
+  // a high-entropy secret; all operational routes below remain authenticated.
+  app.get('/api/compatibility', createDiscoveryRequestRateLimiter(), statusRoutes.getCompatibility);
+  // MCP authenticates its own bearer tokens before the shared API guard.
   mountMcp(app, { db, taskQueue, redisClient, runtimeBuildQueue });
-  app.use('/api', ensureAuthenticated, resolveAuthorization);
+  registerDesktopApiBoundary(app, {
+    discovery: statusRoutes.getDesktopDiscovery,
+    startPairing: desktopAuthRoutes.startPairing,
+    pollPairing: desktopAuthRoutes.pollPairing,
+    activatePairing: desktopAuthRoutes.activatePairing,
+    cancelPairing: desktopAuthRoutes.cancelPairing,
+    openPairingApproval: desktopAuthRoutes.openPairingApproval,
+    revokeCurrentToken: desktopAuthRoutes.revokeCurrentToken,
+  });
+  app.get('/api/desktop/pairings/:pairingId/approval', desktopAuthRoutes.browserSessionGuard, desktopAuthRoutes.getPairingApproval);
+  app.post('/api/desktop/pairings/:pairingId/approve', desktopAuthRoutes.browserSessionGuard, desktopAuthRoutes.approvalOriginGuard, desktopAuthRoutes.approvePairing);
+  app.get('/api/desktop/tokens', desktopAuthRoutes.listTokens);
+  app.delete('/api/desktop/tokens/:tokenId', desktopAuthRoutes.revokeToken);
   const taskRoutes = createTaskRoutes({ db, taskQueue });
   const taskHistoryRoutes = createTaskHistoryRoutes({ redisClient, taskQueue, db });
   const liveDetailsRoutes = createLiveDetailsRoutes({ redisClient, db });
@@ -313,11 +332,13 @@ function setupRoutes(): void {
   });
   const instanceCatalogRoutes = createInstanceCatalogRoutes();
   const agentVersionRoutes = createAgentVersionRoutes();
+  const activeWorkRoutes = createActiveWorkRoutes({ db, taskQueue });
   const goalRoutes = createGoalRoutes({ db, taskQueue, redisClient });
 
   app.use(['/api/task/:taskId', '/api/task/:taskId/*path', '/api/tasks/:taskId', '/api/execution/:sessionId', '/api/execution/:sessionId/*path', '/api/llm-metrics/:correlationId'], goalRoutes.requireGoalTaskOwnership);
 
   const operationalRoutes: RouteEntry[] = [
+    ['get', '/api/desktop/active-work', activeWorkRoutes.getActiveWork],
     ['get', '/api/goals/capabilities', goalRoutes.capabilities], ['get', '/api/goals', goalRoutes.list], ['post', '/api/goals', goalAttachmentUpload, goalRoutes.create], ['get', '/api/goals/:goalId', goalRoutes.get], ['get', '/api/goals/:goalId/previews', goalRoutes.previews], ['delete', '/api/goals/:goalId', goalRoutes.remove],
     ['post', '/api/goals/:goalId/pause', goalRoutes.pause], ['post', '/api/goals/:goalId/resume', goalRoutes.resume], ['post', '/api/goals/:goalId/cancel', goalRoutes.cancel], ['patch', '/api/goals/:goalId/model', goalRoutes.requestModel], ['post', '/api/goals/:goalId/input', goalAttachmentUpload, goalRoutes.input], ['get', '/api/goals/:goalId/attachments/:attachmentId', goalRoutes.attachment],
     ['get', '/api/status', statusRoutes.getStatus], ['get', '/api/tasks', taskRoutes.getTasks], ['get', '/api/tasks/revert-preview', taskRoutes.getRevertPreview], ['post', '/api/tasks/revert', taskRoutes.revertChanges],
@@ -497,6 +518,15 @@ async function start(): Promise<void> {
     }
     setupRoutes();
     if (!demoMode) {
+      await desktopAuthService.cleanupPairings();
+      desktopPairingCleanupTimer = setInterval(() => {
+        void desktopAuthService.cleanupPairings().catch(error => {
+          console.warn('[desktop-auth] Pairing cleanup failed:', error);
+        });
+      }, 60 * 60_000);
+      desktopPairingCleanupTimer.unref();
+    }
+    if (!demoMode) {
       const socketService = initSocketService(httpServer, validateCorsOrigin, {
         engineMiddleware: socketAuthMiddleware.engineMiddleware,
         authenticate: authenticateSocketRequest,
@@ -544,6 +574,7 @@ async function start(): Promise<void> {
         { name: 'agent login sessions', close: () => agentLoginSessionManager.close() },
         { name: 'redis client', close: () => redisClient.quit() }
       ];
+      if (desktopPairingCleanupTimer) clearInterval(desktopPairingCleanupTimer);
       if (!demoMode) {
         shutdownTasks.push(
           { name: 'Web Push dispatcher', close: () => webPushDispatcher?.close() ?? Promise.resolve() },

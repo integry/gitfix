@@ -1,7 +1,12 @@
+import { DESKTOP_LOGGED_OUT_EVENT } from '../desktop/types';
 import type { Task as ApiTask } from './tasks';
-import { API_BASE_URL, apiFetch, handleApiResponse } from './apiClient';
+import { API_BASE_URL, apiFetch, handleApiResponse, getDesktopConnectionScope, setDesktopConnectionScope } from './apiClient';
 import { isHostedUiOrigin, pathWithActiveHostedTunnelFlow } from '../config/runtimeConfig';
 import { isAccountStatusTimestamp, isProprProxyUrl } from '@propr/shared';
+import {
+  reportPackagedAcceptanceCurrentUser,
+  type PackagedAcceptanceCurrentUserClassification,
+} from '../desktop/packagedAcceptanceCurrentUserValidation';
 
 export * from './apiClient';
 
@@ -33,6 +38,9 @@ export const getSystemStatus = async (): Promise<SystemStatus> => {
   const workers: { id: number; status: string }[] = [];
   for (let i = 0; i < (data.workerCount || 0); i++) workers.push({ id: i + 1, status: 'active' });
   const mapAuthStatus = (status?: string) => status === 'connected' ? 'Authenticated' : 'Failed';
+  const mapClaudeAuthStatus = (status?: string) => status === 'not_applicable'
+    ? 'Not applicable'
+    : mapAuthStatus(status);
   const mapAgentStatus = (status?: string) => status === 'connected' ? 'Ready' : status === 'degraded' ? 'Degraded' : 'Failed';
   const mapIndexingStatus = (status?: string) => {
     switch (status) {
@@ -85,7 +93,7 @@ export const getSystemStatus = async (): Promise<SystemStatus> => {
     workers,
     redis: data.redis === 'connected' ? 'Connected' : 'Disconnected',
     githubAuth: mapAuthStatus(data.githubAuth),
-    claudeAuth: mapAuthStatus(data.claudeAuth),
+    claudeAuth: mapClaudeAuthStatus(data.claudeAuth),
     indexing: mapIndexingStatus(data.indexing),
     githubEventIntake: mapIntakeLabel(data.githubEventIntake),
     githubEventIntakeStatus: mapIntakeStatus(data.githubEventIntakeStatus),
@@ -241,10 +249,103 @@ export const deleteTask = async (taskId: string, force?: boolean): Promise<void>
   await handleApiResponse(response);
 };
 
-export const getCurrentUser = async (): Promise<CurrentUser> => {
-  const response = await apiFetch(`${API_BASE_URL}/api/auth/user`, { credentials: 'include' });
+export interface CurrentUserValidationOptions {
+  scopeGeneration?: number;
+  activeScopePresent?: boolean;
+}
+
+const CURRENT_USER_SCOPE_GENERATION_QUERY = 'proprDesktopScopeGeneration';
+
+const isNullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
+
+export const isCurrentUserResponse = (value: unknown): value is CurrentUser => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const user = value as Partial<CurrentUser>;
+  const permissions = new Set(['instance.manage_agents', 'instance.manage_members', 'instance.manage_runtime', 'instance.manage_settings']);
+  return typeof user.id === 'string'
+    && typeof user.login === 'string'
+    && typeof user.username === 'string'
+    && typeof user.displayName === 'string'
+    && isNullableString(user.email)
+    && isNullableString(user.avatarUrl)
+    && (user.role === 'admin' || user.role === 'member')
+    && Array.isArray(user.permissions)
+    && user.permissions.every(permission => permissions.has(permission))
+    && ['bootstrap', 'local', 'managed', 'implicit', 'demo'].includes(user.authorizationSource ?? '');
+};
+
+const currentUserResponseClassification = async (
+  response: Response,
+): Promise<PackagedAcceptanceCurrentUserClassification> => {
+  if (response.ok) return 'success';
+  if (response.status === 403) return 'forbidden';
+  if (response.status >= 500) return 'server-error';
+  if (response.status !== 401) return 'unauthenticated';
+  try {
+    const body = await response.clone().json() as { code?: unknown };
+    return ['INVALID_INSTANCE_TOKEN', 'INSTANCE_TOKEN_EXPIRED', 'INSTANCE_TOKEN_REVOKED'].includes(String(body.code))
+      ? 'revoked'
+      : 'unauthenticated';
+  } catch {
+    return 'unauthenticated';
+  }
+};
+
+export const getCurrentUser = async (options: CurrentUserValidationOptions = {}): Promise<CurrentUser> => {
+  const requestedScopeGeneration = options.scopeGeneration;
+  const scopeGeneration = typeof requestedScopeGeneration === 'number'
+    && Number.isSafeInteger(requestedScopeGeneration) && requestedScopeGeneration >= 0
+    ? requestedScopeGeneration
+    : 0;
+  const activeScopePresent = options.activeScopePresent === true;
+  const currentUserUrl = activeScopePresent
+    ? `${API_BASE_URL}/api/auth/user?${CURRENT_USER_SCOPE_GENERATION_QUERY}=${scopeGeneration}`
+    : `${API_BASE_URL}/api/auth/user`;
+  if (activeScopePresent) {
+    reportPackagedAcceptanceCurrentUser({
+      phase: 'request-issued', scopeGeneration, activeScopePresent,
+      responseStatus: 0, classification: 'pending', schemaAccepted: false,
+    });
+  }
+  const response = await apiFetch(currentUserUrl, activeScopePresent
+    ? { credentials: 'include' }
+    : { credentials: 'include', cache: 'no-store' });
+  const classification = await currentUserResponseClassification(response);
+  if (activeScopePresent) {
+    reportPackagedAcceptanceCurrentUser({
+      phase: 'response-completed', scopeGeneration, activeScopePresent,
+      responseStatus: response.status, classification, schemaAccepted: false,
+    });
+  }
   await handleApiResponse(response);
-  return response.json();
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    if (activeScopePresent) {
+      reportPackagedAcceptanceCurrentUser({
+        phase: 'parsed-user-rejected', scopeGeneration, activeScopePresent,
+        responseStatus: response.status, classification: 'invalid-schema', schemaAccepted: false,
+      });
+    }
+    throw new Error('Current-user response schema was invalid.');
+  }
+  if (!isCurrentUserResponse(body)) {
+    if (activeScopePresent) {
+      reportPackagedAcceptanceCurrentUser({
+        phase: 'parsed-user-rejected', scopeGeneration, activeScopePresent,
+        responseStatus: response.status, classification: 'invalid-schema', schemaAccepted: false,
+      });
+    }
+    throw new Error('Current-user response schema was invalid.');
+  }
+  if (activeScopePresent) {
+    reportPackagedAcceptanceCurrentUser({
+      phase: 'parsed-user-accepted', scopeGeneration, activeScopePresent,
+      responseStatus: response.status, classification, schemaAccepted: true,
+    });
+  }
+  return body;
 };
 
 export const HOSTED_LOGOUT_FAILED_MESSAGE =
@@ -273,7 +374,47 @@ const hostedLogout = async (): Promise<void> => {
   }
 };
 
+let desktopLogoutInFlight: Promise<void> | null = null;
+
+const desktopLogout = async (): Promise<void> => {
+  const scope = getDesktopConnectionScope();
+  if (!scope) {
+    window.alert('Unable to log out: the active desktop connection changed. Reconnect and try again.');
+    return;
+  }
+  // Cancels REST and disconnects the scoped socket before invoking main.
+  setDesktopConnectionScope(null);
+  try {
+    await scope.bridge.auth.logout({ profileId: scope.profileId, transportScope: scope.transportScope });
+  } catch {
+    if (!getDesktopConnectionScope()) setDesktopConnectionScope(scope);
+    window.alert('Unable to log out from ProPR Desktop. The local credential could not be removed. Try again.');
+    return;
+  }
+  // A late logout must never clear a newer profile's renderer state.
+  if (getDesktopConnectionScope()) return;
+  window.dispatchEvent(new CustomEvent(DESKTOP_LOGGED_OUT_EVENT, { detail: scope }));
+  // The desktop shell now owns sign-in. Reset account-specific routes so a
+  // later successful pairing boots the dashboard and validates its new user.
+  window.location.hash = '/';
+  try {
+    // These legacy keys belong to the mounted account UI. Keep instance
+    // configuration, device preferences and any other profile namespaces.
+    for (const key of [
+      'dismissed_plan_ids', 'dismissed_task_ids', 'dismissed_task_timestamps',
+      'plannerSettings', 'propr.goalFormSettings', 'propr:push-subscription-owner',
+    ]) window.localStorage.removeItem(key);
+    window.sessionStorage.removeItem('agent-tank-banner-dismissed');
+  } catch {
+    window.alert('You are signed out, but ProPR could not clear the account display cache. Restart ProPR Desktop before signing in again.');
+  }
+};
+
 export const logout = (): void | Promise<void> => {
+  if (typeof window !== 'undefined' && window.proprDesktop) {
+    desktopLogoutInFlight ??= desktopLogout().finally(() => { desktopLogoutInFlight = null; });
+    return desktopLogoutInFlight;
+  }
   if (typeof window !== 'undefined' && isHostedUiOrigin(window.location.hostname) && isProprProxyUrl(API_BASE_URL)) {
     hostedLogoutInFlight ??= hostedLogout();
     return hostedLogoutInFlight;

@@ -4,6 +4,8 @@ import {
     updateVisualPreviewCredentialForCurrentOwner,
     visualPreviewOAuthCredentialService,
 } from './services/visualPreviewOAuth.js';
+import { githubUserGrantService } from './githubUserGrantService.js';
+import type { GitHubUserGrantService } from './githubUserGrantService.js';
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_TIMEOUT_MS = 20_000;
@@ -28,6 +30,16 @@ export interface GitHubTokenRefreshResult {
 }
 
 const sessionRefreshes = new Map<string, Promise<GitHubTokenRefreshResult>>();
+
+export interface GitHubTokenRefreshDependencies {
+    userGrantService?: Pick<GitHubUserGrantService, 'resolve' | 'updateIfOwner'>;
+    visualPreviewService?: Pick<typeof visualPreviewOAuthCredentialService, 'refreshAndGetForOwner'>;
+}
+
+const defaultRefreshDependencies: Required<GitHubTokenRefreshDependencies> = {
+    userGrantService: githubUserGrantService,
+    visualPreviewService: visualPreviewOAuthCredentialService,
+};
 
 function isUnrecoverableRefreshError(error?: string): boolean {
     return error === 'bad_refresh_token' || error === 'invalid_grant';
@@ -96,6 +108,117 @@ async function saveSession(req: Request, successMessage: string): Promise<void> 
             }
         });
     });
+}
+
+async function updateStoredUserGrant(
+    req: Request,
+    service: Pick<GitHubUserGrantService, 'updateIfOwner'> = githubUserGrantService,
+    expected?: { accessToken?: string; refreshToken?: string },
+): Promise<'updated' | 'not-updated' | 'unavailable'> {
+    if (!req.user) return 'not-updated';
+    try {
+        return await service.updateIfOwner(req.user, expected) ? 'updated' : 'not-updated';
+    } catch (error) {
+        console.warn('Could not update the stored GitHub user grant:', (error as Error).message);
+        return 'unavailable';
+    }
+}
+
+async function adoptStoredGrantAfterConflict(
+    req: Request,
+    expected: { accessToken?: string; refreshToken?: string },
+    service: Pick<GitHubUserGrantService, 'resolve'>,
+): Promise<GitHubTokenRefreshResult | null> {
+    const user = req.user;
+    if (!user) return null;
+    try {
+        const stored = await service.resolve(user.id, false);
+        // A CAS miss only proves a concurrent credential change after a read
+        // observes a different access token. The unchanged pre-rotation row is
+        // never allowed to replace GitHub's successfully issued token.
+        if (stored.status !== 'active' || stored.accessToken === expected.accessToken) return null;
+        user.accessToken = stored.accessToken;
+        user.refreshToken = stored.refreshToken;
+        user.tokenExpiresAt = stored.tokenExpiresAt;
+        user.refreshTokenExpiresAt = stored.refreshTokenExpiresAt;
+        delete user.githubAuthInvalid;
+        await saveSession(req, `Adopted concurrently refreshed GitHub token for user ${user.username}`);
+        return {
+            status: 'refreshed',
+            accessToken: stored.accessToken,
+            refreshToken: stored.refreshToken,
+            tokenExpiresAt: stored.tokenExpiresAt,
+            refreshTokenExpiresAt: stored.refreshTokenExpiresAt,
+        };
+    } catch (error) {
+        console.warn('Could not verify a concurrent stored GitHub grant update:', (error as Error).message);
+        return null;
+    }
+}
+
+async function synchronizeFromStoredGrant(
+    req: Request,
+    force: boolean,
+    service: Pick<GitHubUserGrantService, 'resolve'>,
+): Promise<GitHubTokenRefreshResult | null> {
+    const user = req.user;
+    if (!user) return { status: 'reauth-required' };
+    let stored = await service.resolve(user.id, false);
+    const alreadyRotated = stored.status === 'active' && (
+        stored.accessToken !== user.accessToken
+        || stored.refreshToken !== user.refreshToken
+    );
+    if (force && !alreadyRotated) stored = await service.resolve(user.id, true);
+    if (stored.status === 'missing' || stored.status === 'reauth_required') return null;
+    if (stored.status === 'temporarily_unavailable') return { status: 'temporarily-unavailable' };
+
+    const changed = user.accessToken !== stored.accessToken
+        || user.refreshToken !== stored.refreshToken
+        || user.tokenExpiresAt !== stored.tokenExpiresAt
+        || user.refreshTokenExpiresAt !== stored.refreshTokenExpiresAt;
+    user.accessToken = stored.accessToken;
+    user.refreshToken = stored.refreshToken;
+    user.tokenExpiresAt = stored.tokenExpiresAt;
+    user.refreshTokenExpiresAt = stored.refreshTokenExpiresAt;
+    delete user.githubAuthInvalid;
+    if (changed) {
+        await saveSession(req, `Synchronized refreshed GitHub token for user ${user.username}`);
+    }
+    return {
+        status: changed || force ? 'refreshed' : 'not-needed',
+        accessToken: stored.accessToken,
+        refreshToken: stored.refreshToken,
+        tokenExpiresAt: stored.tokenExpiresAt,
+        refreshTokenExpiresAt: stored.refreshTokenExpiresAt,
+    };
+}
+
+async function adoptSharedGrantAfterRejectedRefresh(
+    req: Request,
+    service: Pick<typeof visualPreviewOAuthCredentialService, 'refreshAndGetForOwner'>,
+): Promise<GitHubTokenRefreshResult | null> {
+    const user = req.user;
+    if (!user) return null;
+    try {
+        const sharedGrant = await service.refreshAndGetForOwner(user.id, false);
+        if (sharedGrant?.status !== 'active' || !sharedGrant.accessToken) return null;
+        user.accessToken = sharedGrant.accessToken;
+        user.refreshToken = sharedGrant.refreshToken;
+        user.tokenExpiresAt = sharedGrant.accessTokenExpiresAt;
+        user.refreshTokenExpiresAt = sharedGrant.refreshTokenExpiresAt;
+        delete user.githubAuthInvalid;
+        await saveSession(req, `Adopted concurrently refreshed GitHub token for user ${user.username}`);
+        return {
+            status: 'refreshed',
+            accessToken: user.accessToken,
+            refreshToken: user.refreshToken,
+            tokenExpiresAt: user.tokenExpiresAt,
+            refreshTokenExpiresAt: user.refreshTokenExpiresAt,
+        };
+    } catch (error) {
+        console.warn('Could not check the shared OAuth grant after a rejected session refresh:', (error as Error).message);
+        return null;
+    }
 }
 
 function buildTokenRefreshRequest(user: NonNullable<Request['user']>): { endpoint: string; init: RequestInit } {
@@ -168,14 +291,27 @@ export async function refreshStoredGitHubCredential(user: NonNullable<Request['u
 
 // Session fallback and the shared background credential deliberately converge here.
 // eslint-disable-next-line complexity
-async function performGitHubTokenRefresh(req: Request, force: boolean): Promise<GitHubTokenRefreshResult> {
+async function performGitHubTokenRefresh(
+    req: Request,
+    force: boolean,
+    dependencies: Required<GitHubTokenRefreshDependencies>,
+): Promise<GitHubTokenRefreshResult> {
     const user = req.user;
     if (!user || user.githubAuthInvalid) return { status: 'reauth-required' };
+    const refreshInput = { accessToken: user.accessToken, refreshToken: user.refreshToken };
     const supportsVisualPreviewUploads = isSupportedVisualPreviewUploadToken(user.accessToken || '');
+
+    try {
+        const storedResult = await synchronizeFromStoredGrant(req, force, dependencies.userGrantService);
+        if (storedResult) return storedResult;
+    } catch (error) {
+        console.warn('Could not coordinate refresh with the stored GitHub user grant:', (error as Error).message);
+        return { status: 'temporarily-unavailable' };
+    }
 
     if (supportsVisualPreviewUploads) {
         try {
-            const sharedGrant = await visualPreviewOAuthCredentialService.refreshAndGetForOwner(user.id, force);
+            const sharedGrant = await dependencies.visualPreviewService.refreshAndGetForOwner(user.id, force);
             if (sharedGrant?.status === 'reauth_required') {
                 await markGitHubSessionReauthRequired(req, 'shared_visual_preview_grant_invalid');
                 return { status: 'reauth-required' };
@@ -190,6 +326,7 @@ async function performGitHubTokenRefresh(req: Request, force: boolean): Promise<
                 user.refreshTokenExpiresAt = sharedGrant.refreshTokenExpiresAt;
                 if (changed) {
                     await saveSession(req, `Synchronized refreshed GitHub token for user ${user.username}`);
+                    await updateStoredUserGrant(req, dependencies.userGrantService);
                 }
                 return {
                     status: changed ? 'refreshed' : 'not-needed',
@@ -229,7 +366,13 @@ async function performGitHubTokenRefresh(req: Request, force: boolean): Promise<
         const data = await response.json() as GitHubTokenRefreshResponse;
         if (data.error) {
             console.error(`GitHub token refresh error: ${data.error} - ${data.error_description}`);
-            if (isUnrecoverableRefreshError(data.error)) await markGitHubSessionReauthRequired(req, data.error);
+            if (isUnrecoverableRefreshError(data.error)) {
+                const adopted = await synchronizeFromStoredGrant(req, false, dependencies.userGrantService);
+                if (adopted?.accessToken) return { ...adopted, status: 'refreshed' };
+                const sharedAdoption = await adoptSharedGrantAfterRejectedRefresh(req, dependencies.visualPreviewService);
+                if (sharedAdoption) return sharedAdoption;
+                await markGitHubSessionReauthRequired(req, data.error);
+            }
             return { status: isUnrecoverableRefreshError(data.error) ? 'reauth-required' : 'temporarily-unavailable' };
         }
         if (!data.access_token) {
@@ -244,6 +387,12 @@ async function performGitHubTokenRefresh(req: Request, force: boolean): Promise<
             user.refreshTokenExpiresAt = Date.now() + (data.refresh_token_expires_in * 1000);
         }
 
+        const persistence = await updateStoredUserGrant(req, dependencies.userGrantService, refreshInput);
+        if (persistence === 'not-updated') {
+            const adopted = await adoptStoredGrantAfterConflict(req, refreshInput, dependencies.userGrantService);
+            if (adopted) return adopted;
+            console.warn('Stored GitHub user grant was not updated and no concurrent rotation could be confirmed');
+        }
         await saveSession(req, `Successfully refreshed GitHub token for user ${user.username}`);
         if (supportsVisualPreviewUploads) {
             try {
@@ -266,7 +415,12 @@ async function performGitHubTokenRefresh(req: Request, force: boolean): Promise<
     }
 }
 
-export async function refreshGitHubTokenWithResult(req: Request, force = false): Promise<GitHubTokenRefreshResult> {
+export async function refreshGitHubTokenWithResult(
+    req: Request,
+    force = false,
+    dependencyOverrides: GitHubTokenRefreshDependencies = {},
+): Promise<GitHubTokenRefreshResult> {
+    const dependencies = { ...defaultRefreshDependencies, ...dependencyOverrides };
     const lockKey = getRefreshLockKey(req);
     const existingRefresh = lockKey ? sessionRefreshes.get(lockKey) : undefined;
     if (existingRefresh) {
@@ -278,7 +432,7 @@ export async function refreshGitHubTokenWithResult(req: Request, force = false):
         return result;
     }
 
-    const refreshPromise = performGitHubTokenRefresh(req, force);
+    const refreshPromise = performGitHubTokenRefresh(req, force, dependencies);
     if (lockKey) sessionRefreshes.set(lockKey, refreshPromise);
     try {
         return await refreshPromise;

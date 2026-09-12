@@ -131,10 +131,10 @@ const TimelineContent: React.FC<{
   const routing = item.metadata?.syntheticRouting;
 
   return (
-    <div className={`flex-grow ${isCompleted ? 'mt-1' : ''} ${compact ? 'pb-3' : 'pb-6'}`}>
-      <div className="flex justify-between items-center">
-        <div>
-          <div className={`${compact ? 'text-xs' : 'text-sm'} ${index === maxDurationIndex ? 'font-bold text-gray-900' : 'font-medium text-gray-700'}`}>
+    <div className={`min-w-0 flex-grow ${isCompleted ? 'mt-1' : ''} ${compact ? 'pb-3' : 'pb-6'}`}>
+      <div className="flex min-w-0 items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className={`break-words ${compact ? 'text-xs' : 'text-sm'} ${index === maxDurationIndex ? 'font-bold text-gray-900' : 'font-medium text-gray-700'}`}>
             {displayLabel}
             {prInfo?.url && (
               <a
@@ -151,7 +151,7 @@ const TimelineContent: React.FC<{
             )}
           </div>
           {routing && (
-            <div className="mt-0.5 text-[10px] text-slate-500">
+            <div className="mt-0.5 break-words text-[10px] text-slate-500">
               Virtual {routing.virtualAgentAlias} · {routing.virtualModel}
               {routing.selectionReason ? ` · ${routing.selectionReason}` : ''}
             </div>
@@ -159,7 +159,7 @@ const TimelineContent: React.FC<{
         </div>
 
         {/* Duration */}
-        <div className="text-right pl-4">
+        <div className="flex-shrink-0 text-right">
           {item.duration !== null && (
             <span className={`${compact ? 'text-xs' : 'text-sm'} ${index === maxDurationIndex ? 'font-bold text-gray-800' : 'text-gray-500'}`}>
               {formatRelativeTime(item.duration)}

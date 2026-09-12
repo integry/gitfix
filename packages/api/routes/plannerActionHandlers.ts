@@ -30,10 +30,16 @@ import {
   recoverStaleRefinement,
   releaseDraftPreparation,
   setupRepoContext,
+  verifyPlannerRepositoryAccess,
   selectRefinementModel,
   validateRefineInput,
   GenerateRequestBody
 } from './plannerHelpers/index.js';
+import {
+  handleGitHubRepositoryAccessError,
+  resolveGitHubMetadataToken,
+  verifyGitHubRepositoryAccess,
+} from '../githubMetadataAuth.js';
 
 function validateGenerateRequest(body: GenerateRequestBody): string | undefined {
   const { draftId, contextRepositories, excludedFiles } = body;
@@ -47,7 +53,18 @@ function validateGenerateRequest(body: GenerateRequestBody): string | undefined 
   return undefined;
 }
 
-export function createGenerateHandler(db: Knex) {
+interface PlannerActionAuthorizationDeps {
+  resolveMetadataToken?: typeof resolveGitHubMetadataToken;
+  verifyRepositoryAccess?: typeof verifyGitHubRepositoryAccess;
+  setupRepository?: typeof setupRepoContext;
+  hasRunningContainer?: typeof hasRunningPlannerContainer;
+}
+
+export function createGenerateHandler(db: Knex, deps: PlannerActionAuthorizationDeps = {}) {
+  const resolveMetadataToken = deps.resolveMetadataToken ?? resolveGitHubMetadataToken;
+  const verifyRepositoryAccess = deps.verifyRepositoryAccess ?? verifyGitHubRepositoryAccess;
+  const setupRepository = deps.setupRepository ?? setupRepoContext;
+  const hasRunningContainer = deps.hasRunningContainer ?? hasRunningPlannerContainer;
   return async function generate(req: Request, res: Response): Promise<void> {
     const check = checkDbAndAuth(db, req.user?.id);
     if (!check.valid) { sendCheckError(res, check); return; }
@@ -75,7 +92,7 @@ export function createGenerateHandler(db: Knex) {
         res.status(409).json({ error: 'Another operation is already running for this draft' });
         return;
       }
-      if (await hasRunningPlannerContainer(draftId, 'plan-generation')) {
+      if (await hasRunningContainer(draftId, 'plan-generation')) {
         res.status(409).json({ error: 'Plan generation is already running for this draft' });
         return;
       }
@@ -83,10 +100,18 @@ export function createGenerateHandler(db: Knex) {
       const [owner, repoName] = (draft.repository as string).split('/');
       if (!owner || !repoName) { res.status(400).json({ error: 'Invalid repository format' }); return; }
 
-      const accessToken = req.user!.accessToken;
-      if (!accessToken) { res.status(401).json({ error: 'GitHub access token not available' }); return; }
+      const accessToken = await resolveMetadataToken(req);
+      await verifyPlannerRepositoryAccess(
+        {
+          repository: draft.repository as string,
+          context_config: draft.context_config,
+        },
+        contextRepositories,
+        accessToken,
+        verifyRepositoryAccess,
+      );
 
-      const { worktreePath, authToken } = await setupRepoContext({ repository: draft.repository as string }, accessToken);
+      const { worktreePath, authToken } = await setupRepository({ repository: draft.repository as string }, accessToken);
 
       await updateDraftContextConfig(db, draftId, draft, { baseBranch, granularity, contextLevel, compress, contextRepositories, generationModel, excludedFiles });
 
@@ -102,6 +127,7 @@ export function createGenerateHandler(db: Knex) {
 
       void runBackgroundGeneration({ db, draftId, worktreePath, authToken, correlationId, runId: correlationId });
     } catch (error) {
+      if (await handleGitHubRepositoryAccessError(req, res, error)) return;
       console.error('Generate plan error:', error);
       if (generationClaimed && !res.headersSent) {
         try {
@@ -138,7 +164,10 @@ function isValidExpectedRevision(value: unknown): boolean {
   return value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0);
 }
 
-export function createRefineHandler(db: Knex) {
+export function createRefineHandler(db: Knex, deps: PlannerActionAuthorizationDeps = {}) {
+  const resolveMetadataToken = deps.resolveMetadataToken ?? resolveGitHubMetadataToken;
+  const verifyRepositoryAccess = deps.verifyRepositoryAccess ?? verifyGitHubRepositoryAccess;
+  const hasRunningContainer = deps.hasRunningContainer ?? hasRunningPlannerContainer;
   return async function refine(req: Request, res: Response): Promise<void> {
     const check = checkDbAndAuth(db, req.user?.id);
     if (!check.valid) { sendCheckError(res, check); return; }
@@ -153,10 +182,11 @@ export function createRefineHandler(db: Knex) {
     const correlationId = generateCorrelationId();
     let refinementClaimed = false;
     let preparationClaimed = false;
+    let accessToken = '';
 
     try {
       // Verify ownership
-      const ownership = await verifyDraftOwnership(db, draftId, req.user!.id, ['user_id', 'status']);
+      const ownership = await verifyDraftOwnership(db, draftId, req.user!.id, ['user_id', 'status', 'repository', 'context_config']);
       if (!ownership.authorized) { res.status(ownership.status!).json({ error: ownership.error }); return; }
       preparationClaimed = claimDraftPreparation(draftId, 'plan-refinement');
       if (!preparationClaimed) {
@@ -164,10 +194,20 @@ export function createRefineHandler(db: Knex) {
         return;
       }
       const draft = await recoverStaleRefinement(db, ownership.draft!);
-      if (isDraftOperationActive(draft.status) || await hasRunningPlannerContainer(draftId, 'plan-refinement')) {
+      if (isDraftOperationActive(draft.status) || await hasRunningContainer(draftId, 'plan-refinement')) {
         res.status(409).json({ error: 'Another operation is already running for this draft' });
         return;
       }
+      accessToken = await resolveMetadataToken(req);
+      await verifyPlannerRepositoryAccess(
+        {
+          repository: draft.repository as string,
+          context_config: draft.context_config,
+        },
+        undefined,
+        accessToken,
+        verifyRepositoryAccess,
+      );
 
       // Calculate estimation early so we can store it before the LLM call starts
       // Fetch original context to include in the token estimate (this is the bulk of the prompt)
@@ -226,10 +266,11 @@ export function createRefineHandler(db: Knex) {
         instruction,
         generationModel,
         correlationId,
-        accessToken: req.user!.accessToken || '',
+        accessToken,
         runId: correlationId
       }).catch(error => console.error('[refine] Detached refinement failed', { draftId, error }));
     } catch (error) {
+      if (await handleGitHubRepositoryAccessError(req, res, error)) return;
       console.error('Refine plan error:', error);
       if (refinementClaimed && !res.headersSent) {
         try {

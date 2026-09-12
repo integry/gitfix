@@ -3,8 +3,9 @@ import { Request, Response } from 'express';
 import { RedisClientType } from 'redis';
 import { isDemoMode } from '../demoMode.js';
 import {
+  PROPR_CONNECT_DISCOVERY_SCHEMA_VERSION,
+  canonicalProprProxyUrl,
   getProprCompatibilityMetadata,
-  AGENT_DEFAULTS,
   resolveGithubAuthMode,
   resolveGithubEventIntakeMode,
   ROUTING_STATUS_REDIS_KEY,
@@ -19,9 +20,8 @@ import {
 } from '@propr/core';
 import type { Agent, AgentConfig, AgentRegistryOperationalStatus } from '@propr/core';
 import type { SyntheticAgentConfig } from '@propr/shared';
-import path from 'node:path';
-import os from 'node:os';
 import { applyRoutingStatus, parseConnectAccountStatus, type RoutingState } from './connectAccountStatus.js';
+import { getOrCreatePublicInstanceIdentity } from '../publicInstanceIdentity.js';
 
 interface StatusRoutesDeps {
   redisClient: RedisClientType;
@@ -37,6 +37,7 @@ interface StatusRoutesDeps {
     snapshot: Record<string, unknown> & { timestamp: string },
     additionalAdministratorIds: readonly string[],
   ) => Promise<void>;
+  getPublicInstanceIdentity?: () => string | Promise<string>;
 }
 
 interface IndexingStatusQueue {
@@ -48,13 +49,19 @@ type StatusAgentRegistry = Pick<AgentRegistry, 'ensureInitialized' | 'getAllAgen
   getOperationalStatus?: () => AgentRegistryOperationalStatus;
 };
 
-type ServiceStatus = 'connected' | 'disconnected' | 'active' | 'queued' | 'idle' | 'failed' | 'unknown';
+type ServiceStatus = 'connected' | 'disconnected' | 'active' | 'queued' | 'idle' | 'failed'
+  | 'unknown' | 'not_applicable';
 
 interface AgentStatus {
   id: string;
   type: AgentConfig['type'] | 'synthetic';
   alias: string;
   status: 'connected' | 'disconnected' | 'degraded';
+}
+
+interface AgentStatusSnapshot {
+  agents: AgentStatus[];
+  claudeAuth: Extract<ServiceStatus, 'connected' | 'disconnected' | 'unknown' | 'not_applicable'>;
 }
 
 export function createStatusRoutes(deps: StatusRoutesDeps) {
@@ -68,22 +75,48 @@ export function createStatusRoutes(deps: StatusRoutesDeps) {
     agentHealthTimeoutMs = 1500,
     now = Date.now,
     loadSummarizationRuntimeState: loadSummarizationRuntimeStateDep = loadSummarizationRuntimeState,
-    projectSystemSnapshot
+    projectSystemSnapshot,
+    getPublicInstanceIdentity: loadPublicInstanceIdentity = getOrCreatePublicInstanceIdentity,
   } = deps;
   // Unit/integration callers that replace the direct config loader predate
   // synthetic pools. Treat that fixture as an empty synthetic document unless
   // it explicitly supplies one; production still uses persisted configuration.
   const loadSyntheticAgents = configuredSyntheticLoader
     ?? (deps.loadAgents ? async () => [] : loadSyntheticAgentConfigs);
-  let agentStatusCache: { expiresAt: number; statuses: AgentStatus[] } | undefined;
+  let agentStatusCache: { expiresAt: number; snapshot: AgentStatusSnapshot } | undefined;
 
   function getCompatibility(_req: Request, res: Response): void {
-    res.json(getProprCompatibilityMetadata());
+    res.json(getProprCompatibilityMetadata(!isDemoMode()));
+  }
+
+  async function getDesktopDiscovery(_req: Request, res: Response): Promise<void> {
+    // This endpoint is intentionally unauthenticated. Keep it cache-safe and
+    // bounded, and never include environment/account/credential state.
+    res.set({
+      'Cache-Control': 'no-store, max-age=0',
+      Pragma: 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    try {
+      res.json({
+        schemaVersion: PROPR_CONNECT_DISCOVERY_SCHEMA_VERSION,
+        product: 'ProPR',
+        canonicalEndpoint: canonicalProprProxyUrl(process.env.API_PUBLIC_URL) ?? null,
+        publicInstanceIdentity: await loadPublicInstanceIdentity(),
+        ...getProprCompatibilityMetadata(!isDemoMode()),
+      });
+    } catch {
+      // Do not expose a persistence path or parse error through public discovery.
+      res.status(503).json({
+        schemaVersion: PROPR_CONNECT_DISCOVERY_SCHEMA_VERSION,
+        code: 'IDENTITY_UNAVAILABLE',
+      });
+    }
   }
 
   async function getStatus(req: Request, res: Response): Promise<void> {
     try {
-      const compatibility = getProprCompatibilityMetadata();
+      const compatibility = getProprCompatibilityMetadata(!isDemoMode());
       // In demo mode, return all-green status
       if (isDemoMode()) {
         res.json({
@@ -165,11 +198,9 @@ export function createStatusRoutes(deps: StatusRoutesDeps) {
       // stalled one independent of the intake method name.
       status.githubEventIntakeStatus = resolveIntakeStatus(intakeMode, routing, status.daemon);
 
-      const agents = await getCachedAgentStatuses();
-      status.agents = agents;
-      status.claudeAuth = agents.some(agent => agent.type === 'claude' && agent.status === 'connected')
-        ? 'connected'
-        : 'disconnected';
+      const agentSnapshot = await getCachedAgentStatusSnapshot();
+      status.agents = agentSnapshot.agents;
+      status.claudeAuth = agentSnapshot.claudeAuth;
       status.indexing = await getIndexingStatus(getIndexingQueue);
       const warnings = await getSystemWarnings(loadSummarizationRuntimeStateDep);
       const agentRuntime = agentRegistry.getOperationalStatus?.();
@@ -204,20 +235,22 @@ export function createStatusRoutes(deps: StatusRoutesDeps) {
     }
   }
 
-  return { getCompatibility, getStatus };
+  return { getCompatibility, getDesktopDiscovery, getStatus };
 
-  async function getCachedAgentStatuses(): Promise<AgentStatus[]> {
+  async function getCachedAgentStatusSnapshot(): Promise<AgentStatusSnapshot> {
     const currentTime = now();
     if (agentStatusCache && agentStatusCache.expiresAt > currentTime) {
-      return agentStatusCache.statuses;
+      return agentStatusCache.snapshot;
     }
 
-    const statuses = await getAgentStatuses(loadAgents, loadSyntheticAgents, agentRegistry, agentHealthTimeoutMs);
+    const snapshot = await getAgentStatusSnapshot(
+      loadAgents, loadSyntheticAgents, agentRegistry, agentHealthTimeoutMs,
+    );
     agentStatusCache = {
-      statuses,
+      snapshot,
       expiresAt: currentTime + agentStatusCacheTtlMs
     };
-    return statuses;
+    return snapshot;
   }
 }
 
@@ -370,19 +403,22 @@ function formatCooldownUntil(until: string): string {
   });
 }
 
-async function getAgentStatuses(
+async function getAgentStatusSnapshot(
   loadAgents: () => Promise<AgentConfig[]>,
   loadSyntheticAgents: () => Promise<SyntheticAgentConfig[]>,
   registry: StatusAgentRegistry,
   healthTimeoutMs: number
-): Promise<AgentStatus[]> {
+): Promise<AgentStatusSnapshot> {
   let configuredAgents: AgentConfig[];
   let syntheticAgents: SyntheticAgentConfig[] = [];
   try {
     configuredAgents = await loadAgents();
   } catch (error) {
     console.error('Error loading agent status configuration:', error);
-    return [];
+    // Configuration availability is part of applicability. Do not mistake a
+    // read failure for a known Codex-only instance and hide a possible Claude
+    // auth problem.
+    return { agents: [], claudeAuth: 'unknown' };
   }
   try {
     syntheticAgents = await loadSyntheticAgents();
@@ -398,16 +434,20 @@ async function getAgentStatuses(
     console.error('Error initializing agent registry for status:', error);
   }
 
-  if (configuredAgents.length === 0 && syntheticAgents.length === 0) {
-    const defaultAgent = registry.getAgentById('default-claude-agent') ?? registry.getAgentByAlias('default');
-    if (defaultAgent?.config.type === 'claude') {
-      return [await buildRegisteredAgentStatus(defaultAgent, healthTimeoutMs)];
-    }
-    return [buildDisconnectedAgentStatus(getDefaultClaudeConfig())];
-  }
-
   const registeredById = new Map(registry.getAllAgents().map(agent => [agent.config.id, agent]));
   const registeredByAlias = new Map(registry.getAllAgents().map(agent => [agent.config.alias, agent]));
+
+  // With no persisted configs the registry still supports the legacy,
+  // environment-configured Claude runtime. Only surface the concrete enabled
+  // agent that the registry actually created, and only when its legacy
+  // environment configuration is explicit. This avoids reviving the old
+  // fabricated disconnected default for genuinely unconfigured instances.
+  const legacyClaudeAgent = configuredAgents.length === 0 && hasExplicitLegacyClaudeConfiguration()
+    ? registeredById.get('default-claude-agent')
+    : undefined;
+  const enabledLegacyClaudeAgent = legacyClaudeAgent?.config.enabled && legacyClaudeAgent.config.type === 'claude'
+    ? legacyClaudeAgent
+    : undefined;
 
   const directStatuses = await Promise.all(configuredAgents
     .filter(agent => agent.enabled)
@@ -438,20 +478,24 @@ async function getAgentStatuses(
       };
     }));
 
-  return [...directStatuses, ...syntheticStatuses];
+  const legacyClaudeStatuses = enabledLegacyClaudeAgent
+    ? [await buildRegisteredAgentStatus(enabledLegacyClaudeAgent, healthTimeoutMs)]
+    : [];
+  const agents = [...directStatuses, ...legacyClaudeStatuses, ...syntheticStatuses];
+  const claudeApplicable = configuredAgents.some(agent => agent.enabled && agent.type === 'claude')
+    || enabledLegacyClaudeAgent !== undefined;
+  return {
+    agents,
+    claudeAuth: !claudeApplicable
+      ? 'not_applicable'
+      : agents.some(agent => agent.type === 'claude' && agent.status === 'connected')
+        ? 'connected'
+        : 'disconnected',
+  };
 }
 
-function getDefaultClaudeConfig(): AgentConfig {
-  return {
-    id: 'default-claude-agent',
-    type: 'claude',
-    alias: 'default',
-    enabled: true,
-    dockerImage: process.env.AGENT_DOCKER_IMAGE || 'propr/agent:latest',
-    configPath: process.env.CLAUDE_CONFIG_PATH || path.join(os.homedir(), '.claude'),
-    supportedModels: [...AGENT_DEFAULTS.claude.defaultModels],
-    defaultModel: process.env.CLAUDE_MODEL || undefined
-  };
+function hasExplicitLegacyClaudeConfiguration(): boolean {
+  return Boolean(process.env.AGENT_DOCKER_IMAGE?.trim() || process.env.CLAUDE_CONFIG_PATH?.trim());
 }
 
 async function buildConfiguredAgentStatus(

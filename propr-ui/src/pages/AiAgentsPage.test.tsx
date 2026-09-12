@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PropsWithChildren } from 'react';
+import type { HTMLAttributes, PropsWithChildren } from 'react';
 import type { AgentConfig } from '../api/proprApi';
 import type { SyntheticAgentConfig } from '@propr/shared';
 import { CommittedConfigWriteError } from '../api/apiClient';
@@ -21,10 +21,37 @@ const agentTankApiMocks = vi.hoisted(() => ({
 vi.mock('../api/proprApi', () => apiMocks);
 vi.mock('../api/revertApi', () => agentTankApiMocks);
 
+type MockPanelProps = PropsWithChildren<HTMLAttributes<HTMLDivElement> & {
+  defaultSize?: number;
+  direction?: string;
+  hitAreaMargins?: unknown;
+  keyboardResizeBy?: number;
+  minSize?: number;
+  order?: number;
+}>;
+
 vi.mock('react-resizable-panels', () => ({
-  Panel: ({ children }: PropsWithChildren) => <div>{children}</div>,
-  PanelGroup: ({ children }: PropsWithChildren) => <div>{children}</div>,
-  PanelResizeHandle: ({ children }: PropsWithChildren) => <div>{children}</div>
+  Panel: ({ children, defaultSize, minSize, order, ...props }: MockPanelProps) => (
+    <div
+      {...props}
+      data-mock-panel="true"
+      data-default-size={defaultSize}
+      data-min-size={minSize}
+      data-order={order}
+    >
+      {children}
+    </div>
+  ),
+  PanelGroup: ({ children, direction, keyboardResizeBy, ...props }: MockPanelProps) => (
+    <div {...props} data-mock-panel-group={direction} data-keyboard-resize-by={keyboardResizeBy}>
+      {children}
+    </div>
+  ),
+  PanelResizeHandle: ({ children, ...props }: MockPanelProps) => {
+    const { hitAreaMargins, ...htmlProps } = props;
+    void hitAreaMargins;
+    return <div {...htmlProps}>{children}</div>;
+  }
 }));
 
 const sharedModelId = 'provider:model:1';
@@ -88,6 +115,26 @@ describe('AiAgentsPage model selection', () => {
     apiMocks.getSyntheticAgents.mockResolvedValue({ synthetic_agents: [syntheticPool] });
     apiMocks.saveSyntheticAgents.mockResolvedValue({ success: true, synthetic_agents: [syntheticPool] });
     agentTankApiMocks.getAgentTankStatus.mockResolvedValue({ available: true });
+  });
+
+  it('places each desktop header and content region in the same resizable pane', async () => {
+    render(<AiAgentsPage />);
+
+    await screen.findAllByRole('button', { name: `First Codex: ${sharedModelId}` });
+
+    const group = screen.getByTestId('ai-agents-panel-group');
+    const configurationPane = screen.getByTestId('ai-agents-configuration-pane');
+    const playgroundPane = screen.getByTestId('ai-agents-playground-pane');
+    const configurationPanel = configurationPane.parentElement;
+    const playgroundPanel = playgroundPane.parentElement;
+
+    expect(document.querySelectorAll('[data-mock-panel-group]')).toHaveLength(1);
+    expect(group.querySelectorAll(':scope > [data-mock-panel="true"]')).toHaveLength(2);
+    expect(configurationPanel).toContainElement(screen.getByRole('heading', { name: 'Agent Configuration' }));
+    expect(configurationPanel).toContainElement(screen.getByTestId('ai-agents-configuration-scroll'));
+    expect(configurationPanel).toContainElement(screen.getByRole('button', { name: '+ Add Agent' }));
+    expect(playgroundPanel).toContainElement(screen.getByRole('heading', { name: 'Playground', level: 2 }));
+    expect(playgroundPanel).toContainElement(screen.getByTestId('ai-agents-playground-content'));
   });
 
   it('replaces Playground selections with the exact enabled agent/model pair and opens the mobile Playground', async () => {

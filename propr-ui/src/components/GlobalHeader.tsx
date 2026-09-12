@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Inbox, LogOut, ScrollText } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ScrollText } from 'lucide-react';
+import { DESKTOP_UI_COMMAND_EVENT } from '../desktop/useDesktopNativeCommands';
+import { useDesktop } from '../desktop/DesktopContext';
 import GlobalSearch from './GlobalSearch';
-import AIActivityMonitor from './AIActivityMonitor';
 import QuickAddTodo from './QuickAddTodo';
 import { useHeaderStats, type HeaderStats } from '../hooks/useHeaderStats';
 import {
@@ -20,6 +21,7 @@ interface GlobalHeaderProps {
   MenuIcon: React.FC<{ className?: string }>;
   isDemoMode?: boolean;
   headerStatsOverride?: Pick<HeaderStats, 'runningCount' | 'runningItems' | 'activePlans' | 'reviewGroups' | 'systemHealth'> & {
+    activityStatus?: HeaderStats['activityStatus'];
     dismissPlan?: HeaderStats['dismissPlan'];
     dismissTask?: HeaderStats['dismissTask'];
   };
@@ -34,6 +36,7 @@ function resolveHeaderStats(
   return {
     runningCount: override?.runningCount ?? stats.runningCount,
     runningItems: override?.runningItems ?? stats.runningItems,
+    activityStatus: override?.activityStatus ?? stats.activityStatus,
     activePlans: override?.activePlans ?? stats.activePlans,
     reviewGroups: override?.reviewGroups ?? stats.reviewGroups,
     systemHealth: override?.systemHealth ?? stats.systemHealth,
@@ -62,67 +65,15 @@ function useHeaderKeyboardShortcuts(
   }, [searchInputRef, setQuickAddOpen]);
 }
 
-interface ProfileSectionProps {
-  user: GlobalHeaderProps['user'];
-  onLogout: () => void;
-  systemHealth: HeaderStats['systemHealth'];
-}
-
-const ProfileSection: React.FC<ProfileSectionProps> = ({ user, onLogout, systemHealth }) => (
-  <div className="relative flex items-center gap-1 px-1 sm:gap-2 sm:px-4">
-    <div className="absolute left-0 top-[20%] h-[60%] w-px bg-slate-200" />
-    <div className="hidden md:flex h-full">
-      <SystemHealth systemHealth={systemHealth} />
-    </div>
-    {user && (
-      <a
-        href={`https://github.com/${user.username}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="group flex h-full flex-none items-center gap-3 transition-colors hover:bg-slate-50 sm:px-2"
-      >
-        <div className="hidden lg:flex flex-col items-end">
-          <span className="text-sm font-semibold text-gray-700 group-hover:text-gray-900 transition-colors">
-            {user.displayName || user.username}
-          </span>
-          <span className="text-xs text-gray-500 group-hover:text-gray-700 transition-colors">
-            @{user.username}
-          </span>
-        </div>
-        {user.avatarUrl ? (
-          <img
-            src={user.avatarUrl}
-            alt={user.username}
-            className="w-8 h-8 rounded-full border border-gray-200 group-hover:border-gray-300 transition-colors"
-          />
-        ) : (
-          <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-600 font-bold text-xs group-hover:bg-primary-200 transition-colors">
-            {user.username.slice(0, 2).toUpperCase()}
-          </div>
-        )}
-      </a>
-    )}
-    {user && (
-      <button
-        onClick={onLogout}
-        className="flex h-full flex-none items-center px-1 text-sm font-medium text-gray-500 transition-colors hover:text-red-600 sm:px-0"
-        aria-label="Logout"
-        title="Logout"
-      >
-        <LogOut className="h-5 w-5 sm:hidden" aria-hidden="true" />
-        <span className="hidden sm:inline">Logout</span>
-      </button>
-    )}
-  </div>
-);
-
 const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggle, MenuIcon, isDemoMode = false, headerStatsOverride, newPlanPressedOverride = false, inboxUnreadCount = null }) => {
   const navigate = useNavigate();
+  const desktop = useDesktop();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [searchRequest, setSearchRequest] = useState(0);
 
   const headerStats = useHeaderStats();
-  const { runningCount, runningItems, activePlans, reviewGroups, systemHealth, dismissPlan, dismissTask } = resolveHeaderStats(headerStatsOverride, headerStats);
+  const { activePlans, reviewGroups, systemHealth, dismissPlan, dismissTask } = resolveHeaderStats(headerStatsOverride, headerStats);
 
   const handleNewPlan = useCallback(() => {
     if (isDemoMode) return;
@@ -130,6 +81,18 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggl
   }, [isDemoMode, navigate]);
 
   useHeaderKeyboardShortcuts(searchInputRef, setQuickAddOpen);
+  useEffect(() => {
+    if (!desktop) return;
+    const handleCommand = (event: Event) => {
+      if ((event as CustomEvent).detail === 'search') setSearchRequest(value => value + 1);
+    };
+    window.addEventListener(DESKTOP_UI_COMMAND_EVENT, handleCommand);
+    return () => window.removeEventListener(DESKTOP_UI_COMMAND_EVENT, handleCommand);
+  }, [desktop]);
+
+  useEffect(() => {
+    if (searchRequest) searchInputRef.current?.focus();
+  }, [searchRequest]);
 
   const newPlanBg = newPlanPressedOverride ? 'bg-teal-800' : 'bg-teal-600';
   const newPlanTitle = isDemoMode ? 'Demo mode is read-only' : 'New Plan';
@@ -138,84 +101,51 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = ({ user, onLogout, onMenuToggl
     <>
     {/* Global navigation owns app-wide dropdowns, so its stacking context must stay
         above route-level sticky headers such as task details summaries. */}
-    <header className="bg-white border-b border-gray-200 h-16 hidden md:flex items-stretch shadow-sm z-40 sticky top-0">
-      <div className="flex items-center lg:hidden px-4">
-        <button
-          onClick={onMenuToggle}
-          className="p-2 -ml-2 text-gray-500 hover:text-gray-700"
-          aria-label="Open menu"
-        >
-          <MenuIcon className="w-6 h-6" />
-        </button>
-      </div>
-
-      {runningCount > 0 && (
-        <div className="hidden sm:flex items-center relative">
-          <AIActivityMonitor runningItems={runningItems} runningCount={runningCount} />
-          <div className="absolute right-0 top-[20%] h-[60%] w-px bg-slate-200" />
+    <header aria-label="Application toolbar" className="desktop-content-toolbar sticky top-0 z-40 hidden h-14 grid-cols-[minmax(0,1fr)_16rem_minmax(0,1fr)] items-stretch border-b border-slate-200 bg-slate-50 md:grid xl:grid-cols-[minmax(0,1fr)_20rem_minmax(0,1fr)]">
+      <div className="flex min-w-0 items-stretch justify-self-start">
+        <div className="flex items-center px-2 lg:hidden">
+          <button
+            onClick={onMenuToggle}
+            className="p-2 text-gray-500 hover:text-gray-700"
+            aria-label="Open menu"
+          >
+            <MenuIcon className="h-6 w-6" />
+          </button>
         </div>
-      )}
-
-      <div className="hidden md:flex items-center relative">
-        <ActivePlansButton activePlans={activePlans} onDismissPlan={dismissPlan} />
-        <div className="absolute right-0 top-[20%] h-[60%] w-px bg-slate-200" />
+        <div className="flex items-stretch">
+          <ActivePlansButton activePlans={activePlans} onDismissPlan={dismissPlan} />
+          <div className="h-[60%] w-px self-center bg-slate-200" />
+          <TasksButton taskGroups={reviewGroups} onDismissTask={dismissTask} />
+        </div>
       </div>
 
-      <div className="hidden md:flex items-center relative">
-        <TasksButton taskGroups={reviewGroups} onDismissTask={dismissTask} />
-        <div className="absolute right-0 top-[20%] h-[60%] w-px bg-slate-200" />
-      </div>
-
-      <div className="flex-1 flex items-center justify-center px-2 sm:px-4">
-        <div className="w-full max-w-md">
+      <div className="flex w-full items-center justify-center px-2">
+        <div className="w-full">
           <GlobalSearch inputRef={searchInputRef} />
         </div>
       </div>
 
-      <div className="hidden md:flex items-center gap-2 px-4">
-        <QuickAddTodo
-          externalOpen={quickAddOpen}
-          onExternalOpenHandled={() => setQuickAddOpen(false)}
-          disabled={isDemoMode}
-        />
-        <button
-          onClick={handleNewPlan}
-          disabled={isDemoMode}
-          title={newPlanTitle}
-          className={`flex items-center gap-2 px-4 py-1.5 text-white text-sm font-medium hover:bg-teal-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed ${newPlanBg}`}
-        >
-          <ScrollText className="w-4 h-4" />
-          <span>New Plan</span>
-        </button>
+      <div className="flex items-stretch gap-2 justify-self-end pl-3">
+        <div className="flex items-center">
+          <QuickAddTodo
+            externalOpen={quickAddOpen}
+            onExternalOpenHandled={() => setQuickAddOpen(false)}
+            disabled={isDemoMode}
+          />
+        </div>
+        <div className="flex items-center">
+          <button
+            onClick={handleNewPlan}
+            disabled={isDemoMode}
+            title={newPlanTitle}
+            className={`flex items-center gap-2 whitespace-nowrap rounded-lg border-0 px-3 py-1.5 text-white text-sm font-medium hover:bg-teal-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed xl:px-4 ${newPlanBg}`}
+          >
+            <ScrollText className="w-4 h-4" />
+            <span>New Plan</span>
+          </button>
+        </div>
+        <SystemHealth systemHealth={systemHealth} />
       </div>
-
-      <button
-        onClick={handleNewPlan}
-        disabled={isDemoMode}
-        className={`md:hidden flex items-center px-4 text-white hover:bg-teal-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed ${newPlanBg}`}
-        aria-label="New Plan"
-        title={newPlanTitle}
-      >
-        <ScrollText className="w-5 h-5" />
-      </button>
-
-      <Link
-        to="/inbox"
-        className="relative flex items-center px-3 text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700"
-        aria-label={inboxUnreadCount && inboxUnreadCount > 0
-          ? `Inbox, ${inboxUnreadCount} unread notifications`
-          : 'Inbox'}
-        title="Inbox"
-      >
-        <Inbox className="h-5 w-5" aria-hidden="true" />
-        {inboxUnreadCount !== null && inboxUnreadCount > 0 && (
-          <span className="absolute right-1.5 top-1 inline-flex min-w-4 items-center justify-center rounded-full bg-primary-500 px-1 text-[10px] font-bold leading-4 text-white">
-            {inboxUnreadCount > 99 ? '99+' : inboxUnreadCount}
-          </span>
-        )}
-      </Link>
-
-      <ProfileSection user={user} onLogout={onLogout} systemHealth={systemHealth} />
     </header>
     <MobileBottomNavigation
       user={user}
