@@ -16,7 +16,7 @@ const user: CurrentUser = {
 };
 
 const renderAvatar = (currentUser = user) => render(
-  <UserAvatar user={currentUser} className="avatar" fallbackClassName="fallback" />
+  <UserAvatar user={currentUser} className="avatar" fallbackClassName="fallback" referrerPolicy="no-referrer" />
 );
 
 describe('UserAvatar', () => {
@@ -25,6 +25,7 @@ describe('UserAvatar', () => {
 
     const image = screen.getByRole('img', { name: 'The Octocat avatar' });
     expect(image).toHaveAttribute('src', user.avatarUrl);
+    expect(image).toHaveAttribute('referrerpolicy', 'no-referrer');
 
     fireEvent.error(image);
 
