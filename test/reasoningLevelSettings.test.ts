@@ -43,7 +43,7 @@ describe('shared reasoning level vocabulary', () => {
     assert.deepEqual(REASONING_LEVELS, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ultracode', 'auto']);
     assert.deepEqual(CODEX_REASONING_LEVELS, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
     assert.deepEqual(CLAUDE_REASONING_LEVELS, ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode', 'auto']);
-    assert.deepEqual(MUSE_REASONING_LEVELS, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+    assert.deepEqual(MUSE_REASONING_LEVELS, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     assert.deepEqual(getReasoningLevelsForAgentType('codex'), CODEX_REASONING_LEVELS);
     assert.deepEqual(getReasoningLevelsForAgentType('claude'), CLAUDE_REASONING_LEVELS);
     assert.deepEqual(getReasoningLevelsForAgentType('muse'), MUSE_REASONING_LEVELS);
@@ -130,7 +130,7 @@ describe('core model_reasoning_level validation', () => {
     assert.equal(resolveRuntimeModelReasoningLevel('claude', 'auto'), 'auto');
     assert.equal(resolveRuntimeModelReasoningLevel('claude', 'minimal'), null);
     assert.equal(resolveRuntimeModelReasoningLevel('muse', 'none'), 'none');
-    assert.equal(resolveRuntimeModelReasoningLevel('muse', 'ultra'), 'ultra');
+    assert.equal(resolveRuntimeModelReasoningLevel('muse', 'ultra'), null);
     assert.equal(resolveRuntimeModelReasoningLevel('muse', 'auto'), null);
     assert.equal(resolveRuntimeModelReasoningLevel('muse', 'ultracode'), null);
     assert.equal(resolveRuntimeModelReasoningLevel('opencode', 'high'), null);
@@ -144,6 +144,7 @@ describe('core model_reasoning_level validation', () => {
     assert.equal(resolveClaudeReasoningLevel('auto'), 'auto');
     assert.equal(resolveClaudeReasoningLevel('minimal'), null);
     assert.equal(resolveMuseReasoningLevel('none'), 'none');
+    assert.equal(resolveMuseReasoningLevel('ultra'), null);
     assert.equal(resolveMuseReasoningLevel('auto'), null);
     assert.equal(resolveMuseReasoningLevel('ultracode'), null);
   });
@@ -257,7 +258,7 @@ describe('agent model reasoning level configuration', () => {
     }]);
 
     assert.match(error ?? '', /reasoning level 'ultracode'.*not supported by codex/);
-    assert.match(error ?? '', /Supported levels: low, medium, high, xhigh, max, ultra/);
+    assert.match(error ?? '', /Supported levels: low, medium, high, xhigh, max, ultra$/);
   });
 
   test('task labels override per-model agent reasoning levels', async () => {

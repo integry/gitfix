@@ -43,7 +43,6 @@ export const MUSE_REASONING_LEVELS = [
   'high',
   'xhigh',
   'max',
-  'ultra',
 ] as const satisfies readonly ReasoningLevel[];
 
 export function isReasoningLevel(value: string): value is ReasoningLevel {

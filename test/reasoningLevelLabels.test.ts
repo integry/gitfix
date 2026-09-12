@@ -73,10 +73,10 @@ describe('reasoning level runtime clamping', () => {
     assert.equal(resolveClaudeReasoningLevel('minimal'), null);
   });
 
-  test('omits auto and ultracode on the Muse runtime', () => {
+  test('omits auto, ultracode, and ultra on the Muse runtime', () => {
     assert.equal(resolveMuseReasoningLevel('auto'), null);
     assert.equal(resolveMuseReasoningLevel('ultracode'), null);
+    assert.equal(resolveMuseReasoningLevel('ultra'), null);
     assert.equal(resolveMuseReasoningLevel('none'), 'none');
-    assert.equal(resolveMuseReasoningLevel('ultra'), 'ultra');
   });
 });

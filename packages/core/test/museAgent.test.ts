@@ -71,7 +71,7 @@ test('agent factory constructs Muse with goal mode disabled', () => {
 test('Muse omits reasoning levels its CLI does not support', async () => {
     const agent = new MuseAgent(config) as unknown as {
         resolveEffectiveReasoningLevel(
-            reasoningLevel: 'none' | 'high' | 'auto' | 'ultracode' | undefined,
+            reasoningLevel: 'none' | 'high' | 'auto' | 'ultracode' | 'ultra' | undefined,
             model: string,
             useConfiguredReasoningLevel?: boolean
         ): Promise<string>;
@@ -81,5 +81,6 @@ test('Muse omits reasoning levels its CLI does not support', async () => {
     assert.equal(await agent.resolveEffectiveReasoningLevel('high', 'muse-spark-1.3'), 'high');
     assert.equal(await agent.resolveEffectiveReasoningLevel('auto', 'muse-spark-1.3'), '');
     assert.equal(await agent.resolveEffectiveReasoningLevel('ultracode', 'muse-spark-1.3'), '');
+    assert.equal(await agent.resolveEffectiveReasoningLevel('ultra', 'muse-spark-1.3'), '');
     assert.equal(await agent.resolveEffectiveReasoningLevel(undefined, 'muse-spark-1.3', false), '');
 });

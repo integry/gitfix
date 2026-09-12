@@ -13,7 +13,7 @@ const reasoningLevelLabels: Record<ReasoningLevel, string> = {
   high: 'High',
   xhigh: 'XHigh',
   max: 'Max',
-  ultra: 'Ultra (Codex and Muse Code only)',
+  ultra: 'Ultra (Codex only)',
   ultracode: 'Ultracode (Claude only)',
   auto: 'Auto (Claude only)',
 };
