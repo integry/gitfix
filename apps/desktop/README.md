@@ -282,6 +282,86 @@ Desktop releases have their own `desktop-v<major>.<minor>.<patch>` tags. They do
 metadata, Linux packages, the deferred protected machine MSI, artifact names, and release manifest without changing the monorepo
 package versions.
 
+### Independent Linux preview channel
+
+The recommended first Linux delivery is the manual **Desktop Linux Preview Release** GitHub Actions workflow and GitHub
+Releases. It is independent of the tag-driven production workflow: it runs only on manual dispatch from `main`, uses
+native `ubuntu-24.04` x64 and ARM64 runners, reads no Apple, Windows, update-signing, or publication secret, and emits
+exactly these unsigned packages:
+
+- `ProPR-Desktop-<version>-linux-x64.deb`
+- `ProPR-Desktop-<version>-linux-x64.rpm`
+- `ProPR-Desktop-<version>-linux-arm64.deb`
+- `ProPR-Desktop-<version>-linux-arm64.rpm`
+
+The bundle also contains `linux-preview.json`, `INSTALL.md`, and `SHA256SUMS`. The preview manifest records the full
+source commit, desktop package version, architecture and format of every asset, digest-pinned runtime app/UI image
+references, workflow run, `unsigned-preview` trust state, and manual package-manager upgrade policy. The generated
+preview identity is `desktop-linux-preview-v<version>-<first-12-source-SHA>`; draft creation refuses an existing tag or
+different asset at that identity. Finalization re-inspects both package architectures and accepts no ZIP, macOS,
+Windows, stable update manifest, signature, or extra file.
+
+Before staging, publish the source revision's multi-architecture runtime images for `linux/amd64` and `linux/arm64` and
+obtain their immutable references:
+
+```text
+propr/app:<40-character-source-SHA>@sha256:<64-character-manifest-digest>
+propr/ui:<40-character-source-SHA>@sha256:<64-character-manifest-digest>
+```
+
+The workflow verifies both registry manifests and embeds an API-compatible runtime manifest bound to the same source
+revision. Missing images, a mutable tag-only reference, a digest mismatch, or a missing architecture is an actionable
+preflight failure; the build never falls back to the checked-in launcher manifest. Stage the private draft with:
+
+```sh
+SOURCE_SHA=<full-lowercase-commit-on-main>
+gh workflow run desktop-linux-preview.yml --ref main \
+  -f operation=stage-draft \
+  -f source_revision="$SOURCE_SHA" \
+  -f runtime_app_image="propr/app:$SOURCE_SHA@sha256:<app-manifest-digest>" \
+  -f runtime_ui_image="propr/ui:$SOURCE_SHA@sha256:<ui-manifest-digest>"
+```
+
+`stage-draft` has repository `contents: write` only in its final draft-staging job. It creates or safely resumes a
+private GitHub draft, uploads the exact checksum allowlist, downloads every uploaded byte to verify it, and never
+publishes or creates the preview tag. Pull requests, ordinary pushes, and the production `desktop-v*` tag workflow do
+not invoke this channel.
+
+Public preview publication is a second manual dispatch over the already-staged bytes. First create the
+`desktop-linux-preview-publication` GitHub environment with required reviewers, restrict deployment to `main`, configure
+a tag ruleset for `refs/tags/desktop-linux-preview-v*` that blocks updates and deletion, and set environment variable
+`PROPR_DESKTOP_LINUX_PREVIEW_PUBLICATION_AUTHORIZED=1`. Do not store production signing credentials in this environment.
+Then an authorized reviewer may run:
+
+```sh
+gh workflow run desktop-linux-preview.yml --ref main \
+  -f operation=publish-draft \
+  -f source_revision="$SOURCE_SHA"
+```
+
+Publication downloads and hashes the draft again, validates its exact four-package matrix and both native
+architectures, checks the source-bound manifest and canonical instructions, then publishes it as a GitHub prerelease
+with `make_latest=false`. It refuses an existing tag rather than moving or reusing one. GitHub Actions must be allowed
+to create releases with the job-scoped `GITHUB_TOKEN`, both native hosted runner labels must be available, and the two
+published runtime images plus the protected environment/tag ruleset are the complete external setup for this preview
+channel. Apple Developer credentials, notarization, Ed25519 update keys, macOS runners, and Windows runners are not
+requirements.
+
+Preview DEB/RPM assets do not configure an apt or dnf repository and do not enable Linux self-updates. Users manually
+download a newer architecture-matching asset and run `apt install ./<new>.deb` or `dnf upgrade ./<new>.rpm`; `INSTALL.md`
+also documents `apt install --reinstall` / `dnf reinstall` when a newer source preview intentionally retains the same
+package version. It travels with every release and includes install, launch, checksum, upgrade, and removal commands. The later production
+Linux channel should use signed apt and dnf repositories, but it still needs independent package-signing keys, protected
+offline/CI signing custody, repository metadata signing, HTTPS hosting/CDN, retention, rotation/revocation, and client
+repository bootstrap instructions. None of that is simulated by this unsigned preview.
+
+Snap and Flatpak are not first-delivery substitutes here. ProPR's Linux setup needs the host Docker daemon/socket and
+terminal/browser handoffs; profiles need a real Secret Service/keyring; Connect/deep links need browser and URI-scheme
+integration; and tray behavior spans StatusNotifier/XEmbed desktop environments. Snap interfaces or Flatpak portals and
+socket/filesystem permissions would need a threat-model review plus installed-package testing on supported desktops.
+Unvalidated classic confinement, broad filesystem/socket access, or portal fallbacks would weaken the current boundary,
+so neither format blocks DEB/RPM delivery and neither is emitted by the preview workflow.
+
 The first production release uses the explicit, fail-closed `macos-linux-v1` profile. It produces exactly 10 native
 artifacts for these four targets: `linux-x64`, `linux-arm64`, `darwin-x64`, and `darwin-arm64`.
 
