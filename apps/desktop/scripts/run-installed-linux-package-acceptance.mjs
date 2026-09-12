@@ -19,6 +19,10 @@ export const INSTALLED_LINUX_SANDBOX_ISOLATIONS = Object.freeze([
   'docker-default',
   'docker-cap-sys-admin',
 ]);
+export const INSTALLED_LINUX_ADDED_CAPABILITIES = Object.freeze([
+  'SYS_ADMIN',
+  'IPC_LOCK',
+]);
 export const INSTALLED_LINUX_EVIDENCE_PREFIX = 'PROPR_INSTALLED_LINUX_EVIDENCE=';
 
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -173,7 +177,9 @@ export const createInstalledLinuxContainerInvocation = ({ family, target, isolat
     args: Object.freeze([
       'run', '--rm', '--init', `--platform=${dockerPlatform(target.arch)}`,
       '--name', name, '--label', `dev.propr.acceptance=${isolationId}`,
-      ...(target.sandboxIsolation === 'docker-cap-sys-admin' ? ['--cap-add=SYS_ADMIN'] : []),
+      ...(target.sandboxIsolation === 'docker-cap-sys-admin'
+        ? INSTALLED_LINUX_ADDED_CAPABILITIES.map(capability => `--cap-add=${capability}`)
+        : []),
       '--mount', mount(scriptPath, '/propr-acceptance/test-installed-linux-package.sh'),
       '--mount', mount(target.artifacts[family].previous, beforeTarget),
       '--mount', mount(target.artifacts[family].current, afterTarget),

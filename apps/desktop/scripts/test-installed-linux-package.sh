@@ -344,6 +344,41 @@ run_installed_smoke() {
   launches_passed=$((launches_passed + 1))
 }
 
+preflight_synthetic_keyring() {
+  local keyring_preflight_log='/tmp/propr-package-keyring-preflight.log'
+  local keyring_preflight_status
+  set +e
+  runuser -u "$test_user" -- env -i \
+    HOME="$test_home" USER="$test_user" LOGNAME="$test_user" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    PATH=/usr/local/bin:/usr/bin:/bin XDG_CONFIG_HOME="$xdg_config_home" \
+    XDG_DATA_HOME="$synthetic_keyring_root" XDG_RUNTIME_DIR="$xdg_runtime_dir" \
+    timeout --signal=TERM --kill-after=5s 30s \
+    dbus-run-session -- bash -euo pipefail -c '
+      keyring_environment="$(printf "%s\n" "propr-installed-package-smoke" | gnome-keyring-daemon --unlock --components=secrets)"
+      eval "$keyring_environment"
+      unset keyring_environment
+      dbus-send --session --type=method_call --print-reply \
+        --dest=org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.DBus.Peer.Ping >/dev/null
+    ' >"$keyring_preflight_log" 2>&1
+  keyring_preflight_status="$?"
+  set -e
+  if [ "$keyring_preflight_status" -ne 0 ]; then
+    outcome='environment-limited'
+    if grep -Eqi 'gnome-keyring-daemon.*Operation not permitted|org\.freedesktop\.secrets.*Operation not permitted' \
+      "$keyring_preflight_log"; then
+      if [ "$sandbox_isolation" = docker-default ]; then
+        environment_limitation='Container runtime capability policy denied execution of the installed distribution gnome-keyring-daemon, so Secret Service was unavailable; Rocky Linux 9 requires IPC_LOCK for this file-capability binary. No application launch, upgrade, or uninstall acceptance was reached. Use the explicit docker-cap-sys-admin mode on an authorized host or a disposable native VM.'
+      else
+        environment_limitation='Container runtime or host policy denied execution of the installed distribution gnome-keyring-daemon even with the explicit SYS_ADMIN and IPC_LOCK capabilities, so Secret Service was unavailable. No application launch, upgrade, or uninstall acceptance was reached. Use a disposable native VM.'
+      fi
+    else
+      environment_limitation='The installed distribution gnome-keyring-daemon did not make the synthetic Secret Service ready within 30 seconds under the selected container policy. No application launch, upgrade, or uninstall acceptance was reached. Use a disposable native VM if the container runtime blocks this service.'
+    fi
+    head -c 4096 "$keyring_preflight_log" >&2 || true
+    fail 'synthetic Secret Service keyring preflight is unavailable in this environment'
+  fi
+}
+
 current_phase='artifact-metadata'
 verify_artifact_metadata "$previous_artifact" "$previous_version"
 verify_artifact_metadata "$artifact" "$version"
@@ -363,6 +398,9 @@ install_artifact "$previous_artifact"
 assert_installed_payload "$previous_version" "$previous_artifact"
 installed_payloads_verified=1
 last_completed_phase='previous-package-payload'
+current_phase='keyring-preflight'
+preflight_synthetic_keyring
+last_completed_phase='keyring-preflight'
 current_phase='before-upgrade-launch'
 run_installed_smoke before-upgrade
 last_completed_phase='before-upgrade-launch'

@@ -503,17 +503,25 @@ uses `apt` or `dnf` for the package operations themselves.
 
 The sandbox isolation mode is deliberately required. `docker-default` adds no capability and runs a mount/PID/network
 namespace-creation preflight; Docker's usual capability boundary is expected to reject that preflight on many hosts.
-`docker-cap-sys-admin` adds only `SYS_ADMIN` to Docker's existing capability set for each auto-removed acceptance
-container. It does not use a privileged container, replace Docker's default seccomp profile, share host namespaces, or
-make any bind mount writable. Docker documents `--cap-add` as the fine-grained alternative to `--privileged` and adjusts
-its default seccomp profile for explicitly selected capabilities. Because `SYS_ADMIN` is still powerful inside the
-container, use this mode only on an authorized isolated host or disposable VM:
+`docker-cap-sys-admin` retains Docker's default `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`,
+`MKNOD`, `NET_BIND_SERVICE`, `NET_RAW`, `SETFCAP`, `SETGID`, `SETPCAP`, `SETUID`, and `SYS_CHROOT` capabilities and adds
+exactly `SYS_ADMIN` and `IPC_LOCK` for each auto-removed acceptance container. `SYS_ADMIN` permits the Electron sandbox's
+namespace creation. `IPC_LOCK` permits execution of Rocky Linux 9's real `/usr/bin/gnome-keyring-daemon`, whose distro
+file capabilities include `cap_ipc_lock=ep`; Docker's default capability bounding set otherwise rejects that exec. The
+mode does not use a privileged container, replace Docker's default seccomp profile, share host namespaces, or make any
+bind mount writable. Docker documents `--cap-add` as the fine-grained alternative to `--privileged` and adjusts its
+default seccomp profile for explicitly selected capabilities. Because `SYS_ADMIN` is still powerful inside the container,
+use this mode only on an authorized isolated host or disposable VM:
 https://docs.docker.com/engine/containers/run/#runtime-privilege-and-linux-capabilities
 
 The preflight runs after installing only the distribution test prerequisites and before inspecting or installing either
 ProPR package. It verifies that one process can create mount, PID, and network namespaces and run `/bin/true` in them.
 It passes `--propagation unchanged` so util-linux does not also attempt an unrelated recursive change to the root mount's
 propagation; the preflight does not verify such a propagation change or replace the later real sandboxed Electron launch.
+After the previous package's payload is installed and verified, a separate 30-second preflight starts the real distro
+keyring daemon as the synthetic user, unlocks only the disposable keyring, and pings `org.freedesktop.secrets` over its
+disposable D-Bus session. An execution denial or readiness timeout is reported as an environment-limited
+`keyring-preflight` before an application launch is attempted, with emitted diagnostic output capped at 4096 bytes.
 If the host runtime still denies namespace creation, the harness reports `environment-limited`, names the last completed
 and failed phases, records zero attempted/passed application launches, and makes no upgrade or uninstall claim. If a real
 application launch later encounters the same namespace/zygote boundary, the failure record preserves the completed

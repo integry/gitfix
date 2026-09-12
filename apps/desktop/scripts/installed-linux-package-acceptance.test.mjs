@@ -9,6 +9,7 @@ import {
   cleanupOwnedContainer,
   createInstalledLinuxContainerInvocation,
   DEFAULT_LINUX_PACKAGE_IMAGES,
+  INSTALLED_LINUX_ADDED_CAPABILITIES,
   INSTALLED_LINUX_ACCEPTANCE_OPT_IN,
   INSTALLED_LINUX_EVIDENCE_PREFIX,
   INSTALLED_LINUX_SANDBOX_ISOLATIONS,
@@ -37,6 +38,7 @@ describe('installed Linux package acceptance authority', () => {
     assert.equal(target.version, '1.2.3');
     assert.equal(target.sandboxIsolation, 'docker-cap-sys-admin');
     assert.deepEqual(INSTALLED_LINUX_SANDBOX_ISOLATIONS, ['docker-default', 'docker-cap-sys-admin']);
+    assert.deepEqual(INSTALLED_LINUX_ADDED_CAPABILITIES, ['SYS_ADMIN', 'IPC_LOCK']);
     assert.deepEqual(target.images, DEFAULT_LINUX_PACKAGE_IMAGES);
     assert.equal(target.artifacts.deb.current, '/private/artifacts/ProPR-Desktop-1.2.3-linux-x64.deb');
 
@@ -185,6 +187,47 @@ printf '%s\\n' "$@" > "$PROPR_XVFB_ARGUMENT_LOG"
     }
   });
 
+  test('preflights the synthetic keyring with bounded distro-daemon and Secret Service argv', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    const source = await readFile(new URL('./test-installed-linux-package.sh', import.meta.url), 'utf8');
+    const preflightScript = source.match(
+      /preflight_synthetic_keyring\(\) \{[\s\S]*?dbus-run-session -- bash -euo pipefail -c '([\s\S]*?)' >"\$keyring_preflight_log"/u,
+    )?.[1];
+    assert.ok(preflightScript, 'keyring readiness script must remain executable coverage');
+
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'propr-keyring-preflight-')));
+    const keyring = join(directory, 'gnome-keyring-daemon');
+    const dbusSend = join(directory, 'dbus-send');
+    const argumentLog = join(directory, 'arguments');
+    try {
+      await writeFile(keyring, `#!/bin/sh
+printf 'keyring:%s\\n' "$*" >> "$PROPR_KEYRING_ARGUMENT_LOG"
+cat >/dev/null
+`);
+      await writeFile(dbusSend, `#!/bin/sh
+printf 'dbus:%s\\n' "$*" >> "$PROPR_KEYRING_ARGUMENT_LOG"
+`);
+      await Promise.all([chmod(keyring, 0o755), chmod(dbusSend, 0o755)]);
+      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', preflightScript], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${directory}:${process.env.PATH ?? ''}`,
+          PROPR_KEYRING_ARGUMENT_LOG: argumentLog,
+        },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual((await readFile(argumentLog, 'utf8')).trim().split('\n'), [
+        'keyring:--unlock --components=secrets',
+        'dbus:--session --type=method_call --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.DBus.Peer.Ping',
+      ]);
+      assert.match(source, /timeout --signal=TERM --kill-after=5s 30s[\s\S]*dbus-run-session/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test('mounts only the selected artifacts and harness read-only in an auto-removed container', () => {
     const target = parseInstalledLinuxAcceptanceArguments(canonicalArguments('/private/artifacts'));
     const invocation = createInstalledLinuxContainerInvocation({
@@ -204,7 +247,10 @@ printf '%s\\n' "$@" > "$PROPR_XVFB_ARGUMENT_LOG"
     assert.match(command, /ProPR-Desktop-1\.2\.3-linux-x64\.deb/);
     assert.doesNotMatch(command, /\.rpm/);
     assert.equal(command.match(/readonly/g)?.length, 3);
-    assert.equal(command.match(/--cap-add=SYS_ADMIN/g)?.length, 1);
+    assert.deepEqual(invocation.args.filter(argument => argument.startsWith('--cap-add=')), [
+      '--cap-add=SYS_ADMIN',
+      '--cap-add=IPC_LOCK',
+    ]);
     assert.doesNotMatch(command, /--privileged|--no-sandbox|seccomp=unconfined|\/var\/run\/docker\.sock/);
 
     const defaultTarget = { ...target, sandboxIsolation: 'docker-default' };
@@ -248,6 +294,19 @@ printf '%s\\n' "$@" > "$PROPR_XVFB_ARGUMENT_LOG"
       { family: 'deb', architecture: 'x64', sandboxIsolation: 'docker-cap-sys-admin' },
     );
     assert.deepEqual(parsed, failedLaunch);
+
+    const failedKeyringPreflight = {
+      ...failedLaunch,
+      family: 'rpm',
+      lastCompletedPhase: 'previous-package-payload',
+      failedPhase: 'keyring-preflight',
+      launchesAttempted: 0,
+      environmentLimitation: 'Container capability policy denied execution of the distro keyring daemon.',
+    };
+    assert.deepEqual(parseInstalledLinuxContainerEvidence(
+      `${INSTALLED_LINUX_EVIDENCE_PREFIX}${JSON.stringify(failedKeyringPreflight)}\n`,
+      { family: 'rpm', architecture: 'x64', sandboxIsolation: 'docker-cap-sys-admin' },
+    ), failedKeyringPreflight);
 
     assert.throws(() => parseInstalledLinuxContainerEvidence(
       `${INSTALLED_LINUX_EVIDENCE_PREFIX}${JSON.stringify({
@@ -303,6 +362,9 @@ printf '%s\\n' "$@" > "$PROPR_XVFB_ARGUMENT_LOG"
     assert.match(source, /XDG_DATA_HOME="\$synthetic_keyring_root"/);
     assert.match(source, /XDG_RUNTIME_DIR="\$xdg_runtime_dir"/);
     assert.match(source, /gnome-keyring-daemon --unlock --components=secrets/);
+    assert.match(source, /current_phase='keyring-preflight'[\s\S]*preflight_synthetic_keyring[\s\S]*current_phase='before-upgrade-launch'/);
+    assert.match(source, /org\.freedesktop\.DBus\.Peer\.Ping/);
+    assert.match(source, /launches_attempted=\$\(\(launches_attempted \+ 1\)\)/);
     assert.match(source, /--password-store=gnome-libsecret/);
     assert.equal(source.match(/propr:\/\/connect\?api=https%3A%2F%2Fconnect\.propr\.dev/g)?.length, 1);
     assert.match(source, /dbus-run-session -- bash -euo pipefail -c '[\s\S]*gnome-keyring-daemon[\s\S]*xvfb-run/);
