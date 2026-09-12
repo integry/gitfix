@@ -420,7 +420,7 @@ html[data-desktop-window="linux"] .desktop-sidebar-header {
 .desktop-instance-account-label { color: #5e706f; font-size: .6875rem; line-height: 1.4; }
 .desktop-instance-account-identity { display: block; min-width: 0; color: #283d3c; font-size: .8125rem; font-weight: 550; line-height: 1.5; }
 .desktop-instance-account-identity > span { display: flex; min-width: 0; gap: .5rem; }
-.desktop-instance-account-identity img { flex: none; width: 1.25rem; height: 1.25rem; }
+.desktop-instance-account-identity > span > :first-child { flex: none; width: 1.25rem; height: 1.25rem; }
 .desktop-instance-account-identity > span > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-instance-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; font-size: .75rem; line-height: 1.5; }
 .desktop-instance-status { display: inline-flex; align-items: center; gap: .4rem; color: #5e706f; }

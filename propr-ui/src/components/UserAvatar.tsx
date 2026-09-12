@@ -6,6 +6,7 @@ interface UserAvatarProps {
   className: string;
   fallbackClassName?: string;
   decorative?: boolean;
+  referrerPolicy?: React.ImgHTMLAttributes<HTMLImageElement>['referrerPolicy'];
 }
 
 type AvatarPresentationProps = Omit<UserAvatarProps, 'user'> & {
@@ -41,6 +42,7 @@ const LoadableAvatar: React.FC<AvatarPresentationProps & { src: string }> = prop
       alt={props.decorative ? '' : props.accessibleName}
       className={props.className}
       onError={() => setFailed(true)}
+      referrerPolicy={props.referrerPolicy}
     />
   );
 };
@@ -50,6 +52,7 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
   className,
   fallbackClassName = '',
   decorative = false,
+  referrerPolicy,
 }) => {
   const accessibleName = `${user.displayName || user.username} avatar`;
   const presentation = {
@@ -58,6 +61,7 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
     fallbackClassName,
     decorative,
     initials: user.username.slice(0, 2).toUpperCase(),
+    referrerPolicy,
   };
 
   if (user.avatarUrl) {

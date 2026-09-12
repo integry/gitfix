@@ -6,6 +6,22 @@ import type { DesktopConnectionResult } from './types';
 const alice = { ...remoteProfile, id: 'alice', account: { id: '101', username: 'alice', avatarUrl: null } };
 const bob = { ...remoteProfile, id: 'bob', account: { id: '202', username: 'bob', avatarUrl: null } };
 
+it('shows a safe fallback when a saved account avatar fails in the chooser', async () => {
+  const account = { ...alice.account, avatarUrl: 'https://avatars.githubusercontent.com/u/101?broken=1' };
+  const adapters = adaptersFor([{ ...alice, account }]);
+  adapters.savedAccounts = true;
+  renderConnectedExperience(adapters);
+
+  const identity = (await screen.findByText('@alice')).parentElement!;
+  const image = identity.querySelector('img');
+  expect(image).toHaveAttribute('src', account.avatarUrl);
+
+  fireEvent.error(image!);
+
+  expect(identity.querySelector('img')).not.toBeInTheDocument();
+  expect(identity).toHaveTextContent('AL@alice');
+});
+
 it('shows both users at one instance and adds an account with a fresh binding', async () => {
   const adapters = adaptersFor([alice, bob]);
   adapters.savedAccounts = true;
