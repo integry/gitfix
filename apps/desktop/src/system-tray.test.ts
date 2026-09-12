@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Menu, MenuItemConstructorOptions, NativeImage, Tray } from 'electron';
+import { createDesktopNativeCommandDispatcher } from './native-commands';
 import { createDesktopTrayController, formatTrayCount, parseActiveWorkSnapshot } from './system-tray';
 
 const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 10));
@@ -225,6 +226,76 @@ describe('desktop system tray', () => {
     controller.close();
     fakeTray.listeners.get('click')?.();
     assert.deepEqual(dispatched, ['open', 'open'], 'activation after tray cleanup is ignored safely');
+  });
+
+  it('routes Linux About and Help tray actions while unavailable and with active work', async () => {
+    const fakeTray = new FakeTray();
+    const urls: string[] = [];
+    let about = 0;
+    let connectionScope: { profileId: string; transportScope: string } | null = null;
+    let menuTemplate: MenuItemConstructorOptions[] = [];
+    const commands = createDesktopNativeCommandDispatcher({
+      channel: 'test',
+      getWindow: () => null,
+      restoreWindow: () => undefined,
+      activeConnectionScope: () => connectionScope,
+      activeNotificationScope: () => null,
+      notificationState: () => ({ available: false, enabled: false }),
+      setNativeNotificationsEnabled: async () => undefined,
+      quit: () => undefined,
+      showAbout: () => { about += 1; },
+      openExternal: async url => { urls.push(url); },
+    });
+    const controller = createDesktopTrayController({
+      platform: 'linux',
+      icon: {} as NativeImage,
+      createTray: () => fakeTray as unknown as Tray,
+      buildMenu: template => { menuTemplate = template; return {} as Menu; },
+      setBadgeCount: () => false,
+      fetchActiveWork: async () => ({ status: 'response', response: snapshot(2, 3, 1) }),
+      commands,
+      log: () => undefined,
+      debounceMs: 0,
+      minimumRefreshIntervalMs: 0,
+      pollIntervalMs: 60_000,
+    });
+
+    const invokeAboutAndHelp = (): void => {
+      const aboutItem = menuTemplate.find(item => item.label === 'About ProPR');
+      const helpItem = menuTemplate.find(item => item.label === 'Help');
+      assert.notEqual(aboutItem?.enabled, false, 'About is available without credentials');
+      assert.ok(Array.isArray(helpItem?.submenu), 'Help is a native submenu');
+      (aboutItem?.click as (() => void) | undefined)?.();
+      for (const label of ['ProPR Website', 'Documentation', 'Connection Help']) {
+        const item = helpItem.submenu.find(candidate => candidate.label === label);
+        assert.notEqual(item?.enabled, false, `${label} is available without credentials`);
+        (item?.click as (() => void) | undefined)?.();
+      }
+    };
+
+    controller.start();
+    assert.match(fakeTray.tooltip, /Active work unavailable/);
+    invokeAboutAndHelp();
+
+    connectionScope = { profileId: 'profile-a', transportScope: 'abcdefghijklmnopqrstuv' };
+    commands.connectionAvailable();
+    controller.connectionAvailable();
+    await tick();
+    assert.match(fakeTray.tooltip, /Active work: 5/);
+    invokeAboutAndHelp();
+    await tick();
+
+    assert.equal(about, 2);
+    assert.deepEqual(urls, [
+      'https://propr.dev',
+      'https://docs.propr.dev',
+      'https://docs.propr.dev/docs/operations/desktop-application',
+      'https://propr.dev',
+      'https://docs.propr.dev',
+      'https://docs.propr.dev/docs/operations/desktop-application',
+    ]);
+    controller.close();
+    commands.close();
   });
 
   it('drops scoped stale responses and marks network failures unavailable instead of zero', async () => {
