@@ -492,7 +492,7 @@ async function start(): Promise<void> {
       // so dropping the cache alone would leave them on the pre-change values.
       configReloadSubscription = await startConfigReloadSubscription(redisClient, async () => {
         invalidateMcpConfigCache();
-        await resolveMcpConfig(db).catch(() => undefined);
+        await resolveMcpConfig(db).catch(error => { console.error('Failed to resolve MCP configuration:', error); });
         await reloadConfigs();
       });
       // Subscribe first, then enqueue the initial load through the same serial
@@ -513,8 +513,18 @@ async function start(): Promise<void> {
     }
     // Prime MCP config cache before route registration so authRedirect and CORS
     // middleware see the correct origin on the first request after startup.
+    // The env-managed path keeps its pre-toggle behavior: an invalid MCP_* value,
+    // or MCP_ENABLED=true in demo mode, aborts startup through start()'s catch
+    // rather than leaving the MCP server silently 404ing everywhere.
+    if (process.env.MCP_ENABLED === 'true' && demoMode) {
+      throw new Error('MCP_ENABLED cannot be enabled in demo mode. Demo remains read-only.');
+    }
     if (!demoMode) {
-      await resolveMcpConfig(db).catch(() => undefined);
+      if (process.env.MCP_ENABLED === 'true') {
+        await resolveMcpConfig(db);
+      } else {
+        await resolveMcpConfig(db).catch(error => { console.error('Failed to resolve MCP configuration:', error); });
+      }
     }
     setupRoutes();
     if (!demoMode) {

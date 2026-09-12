@@ -89,6 +89,19 @@ function isMcpAuthPath(path: string): boolean {
   return MCP_AUTH_PATHS.some(owned => path === owned || path.startsWith(`${owned}/`));
 }
 
+// A resolve failure is exceptional (an invalid env-managed MCP_* value or an
+// unreachable database) and leaves MCP serving 404s, so it must not be silent.
+// Throttle the log so a persistent failure cannot flood it on every request.
+let lastResolveErrorLog = 0;
+function logMcpResolveFailure(error: unknown): null {
+  const now = Date.now();
+  if (now - lastResolveErrorLog > 60_000) {
+    lastResolveErrorLog = now;
+    console.error('[mcp] Failed to resolve MCP configuration:', error);
+  }
+  return null;
+}
+
 export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void {
   if (isDemoMode()) return;
 
@@ -105,7 +118,7 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
   let oauthMetadata: object;
 
   async function doInit(): Promise<boolean> {
-    const config = await resolveMcpConfig(services.db).catch(() => null);
+    const config = await resolveMcpConfig(services.db).catch(logMcpResolveFailure);
     if (!config) return false;
     store = new McpStore(services.db, config.encryptionKey);
     // Fall back to the ceiling this init resolved, so an invalidated cache never
@@ -144,7 +157,7 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
   // change takes effect without a restart. It is TTL-cached, so per-request
   // cost is bounded.
   async function mcpActive(): Promise<boolean> {
-    const config = await resolveMcpConfig(services.db).catch(() => null);
+    const config = await resolveMcpConfig(services.db).catch(logMcpResolveFailure);
     return config !== null && await ensureInitialized();
   }
 
@@ -188,7 +201,7 @@ export function mountMcp(app: Express, services: Omit<ToolDeps, 'policy'>): void
   const endpoint: RequestHandler = async (req, res) => {
     // Empty 202 notifications still have an HTTP body stream at the gateway.
     res.set({ 'Cache-Control': 'no-store', 'X-ProPR-MCP-Contract': MCP_CONNECT_CONTRACT }).type('application/json');
-    const config = await resolveMcpConfig(services.db).catch(() => null);
+    const config = await resolveMcpConfig(services.db).catch(logMcpResolveFailure);
     if (!config || !await ensureInitialized()) { res.status(404).end(); return; }
     const bearer = /^Bearer ([^\s]+)$/i.exec(req.get('authorization') || '')?.[1];
     if (!bearer) {

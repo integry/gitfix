@@ -87,7 +87,8 @@ export async function loadMcpAdminSettings(database: Knex = db): Promise<McpAdmi
 
 /**
  * Forget the encryption-key fingerprint so a rotated secret can be adopted.
- * Only meaningful once the grants encrypted under the previous key are gone.
+ * Only meaningful once the records encrypted under the previous key are gone
+ * (see revokeAll in adminMcpRoutes, which deletes them).
  */
 export async function resetMcpKeyCheckValue(database: Knex = db): Promise<void> {
   await database('mcp_admin_settings').where({ key: 'key_check_value' }).delete();

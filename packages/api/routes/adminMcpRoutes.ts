@@ -127,20 +127,30 @@ export function createAdminMcpRoutes({ database = db, redisClient }: AdminMcpRou
   async function revokeAll(req: Request, res: Response): Promise<void> {
     try {
       const now = Date.now();
-      // Mark all grants as revoked by setting expires_at to the past
-      const revoked = await database('mcp_records')
+      // Count of grant rows this call invalidates. Rows an earlier sweep already
+      // expired are left out so repeated invocations do not re-count them.
+      const [counted] = await database('mcp_records')
         .where({ kind: 'grant' })
-        .whereRaw('(value NOT LIKE ? OR expires_at > ?)', ['%"revoked":true%', now])
-        .update({ expires_at: now - 1 });
+        .whereRaw('(expires_at IS NULL OR expires_at > ?)', [now])
+        .count<Array<{ count: string | number }>>({ count: '*' });
+      const revoked = Number(counted?.count ?? 0);
 
-      // Every grant is now unusable, so nothing remains that was encrypted under a
-      // previous secret. Forgetting the key fingerprint clears the "Reconnect
-      // required" state and lets an admin enable MCP again after a key rotation.
+      // Delete rather than expire. Every value here is ciphertext sealed with the
+      // current encryption key, and the key fingerprint is forgotten just below so
+      // a rotated secret can be adopted; anything left behind would be unreadable
+      // and its read path would throw instead of failing as an invalid grant.
+      await database('mcp_records')
+        .whereIn('kind', ['grant', 'access', 'refresh', 'code', 'pending', 'credential', 'client'])
+        .delete();
+
+      // Nothing usable remains that was encrypted under the previous secret.
+      // Forgetting the key fingerprint clears the "Reconnect required" state and
+      // lets an admin enable MCP again after a key rotation.
       await resetMcpKeyCheckValue(database);
       invalidateMcpConfigCache();
       await publishMcpUpdate(redisClient);
 
-      await logActivity(redisClient, `Revoked all MCP grants (${revoked} affected)`, req.user?.username);
+      await logActivity(redisClient, `Revoked all MCP connections (${revoked} grants invalidated)`, req.user?.username);
       res.json({ revoked, status: await resolveMcpStatus(database) });
     } catch (error) {
       console.error('Failed to revoke MCP grants:', error);
