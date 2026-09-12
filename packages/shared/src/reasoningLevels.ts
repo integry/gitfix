@@ -36,7 +36,6 @@ export const CLAUDE_REASONING_LEVELS = [
 ] as const satisfies readonly ReasoningLevel[];
 
 export const MUSE_REASONING_LEVELS = [
-  'none',
   'minimal',
   'low',
   'medium',

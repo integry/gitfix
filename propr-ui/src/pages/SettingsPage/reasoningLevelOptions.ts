@@ -6,7 +6,7 @@ import {
 } from '@propr/shared';
 
 const reasoningLevelLabels: Record<ReasoningLevel, string> = {
-  none: 'None (Muse Code only)',
+  none: 'None',
   minimal: 'Minimal (Muse Code only)',
   low: 'Low',
   medium: 'Medium',

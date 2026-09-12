@@ -77,7 +77,7 @@ test('Muse omits reasoning levels its CLI does not support', async () => {
         ): Promise<string>;
     };
 
-    assert.equal(await agent.resolveEffectiveReasoningLevel('none', 'muse-spark-1.3'), 'none');
+    assert.equal(await agent.resolveEffectiveReasoningLevel('none', 'muse-spark-1.3'), '');
     assert.equal(await agent.resolveEffectiveReasoningLevel('high', 'muse-spark-1.3'), 'high');
     assert.equal(await agent.resolveEffectiveReasoningLevel('auto', 'muse-spark-1.3'), '');
     assert.equal(await agent.resolveEffectiveReasoningLevel('ultracode', 'muse-spark-1.3'), '');

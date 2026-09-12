@@ -43,7 +43,7 @@ describe('shared reasoning level vocabulary', () => {
     assert.deepEqual(REASONING_LEVELS, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ultracode', 'auto']);
     assert.deepEqual(CODEX_REASONING_LEVELS, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
     assert.deepEqual(CLAUDE_REASONING_LEVELS, ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode', 'auto']);
-    assert.deepEqual(MUSE_REASONING_LEVELS, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+    assert.deepEqual(MUSE_REASONING_LEVELS, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     assert.deepEqual(getReasoningLevelsForAgentType('codex'), CODEX_REASONING_LEVELS);
     assert.deepEqual(getReasoningLevelsForAgentType('claude'), CLAUDE_REASONING_LEVELS);
     assert.deepEqual(getReasoningLevelsForAgentType('muse'), MUSE_REASONING_LEVELS);
@@ -51,7 +51,7 @@ describe('shared reasoning level vocabulary', () => {
     assert.equal(isReasoningLevelSupportedByAgentType('codex', 'ultra'), true);
     assert.equal(isReasoningLevelSupportedByAgentType('codex', 'ultracode'), false);
     assert.equal(isReasoningLevelSupportedByAgentType('claude', 'ultracode'), true);
-    assert.equal(isReasoningLevelSupportedByAgentType('muse', 'none'), true);
+    assert.equal(isReasoningLevelSupportedByAgentType('muse', 'none'), false);
     assert.equal(isReasoningLevelSupportedByAgentType('muse', 'auto'), false);
     assert.equal(isReasoningLevelSupportedByAgentType('codex', 'none'), false);
   });
@@ -129,7 +129,7 @@ describe('core model_reasoning_level validation', () => {
     assert.equal(resolveRuntimeModelReasoningLevel('claude', 'ultra'), 'max');
     assert.equal(resolveRuntimeModelReasoningLevel('claude', 'auto'), 'auto');
     assert.equal(resolveRuntimeModelReasoningLevel('claude', 'minimal'), null);
-    assert.equal(resolveRuntimeModelReasoningLevel('muse', 'none'), 'none');
+    assert.equal(resolveRuntimeModelReasoningLevel('muse', 'none'), null);
     assert.equal(resolveRuntimeModelReasoningLevel('muse', 'ultra'), null);
     assert.equal(resolveRuntimeModelReasoningLevel('muse', 'auto'), null);
     assert.equal(resolveRuntimeModelReasoningLevel('muse', 'ultracode'), null);
@@ -143,7 +143,7 @@ describe('core model_reasoning_level validation', () => {
     assert.equal(resolveClaudeReasoningLevel('ultra'), 'max');
     assert.equal(resolveClaudeReasoningLevel('auto'), 'auto');
     assert.equal(resolveClaudeReasoningLevel('minimal'), null);
-    assert.equal(resolveMuseReasoningLevel('none'), 'none');
+    assert.equal(resolveMuseReasoningLevel('none'), null);
     assert.equal(resolveMuseReasoningLevel('ultra'), null);
     assert.equal(resolveMuseReasoningLevel('auto'), null);
     assert.equal(resolveMuseReasoningLevel('ultracode'), null);

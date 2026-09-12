@@ -14,7 +14,7 @@ export type { ModelReasoningLevel };
 
 export type CodexRuntimeReasoningLevel = Exclude<ReasoningLevel, 'auto' | 'ultracode' | 'none' | 'minimal'>;
 export type ClaudeRuntimeReasoningLevel = Exclude<ReasoningLevel, 'ultra' | 'none' | 'minimal'>;
-export type MuseRuntimeReasoningLevel = Exclude<ReasoningLevel, 'auto' | 'ultracode' | 'ultra'>;
+export type MuseRuntimeReasoningLevel = Exclude<ReasoningLevel, 'auto' | 'ultracode' | 'ultra' | 'none'>;
 export type RuntimeReasoningLevel = CodexRuntimeReasoningLevel | ClaudeRuntimeReasoningLevel | MuseRuntimeReasoningLevel;
 
 const REASONING_LEVEL_MIN_CLI_VERSION: Partial<Record<AgentType, string>> = {
@@ -68,8 +68,9 @@ export function resolveClaudeReasoningLevel(level: ModelReasoningLevel): ClaudeR
 }
 
 export function resolveMuseReasoningLevel(level: ModelReasoningLevel): MuseRuntimeReasoningLevel | null {
-    // Ultra is a Muse mode, not a reasoning level, so it is omitted like auto and ultracode.
-    if (level === '' || level === 'auto' || level === 'ultracode' || level === 'ultra') return null;
+    // Ultra is a Muse mode, not a reasoning level, and the meta provider rejects
+    // reasoning-effort none, so both are omitted like auto and ultracode.
+    if (level === '' || level === 'auto' || level === 'ultracode' || level === 'ultra' || level === 'none') return null;
     return level;
 }
 
