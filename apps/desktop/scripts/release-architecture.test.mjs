@@ -11,6 +11,7 @@ import {
   inspectArtifactArchitecture,
   inspectLinuxPackageLayout,
   inspectMachineMsiForTest,
+  assertRpmSandboxMetadata,
   msiExtractorInvocationForTest,
   runBoundedMsiExtractorForTest,
   validateMsiListingForTest,
@@ -237,6 +238,33 @@ const fixture = async (context, machine = 62, packageFormat = 'deb') => {
 };
 
 describe('DEB and RPM executable layouts', () => {
+  test('requires root-owned setuid sandbox permissions in RPM header-query output', () => {
+    const metadata = [
+      '/usr/lib/propr-desktop/propr-desktop\t33261\troot\troot',
+      '/usr/lib/propr-desktop/resources/app.asar\t33188\troot\troot',
+      '/usr/lib/propr-desktop/resources/native.node\t33261\troot\troot',
+      '/usr/lib/propr-desktop/chrome-sandbox\t35309\troot\troot',
+    ].join('\n');
+    for (const arch of ['x64', 'arm64']) {
+      assert.deepEqual(assertRpmSandboxMetadata(metadata, `${arch} RPM fixture`), {
+        mode: 0o4755,
+        owner: 'root',
+        group: 'root',
+      });
+    }
+
+    for (const invalid of [
+      metadata.replace('\t35309\t', '\t33261\t'),
+      metadata.replace('\t35309\troot\troot', '\t35309\tuser\troot'),
+      metadata.replace('/usr/lib/propr-desktop/chrome-sandbox\t35309\troot\troot', ''),
+    ]) {
+      assert.throws(
+        () => assertRpmSandboxMetadata(invalid, 'RPM fixture'),
+        /chrome-sandbox.*root:root 4755|exactly one.*chrome-sandbox/u,
+      );
+    }
+  });
+
   test('accept only the canonical regular ELF payload and documented launcher symlink', async context => {
     for (const [format, arch, machine] of [['DEB', 'x64', 62], ['RPM', 'arm64', 183]]) {
       const packageFormat = format.toLowerCase();
