@@ -333,12 +333,39 @@ macOS x64/arm64 artifacts, requires Windows artifacts to be absent from canonica
 install/relaunch/uninstall behavior, protocol delivery, credential persistence/deletion, clean shutdown, and fail-closed
 signing/update configuration. Linux x64 also produces deterministic packaged visual/accessibility evidence.
 
-For Linux preview downloads, use the manually dispatched **Desktop Linux Preview Release** workflow. Its
-`stage-draft` operation must be dispatched from `main` with a full commit already reachable from `main` and exact
-digest-pinned `propr/app:<commit>@sha256:<digest>` and `propr/ui:<commit>@sha256:<digest>` runtime images. Both images
-must publish `linux/amd64` and `linux/arm64`. The workflow builds and revalidates only x64/arm64 DEB and RPM assets,
-then creates a private draft with `linux-preview.json`, `INSTALL.md`, and `SHA256SUMS`. Missing or unaligned runtime
-images fail preflight instead of silently packaging the older checked-in runtime manifest.
+Linux previews use two manual workflows in this order:
+
+1. From the `main` branch version of **Preview Runtime Images**, enter a full lowercase commit SHA that is already
+   reachable from `main` and leave `operation` set to `prepare`. This default, validation-only operation builds only
+   `propr/app` and `propr/ui` on native `linux/amd64` and `linux/arm64` runners, exercises the app desktop-discovery
+   contract and UI runtime configuration, and retains checked artifacts for 14 days. It does not log in to Docker Hub
+   or publish any tag.
+2. Review that run, then dispatch **Preview Runtime Images** again for the same SHA with `operation: publish`. The native
+   build and smoke gates run again before the protected publication job becomes eligible for approval. Publication
+   preflights both existing full-SHA tags before its first registry mutation. An existing tag is reused only when its
+   manifest contains exactly both native Linux architectures and each image config carries the requested
+   `org.opencontainers.image.revision` and the `integry/propr` source label; any conflicting tag fails closed. Missing
+   images are copied from the verified OCI candidates directly to `propr/app:<full-SHA>` and
+   `propr/ui:<full-SHA>`. The job summary emits both `propr/<image>:<full-SHA>@sha256:<manifest-digest>` references.
+3. From the `main` branch version of **Desktop Linux Preview Release**, choose `stage-draft`, enter that same SHA, and
+   paste the two digest-pinned references into `runtime_app_image` and `runtime_ui_image`. This workflow independently
+   resolves each tag and requires both architectures before building only x64/arm64 DEB and RPM assets and creating a
+   private draft with `linux-preview.json`, `INSTALL.md`, and `SHA256SUMS`. Missing or unaligned runtime images fail
+   preflight instead of silently packaging the older checked-in runtime manifest.
+
+The preview runtime workflow never uses the stable `docker-images.yml` release path. It cannot create version or
+`latest` tags, npm packages, stable releases, desktop releases, docs/agent/launcher images, or release assets. Its
+source checkout jobs have read-only repository access and no publication credentials; only the reviewed helper and
+checksum-bound OCI artifacts reach the publication job.
+
+Before runtime publication is enabled, administrators must create the protected
+`desktop-linux-preview-runtime-publication` environment, require reviewers, define the environment variable
+`PROPR_DESKTOP_LINUX_PREVIEW_RUNTIME_PUBLICATION_AUTHORIZED=1`, and scope `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+secrets to that environment. The Docker Hub principal needs write access only to the `propr/app` and `propr/ui`
+repositories. Protect operationally against moving or deleting full-SHA tags; the workflow will never overwrite a
+conflicting one. Configure native `ubuntu-24.04` and `ubuntu-24.04-arm` runners with Docker, and allow the pinned
+`regctl` installer action. Do not place Docker Hub credentials in repository-level variables or source-build runner
+configuration.
 
 Draft staging never publishes a release or creates a tag. Public preview publication requires a separate
 `publish-draft` dispatch, approval through the protected `desktop-linux-preview-publication` environment, its
@@ -346,8 +373,8 @@ Draft staging never publishes a release or creates a tag. Public preview publica
 `desktop-linux-preview-v*` tag ruleset. The publication job downloads, hashes, and architecture-inspects the staged
 bytes again and publishes them only as a prerelease, never as the latest release. This preview environment contains no
 production signing credential. GitHub Actions release write permission, the two native Linux runner labels, the two
-published runtime image manifests, environment reviewers, and preview tag protection are the remaining external setup;
-Apple credentials and macOS/Windows jobs are not involved.
+published runtime image manifests, environment reviewers, and preview tag protection are the remaining desktop-draft
+setup; Apple credentials and macOS/Windows jobs are not involved.
 
 Preview users verify `SHA256SUMS`, install the matching package with `apt install ./<asset>.deb` or
 `dnf install ./<asset>.rpm`, and upgrade only after manually downloading a newer preview with

@@ -365,6 +365,7 @@ jobs:
               scripts/build-images.sh \
               scripts/ci-redis.sh \
               scripts/smoke-test-images.sh \
+              scripts/smoke-test-preview-runtime-images.sh \
               scripts/smoke-test-sqlite-startup.sh \
               scripts/verify-antigravity-image.sh
           } > >(tee -a build_log.txt) 2>&1

@@ -9,6 +9,7 @@
 #   scripts/build-images.sh --push --dockerhub # explicit Docker Hub selector (backward compatible)
 #   scripts/build-images.sh --platform linux/amd64,linux/arm64 --push  # multi-arch (app/ui/docs only)
 #   scripts/build-images.sh --only app,agent   # build a subset
+#   scripts/build-images.sh --sha-only --only app,ui # local full-SHA tags only (preview preparation)
 #
 # Note: the agent image is pinned to linux/amd64 (Debian package pins include
 # amd64 binNMU suffixes), so a multi-arch --platform value cannot build the full
@@ -91,6 +92,7 @@ AGENT_BUNDLE_TAG=""
 PUSH=false
 PUSH_ONLY=false
 PROMOTE_LATEST=false
+SHA_ONLY=false
 PLATFORM=""   # empty = native platform
 ONLY=""
 
@@ -99,6 +101,7 @@ while [[ $# -gt 0 ]]; do
     --push) PUSH=true; shift ;;
     --push-only) PUSH=true; PUSH_ONLY=true; shift ;;
     --promote-latest) PROMOTE_LATEST=true; shift ;;
+    --sha-only) SHA_ONLY=true; shift ;;
     --dockerhub) shift ;;
     --ghcr)
       echo "GHCR publishing is no longer supported; Docker Hub is ProPR's release registry." >&2
@@ -114,6 +117,17 @@ done
 if $PROMOTE_LATEST && { $PUSH || $PUSH_ONLY || [[ -n "$PLATFORM" ]]; }; then
   echo "--promote-latest cannot be combined with build or push options" >&2
   exit 1
+fi
+if $SHA_ONLY && { $PUSH || $PUSH_ONLY || $PROMOTE_LATEST; }; then
+  echo "--sha-only is a local-build safety mode and cannot publish or promote images" >&2
+  exit 1
+fi
+if $SHA_ONLY; then
+  PUSH_LATEST=false
+  if [[ ! "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "--sha-only requires a full lowercase 40-character Git commit SHA; got '$GIT_SHA'" >&2
+    exit 1
+  fi
 fi
 if { $PUSH || $PROMOTE_LATEST; } && [[ ! "$GIT_SHA" =~ ^[0-9a-f]{40,64}$ ]]; then
   echo "Publishing requires a full Git commit SHA; got '$GIT_SHA'" >&2
@@ -148,12 +162,16 @@ tags_for() {
   local name="$1" repository
   local -a tags=()
   while IFS= read -r repository; do
-    tags+=("$repository:$VERSION")
+    if ! $SHA_ONLY; then
+      tags+=("$repository:$VERSION")
+    fi
     tags+=("$repository:$GIT_SHA")
-    if [[ "$PUSH_LATEST" == "true" ]]; then
+    if ! $SHA_ONLY && [[ "$PUSH_LATEST" == "true" ]]; then
       tags+=("$repository:latest")
     fi
-    [[ "$name" == "agent" ]] && tags+=("$repository:$AGENT_BUNDLE_TAG")
+    if ! $SHA_ONLY && [[ "$name" == "agent" ]]; then
+      tags+=("$repository:$AGENT_BUNDLE_TAG")
+    fi
   done < <(repositories_for "$name")
   printf '%s\n' "${tags[@]}"
 }
@@ -164,8 +182,11 @@ candidate_ref_for() {
 
 immutable_suffixes_for() {
   local name="$1"
-  printf '%s\n' "$GIT_SHA" "$VERSION"
-  [[ "$name" == "agent" ]] && printf '%s\n' "$AGENT_BUNDLE_TAG"
+  printf '%s\n' "$GIT_SHA"
+  if ! $SHA_ONLY; then
+    printf '%s\n' "$VERSION"
+    [[ "$name" == "agent" ]] && printf '%s\n' "$AGENT_BUNDLE_TAG"
+  fi
 }
 
 manifest_ns() {
@@ -576,6 +597,7 @@ echo "  docker hub: $DOCKERHUB_NS"
 echo "  platform:   ${PLATFORM:-native}"
 echo "  push:       $PUSH"
 echo "  latest:     $PUSH_LATEST"
+echo "  sha only:   $SHA_ONLY"
 echo "  agent tag:  $AGENT_BUNDLE_TAG"
 [[ -n "$ONLY" ]] && echo "  only:       $ONLY"
 
