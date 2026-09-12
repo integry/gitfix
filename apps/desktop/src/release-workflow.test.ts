@@ -380,7 +380,7 @@ describe('desktop trusted release workflow', () => {
 
   test('keeps standalone native Windows durability assertions paused but ready for re-enablement', () => {
     const section = job('native-windows-durability', 'validation-version');
-    assert.match(section, /# Windows delivery is paused; retain the job for explicit re-enablement\.\n\s+if: \$\{\{ false \}\}/);
+    assert.match(section, /if: github\.event_name == 'pull_request' && vars\.PROPR_WINDOWS_DESKTOP_CI_ENABLED == 'true'/);
     assert.match(section, /runs-on: windows-latest/);
     assert.match(section, /continue-on-error: true/);
     assert.match(section, /PROPR_NATIVE_WINDOWS_DURABILITY_REQUIRED: '1'/);
