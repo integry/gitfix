@@ -333,6 +333,22 @@ const assertDraft = (release, { tag, sourceRevision, version }) => {
   }
 };
 
+const findReleaseByTag = async (json, tag) => {
+  let release;
+  for (let page = 1; ; page += 1) {
+    const result = await json(`/releases?per_page=${API_PAGE_SIZE}&page=${page}`);
+    if (!Array.isArray(result)) throw new Error('GitHub returned an invalid Linux preview release list');
+    for (const candidate of result) {
+      if (candidate?.tag_name !== tag) continue;
+      if (release !== undefined) {
+        throw new Error('GitHub returned duplicate releases for the Linux preview tag');
+      }
+      release = candidate;
+    }
+    if (result.length < API_PAGE_SIZE) return release;
+  }
+};
+
 const listAssets = async (json, releaseId) => {
   const assets = [];
   for (let page = 1; ; page += 1) {
@@ -397,7 +413,7 @@ export const stageLinuxPreviewDraft = async ({
   }
   const commit = await json(`/commits/${sourceRevision}`);
   if (commit?.sha !== sourceRevision) throw new Error('Linux preview source revision is unavailable');
-  let release = await json(`/releases/tags/${encodeURIComponent(tag)}`, { allowNotFound: true });
+  let release = await findReleaseByTag(json, tag);
   if (release === undefined) {
     release = await json('/releases', {
       method: 'POST',
@@ -461,7 +477,7 @@ export const publishLinuxPreviewDraft = async ({
   if (await json(`/git/ref/tags/${encodeURIComponent(tag)}`, { allowNotFound: true }) !== undefined) {
     throw new Error('Linux preview tag already exists; refusing to republish or move it');
   }
-  const release = await json(`/releases/tags/${encodeURIComponent(tag)}`);
+  const release = await findReleaseByTag(json, tag);
   assertDraft(release, { tag, sourceRevision, version });
   const listed = await listAssets(json, release.id);
   const expectedNames = expectedBundleNames(version);

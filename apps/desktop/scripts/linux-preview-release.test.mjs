@@ -88,7 +88,16 @@ const response = ({ status = 200, value, bytes }) => ({
 });
 
 const createGitHub = () => {
-  const state = { release: undefined, assets: [], patchCalls: 0, published: false };
+  const state = {
+    release: undefined,
+    releaseListPrefix: [],
+    releaseListCalls: [],
+    createCalls: 0,
+    tagLookupCalls: 0,
+    assets: [],
+    patchCalls: 0,
+    published: false,
+  };
   const draft = () => ({
     id: 7,
     tag_name: linuxPreviewTag(version, sourceRevision),
@@ -115,13 +124,21 @@ const createGitHub = () => {
       return response({ value: { sha: sourceRevision } });
     }
     if (path.startsWith('/releases/tags/')) {
-      return state.release ? response({ value: state.release }) : response({ status: 404 });
+      state.tagLookupCalls += 1;
+      return response({ status: 404 });
+    }
+    if (path === '/releases' && method === 'GET') {
+      const page = Number(parsed.searchParams.get('page'));
+      const releases = [...state.releaseListPrefix, ...(state.release ? [state.release] : [])];
+      state.releaseListCalls.push(page);
+      return response({ value: releases.slice((page - 1) * 100, page * 100) });
     }
     if (path === '/releases' && method === 'POST') {
       const input = JSON.parse(options.body);
       assert.equal(input.draft, true);
       assert.equal(input.prerelease, true);
       assert.equal(input.target_commitish, sourceRevision);
+      state.createCalls += 1;
       state.release = draft();
       return response({ status: 201, value: state.release });
     }
@@ -222,7 +239,7 @@ describe('Linux preview release channel', () => {
     }), /explicitly authorized Linux preview publication channel/);
   });
 
-  test('stages only a draft, then publishes only through the separate explicit operation', async () => {
+  test('stages, resumes, and publishes via paginated release lists when release-by-tag returns 404', async () => {
     const { directory } = await createBundle();
     const github = createGitHub();
     const staged = await stageLinuxPreviewDraft({
@@ -237,6 +254,24 @@ describe('Linux preview release channel', () => {
     assert.equal(github.patchCalls, 0);
     assert.equal(github.release.draft, true);
     assert.equal(github.assets.length, 7);
+    assert.equal(github.createCalls, 1);
+
+    github.releaseListPrefix = Array.from({ length: 100 }, (_, index) => ({
+      id: 1000 + index,
+      tag_name: `unrelated-${index}`,
+    }));
+    const resumed = await stageLinuxPreviewDraft({
+      directory,
+      version,
+      sourceRevision,
+      repository,
+      token: 'token',
+      fetchImpl: github.fetchImpl,
+    });
+    assert.equal(resumed.releaseId, staged.releaseId);
+    assert.equal(github.createCalls, 1);
+    assert.equal(github.assets.length, 7);
+    assert.equal(github.patchCalls, 0);
 
     const published = await publishLinuxPreviewDraft({
       version,
@@ -253,6 +288,8 @@ describe('Linux preview release channel', () => {
     assert.equal(published.draft, false);
     assert.equal(published.prerelease, true);
     assert.equal(github.patchCalls, 1);
+    assert.equal(github.tagLookupCalls, 0);
+    assert.deepEqual(github.releaseListCalls, [1, 1, 2, 1, 2]);
   });
 
   test('fails closed if finalized package bytes change before preview preparation', async () => {
