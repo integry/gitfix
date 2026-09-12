@@ -20,7 +20,13 @@ package_name='propr-desktop'
 test_user='propr-acceptance'
 test_home="/home/$test_user"
 smoke_root="$test_home/propr-desktop-smoke-installed"
-user_configuration="$test_home/.config/propr-desktop/package-acceptance.json"
+xdg_cache_home="$test_home/.cache"
+xdg_config_home="$test_home/.config"
+xdg_data_parent="$test_home/.local"
+xdg_data_home="$xdg_data_parent/share"
+xdg_runtime_dir="$test_home/.runtime"
+synthetic_keyring_root="$test_home/propr-desktop-smoke-keyring"
+user_configuration="$xdg_config_home/propr-desktop/package-acceptance.json"
 desktop_file='/usr/share/applications/propr-desktop.desktop'
 launcher_icon='/usr/share/pixmaps/propr-desktop.png'
 application_root='/usr/lib/propr-desktop'
@@ -141,9 +147,12 @@ current_phase='prerequisites'
 if [ "$family" = deb ]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends binutils ca-certificates dbus-x11 procps util-linux xauth xvfb
+  apt-get install -y --no-install-recommends \
+    binutils ca-certificates dbus-x11 gnome-keyring libsecret-1-0 procps util-linux xauth xvfb
 else
-  dnf install -y binutils ca-certificates dbus-x11 procps-ng util-linux xorg-x11-server-Xvfb xorg-x11-xauth
+  dnf install -y \
+    binutils ca-certificates dbus-x11 gnome-keyring libsecret procps-ng util-linux \
+    xorg-x11-server-Xvfb xorg-x11-xauth
 fi
 package_present && fail 'container image already contains propr-desktop'
 last_completed_phase='prerequisites'
@@ -302,12 +311,16 @@ run_installed_smoke() {
   set +e
   runuser -u "$test_user" -- env -i \
     HOME="$test_home" USER="$test_user" LOGNAME="$test_user" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
-    PATH=/usr/local/bin:/usr/bin:/bin XDG_CACHE_HOME="$test_home/.cache" \
-    XDG_CONFIG_HOME="$test_home/.config" XDG_DATA_HOME="$test_home/.local/share" \
-    PROPR_DESKTOP_SMOKE_TEST=1 \
+    PATH=/usr/local/bin:/usr/bin:/bin XDG_CACHE_HOME="$xdg_cache_home" \
+    XDG_CONFIG_HOME="$xdg_config_home" XDG_DATA_HOME="$synthetic_keyring_root" \
+    XDG_RUNTIME_DIR="$xdg_runtime_dir" \
+    PROPR_DESKTOP_SMOKE_KEYRING_ROOT="$synthetic_keyring_root" PROPR_DESKTOP_SMOKE_TEST=1 \
     timeout --signal=TERM --kill-after=10s 120s \
-    xvfb-run --auto-servernum dbus-run-session -- \
-    /usr/bin/propr-desktop --disable-gpu --propr-smoke-test "--user-data-dir=$smoke_root" \
+    dbus-run-session -- bash -euo pipefail -c '
+      eval "$(printf "%s\n" "propr-installed-package-smoke" | gnome-keyring-daemon --unlock --components=secrets)"
+      exec xvfb-run --auto-servernum "$1" --disable-gpu --propr-smoke-test \
+        "--user-data-dir=$2" --password-store=gnome-libsecret
+    ' bash /usr/bin/propr-desktop "$smoke_root" \
     2>&1 | tee "$launch_log"
   launch_status="${PIPESTATUS[0]}"
   set -e
@@ -336,7 +349,13 @@ verify_artifact_metadata "$artifact" "$version"
 artifact_metadata_verified=true
 last_completed_phase='artifact-metadata'
 useradd --create-home --home-dir "$test_home" --shell /bin/bash "$test_user"
-install -d -m 700 -o "$test_user" -g "$test_user" "$smoke_root" "$test_home/.config/propr-desktop"
+for synthetic_directory in \
+  "$xdg_cache_home" "$xdg_config_home" "$xdg_data_parent" "$xdg_data_home" \
+  "$xdg_runtime_dir" "$synthetic_keyring_root" "$smoke_root" "$xdg_config_home/propr-desktop"; do
+  install -d -m 700 -o "$test_user" -g "$test_user" "$synthetic_directory"
+  [ "$(stat -c '%a:%U:%G' "$synthetic_directory")" = "700:$test_user:$test_user" ] \
+    || fail 'synthetic user directory mode or ownership is invalid'
+done
 
 current_phase='previous-package-payload'
 install_artifact "$previous_artifact"
@@ -353,10 +372,10 @@ chown "$test_user:$test_user" "$user_configuration"
 chmod 600 "$user_configuration"
 configuration_sha256="$(sha256sum "$user_configuration" | cut -d ' ' -f 1)"
 runuser -u "$test_user" -- env -i HOME="$test_home" PATH=/usr/bin:/bin \
-  XDG_CONFIG_HOME="$test_home/.config" XDG_DATA_HOME="$test_home/.local/share" \
+  XDG_CONFIG_HOME="$xdg_config_home" XDG_DATA_HOME="$xdg_data_home" \
   xdg-mime default propr-desktop.desktop x-scheme-handler/propr
 [ "$(runuser -u "$test_user" -- env -i HOME="$test_home" PATH=/usr/bin:/bin \
-  XDG_CONFIG_HOME="$test_home/.config" XDG_DATA_HOME="$test_home/.local/share" \
+  XDG_CONFIG_HOME="$xdg_config_home" XDG_DATA_HOME="$xdg_data_home" \
   xdg-mime query default x-scheme-handler/propr)" = 'propr-desktop.desktop' ] \
   || fail 'installed desktop entry did not register as the synthetic user scheme handler'
 last_completed_phase='user-configuration'

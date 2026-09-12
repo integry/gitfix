@@ -442,10 +442,12 @@ The check compares generated and installed name/version/architecture/dependency 
 setuid-sandbox, and native-addon ownership/modes and ELF architecture, verifies the desktop entry and `propr://` MIME
 handler, and matches all three installed application/tray icons to the already pixel- and transparency-verified assets.
 It launches the actually installed application as a synthetic unprivileged account under Xvfb both before and after the
-upgrade without `--no-sandbox`. It then proves that the upgrade preserves synthetic app configuration, that uninstall
-preserves the synthetic account's configuration and smoke data, and that the package database, launcher, application
-tree, desktop entry, and system icon are removed. Package artifacts are mounted read-only; host profiles, keyrings,
-workers, the host package database, and any host ProPR installation are never mounted or addressed.
+upgrade without `--no-sandbox`. Each launch uses an unlocked, synthetic Secret Service keyring rooted inside that
+account's disposable home and explicitly selects `gnome-libsecret`; it never reads a real keyring or permits plaintext
+credential fallback. It then proves that the upgrade preserves synthetic app configuration, that uninstall preserves
+the synthetic account's configuration and smoke data, and that the package database, launcher, application tree,
+desktop entry, and system icon are removed. Package artifacts are mounted read-only; host profiles, keyrings, workers,
+the host package database, and any host ProPR installation are never mounted or addressed.
 
 Run `--arch x64` only on an x64 Linux Docker host. `arm64` remains a first-class builder/native-gate target and the same
 installed-package harness accepts `--arch arm64`, but only on a native ARM64 Linux Docker host. The runner rejects a host
