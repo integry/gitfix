@@ -42,6 +42,7 @@
     "make:dmg": "node scripts/make-dmg.mjs",
     "release:stage": "node scripts/release-artifacts.mjs stage",
     "release:finalize": "node scripts/release-artifacts.mjs finalize",
+    "release:linux-preview": "node scripts/linux-preview-release.mjs",
     "premake:deb": "npm run prepare:renderer",
     "make:deb": "PROPR_DESKTOP_ENABLE_DEB=1 electron-forge make --targets deb",
     "premake:rpm": "npm run prepare:renderer",
