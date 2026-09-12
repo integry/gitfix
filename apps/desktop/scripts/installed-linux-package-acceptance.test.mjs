@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -93,6 +93,47 @@ describe('installed Linux package acceptance authority', () => {
         input: `${dependencies}\n`,
       });
       assert.equal(result.status, 0, `${family} GTK dependency metadata was rejected: ${result.stderr}`);
+    }
+  });
+
+  test('namespace preflight creates namespaces without changing root mount propagation', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    const source = await readFile(new URL('./test-installed-linux-package.sh', import.meta.url), 'utf8');
+    const command = source.match(
+      /^(unshare .* >"\$namespace_preflight_log" 2>&1)$/mu,
+    )?.[1];
+    assert.ok(command, 'namespace preflight command must remain executable coverage');
+
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'propr-namespace-preflight-')));
+    const unshare = join(directory, 'unshare');
+    const argumentLog = join(directory, 'arguments');
+    const namespacePreflightLog = join(directory, 'preflight.log');
+    try {
+      await writeFile(unshare, `#!/bin/sh
+printf '%s\\n' "$@" > "$PROPR_UNSHARE_ARGUMENT_LOG"
+[ "$*" = '--mount --propagation unchanged --pid --net --fork /bin/true' ] || {
+  echo 'unshare: cannot change root filesystem propagation: Permission denied' >&2
+  exit 1
+}
+`);
+      await chmod(unshare, 0o755);
+      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', command], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${directory}:${process.env.PATH ?? ''}`,
+          PROPR_UNSHARE_ARGUMENT_LOG: argumentLog,
+          namespace_preflight_log: namespacePreflightLog,
+        },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual((await readFile(argumentLog, 'utf8')).trim().split('\n'), [
+        '--mount', '--propagation', 'unchanged', '--pid', '--net', '--fork', '/bin/true',
+      ]);
+      assert.equal(await readFile(namespacePreflightLog, 'utf8'), '');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
@@ -197,7 +238,7 @@ describe('installed Linux package acceptance authority', () => {
     assert.match(source, /\[ ! -f \/\.dockerenv \].*\/run\/\.containerenv/);
     assert.match(source, /apt-get install -y "\$package"/);
     assert.match(source, /dnf install -y "\$package"/);
-    assert.match(source, /unshare --mount --pid --net --fork \/bin\/true/);
+    assert.match(source, /unshare --mount --propagation unchanged --pid --net --fork \/bin\/true/);
     assert.match(source, /outcome='environment-limited'[\s\S]*no application launch, upgrade, or uninstall acceptance was reached/);
     assert.match(source, /assert_mode_owner "\$sandbox" 4755/);
     assert.match(source, /assert_mode_owner "\$native_addon" 755/);

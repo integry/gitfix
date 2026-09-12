@@ -502,7 +502,7 @@ derivative. Each container starts with no ProPR package or account, installs bui
 uses `apt` or `dnf` for the package operations themselves.
 
 The sandbox isolation mode is deliberately required. `docker-default` adds no capability and runs a mount/PID/network
-namespace preflight; Docker's usual capability boundary is expected to reject that preflight on many hosts.
+namespace-creation preflight; Docker's usual capability boundary is expected to reject that preflight on many hosts.
 `docker-cap-sys-admin` adds only `SYS_ADMIN` to Docker's existing capability set for each auto-removed acceptance
 container. It does not use a privileged container, replace Docker's default seccomp profile, share host namespaces, or
 make any bind mount writable. Docker documents `--cap-add` as the fine-grained alternative to `--privileged` and adjusts
@@ -511,12 +511,15 @@ container, use this mode only on an authorized isolated host or disposable VM:
 https://docs.docker.com/engine/containers/run/#runtime-privilege-and-linux-capabilities
 
 The preflight runs after installing only the distribution test prerequisites and before inspecting or installing either
-ProPR package. If the host runtime still denies the namespaces, the harness reports `environment-limited`, names the
-last completed and failed phases, records zero attempted/passed application launches, and makes no upgrade or uninstall
-claim. If a real application launch later encounters the same namespace/zygote boundary, the failure record preserves
-the completed metadata/payload checks and separate attempted/passed launch counts; it is never converted to a skipped or
-successful launch. Use a disposable native Debian 12 or Rocky Linux 9 VM when host policy rejects the scoped capability.
-Do not disable Electron's sandbox, use an unconfined seccomp profile, run a privileged container, or weaken host policy.
+ProPR package. It verifies that one process can create mount, PID, and network namespaces and run `/bin/true` in them.
+It passes `--propagation unchanged` so util-linux does not also attempt an unrelated recursive change to the root mount's
+propagation; the preflight does not verify such a propagation change or replace the later real sandboxed Electron launch.
+If the host runtime still denies namespace creation, the harness reports `environment-limited`, names the last completed
+and failed phases, records zero attempted/passed application launches, and makes no upgrade or uninstall claim. If a real
+application launch later encounters the same namespace/zygote boundary, the failure record preserves the completed
+metadata/payload checks and separate attempted/passed launch counts; it is never converted to a skipped or successful
+launch. Use a disposable native Debian 12 or Rocky Linux 9 VM when host policy rejects the scoped capability. Do not
+disable Electron's sandbox, use an unconfined seccomp profile, run a privileged container, or weaken host policy.
 
 The check compares generated and installed name/version/architecture/dependency metadata, verifies executable,
 setuid-sandbox, and native-addon ownership/modes and ELF architecture, verifies the desktop entry and `propr://` MIME

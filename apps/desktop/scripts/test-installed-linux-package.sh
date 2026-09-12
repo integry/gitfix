@@ -160,7 +160,7 @@ last_completed_phase='prerequisites'
 current_phase='sandbox-preflight'
 namespace_preflight_log='/tmp/propr-package-namespace-preflight.log'
 set +e
-unshare --mount --pid --net --fork /bin/true >"$namespace_preflight_log" 2>&1
+unshare --mount --propagation unchanged --pid --net --fork /bin/true >"$namespace_preflight_log" 2>&1
 namespace_preflight_status="$?"
 set -e
 if [ "$namespace_preflight_status" -ne 0 ]; then
