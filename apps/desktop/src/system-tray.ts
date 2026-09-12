@@ -112,6 +112,21 @@ const unavailableDetail = (reason: Parameters<DesktopTrayController['connectionU
   return 'Offline or not connected';
 };
 
+const linuxAboutAndHelpItems = (
+  commands: Pick<DesktopNativeCommandDispatcher, 'dispatch'>,
+): MenuItemConstructorOptions[] => [
+  { type: 'separator' },
+  { label: 'About ProPR', click: () => commands.dispatch('about') },
+  {
+    label: 'Help',
+    submenu: [
+      { label: 'ProPR Website', click: () => commands.dispatch('website') },
+      { label: 'Documentation', click: () => commands.dispatch('documentation') },
+      { label: 'Connection Help', click: () => commands.dispatch('connection-help') },
+    ],
+  },
+];
+
 export const createDesktopTrayController = (options: DesktopTrayOptions): DesktopTrayController => {
   const supported = options.platform === 'darwin' || options.platform === 'linux';
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -163,6 +178,7 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
           enabled: commandState.nativeNotificationsAvailable,
           click: () => options.commands.dispatch('toggle-native-notifications'),
         },
+        ...(options.platform === 'linux' ? linuxAboutAndHelpItems(options.commands) : []),
         { type: 'separator' },
         { label: 'Quit ProPR', click: () => options.commands.dispatch('quit') },
       ];
@@ -192,6 +208,7 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
           enabled: commandState.nativeNotificationsAvailable,
           click: () => options.commands.dispatch('toggle-native-notifications'),
         },
+        ...(options.platform === 'linux' ? linuxAboutAndHelpItems(options.commands) : []),
         { type: 'separator' },
         { label: 'Quit ProPR', click: () => options.commands.dispatch('quit') },
       ];

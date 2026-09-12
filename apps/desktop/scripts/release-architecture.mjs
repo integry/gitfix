@@ -95,6 +95,8 @@ const EXPECTED_PACKAGE_ARCHITECTURE = {
   deb: { x64: 'amd64', arm64: 'arm64' },
   rpm: { x64: 'x86_64', arm64: 'aarch64' },
 };
+const RPM_SANDBOX_PATH = '/usr/lib/propr-desktop/chrome-sandbox';
+const RPM_FILE_QUERY = '[%{FILENAMES}\\t%{FILEMODES}\\t%{FILEUSERNAME}\\t%{FILEGROUPNAME}\\n]';
 
 const readPrefix = async (path, length = 4096) => {
   const handle = await open(path, 'r');
@@ -1215,12 +1217,38 @@ const inspectDeb = async (path, platform, arch) => {
   }
 };
 
+export const assertRpmSandboxMetadata = (metadata, artifact = 'RPM artifact') => {
+  if (typeof metadata !== 'string') throw new Error(`${artifact} RPM file metadata is invalid`);
+  const matches = [];
+  for (const line of metadata.split('\n').filter(Boolean)) {
+    const fields = line.split('\t');
+    if (fields.length !== 4 || !/^\d+$/u.test(fields[1])) {
+      throw new Error(`${artifact} RPM file metadata is malformed`);
+    }
+    if (fields[0] === RPM_SANDBOX_PATH) {
+      matches.push({ mode: Number(fields[1]) & 0o7777, owner: fields[2], group: fields[3] });
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error(`${artifact} must contain exactly one ${RPM_SANDBOX_PATH} metadata entry`);
+  }
+  const [sandbox] = matches;
+  if (sandbox.mode !== 0o4755 || sandbox.owner !== 'root' || sandbox.group !== 'root') {
+    throw new Error(
+      `${artifact} ${RPM_SANDBOX_PATH} metadata must be root:root 4755`,
+    );
+  }
+  return sandbox;
+};
+
 const inspectRpm = async (path, platform, arch) => {
   const { stdout } = await execFile('rpm', ['-qp', '--qf', '%{ARCH}', path]);
   const packageArchitecture = stdout.trim();
   if (packageArchitecture !== EXPECTED_PACKAGE_ARCHITECTURE.rpm[arch]) {
     throw new Error(`RPM architecture mismatch: expected ${EXPECTED_PACKAGE_ARCHITECTURE.rpm[arch]}, found ${packageArchitecture}`);
   }
+  const { stdout: fileMetadata } = await execFile('rpm', ['-qp', '--qf', RPM_FILE_QUERY, path]);
+  assertRpmSandboxMetadata(fileMetadata, path);
   const directory = await mkdtemp(join(tmpdir(), 'propr-rpm-'));
   try {
     await runPipeline('rpm2cpio', [path], 'cpio', ['-idm', '--quiet'], directory);

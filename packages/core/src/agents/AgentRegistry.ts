@@ -117,6 +117,28 @@ export class AgentRegistry {
                 return;
             }
 
+            if (!configs.some(config => config.enabled)) {
+                // A non-empty, explicitly disabled configuration is different
+                // from an unconfigured installation: there is no execution
+                // runtime to prepare. This keeps no-work installations alive
+                // without weakening the empty-config default-agent fallback or
+                // any startup that has an enabled direct agent.
+                this.clearUnifiedAgentImageRetry();
+                this.unavailableUnifiedAgentImage = null;
+                this.agents.clear();
+                this.agentsByAlias.clear();
+                this.goalCapabilityProbe.clear();
+                this.syntheticAgents.clear();
+                await this.syntheticAgents.register();
+                await this.captureRuntimePackageStateVersion();
+                this.initialized = true;
+                logger.info(
+                    { configuredAgentCount: configs.length },
+                    'Agent registry initialized without an execution image because every configured direct agent is disabled',
+                );
+                return;
+            }
+
             const bundleImage = await this.ensureUnifiedAgentImage(configs, prepareImages);
             if (!bundleImage) {
                 await this.captureRuntimePackageStateVersion();

@@ -10,6 +10,7 @@ import {
   resolveTrustedUpdateBuildConfig,
   WINDOWS_INSTALLER_PRODUCT_VERSION_ERROR,
 } from './release-config';
+import { ProprMakerRpm } from './rpm-maker';
 
 const publicKey = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
 const certificatePin = `certificate-sha256:${'1'.repeat(64)}`;
@@ -58,6 +59,14 @@ describe('desktop release configuration', () => {
         await maker.prepareConfig('x64');
         assert.equal(maker.config.options?.bin, executableName);
         assert.notEqual(maker.config.options?.bin, '@propr/desktop');
+        if (expectedTarget === 'rpm') {
+          assert.ok(maker instanceof ProprMakerRpm);
+          const clonedMaker = maker.clone();
+          assert.ok(clonedMaker instanceof ProprMakerRpm);
+          await clonedMaker.prepareConfig('x64');
+          assert.equal(clonedMaker.specTemplate, maker.specTemplate);
+          assert.equal(clonedMaker.config.options?.bin, executableName);
+        }
       }
     } finally {
       if (previousDeb === undefined) delete process.env.PROPR_DESKTOP_ENABLE_DEB;
