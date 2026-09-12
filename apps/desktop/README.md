@@ -74,6 +74,7 @@ npm run test:native-durability -w @propr/desktop
 npm run desktop:package
 npm run desktop:smoke # Run under xvfb-run on a headless Linux host.
 npm run desktop:acceptance # Linux x64 package; run under Xvfb in a D-Bus/keyring session.
+npm run desktop:acceptance:install-linux -- <two-version DEB/RPM arguments> # Opt-in Docker acceptance.
 npm run desktop:make
 npm run desktop:audit
 # Rebuild/check Linux PNG and macOS ICNS assets from the pinned ProPR PWA mark:
@@ -383,10 +384,56 @@ code-signing identity in an isolated keychain. It signs the copied app (never th
 designated requirement before and after both launches, and restores the runner's original keychain list/default before
 deleting the identity and temporary keychain. This stabilizes the Safe Storage application identity without changing
 trust settings and is not evidence of Developer ID signing, notarization, Gatekeeper approval, or end-user launchability.
+
 Linux runs each artifact against one isolated, unlocked D-Bus/libsecret session and proves credential round-trip and
 deletion without permitting plaintext/basic-text fallback. Cold launches are direct argv; Linux package warm dispatch uses an
 isolated XDG MIME database and `gio`, ZIP warm dispatch is direct because ZIP has no registered launcher, and macOS
 warm dispatch uses LaunchServices against the exact copied bundle.
+
+### Installed Linux package acceptance
+
+The native gate above intentionally proves an **extracted artifact** lifecycle. It does not prove that a package manager
+can resolve the package's declared dependencies, install it, upgrade it, or remove its owned system entries. Run the
+separate installed-package acceptance with two unsigned internal-RC builds whose versions are strictly increasing:
+
+```sh
+ARCH=x64
+PREVIOUS_VERSION=1.2.2
+VERSION=1.2.3
+ARTIFACTS="$PWD/desktop-package-acceptance"
+
+PROPR_DESKTOP_REAL_LINUX_PACKAGE_ACCEPTANCE=1 \
+npm run desktop:acceptance:install-linux -- \
+  --arch "$ARCH" \
+  --previous-version "$PREVIOUS_VERSION" \
+  --version "$VERSION" \
+  --previous-deb "$ARTIFACTS/ProPR-Desktop-$PREVIOUS_VERSION-linux-$ARCH.deb" \
+  --deb "$ARTIFACTS/ProPR-Desktop-$VERSION-linux-$ARCH.deb" \
+  --previous-rpm "$ARTIFACTS/ProPR-Desktop-$PREVIOUS_VERSION-linux-$ARCH.rpm" \
+  --rpm "$ARTIFACTS/ProPR-Desktop-$VERSION-linux-$ARCH.rpm"
+```
+
+Build both inputs from the source revision being accepted by setting `PROPR_DESKTOP_VERSION` to each version; do not
+rename one package or use a same-version reinstall as upgrade evidence. The harness accepts only canonical non-link
+artifact paths and runs Debian 12 and Rocky Linux 9 in separate auto-removed Docker containers. Those distributions are
+representatives of the documented Debian/Ubuntu and Fedora/RHEL package families; they are not claims about every
+derivative. Each container starts with no ProPR package or account, installs build-independent test prerequisites, then
+uses `apt` or `dnf` for the package operations themselves.
+
+The check compares generated and installed name/version/architecture/dependency metadata, verifies executable,
+setuid-sandbox, and native-addon ownership/modes and ELF architecture, verifies the desktop entry and `propr://` MIME
+handler, and matches all three installed application/tray icons to the already pixel- and transparency-verified assets.
+It launches the actually installed application as a synthetic unprivileged account under Xvfb both before and after the
+upgrade without `--no-sandbox`. It then proves that the upgrade preserves synthetic app configuration, that uninstall
+preserves the synthetic account's configuration and smoke data, and that the package database, launcher, application
+tree, desktop entry, and system icon are removed. Package artifacts are mounted read-only; host profiles, keyrings,
+workers, the host package database, and any host ProPR installation are never mounted or addressed.
+
+Run `--arch x64` only on an x64 Linux Docker host. `arm64` remains a first-class builder/native-gate target and the same
+installed-package harness accepts `--arch arm64`, but only on a native ARM64 Linux Docker host. The runner rejects a host
+architecture mismatch, so QEMU/cross-architecture container success is never reported as native installed-package
+validation. A successful x64 run therefore establishes concrete x64 acceptance and retains, but does not overstate,
+ARM64 coverage.
 
 ### CI preflight, signing, and notarization configuration
 

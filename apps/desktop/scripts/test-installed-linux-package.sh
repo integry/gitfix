@@ -1,0 +1,301 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -ne 9 ]; then
+  echo 'Installed Linux package acceptance received invalid arguments' >&2
+  exit 64
+fi
+
+family="$1"
+architecture="$2"
+package_architecture="$3"
+previous_version="$4"
+version="$5"
+previous_artifact="$6"
+artifact="$7"
+desktop_icon_sha256="$8"
+tray_icon_sha256="$9"
+package_name='propr-desktop'
+test_user='propr-acceptance'
+test_home="/home/$test_user"
+smoke_root="$test_home/propr-desktop-smoke-installed"
+user_configuration="$test_home/.config/propr-desktop/package-acceptance.json"
+desktop_file='/usr/share/applications/propr-desktop.desktop'
+launcher_icon='/usr/share/pixmaps/propr-desktop.png'
+application_root='/usr/lib/propr-desktop'
+executable="$application_root/propr-desktop"
+sandbox="$application_root/chrome-sandbox"
+runtime_icon="$application_root/resources/propr-desktop.png"
+tray_icon="$application_root/resources/propr-tray.png"
+native_addon="$application_root/resources/app.asar.unpacked/.vite/native/prebuilds/linux-$architecture/directory-operations.node"
+owned_system_entries='/tmp/propr-package-owned-system-entries'
+owned_system_directories='/tmp/propr-package-owned-system-directories'
+
+fail() {
+  echo "Installed Linux package acceptance failed: $1" >&2
+  exit 1
+}
+
+if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ]; then
+  fail 'this script may run only inside a disposable container'
+fi
+if [ "$(id -u)" -ne 0 ]; then
+  fail 'container package operations require root'
+fi
+case "$family:$architecture:$package_architecture" in
+  deb:x64:amd64|deb:arm64:arm64|rpm:x64:x86_64|rpm:arm64:aarch64) ;;
+  *) fail 'package family or architecture is invalid' ;;
+esac
+case "$(uname -m):$architecture" in
+  x86_64:x64|aarch64:arm64|arm64:arm64) ;;
+  *) fail 'container kernel architecture does not match the artifact; emulation is not accepted' ;;
+esac
+for value in "$previous_version" "$version"; do
+  [[ "$value" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+    || fail 'package version is invalid'
+done
+IFS=. read -r previous_major previous_minor previous_patch <<< "$previous_version"
+IFS=. read -r current_major current_minor current_patch <<< "$version"
+if (( previous_major > current_major \
+  || (previous_major == current_major && previous_minor > current_minor) \
+  || (previous_major == current_major && previous_minor == current_minor && previous_patch >= current_patch) )); then
+  fail 'package acceptance requires a strictly increasing version upgrade'
+fi
+for candidate in "$previous_artifact" "$artifact"; do
+  [ -f "$candidate" ] && [ ! -L "$candidate" ] || fail 'mounted artifact is not a regular non-link file'
+  [ -s "$candidate" ] || fail 'mounted artifact is empty'
+  [ ! -w "$candidate" ] || fail 'mounted artifact is not read-only'
+done
+
+package_present() {
+  if [ "$family" = deb ]; then
+    dpkg-query -W -f='${db:Status-Status}' "$package_name" 2>/dev/null | grep -qx 'installed'
+  else
+    rpm -q "$package_name" >/dev/null 2>&1
+  fi
+}
+
+remove_package() {
+  if ! package_present; then return; fi
+  if [ "$family" = deb ]; then
+    DEBIAN_FRONTEND=noninteractive apt-get remove -y "$package_name" >/dev/null
+  else
+    dnf remove -y "$package_name" >/dev/null
+  fi
+}
+
+cleanup() {
+  remove_package || true
+  pkill -KILL -u "$test_user" 2>/dev/null || true
+  userdel --remove "$test_user" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
+if [ "$family" = deb ]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends binutils ca-certificates dbus-x11 procps util-linux xauth xvfb
+else
+  dnf install -y binutils ca-certificates dbus-x11 procps-ng util-linux xorg-x11-server-Xvfb xorg-x11-xauth
+fi
+package_present && fail 'container image already contains propr-desktop'
+
+metadata_field() {
+  local package="$1"
+  local field="$2"
+  if [ "$family" = deb ]; then
+    dpkg-deb --field "$package" "$field"
+  else
+    case "$field" in
+      Package) rpm -qp --queryformat '%{NAME}' "$package" ;;
+      Version) rpm -qp --queryformat '%{VERSION}' "$package" ;;
+      Architecture) rpm -qp --queryformat '%{ARCH}' "$package" ;;
+      Depends) rpm -qp --requires "$package" ;;
+      Description) rpm -qp --queryformat '%{SUMMARY}' "$package" ;;
+      Homepage) rpm -qp --queryformat '%{URL}' "$package" ;;
+      License) rpm -qp --queryformat '%{LICENSE}' "$package" ;;
+      *) fail 'unsupported package metadata field' ;;
+    esac
+  fi
+}
+
+verify_artifact_metadata() {
+  local package="$1"
+  local expected_version="$2"
+  [ "$(metadata_field "$package" Package)" = "$package_name" ] || fail 'package name metadata is invalid'
+  [ "$(metadata_field "$package" Version)" = "$expected_version" ] || fail 'package version metadata is invalid'
+  [ "$(metadata_field "$package" Architecture)" = "$package_architecture" ] \
+    || fail 'package architecture metadata is invalid'
+  local dependencies
+  dependencies="$(metadata_field "$package" Depends)"
+  [ -n "$dependencies" ] || fail 'package dependency metadata is empty'
+  printf '%s\n' "$dependencies" | grep -Eq '(^|[ ,])(?:gtk3|libgtk-3-[0-9a-z]+)([ ,]|$|[[:space:]])' \
+    || fail 'package dependency metadata is missing GTK'
+  printf '%s\n' "$dependencies" | grep -Eq '(^|[ ,])xdg-utils([ ,]|$|[[:space:]])' \
+    || fail 'package dependency metadata is missing xdg-utils'
+  [ "$(metadata_field "$package" Homepage)" = 'https://github.com/integry/propr' ] \
+    || fail 'package homepage metadata is invalid'
+  case "$(metadata_field "$package" Description)" in
+    'Secure ProPR desktop application'*) ;;
+    *) fail 'package description metadata is invalid' ;;
+  esac
+  if [ "$family" = rpm ]; then
+    [ "$(metadata_field "$package" License)" = 'Apache-2.0' ] || fail 'package license metadata is invalid'
+  fi
+}
+
+installed_version() {
+  if [ "$family" = deb ]; then
+    dpkg-query -W -f='${Version}' "$package_name"
+  else
+    rpm -q --queryformat '%{VERSION}' "$package_name"
+  fi
+}
+
+installed_dependencies() {
+  if [ "$family" = deb ]; then
+    dpkg-query -W -f='${Depends}' "$package_name"
+  else
+    rpm -q --requires "$package_name"
+  fi
+}
+
+install_artifact() {
+  local package="$1"
+  if [ "$family" = deb ]; then
+    apt-get install -y "$package"
+  else
+    dnf install -y "$package"
+  fi
+}
+
+snapshot_owned_system_entries() {
+  local listing
+  if [ "$family" = deb ]; then
+    listing="$(dpkg-query -L "$package_name")"
+  else
+    listing="$(rpm -ql "$package_name")"
+  fi
+  : > "$owned_system_entries"
+  : > "$owned_system_directories"
+  while IFS= read -r path; do
+    if [ -f "$path" ] || [ -L "$path" ]; then
+      case "$path" in
+        /usr/*) printf '%s\n' "$path" >> "$owned_system_entries" ;;
+        *) fail 'package database contains an unexpected owned file path' ;;
+      esac
+    elif [ -d "$path" ]; then
+      case "$path" in
+        /usr/*propr-desktop*) printf '%s\n' "$path" >> "$owned_system_directories" ;;
+      esac
+    fi
+  done <<< "$listing"
+  [ -s "$owned_system_entries" ] || fail 'package database did not report owned system files'
+}
+
+assert_mode_owner() {
+  local path="$1"
+  local expected_mode="$2"
+  [ -f "$path" ] && [ ! -L "$path" ] || fail 'installed package payload file is missing or linked unexpectedly'
+  [ "$(stat -c '%a:%u:%g' "$path")" = "$expected_mode:0:0" ] \
+    || fail 'installed package payload mode or ownership is invalid'
+}
+
+assert_installed_payload() {
+  [ "$(installed_version)" = "$1" ] || fail 'installed package database version is invalid'
+  [ "$(installed_dependencies)" = "$(metadata_field "$2" Depends)" ] \
+    || fail 'installed package database dependency metadata differs from the artifact'
+  [ "$(readlink -f /usr/bin/propr-desktop)" = "$executable" ] || fail 'installed command does not resolve to the packaged executable'
+  assert_mode_owner "$executable" 755
+  assert_mode_owner "$sandbox" 4755
+  assert_mode_owner "$native_addon" 755
+  assert_mode_owner "$desktop_file" 644
+  assert_mode_owner "$launcher_icon" 644
+  readelf -h "$executable" | grep -Eq "Machine:[[:space:]]+(Advanced Micro Devices X86-64|AArch64)" \
+    || fail 'installed executable is not a supported ELF architecture'
+  readelf -h "$native_addon" | grep -Eq "Machine:[[:space:]]+(Advanced Micro Devices X86-64|AArch64)" \
+    || fail 'installed native addon is not a supported ELF architecture'
+  grep -qx 'Name=ProPR Desktop' "$desktop_file" || fail 'desktop entry name is invalid'
+  grep -Eq '^Exec=propr-desktop( %U)?$' "$desktop_file" || fail 'desktop entry command is invalid'
+  grep -qx 'Icon=propr-desktop' "$desktop_file" || fail 'desktop entry icon is invalid'
+  grep -Eq '^MimeType=.*x-scheme-handler/propr;' "$desktop_file" || fail 'desktop entry scheme handler is missing'
+  echo "$desktop_icon_sha256  $launcher_icon" | sha256sum --check --status \
+    || fail 'installed launcher icon does not match the verified transparent asset'
+  echo "$desktop_icon_sha256  $runtime_icon" | sha256sum --check --status \
+    || fail 'installed runtime icon does not match the verified transparent asset'
+  echo "$tray_icon_sha256  $tray_icon" | sha256sum --check --status \
+    || fail 'installed tray icon does not match the verified transparent asset'
+}
+
+run_installed_smoke() {
+  local phase="$1"
+  local evidence="$smoke_root/application.smoke-evidence.jsonl"
+  runuser -u "$test_user" -- env -i \
+    HOME="$test_home" USER="$test_user" LOGNAME="$test_user" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    PATH=/usr/local/bin:/usr/bin:/bin XDG_CACHE_HOME="$test_home/.cache" \
+    XDG_CONFIG_HOME="$test_home/.config" XDG_DATA_HOME="$test_home/.local/share" \
+    PROPR_DESKTOP_SMOKE_TEST=1 \
+    timeout --signal=TERM --kill-after=10s 120s \
+    xvfb-run --auto-servernum dbus-run-session -- \
+    /usr/bin/propr-desktop --disable-gpu --propr-smoke-test "--user-data-dir=$smoke_root"
+  [ -f "$evidence" ] && [ ! -L "$evidence" ] || fail 'installed application did not emit smoke evidence'
+  for event in desktop.smoke.authorized desktop.app.ready desktop.renderer.mvp_flows.ready \
+    desktop.renderer.ready desktop.app.shutdown; do
+    grep -Fqx "{\"event\":\"$event\"}" "$evidence" || fail 'installed application smoke evidence is incomplete'
+  done
+  if grep -Eq 'desktop\.(app\.start_failed|main_process\.uncaught_exception|log\.write_failed)' "$evidence"; then
+    fail 'installed application reported a smoke failure'
+  fi
+  mv "$evidence" "$smoke_root/application.smoke-evidence.$phase.jsonl"
+}
+
+verify_artifact_metadata "$previous_artifact" "$previous_version"
+verify_artifact_metadata "$artifact" "$version"
+useradd --create-home --home-dir "$test_home" --shell /bin/bash "$test_user"
+install -d -m 700 -o "$test_user" -g "$test_user" "$smoke_root" "$test_home/.config/propr-desktop"
+
+install_artifact "$previous_artifact"
+assert_installed_payload "$previous_version" "$previous_artifact"
+run_installed_smoke before-upgrade
+
+printf '%s\n' '{"schemaVersion":1,"synthetic":"preserve-across-package-upgrade-and-removal"}' > "$user_configuration"
+chown "$test_user:$test_user" "$user_configuration"
+chmod 600 "$user_configuration"
+configuration_sha256="$(sha256sum "$user_configuration" | cut -d ' ' -f 1)"
+runuser -u "$test_user" -- env -i HOME="$test_home" PATH=/usr/bin:/bin \
+  XDG_CONFIG_HOME="$test_home/.config" XDG_DATA_HOME="$test_home/.local/share" \
+  xdg-mime default propr-desktop.desktop x-scheme-handler/propr
+[ "$(runuser -u "$test_user" -- env -i HOME="$test_home" PATH=/usr/bin:/bin \
+  XDG_CONFIG_HOME="$test_home/.config" XDG_DATA_HOME="$test_home/.local/share" \
+  xdg-mime query default x-scheme-handler/propr)" = 'propr-desktop.desktop' ] \
+  || fail 'installed desktop entry did not register as the synthetic user scheme handler'
+
+install_artifact "$artifact"
+assert_installed_payload "$version" "$artifact"
+[ "$(sha256sum "$user_configuration" | cut -d ' ' -f 1)" = "$configuration_sha256" ] \
+  || fail 'package upgrade changed synthetic user configuration'
+[ "$(stat -c '%a:%U:%G' "$user_configuration")" = "600:$test_user:$test_user" ] \
+  || fail 'package upgrade changed synthetic user configuration authority'
+run_installed_smoke after-upgrade
+
+snapshot_owned_system_entries
+remove_package
+package_present && fail 'package manager still reports propr-desktop installed after removal'
+while IFS= read -r owned_path; do
+  [ ! -e "$owned_path" ] && [ ! -L "$owned_path" ] || fail 'package removal left a database-owned system file behind'
+done < "$owned_system_entries"
+while IFS= read -r owned_path; do
+  [ ! -e "$owned_path" ] && [ ! -L "$owned_path" ] || fail 'package removal left a package-specific system directory behind'
+done < "$owned_system_directories"
+for owned_path in /usr/bin/propr-desktop "$application_root" "$desktop_file" "$launcher_icon" \
+  /usr/share/doc/propr-desktop /usr/share/licenses/propr-desktop; do
+  [ ! -e "$owned_path" ] && [ ! -L "$owned_path" ] || fail 'package removal left an owned system entry behind'
+done
+[ "$(sha256sum "$user_configuration" | cut -d ' ' -f 1)" = "$configuration_sha256" ] \
+  || fail 'package removal changed synthetic user configuration'
+[ -f "$smoke_root/application.smoke-evidence.before-upgrade.jsonl" ] \
+  && [ -f "$smoke_root/application.smoke-evidence.after-upgrade.jsonl" ] \
+  || fail 'package removal deleted synthetic application user data'
+
+printf '{"schemaVersion":1,"family":"%s","architecture":"%s","installProof":"package-manager-database","launches":2,"upgrade":true,"userDataPreserved":true,"ownedSystemEntriesRemoved":true}\n' \
+  "$family" "$architecture"
