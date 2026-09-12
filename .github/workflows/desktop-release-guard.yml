@@ -27,7 +27,7 @@ jobs:
   native-windows-durability:
     name: Native Windows durability (x64)
     # Windows delivery is paused; retain the job for explicit re-enablement.
-    if: ${{ false }}
+    if: github.event_name == 'pull_request' && vars.PROPR_WINDOWS_DESKTOP_CI_ENABLED == 'true'
     runs-on: windows-latest
     continue-on-error: true
     timeout-minutes: 30
