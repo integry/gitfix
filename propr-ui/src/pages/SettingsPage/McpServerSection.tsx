@@ -146,9 +146,15 @@ function McpDetails({ data, saving, revoking, isOperatorManaged, onUpdateScopes,
         </div>
       )}
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-gray-100 pt-4">
-        <a href="/mcp/apps" className="text-xs text-blue-600 hover:underline">
-          View connected apps →
-        </a>
+        {/* The /mcp/apps page is served by the API app, whose origin can differ
+            from the SPA origin, so the link must target the resolved MCP origin. */}
+        {status.origin ? (
+          <a href={`${status.origin}/mcp/apps`} className="text-xs text-blue-600 hover:underline">
+            View connected apps →
+          </a>
+        ) : (
+          <span />
+        )}
         <button
           type="button"
           disabled={revoking}
