@@ -6,12 +6,14 @@ import {
 } from '@propr/shared';
 
 const reasoningLevelLabels: Record<ReasoningLevel, string> = {
+  none: 'None (Muse Code only)',
+  minimal: 'Minimal (Muse Code only)',
   low: 'Low',
   medium: 'Medium',
   high: 'High',
   xhigh: 'XHigh',
   max: 'Max',
-  ultra: 'Ultra (Codex only)',
+  ultra: 'Ultra (Codex and Muse Code only)',
   ultracode: 'Ultracode (Claude only)',
   auto: 'Auto (Claude only)',
 };
@@ -21,7 +23,7 @@ export function formatReasoningLevelOption(level: string, agentType?: AgentType)
   if (!(REASONING_LEVELS as readonly string[]).includes(level)) return displayLabel;
   if (agentType && !getReasoningLevelsForAgentType(agentType).includes(level as ReasoningLevel)) {
     const plainLabel = displayLabel.replace(/\s+\([^)]+ only\)$/, '');
-    const agentLabel = agentType === 'codex' ? 'Codex' : agentType === 'claude' ? 'Claude' : agentType;
+    const agentLabel = agentType === 'codex' ? 'Codex' : agentType === 'claude' ? 'Claude' : agentType === 'muse' ? 'Muse Code' : agentType;
     return `${plainLabel} (unsupported for ${agentLabel}) — GitHub: level-${level}`;
   }
   return `${displayLabel} — GitHub: level-${level}`;

@@ -12,9 +12,10 @@ import { getConfig, saveConfig } from './configStore.js';
 export { normalizeModelReasoningLevel };
 export type { ModelReasoningLevel };
 
-export type CodexRuntimeReasoningLevel = Exclude<ReasoningLevel, 'auto' | 'ultracode'>;
-export type ClaudeRuntimeReasoningLevel = Exclude<ReasoningLevel, 'ultra'>;
-export type RuntimeReasoningLevel = CodexRuntimeReasoningLevel | ClaudeRuntimeReasoningLevel;
+export type CodexRuntimeReasoningLevel = Exclude<ReasoningLevel, 'auto' | 'ultracode' | 'none' | 'minimal'>;
+export type ClaudeRuntimeReasoningLevel = Exclude<ReasoningLevel, 'ultra' | 'none' | 'minimal'>;
+export type MuseRuntimeReasoningLevel = Exclude<ReasoningLevel, 'auto' | 'ultracode'>;
+export type RuntimeReasoningLevel = CodexRuntimeReasoningLevel | ClaudeRuntimeReasoningLevel | MuseRuntimeReasoningLevel;
 
 const REASONING_LEVEL_MIN_CLI_VERSION: Partial<Record<AgentType, string>> = {
     claude: '2.1.68',
@@ -55,14 +56,19 @@ export function validateModelReasoningLevel(raw: unknown): { valid: true; value:
 }
 
 export function resolveCodexReasoningLevel(level: ModelReasoningLevel): CodexRuntimeReasoningLevel | null {
-    if (level === '' || level === 'auto') return null;
+    if (level === '' || level === 'auto' || level === 'none' || level === 'minimal') return null;
     if (level === 'ultracode') return 'ultra';
     return level;
 }
 
 export function resolveClaudeReasoningLevel(level: ModelReasoningLevel): ClaudeRuntimeReasoningLevel | null {
-    if (level === '') return null;
+    if (level === '' || level === 'none' || level === 'minimal') return null;
     if (level === 'ultra') return 'max';
+    return level;
+}
+
+export function resolveMuseReasoningLevel(level: ModelReasoningLevel): MuseRuntimeReasoningLevel | null {
+    if (level === '' || level === 'auto' || level === 'ultracode') return null;
     return level;
 }
 
@@ -72,6 +78,7 @@ export function resolveRuntimeModelReasoningLevel(
 ): RuntimeReasoningLevel | null {
     if (agentType === 'codex') return resolveCodexReasoningLevel(level);
     if (agentType === 'claude') return resolveClaudeReasoningLevel(level);
+    if (agentType === 'muse') return resolveMuseReasoningLevel(level);
     return null;
 }
 
