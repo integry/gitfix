@@ -34,7 +34,7 @@ const commandPaths: Record<Exclude<DesktopNativeCommand, 'manage-instances' | 'c
   tasks: '/tasks',
   plans: '/plans',
   inbox: '/inbox',
-  'notification-settings': '/settings',
+  'notification-settings': '/settings?tab=notifications',
 };
 
 const confirmPlanStudioDiscard = (): boolean => {

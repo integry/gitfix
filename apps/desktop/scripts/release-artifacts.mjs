@@ -842,7 +842,7 @@ export const finalizeArtifacts = async ({
   const manifest = {
     schemaVersion: 2,
     releaseProfile: profile.name,
-    channel: 'stable',
+    channel: profile.previewOnly ? 'validation' : 'stable',
     version,
     tag: `desktop-v${version}`,
     publishedAt,
@@ -915,6 +915,9 @@ const createSignedFeeds = async (manifest, outputDirectory, env) => {
 export const signReleaseMetadata = async ({ inputDirectory, outputDirectory, version, profile: profileName, env = process.env }) => {
   if (!VERSION_PATTERN.test(version)) throw new Error(`Invalid desktop release version: ${version}`);
   const profile = resolveReleaseProfile(profileName);
+  if (profile.previewOnly) {
+    throw new Error(`Release profile ${profile.name} is unsigned preview validation and cannot produce trusted update metadata`);
+  }
   const unsignedManifest = JSON.parse(await readFile(join(inputDirectory, 'desktop-release.json'), 'utf8'));
   if (
     unsignedManifest.schemaVersion !== 2

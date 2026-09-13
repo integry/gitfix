@@ -18,10 +18,12 @@ import { useDesktop } from '../../desktop/DesktopContext';
 import ManagedPreviewStorageSection from './ManagedPreviewStorageSection';
 import SettingsNavigation, { type SettingsNavigationSection } from './SettingsNavigation';
 import McpServerSection from './McpServerSection';
+import { useSettingsCategoryRoute } from './useSettingsCategoryRoute';
 
 const AdminSettingsPage: React.FC = () => {
   const { isDemoMode } = useDemoMode();
   const desktop = useDesktop();
+  const categoryRoute = useSettingsCategoryRoute();
 
   const {
     loading,
@@ -314,7 +316,11 @@ const AdminSettingsPage: React.FC = () => {
         )}
       </div>
 
-      <SettingsNavigation sections={settingsSections} isReadOnly={isDemoMode} />
+      <SettingsNavigation
+        sections={settingsSections}
+        isReadOnly={isDemoMode}
+        {...categoryRoute}
+      />
 
       {/* Anchored Footer - Status Bar */}
       <div className="flex-shrink-0 border-t border-gray-200 px-6 py-3 bg-gray-50">

@@ -74,6 +74,7 @@ npm run test:native-durability -w @propr/desktop
 npm run desktop:package
 npm run desktop:smoke # Run under xvfb-run on a headless Linux host.
 npm run desktop:acceptance # Linux x64 package; run under Xvfb in a D-Bus/keyring session.
+npm run desktop:acceptance:install-linux -- <two-version DEB/RPM arguments> # Opt-in Docker acceptance.
 npm run desktop:make
 npm run desktop:audit
 # Rebuild/check Linux PNG and macOS ICNS assets from the pinned ProPR PWA mark:
@@ -281,6 +282,86 @@ Desktop releases have their own `desktop-v<major>.<minor>.<patch>` tags. They do
 metadata, Linux packages, the deferred protected machine MSI, artifact names, and release manifest without changing the monorepo
 package versions.
 
+### Independent Linux preview channel
+
+The recommended first Linux delivery is the manual **Desktop Linux Preview Release** GitHub Actions workflow and GitHub
+Releases. It is independent of the tag-driven production workflow: it runs only on manual dispatch from `main`, uses
+native `ubuntu-24.04` x64 and ARM64 runners, reads no Apple, Windows, update-signing, or publication secret, and emits
+exactly these unsigned packages:
+
+- `ProPR-Desktop-<version>-linux-x64.deb`
+- `ProPR-Desktop-<version>-linux-x64.rpm`
+- `ProPR-Desktop-<version>-linux-arm64.deb`
+- `ProPR-Desktop-<version>-linux-arm64.rpm`
+
+The bundle also contains `linux-preview.json`, `INSTALL.md`, and `SHA256SUMS`. The preview manifest records the full
+source commit, desktop package version, architecture and format of every asset, digest-pinned runtime app/UI image
+references, workflow run, `unsigned-preview` trust state, and manual package-manager upgrade policy. The generated
+preview identity is `desktop-linux-preview-v<version>-<first-12-source-SHA>`; draft creation refuses an existing tag or
+different asset at that identity. Finalization re-inspects both package architectures and accepts no ZIP, macOS,
+Windows, stable update manifest, signature, or extra file.
+
+Before staging, publish the source revision's multi-architecture runtime images for `linux/amd64` and `linux/arm64` and
+obtain their immutable references:
+
+```text
+propr/app:<40-character-source-SHA>@sha256:<64-character-manifest-digest>
+propr/ui:<40-character-source-SHA>@sha256:<64-character-manifest-digest>
+```
+
+The workflow verifies both registry manifests and embeds an API-compatible runtime manifest bound to the same source
+revision. Missing images, a mutable tag-only reference, a digest mismatch, or a missing architecture is an actionable
+preflight failure; the build never falls back to the checked-in launcher manifest. Stage the private draft with:
+
+```sh
+SOURCE_SHA=<full-lowercase-commit-on-main>
+gh workflow run desktop-linux-preview.yml --ref main \
+  -f operation=stage-draft \
+  -f source_revision="$SOURCE_SHA" \
+  -f runtime_app_image="propr/app:$SOURCE_SHA@sha256:<app-manifest-digest>" \
+  -f runtime_ui_image="propr/ui:$SOURCE_SHA@sha256:<ui-manifest-digest>"
+```
+
+`stage-draft` has repository `contents: write` only in its final draft-staging job. It creates or safely resumes a
+private GitHub draft, uploads the exact checksum allowlist, downloads every uploaded byte to verify it, and never
+publishes or creates the preview tag. Pull requests, ordinary pushes, and the production `desktop-v*` tag workflow do
+not invoke this channel.
+
+Public preview publication is a second manual dispatch over the already-staged bytes. First create the
+`desktop-linux-preview-publication` GitHub environment with required reviewers, restrict deployment to `main`, configure
+a tag ruleset for `refs/tags/desktop-linux-preview-v*` that blocks updates and deletion, and set environment variable
+`PROPR_DESKTOP_LINUX_PREVIEW_PUBLICATION_AUTHORIZED=1`. Do not store production signing credentials in this environment.
+Then an authorized reviewer may run:
+
+```sh
+gh workflow run desktop-linux-preview.yml --ref main \
+  -f operation=publish-draft \
+  -f source_revision="$SOURCE_SHA"
+```
+
+Publication downloads and hashes the draft again, validates its exact four-package matrix and both native
+architectures, checks the source-bound manifest and canonical instructions, then publishes it as a GitHub prerelease
+with `make_latest=false`. It refuses an existing tag rather than moving or reusing one. GitHub Actions must be allowed
+to create releases with the job-scoped `GITHUB_TOKEN`, both native hosted runner labels must be available, and the two
+published runtime images plus the protected environment/tag ruleset are the complete external setup for this preview
+channel. Apple Developer credentials, notarization, Ed25519 update keys, macOS runners, and Windows runners are not
+requirements.
+
+Preview DEB/RPM assets do not configure an apt or dnf repository and do not enable Linux self-updates. Users manually
+download a newer architecture-matching asset and run `apt install ./<new>.deb` or `dnf upgrade ./<new>.rpm`; `INSTALL.md`
+also documents `apt install --reinstall` / `dnf reinstall` when a newer source preview intentionally retains the same
+package version. It travels with every release and includes install, launch, checksum, upgrade, and removal commands. The later production
+Linux channel should use signed apt and dnf repositories, but it still needs independent package-signing keys, protected
+offline/CI signing custody, repository metadata signing, HTTPS hosting/CDN, retention, rotation/revocation, and client
+repository bootstrap instructions. None of that is simulated by this unsigned preview.
+
+Snap and Flatpak are not first-delivery substitutes here. ProPR's Linux setup needs the host Docker daemon/socket and
+terminal/browser handoffs; profiles need a real Secret Service/keyring; Connect/deep links need browser and URI-scheme
+integration; and tray behavior spans StatusNotifier/XEmbed desktop environments. Snap interfaces or Flatpak portals and
+socket/filesystem permissions would need a threat-model review plus installed-package testing on supported desktops.
+Unvalidated classic confinement, broad filesystem/socket access, or portal fallbacks would weaken the current boundary,
+so neither format blocks DEB/RPM delivery and neither is emitted by the preview workflow.
+
 The first production release uses the explicit, fail-closed `macos-linux-v1` profile. It produces exactly 10 native
 artifacts for these four targets: `linux-x64`, `linux-arm64`, `darwin-x64`, and `darwin-arm64`.
 
@@ -383,10 +464,87 @@ code-signing identity in an isolated keychain. It signs the copied app (never th
 designated requirement before and after both launches, and restores the runner's original keychain list/default before
 deleting the identity and temporary keychain. This stabilizes the Safe Storage application identity without changing
 trust settings and is not evidence of Developer ID signing, notarization, Gatekeeper approval, or end-user launchability.
+
 Linux runs each artifact against one isolated, unlocked D-Bus/libsecret session and proves credential round-trip and
 deletion without permitting plaintext/basic-text fallback. Cold launches are direct argv; Linux package warm dispatch uses an
 isolated XDG MIME database and `gio`, ZIP warm dispatch is direct because ZIP has no registered launcher, and macOS
 warm dispatch uses LaunchServices against the exact copied bundle.
+
+### Installed Linux package acceptance
+
+The native gate above intentionally proves an **extracted artifact** lifecycle. It does not prove that a package manager
+can resolve the package's declared dependencies, install it, upgrade it, or remove its owned system entries. Run the
+separate installed-package acceptance with two unsigned internal-RC builds whose versions are strictly increasing:
+
+```sh
+ARCH=x64
+PREVIOUS_VERSION=1.2.2
+VERSION=1.2.3
+ARTIFACTS="$PWD/desktop-package-acceptance"
+
+PROPR_DESKTOP_REAL_LINUX_PACKAGE_ACCEPTANCE=1 \
+npm run desktop:acceptance:install-linux -- \
+  --arch "$ARCH" \
+  --sandbox-isolation docker-cap-sys-admin \
+  --previous-version "$PREVIOUS_VERSION" \
+  --version "$VERSION" \
+  --previous-deb "$ARTIFACTS/ProPR-Desktop-$PREVIOUS_VERSION-linux-$ARCH.deb" \
+  --deb "$ARTIFACTS/ProPR-Desktop-$VERSION-linux-$ARCH.deb" \
+  --previous-rpm "$ARTIFACTS/ProPR-Desktop-$PREVIOUS_VERSION-linux-$ARCH.rpm" \
+  --rpm "$ARTIFACTS/ProPR-Desktop-$VERSION-linux-$ARCH.rpm"
+```
+
+Build both inputs from the source revision being accepted by setting `PROPR_DESKTOP_VERSION` to each version; do not
+rename one package or use a same-version reinstall as upgrade evidence. The harness accepts only canonical non-link
+artifact paths and runs Debian 12 and Rocky Linux 9 in separate auto-removed Docker containers. Those distributions are
+representatives of the documented Debian/Ubuntu and Fedora/RHEL package families; they are not claims about every
+derivative. Each container starts with no ProPR package or account, installs build-independent test prerequisites, then
+uses `apt` or `dnf` for the package operations themselves.
+
+The sandbox isolation mode is deliberately required. `docker-default` adds no capability and runs a mount/PID/network
+namespace-creation preflight; Docker's usual capability boundary is expected to reject that preflight on many hosts.
+`docker-cap-sys-admin` retains Docker's default `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`,
+`MKNOD`, `NET_BIND_SERVICE`, `NET_RAW`, `SETFCAP`, `SETGID`, `SETPCAP`, `SETUID`, and `SYS_CHROOT` capabilities and adds
+exactly `SYS_ADMIN` and `IPC_LOCK` for each auto-removed acceptance container. `SYS_ADMIN` permits the Electron sandbox's
+namespace creation. `IPC_LOCK` permits execution of Rocky Linux 9's real `/usr/bin/gnome-keyring-daemon`, whose distro
+file capabilities include `cap_ipc_lock=ep`; Docker's default capability bounding set otherwise rejects that exec. The
+mode does not use a privileged container, replace Docker's default seccomp profile, share host namespaces, or make any
+bind mount writable. Docker documents `--cap-add` as the fine-grained alternative to `--privileged` and adjusts its
+default seccomp profile for explicitly selected capabilities. Because `SYS_ADMIN` is still powerful inside the container,
+use this mode only on an authorized isolated host or disposable VM:
+https://docs.docker.com/engine/containers/run/#runtime-privilege-and-linux-capabilities
+
+The preflight runs after installing only the distribution test prerequisites and before inspecting or installing either
+ProPR package. It verifies that one process can create mount, PID, and network namespaces and run `/bin/true` in them.
+It passes `--propagation unchanged` so util-linux does not also attempt an unrelated recursive change to the root mount's
+propagation; the preflight does not verify such a propagation change or replace the later real sandboxed Electron launch.
+After the previous package's payload is installed and verified, a separate 30-second preflight starts the real distro
+keyring daemon as the synthetic user, unlocks only the disposable keyring, and pings `org.freedesktop.secrets` over its
+disposable D-Bus session. An execution denial or readiness timeout is reported as an environment-limited
+`keyring-preflight` before an application launch is attempted, with emitted diagnostic output capped at 4096 bytes.
+If the host runtime still denies namespace creation, the harness reports `environment-limited`, names the last completed
+and failed phases, records zero attempted/passed application launches, and makes no upgrade or uninstall claim. If a real
+application launch later encounters the same namespace/zygote boundary, the failure record preserves the completed
+metadata/payload checks and separate attempted/passed launch counts; it is never converted to a skipped or successful
+launch. Use a disposable native Debian 12 or Rocky Linux 9 VM when host policy rejects the scoped capability. Do not
+disable Electron's sandbox, use an unconfined seccomp profile, run a privileged container, or weaken host policy.
+
+The check compares generated and installed name/version/architecture/dependency metadata, verifies executable,
+setuid-sandbox, and native-addon ownership/modes and ELF architecture, verifies the desktop entry and `propr://` MIME
+handler, and matches all three installed application/tray icons to the already pixel- and transparency-verified assets.
+It launches the actually installed application as a synthetic unprivileged account under Xvfb both before and after the
+upgrade without `--no-sandbox`. Each launch uses an unlocked, synthetic Secret Service keyring rooted inside that
+account's disposable home and explicitly selects `gnome-libsecret`; it never reads a real keyring or permits plaintext
+credential fallback. It then proves that the upgrade preserves synthetic app configuration, that uninstall preserves
+the synthetic account's configuration and smoke data, and that the package database, launcher, application tree,
+desktop entry, and system icon are removed. Package artifacts are mounted read-only; host profiles, keyrings, workers,
+the host package database, and any host ProPR installation are never mounted or addressed.
+
+Run `--arch x64` only on an x64 Linux Docker host. `arm64` remains a first-class builder/native-gate target and the same
+installed-package harness accepts `--arch arm64`, but only on a native ARM64 Linux Docker host. The runner rejects a host
+architecture mismatch, so QEMU/cross-architecture container success is never reported as native installed-package
+validation. A successful x64 run therefore establishes concrete x64 acceptance and retains, but does not overstate,
+ARM64 coverage.
 
 ### CI preflight, signing, and notarization configuration
 

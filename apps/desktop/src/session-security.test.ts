@@ -337,6 +337,20 @@ describe('production desktop session security', () => {
 
       assert.deepEqual(await service.discardActivation(activated), { discarded: true });
       assert.equal(check(), false);
+      assert.equal(service.activeConnectionScope(), null);
+      assert.equal((await store.list()).activeProfileId, null);
+      assert.deepEqual(await intercepted(
+        'https://avatars.githubusercontent.com/u/583231?v=4',
+        {
+          Accept: 'image/avif,image/webp',
+          Authorization: 'Bearer renderer-controlled',
+          Cookie: 'instance=must-not-cross',
+        },
+        mainRenderer.id,
+        'image',
+      ), {
+        requestHeaders: { Accept: 'image/avif,image/webp' },
+      });
       assert.deepEqual(await intercepted(`${ACTIVE_ORIGIN}/api/side-effect`, {
         Authorization: 'Bearer renderer-controlled',
         Cookie: 'renderer=must-not-cross',

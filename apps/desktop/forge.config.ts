@@ -1,6 +1,5 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { MakerDeb } from '@electron-forge/maker-deb';
-import { MakerRpm } from '@electron-forge/maker-rpm';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { flipFuses, FuseV1Options, FuseVersion } from '@electron/fuses';
@@ -23,6 +22,7 @@ import {
 import { brandMacOSPackage } from './src/macos-branding';
 import { DESKTOP_MICROPHONE_USAGE_DESCRIPTION } from './src/microphone-consent';
 import { copyPackagedNativeAuthority } from './src/package-native-authority';
+import { ProprMakerRpm } from './src/rpm-maker';
 
 const DESKTOP_EXECUTABLE_NAME = 'propr-desktop';
 const desktopIconDirectory = fileURLToPath(new URL('./assets/icons', import.meta.url));
@@ -252,7 +252,7 @@ const config: ForgeConfig = {
       })]
       : []),
     ...(process.env.PROPR_DESKTOP_ENABLE_RPM === '1'
-      ? [new MakerRpm({
+      ? [new ProprMakerRpm({
         options: {
           name: DESKTOP_EXECUTABLE_NAME,
           productName: 'ProPR Desktop',

@@ -1,7 +1,12 @@
 export const MACOS_LINUX_RELEASE_PROFILE = 'macos-linux-v1';
 export const WINDOWS_INCLUSIVE_RELEASE_PROFILE = 'macos-linux-windows-v1';
+export const LINUX_PREVIEW_RELEASE_PROFILE = 'linux-preview-v1';
 
 const profileEntries = [
+  [LINUX_PREVIEW_RELEASE_PROFILE, [
+    ['linux-x64', ['deb', 'rpm']],
+    ['linux-arm64', ['deb', 'rpm']],
+  ]],
   [MACOS_LINUX_RELEASE_PROFILE, [
     ['linux-x64', ['deb', 'rpm', 'zip']],
     ['linux-arm64', ['deb', 'rpm', 'zip']],
@@ -25,6 +30,7 @@ const PROFILES = new Map(profileEntries.map(([name, targets]) => [
     targets: new Map(targets.map(([target, kinds]) => [target, Object.freeze([...kinds])])),
     artifactCount: targets.reduce((count, [, kinds]) => count + kinds.length, 0),
     windowsIncluded: targets.some(([target]) => target.startsWith('win32-')),
+    previewOnly: name === LINUX_PREVIEW_RELEASE_PROFILE,
   }),
 ]));
 

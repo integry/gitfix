@@ -144,6 +144,36 @@ afterEach(() => {
 });
 
 describe('build-images publication reconciliation', () => {
+  test('SHA-only preview preparation creates no local version or latest aliases', () => {
+    const root = createFixture();
+    const result = runBuild(root, ['--sha-only', '--only', 'app']);
+
+    assert.equal(result.status, 0, result.stderr);
+    const build = readDockerLog(root).find(args => args[0] === 'build');
+    assert.ok(build);
+    const tags = build.flatMap((arg, index) => arg === '-t' ? [build[index + 1]] : []);
+    assert.deepEqual(tags, [`${IMAGE_REPOSITORY}:${FULL_SHA}`]);
+    assert.equal(tags.some(tag => tag.endsWith(':1.2.3') || tag.endsWith(':latest')), false);
+  });
+
+  test('SHA-only preview preparation cannot be combined with publication', () => {
+    const root = createFixture();
+    const result = runBuild(root, ['--sha-only', '--push', '--only', 'app']);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /local-build safety mode/);
+    assert.deepEqual(readDockerLog(root), []);
+  });
+
+  test('SHA-only preview preparation rejects non-canonical commit identities', () => {
+    const root = createFixture();
+    const result = runBuild(root, ['--sha-only', '--only', 'app'], { GIT_SHA: '1234ABCD' });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /full lowercase 40-character Git commit SHA/);
+    assert.deepEqual(readDockerLog(root), []);
+  });
+
   test('resolves the supported descriptor digest and creates missing immutable tags', () => {
     const root = createFixture();
     const result = runBuild(root, ['--push-only', '--dockerhub', '--only', 'app']);

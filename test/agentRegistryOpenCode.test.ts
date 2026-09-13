@@ -118,6 +118,27 @@ test('AgentRegistry keeps explicit config refresh inspect-only', async () => {
     assert.deepStrictEqual(preparationModes, [false, true]);
 });
 
+test('AgentRegistry treats an explicitly all-disabled configuration as no work without preparing an image', async () => {
+    await saveAgents([{ ...opencodeConfig, enabled: false }]);
+    const registry = AgentRegistry.getInstance();
+    let imagePreparationAttempts = 0;
+    (registry as unknown as {
+        ensureUnifiedAgentImage: () => Promise<string>;
+    }).ensureUnifiedAgentImage = async () => {
+        imagePreparationAttempts += 1;
+        throw new Error('disabled agents must not require Docker');
+    };
+
+    await registry.prepareImagesAndRefresh();
+
+    assert.strictEqual(imagePreparationAttempts, 0);
+    assert.strictEqual(registry.isInitialized(), true);
+    assert.deepStrictEqual(registry.getAllAgents(), []);
+    assert.deepStrictEqual(registry.getOperationalStatus(), {
+        unifiedAgentImage: { status: 'ready' }
+    });
+});
+
 test('AgentRegistry prepares an execution image on first-use initialization', async () => {
     const registry = AgentRegistry.getInstance();
     const preparationModes: boolean[] = [];

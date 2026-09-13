@@ -260,7 +260,7 @@ describe('desktop trusted release workflow', () => {
   });
 
   test('rechecks package architecture in staging and finalization and publishes only signed new releases', () => {
-    assert.equal(workflow.match(platformArchitecturePattern)?.length, 10);
+    assert.equal(workflow.match(platformArchitecturePattern)?.length, 8);
     assert.equal(workflow.match(/release-artifacts\.mjs stage/g)?.length, 2);
     assert.equal(workflow.match(/release-artifacts\.mjs finalize/g)?.length, 2);
     assert.match(job('finalize', 'preflight'), /needs: \[validation-version, package\]/);
@@ -281,13 +281,13 @@ describe('desktop trusted release workflow', () => {
   test('retains the exact native matrix when the workflow checkout uses CRLF', () => {
     const crlfFixture = workflow.replaceAll('\n', '\r\n');
     const normalizedFixture = normalizeWorkflowText(crlfFixture);
-    assert.equal(normalizedFixture.match(platformArchitecturePattern)?.length, 10);
+    assert.equal(normalizedFixture.match(platformArchitecturePattern)?.length, 8);
     assert.equal(normalizedFixture, workflow);
   });
 
   test('runs the native DMG layout suite on both macOS architectures', () => {
     for (const [jobName, section, targetCount] of [
-      ['unsigned validation', job('package', 'finalize'), 6],
+      ['unsigned validation', job('package', 'finalize'), 4],
       ['trusted production', job('release-package', 'release-finalize'), 4],
     ] as const) {
       assert.equal(section.match(platformArchitecturePattern)?.length, targetCount, `${jobName} has the wrong native target count`);
@@ -378,9 +378,9 @@ describe('desktop trusted release workflow', () => {
   });
 
 
-  test('keeps standalone native Windows durability assertions runnable but non-blocking', () => {
+  test('keeps standalone native Windows durability assertions paused but ready for re-enablement', () => {
     const section = job('native-windows-durability', 'validation-version');
-    assert.match(section, /if: github\.event_name == 'pull_request'/);
+    assert.match(section, /if: github\.event_name == 'pull_request' && vars\.PROPR_WINDOWS_DESKTOP_CI_ENABLED == 'true'/);
     assert.match(section, /runs-on: windows-latest/);
     assert.match(section, /continue-on-error: true/);
     assert.match(section, /PROPR_NATIVE_WINDOWS_DURABILITY_REQUIRED: '1'/);
@@ -391,11 +391,11 @@ describe('desktop trusted release workflow', () => {
     assert.match(section, /npm run desktop:smoke/);
   });
 
-  test('keeps complete Windows validation assertions runnable but non-blocking and outside production', () => {
+  test('keeps complete Windows validation assertions dormant and outside production', () => {
     const section = job('package', 'finalize');
     {
-      assert.match(section, /- platform: win32\n\s+arch: x64\n\s+runner: windows-2025/);
-      assert.match(section, /- platform: win32\n\s+arch: arm64\n\s+runner: windows-11-arm/);
+      assert.doesNotMatch(section, /- platform: win32\n\s+arch: (?:x64|arm64)\n/);
+      assert.match(section, /# Windows x64\/ARM64 validation is paused alongside Windows delivery\./);
       assert.match(section, /Assert Windows MVP package excludes update authority/);
       assert.match(section, /Probe canonical WiX 3\.14\.1 compiler/);
       assert.match(
@@ -418,7 +418,7 @@ describe('desktop trusted release workflow', () => {
         'unsigned validation retained a deferred Windows authority gate');
     }
     assert.match(section, /continue-on-error: \$\{\{ matrix\.release_target == false \}\}/);
-    assert.match(section, /platform: win32[\s\S]*release_target: false[\s\S]*release_profile: macos-linux-windows-v1[\s\S]*artifact_group: optional-windows/);
+    assert.doesNotMatch(section, /release_profile: macos-linux-windows-v1|artifact_group: optional-windows/);
     const production = job('release-package', 'release-finalize');
     assert.doesNotMatch(production, /platform: win32|Windows|WINDOWS_|\.msi/i);
     assert.equal(workflow.match(/\*Machine-Setup\.msi/g)?.length, 1);
@@ -642,8 +642,7 @@ describe('desktop trusted release workflow', () => {
     );
 
     const windowsValidation = job('package', 'finalize');
-    assert.match(windowsValidation, /- platform: win32\n\s+arch: x64\n/);
-    assert.match(windowsValidation, /- platform: win32\n\s+arch: arm64\n/);
+    assert.doesNotMatch(windowsValidation, /- platform: win32\n\s+arch: (?:x64|arm64)\n/);
     assert.equal(windowsValidation.match(/run-installed-windows-app-harness\.ps1/g)?.length, 1);
     assert.equal(windowsValidation.match(/test-installed-windows-app-supervisor\.ps1/g)?.length, 1);
     assert.equal(windowsValidation.match(/run-installed-windows-app-workflow-cleanup\.ps1/g)?.length, 1);
@@ -780,6 +779,15 @@ describe('desktop trusted release workflow', () => {
     assert.match(installedWindowsAppSupervisor, /Wait-MsiCriticalTransactionReceipt/);
     assert.match(installedWindowsAppSupervisorBehaviorTest, /DURING_MSI/);
     assert.match(installedWindowsAppSupervisorBehaviorTest, /DURING_OWNERSHIP_CAPTURE/);
+    const ownershipCaptureFixture = installedWindowsAppSupervisorFixture.slice(
+      installedWindowsAppSupervisorFixture.indexOf("'DURING_OWNERSHIP_CAPTURE' {"),
+      installedWindowsAppSupervisorFixture.indexOf("'NEGATIVE_EXIT' {"),
+    );
+    assert.match(
+      ownershipCaptureFixture,
+      /New-OwnedFixtureResources -PublishCommittedReceipt \$false[\s\S]*Write-FixtureCriticalGate 'DURING_OWNERSHIP_CAPTURE'[\s\S]*MsiTransactionState = 'COMMITTED'/,
+      'ownership-capture cancellation must exclude setup latency and still precede durable commit',
+    );
     assert.match(
       installedWindowsAppTest,
       /Registry::HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\propr-desktop\.exe/,

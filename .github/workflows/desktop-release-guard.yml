@@ -26,7 +26,8 @@ concurrency:
 jobs:
   native-windows-durability:
     name: Native Windows durability (x64)
-    if: github.event_name == 'pull_request'
+    # Windows delivery is paused; retain the job for explicit re-enablement.
+    if: github.event_name == 'pull_request' && vars.PROPR_WINDOWS_DESKTOP_CI_ENABLED == 'true'
     runs-on: windows-latest
     continue-on-error: true
     timeout-minutes: 30
@@ -143,18 +144,8 @@ jobs:
             release_target: true
             release_profile: macos-linux-v1
             artifact_group: canonical
-          - platform: win32
-            arch: x64
-            runner: windows-2025
-            release_target: false
-            release_profile: macos-linux-windows-v1
-            artifact_group: optional-windows
-          - platform: win32
-            arch: arm64
-            runner: windows-11-arm
-            release_target: false
-            release_profile: macos-linux-windows-v1
-            artifact_group: optional-windows
+          # Windows x64/ARM64 validation is paused alongside Windows delivery.
+          # Keep platform-specific steps below for when these targets return.
     env:
       PROPR_DESKTOP_VERSION: ${{ needs.validation-version.outputs.version }}
     steps:

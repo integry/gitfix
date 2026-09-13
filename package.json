@@ -82,6 +82,7 @@
     "desktop:smoke:inspect": "npm run smoke:inspect -w @propr/desktop",
     "desktop:acceptance": "npm run acceptance:package -w @propr/desktop",
     "desktop:acceptance:setup-linux": "npm run acceptance:setup-linux -w @propr/desktop",
+    "desktop:acceptance:install-linux": "npm run acceptance:install-linux -w @propr/desktop --",
     "desktop:acceptance:verify": "npm run acceptance:verify -w @propr/desktop",
     "desktop:make": "npm run make -w @propr/desktop",
     "desktop:runtime:build": "npm run prepare:renderer -w @propr/desktop && node apps/desktop/scripts/desktop-runtime-manifest.mjs local --api-compatibility 2026-06-27",

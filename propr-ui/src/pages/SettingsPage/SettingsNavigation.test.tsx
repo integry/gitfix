@@ -1,9 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, test } from 'vitest';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
+import { describe, expect, test, vi } from 'vitest';
 import SettingsNavigation, {
   matchesSettingsSearch,
   type SettingsNavigationSection
 } from './SettingsNavigation';
+import { useSettingsCategoryRoute } from './useSettingsCategoryRoute';
 
 const sections: SettingsNavigationSection[] = [
   {
@@ -31,6 +33,19 @@ const sections: SettingsNavigationSection[] = [
     content: <p>Notification controls</p>
   }
 ];
+
+const RoutedSettingsNavigation = () => {
+  const categoryRoute = useSettingsCategoryRoute();
+  const location = useLocation();
+  const navigate = useNavigate();
+  return <>
+    <button type="button" onClick={() => navigate('/settings?flow=desktop&tab=notifications')}>
+      Open notification settings
+    </button>
+    <output data-testid="settings-location">{location.search}</output>
+    <SettingsNavigation sections={sections} {...categoryRoute} />
+  </>;
+};
 
 describe('SettingsNavigation', () => {
   test('organizes settings into category tabs', () => {
@@ -76,6 +91,48 @@ describe('SettingsNavigation', () => {
     expect(screen.getByRole('tab', { name: /Automation/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Merge controls')).toBeVisible();
     expect(screen.getByText('Model controls')).not.toBeVisible();
+  });
+
+  test('selects a routed category and reports tab changes to routing state', () => {
+    const onActiveCategoryChange = vi.fn();
+    const view = render(
+      <SettingsNavigation
+        sections={sections}
+        activeCategory="notifications"
+        onActiveCategoryChange={onActiveCategoryChange}
+      />
+    );
+
+    expect(screen.getByRole('tab', { name: /Notifications/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Notification controls')).toBeVisible();
+
+    view.rerender(
+      <SettingsNavigation
+        sections={sections}
+        activeCategory="automation"
+        onActiveCategoryChange={onActiveCategoryChange}
+      />
+    );
+    expect(screen.getByText('Merge controls')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Notifications/ }));
+    expect(onActiveCategoryChange).toHaveBeenCalledWith('notifications');
+  });
+
+  test('reacts to a notification route while another settings tab is open', () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?flow=desktop&tab=automation']}>
+        <RoutedSettingsNavigation />
+      </MemoryRouter>
+    );
+    expect(screen.getByText('Merge controls')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open notification settings' }));
+    expect(screen.getByRole('tab', { name: /Notifications/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Notification controls')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: /AI & Models/ }));
+    expect(screen.getByTestId('settings-location')).toHaveTextContent('?flow=desktop');
   });
 
   test('searches every category and restores the selected tab when cleared', () => {

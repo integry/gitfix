@@ -247,6 +247,9 @@ export const publishDesktopRelease = async ({
     throw new Error('Desktop release publication inputs are invalid');
   }
   const version = tag.startsWith('desktop-v') ? tag.slice('desktop-v'.length) : '';
+  if (resolveReleaseProfile(profileName).previewOnly) {
+    throw new Error(`Release profile ${profileName} must use the explicitly authorized Linux preview publication channel`);
+  }
   const finalDirectory = resolve(directory);
   const expected = await readFinalAssetSet(finalDirectory, profileName, version, tag);
   const apiOrigin = new URL(apiUrl).origin;
