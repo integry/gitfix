@@ -19,6 +19,7 @@ export interface GoalCapability {
   reason?: string;
   models: string[];
   defaultModel: string | null;
+  objectiveMaxCharacters: number | null;
 }
 
 export type GoalLaunchStrategy = 'direct' | 'orchestrate';
