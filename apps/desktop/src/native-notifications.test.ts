@@ -37,6 +37,8 @@ const transition = (
 interface ShownNotification {
   payload: NativeNotificationPayload;
   click(): void;
+  fail(): void;
+  accept(): void;
   closed: boolean;
 }
 
@@ -49,12 +51,14 @@ const deferred = <T,>() => {
 const fixture = async (overrides: {
   platform?: NodeJS.Platform;
   supported?: boolean;
+  delivery?: 'accepted' | 'failed' | 'pending';
   beforePersist?: () => Promise<void>;
   onSettingsChanged?: (changedScope?: DesktopNotificationScope) => void;
 } = {}) => {
   const directory = await mkdtemp(join(tmpdir(), 'propr-native-notifications-'));
   const shown: ShownNotification[] = [];
   const navigated: string[] = [];
+  const logs: Array<{ level: 'warn' | 'error'; event: string }> = [];
   let active = true;
   let currentUser = scope.userId;
   const createService = () => new NativeNotificationService({
@@ -65,21 +69,37 @@ const fixture = async (overrides: {
       && candidate.profileId === scope.profileId
       && candidate.transportScope === scope.transportScope
       && candidate.userId === currentUser,
-    show: (payload, click) => {
-      const item: ShownNotification = { payload, click, closed: false };
+    show: (payload, events) => {
+      const item: ShownNotification = {
+        payload,
+        click: events.click,
+        fail: events.failed,
+        accept: events.shown,
+        closed: false,
+      };
       shown.push(item);
-      const handle: NativeNotificationHandle = { close: () => { item.closed = true; } };
+      const handle: NativeNotificationHandle = {
+        close: () => {
+          item.closed = true;
+          events.close();
+        },
+      };
+      if (overrides.delivery !== 'pending') {
+        queueMicrotask(overrides.delivery === 'failed' ? events.failed : events.shown);
+      }
       return handle;
     },
     navigate: path => navigated.push(path),
     now: () => now,
     batchDelayMs: 5,
+    testDeliveryTimeoutMs: 20,
     beforePersist: overrides.beforePersist,
+    log: (level, event) => logs.push({ level, event }),
     onSettingsChanged: overrides.onSettingsChanged,
   });
   const service = createService();
   return {
-    directory, service, shown, navigated,
+    directory, service, shown, navigated, logs,
     restart: createService,
     deactivate: () => { active = false; },
     setUser: (userId: string) => { currentUser = userId; },
@@ -242,7 +262,7 @@ test('reports Windows and missing native APIs without invoking delivery', async 
       supported: false, platform: 'win32', permission: 'unsupported', reason: 'platform-deferred',
     });
     await windows.service.update(scope, { enabled: true });
-    assert.equal((await windows.service.test(scope)).invoked, false);
+    assert.equal((await windows.service.test(scope)).status, 'not-attempted');
     assert.equal((await unsupported.service.get(scope)).capability.reason, 'native-api-unavailable');
     const mac = new NativeNotificationService({
       statePath: join(windows.directory, 'mac.json'), platform: 'darwin',
@@ -253,6 +273,80 @@ test('reports Windows and missing native APIs without invoking delivery', async 
   } finally {
     await windows.cleanup();
     await unsupported.cleanup();
+  }
+});
+
+test('reports asynchronous native delivery failures with a fixed privacy-safe diagnostic', async () => {
+  const item = await fixture({ platform: 'darwin', delivery: 'failed' });
+  try {
+    await item.service.update(scope, { enabled: true });
+
+    assert.deepEqual(await item.service.test(scope), { status: 'failed' });
+    assert.deepEqual(item.logs, [{
+      level: 'warn', event: 'desktop.notifications.delivery_failed',
+    }]);
+    item.shown[0].fail();
+    assert.equal(item.logs.length, 1);
+
+    item.service.close();
+    assert.equal(item.shown[0].closed, false);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
+test('cancels a pending test result when notifications are disabled', async () => {
+  const item = await fixture({ delivery: 'pending' });
+  try {
+    await item.service.update(scope, { enabled: true });
+    const pendingTest = item.service.test(scope);
+    await new Promise(resolve => setImmediate(resolve));
+
+    await item.service.update(scope, { enabled: false });
+
+    assert.deepEqual(await pendingTest, { status: 'cancelled' });
+    assert.equal(item.shown[0].closed, true);
+    item.shown[0].fail();
+    assert.deepEqual(item.logs, []);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
+test('does not infer delivery when the native adapter emits no outcome', async () => {
+  const item = await fixture({ delivery: 'pending' });
+  try {
+    await item.service.update(scope, { enabled: true });
+
+    assert.deepEqual(await item.service.test(scope), { status: 'unconfirmed' });
+    assert.equal(item.shown.length, 1);
+    assert.deepEqual(item.logs, []);
+  } finally {
+    item.service.close();
+    await item.cleanup();
+  }
+});
+
+test('cancels an unresolved test on account switch without affecting the replacement account', async () => {
+  const item = await fixture({ delivery: 'pending' });
+  const nextScope = { ...scope, userId: 'user-b' };
+  try {
+    await item.service.update(scope, { enabled: true });
+    const oldAccountTest = item.service.test(scope);
+    await new Promise(resolve => setImmediate(resolve));
+
+    item.setUser(nextScope.userId);
+    const nextSettings = await item.service.get(nextScope);
+
+    assert.deepEqual(await oldAccountTest, { status: 'cancelled' });
+    assert.equal(item.shown[0].closed, true);
+    assert.equal(nextSettings.preferences.enabled, false);
+    assert.deepEqual(await item.service.test(nextScope), { status: 'not-attempted' });
+  } finally {
+    item.service.close();
+    await item.cleanup();
   }
 });
 
@@ -448,7 +542,7 @@ test('test and task clicks route only while the original scope remains authorize
   const item = await fixture();
   try {
     await item.service.update(scope, { enabled: true });
-    assert.equal((await item.service.test(scope)).invoked, true);
+    assert.equal((await item.service.test(scope)).status, 'accepted');
     item.shown[0].click();
     assert.deepEqual(item.navigated, ['/tasks']);
 
@@ -487,7 +581,7 @@ test('clearing an old scope leaves the active scope notification open', async ()
     await item.service.get(scope);
     item.setUser(nextScope.userId);
     await item.service.update(nextScope, { enabled: true });
-    assert.equal((await item.service.test(nextScope)).invoked, true);
+    assert.equal((await item.service.test(nextScope)).status, 'accepted');
 
     item.service.clear(scope);
 
@@ -511,7 +605,7 @@ test('rate limits repeated small batches across the delivery window', async () =
       await settleBatch();
     }
     assert.equal(item.shown.length, 6);
-    assert.equal((await item.service.test(scope)).invoked, false);
+    assert.equal((await item.service.test(scope)).status, 'not-attempted');
     assert.equal(item.shown.length, 6);
   } finally {
     item.service.close();

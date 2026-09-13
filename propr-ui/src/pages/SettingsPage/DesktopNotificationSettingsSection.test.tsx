@@ -67,7 +67,7 @@ describe('Desktop notification settings', () => {
     mocks.update.mockImplementation(async (_scope, update) => ({
       ...settings(), preferences: { ...settings().preferences, ...update },
     }));
-    mocks.test.mockResolvedValue({ invoked: true });
+    mocks.test.mockResolvedValue({ status: 'accepted' });
   });
 
   test('shows an independent section with quiet defaults and explicit enrollment', async () => {
@@ -94,7 +94,8 @@ describe('Desktop notification settings', () => {
     const testButton = screen.getByRole('button', { name: 'Send test notification' });
     await waitFor(() => expect(testButton).toBeEnabled());
     fireEvent.click(testButton);
-    expect(await screen.findByText(/operating system decides whether a banner/)).toBeInTheDocument();
+    expect(await screen.findByText(/operating system accepted the test notification/)).toBeInTheDocument();
+    expect(screen.getByText(/banner may still be suppressed/)).toBeInTheDocument();
   });
 
   test('refetches only matching native settings changes and unsubscribes on teardown', async () => {
@@ -176,12 +177,12 @@ describe('Desktop notification settings', () => {
   });
 
   test('discards stale test results while a test for the new account is pending', async () => {
-    let resolveAccountA!: (value: { invoked: boolean }) => void;
-    let resolveAccountB!: (value: { invoked: boolean }) => void;
-    const accountATest = new Promise<{ invoked: boolean }>(resolve => {
+    let resolveAccountA!: (value: { status: 'accepted' }) => void;
+    let resolveAccountB!: (value: { status: 'not-attempted' }) => void;
+    const accountATest = new Promise<{ status: 'accepted' }>(resolve => {
       resolveAccountA = resolve;
     });
-    const accountBTest = new Promise<{ invoked: boolean }>(resolve => {
+    const accountBTest = new Promise<{ status: 'not-attempted' }>(resolve => {
       resolveAccountB = resolve;
     });
     mocks.get.mockResolvedValue(settings({ enabled: true }));
@@ -200,17 +201,45 @@ describe('Desktop notification settings', () => {
     await waitFor(() => expect(mocks.test).toHaveBeenCalledTimes(2));
 
     await act(async () => {
-      resolveAccountA({ invoked: true });
+      resolveAccountA({ status: 'accepted' });
       await accountATest;
     });
-    expect(screen.queryByText(/operating system decides whether a banner/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/operating system accepted the test notification/)).not.toBeInTheDocument();
     expect(testButton).toBeDisabled();
 
     await act(async () => {
-      resolveAccountB({ invoked: false });
+      resolveAccountB({ status: 'not-attempted' });
       await accountBTest;
     });
-    expect(await screen.findByText(/service is unavailable or disabled/)).toBeInTheDocument();
+    expect(await screen.findByText(/service is unavailable, disabled, or temporarily rate limited/)).toBeInTheDocument();
     expect(testButton).toBeEnabled();
+  });
+
+  test('explains macOS rejection without claiming that a banner was displayed', async () => {
+    mocks.get.mockResolvedValue({
+      ...settings({ enabled: true }),
+      capability: { supported: true, platform: 'darwin', permission: 'unknown' },
+    });
+    mocks.test.mockResolvedValue({ status: 'failed' });
+    render(<DesktopNotificationSettingsSection />);
+
+    const testButton = await screen.findByRole('button', { name: 'Send test notification' });
+    fireEvent.click(testButton);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/macOS rejected the test notification/);
+    expect(screen.getByText(/signed, installed build/)).toBeInTheDocument();
+    expect(screen.queryByText(/Test sent/)).not.toBeInTheDocument();
+  });
+
+  test('reports an unconfirmed native request without treating it as delivery', async () => {
+    mocks.get.mockResolvedValue(settings({ enabled: true }));
+    mocks.test.mockResolvedValue({ status: 'unconfirmed' });
+    render(<DesktopNotificationSettingsSection />);
+
+    const testButton = await screen.findByRole('button', { name: 'Send test notification' });
+    fireEvent.click(testButton);
+
+    expect(await screen.findByText(/did not confirm delivery/)).toBeInTheDocument();
+    expect(screen.getByText(/No banner is assumed/)).toBeInTheDocument();
   });
 });

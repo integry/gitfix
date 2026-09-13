@@ -51,6 +51,7 @@ import {
 import { LocalLifecycleController } from './lifecycle';
 import { createDesktopLogger, type DesktopLogger } from './logger';
 import { NativeNotificationService } from './native-notifications';
+import { showElectronNotification } from './notification-show-adapter';
 import {
   createDesktopNativeCommandDispatcher,
   type DesktopNativeCommandDispatcher,
@@ -1787,19 +1788,14 @@ if (!hasSingleInstanceLock) {
       platform: process.platform,
       isSupported: () => Notification.isSupported(),
       isActiveScope: scope => credentials.isActiveConnectionScope(scope),
-      show: (payload, onClick) => {
+      show: (payload, events) => {
         const notification = new Notification(createDesktopNotificationOptions({
           platform: process.platform,
           title: payload.title,
           body: payload.body,
           iconPath: desktopWindowIcon?.path,
         }));
-        notification.once('click', onClick);
-        notification.show();
-        return {
-          close: () => notification.close(),
-          onClose: listener => { notification.once('close', listener); },
-        };
+        return showElectronNotification(notification, events);
       },
       navigate: path => {
         if (!mainWindow || mainWindow.isDestroyed()) return;

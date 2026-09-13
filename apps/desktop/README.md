@@ -39,8 +39,13 @@ new hidden background mode. Windows tray support remains deferred.
 
 Linux native task notifications pass the same transparent, full-color ProPR application artwork to Electron as an
 absolute local icon path in both development and packaged execution. macOS notifications continue to use the app's
-bundle identity and the operating system's native presentation instead of requesting a custom per-alert icon; local
-notification testing does not require Apple signing. Windows native notifications remain deferred.
+bundle identity and the operating system's native presentation instead of requesting a custom per-alert icon. Electron's
+[macOS notification implementation](https://www.electronjs.org/docs/latest/api/notification) uses Apple's User
+Notifications framework and requires a code-signed application; ineligible development builds report a native delivery
+failure. A temporary/ad-hoc package is diagnostic evidence only: the absence of a banner can also be caused by macOS
+notification settings, Focus, or presentation policy—[alert authorization does not guarantee on-screen
+presentation](https://developer.apple.com/documentation/usernotifications/unnotificationsettings/alertsetting)—so
+release delivery must be validated with the signed, installed artifact. Windows native notifications remain deferred.
 
 ### Recovery and troubleshooting
 

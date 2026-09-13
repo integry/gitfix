@@ -281,6 +281,10 @@ export interface DesktopNotificationSettings {
   scope: 'account-instance-device';
 }
 
+export interface DesktopNotificationTestResult {
+  status: 'accepted' | 'failed' | 'unconfirmed' | 'not-attempted' | 'cancelled';
+}
+
 export interface DesktopTaskTransition {
   taskId: string;
   state: string;
@@ -473,7 +477,7 @@ export interface DesktopBridge {
       scope: DesktopNotificationScope,
       preferences: Partial<DesktopNotificationPreferences>,
     ): Promise<DesktopNotificationSettings>;
-    test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }>;
+    test(scope: DesktopNotificationScope): Promise<DesktopNotificationTestResult>;
     publish(scope: DesktopNotificationScope, transition: DesktopTaskTransition): Promise<{ accepted: boolean }>;
     clear(scope: DesktopNotificationScope): Promise<void>;
     onSettingsChanged(listener: (scope: DesktopNotificationScope) => void): () => void;

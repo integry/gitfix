@@ -55,7 +55,7 @@ async function installDesktopSettingsFixture(page: Page): Promise<void> {
           ...settings,
           preferences: { ...settings.preferences, ...change },
         }),
-        test: async () => ({ invoked: false }),
+        test: async () => ({ status: 'failed' as const }),
         publish: async () => ({ accepted: false }),
         clear: noop,
         onSettingsChanged: () => () => undefined,
@@ -116,6 +116,9 @@ test('routes desktop notification settings into the native controls', async ({ p
   if (process.env.PROPR_CAPTURE_PREVIEWS) {
     const directory = path.resolve('../.propr/previews');
     await mkdir(directory, { recursive: true });
+    await page.getByRole('checkbox', { name: 'Enable desktop notifications on this device' }).click();
+    await page.getByRole('button', { name: 'Send test notification' }).click();
+    await expect(page.getByText(/macOS rejected the test notification/)).toBeVisible();
     await page.screenshot({ animations: 'disabled', path: path.join(directory, 'desktop-notification-settings.png') });
   }
 });
