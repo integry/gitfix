@@ -31,6 +31,7 @@ const capability = {
   lifecycle: { launch: 'native-goal', resume: 'native-goal', runningInput: 'live-steer' } as const,
   controls: { liveInput: true, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true },
   models: ['gpt-5.6-sol', 'gpt-5.6-luna'], defaultModel: 'gpt-5.6-sol',
+  objectiveMaxCharacters: 3_994,
 };
 const goal: goalsApi.Goal = {
   id: 'goal-1', owner: 'owner', repository: 'acme/web', title: 'Launch Customer Analytics Dashboard', objective: 'Ship the dashboard',
@@ -88,6 +89,41 @@ describe('GoalsPage', () => {
     expect(await screen.findByText('Goal detail')).toBeInTheDocument();
   });
 
+  it('counts Unicode characters and applies only the selected provider objective limit', async () => {
+    const claudeCapability = {
+      ...capability,
+      agentId: 'agent-2',
+      agentAlias: 'claude',
+      agentType: 'claude',
+      models: ['claude-sonnet-4-6'],
+      defaultModel: 'claude-sonnet-4-6',
+      objectiveMaxCharacters: null,
+    };
+    vi.mocked(goalsApi.getGoalCapabilities).mockResolvedValue({ agents: [capability, claudeCapability] });
+    render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
+    openGoalCreator();
+    await screen.findByRole('option', { name: 'Codex' });
+
+    const objective = screen.getByLabelText('Objective');
+    const exactCodexObjective = `${'x'.repeat(3_993)}😀`;
+    fireEvent.change(objective, { target: { value: exactCodexObjective } });
+    expect(screen.getByLabelText('Objective character count')).toHaveTextContent('3,994 / 3,994 characters');
+    expect(screen.getByRole('button', { name: 'Start goal' })).toBeEnabled();
+
+    fireEvent.change(objective, { target: { value: `${exactCodexObjective}x` } });
+    expect(objective).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Objective character count')).toHaveTextContent('3,995 / 3,994 characters');
+    expect(screen.getByRole('button', { name: 'Start goal' })).toBeDisabled();
+    fireEvent.submit(screen.getByRole('button', { name: 'Start goal' }).closest('form')!);
+    expect(goalsApi.createGoal).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Coding agent'), { target: { value: 'agent-2' } });
+    await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue('claude-sonnet-4-6'));
+    expect(screen.queryByLabelText('Objective character count')).not.toBeInTheDocument();
+    expect(objective).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByRole('button', { name: 'Start goal' })).toBeEnabled();
+  });
+
   it('keeps goal creation read-only in demo mode', async () => {
     demoState.isDemoMode = true;
     render(<MemoryRouter initialEntries={['/goals']}><Routes><Route path="/goals" element={<GoalsPage />} /></Routes></MemoryRouter>);
@@ -119,6 +155,7 @@ describe('GoalsPage', () => {
       agentType: 'claude',
       models: ['claude-sonnet-4-6', 'claude-opus-4-6'],
       defaultModel: 'claude-sonnet-4-6',
+      objectiveMaxCharacters: null,
     };
     vi.mocked(goalsApi.getGoalCapabilities).mockResolvedValue({ agents: [capability, claudeCapability] });
     vi.mocked(getInstanceCatalog).mockResolvedValue({

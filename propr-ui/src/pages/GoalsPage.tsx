@@ -193,6 +193,10 @@ function CreateGoalForm({ onCancel, onCreated, onDirtyChange, onSubmittingChange
   const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedAgent = agents.find(agent => agent.agentId === agentId);
+  const objectiveCharacters = Array.from(objective).length;
+  const objectiveMaxCharacters = selectedAgent?.objectiveMaxCharacters ?? null;
+  const objectiveTooLong = objectiveMaxCharacters !== null
+    && objectiveCharacters > objectiveMaxCharacters;
   const unsupportedAgents = agents.filter(agent => !agent.goalCapable);
   const showRuntimeDiagnostics = agents.length > 0 && unsupportedAgents.length === agents.length;
   const repositoryOptions = useMemo<RepoOption[]>(() => repositories.map(repo => ({
@@ -239,6 +243,10 @@ function CreateGoalForm({ onCancel, onCreated, onDirtyChange, onSubmittingChange
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (isDemoMode) return;
+    if (objectiveTooLong) {
+      setError(`Objective exceeds this coding agent's ${objectiveMaxCharacters?.toLocaleString('en-US')} character limit.`);
+      return;
+    }
     setSubmitting(true);
     onSubmittingChange(true);
     setError(null);
@@ -325,13 +333,17 @@ function CreateGoalForm({ onCancel, onCreated, onDirtyChange, onSubmittingChange
         <p className="mt-2 text-xs text-slate-500">Guidance for the agent, not a timer. ProPR commits only when the agent declares a coherent checkpoint ready.</p>
         </div>}
         <div className="mt-4 text-sm font-medium text-slate-700">Objective
-        <textarea aria-label="Objective" value={objective} onChange={event => { markDirty(); setObjective(event.target.value); }} onPaste={event => {
+        <textarea aria-label="Objective" aria-invalid={objectiveTooLong || undefined} aria-describedby={objectiveMaxCharacters === null ? undefined : 'goal-objective-limit'} value={objective} onChange={event => { markDirty(); setObjective(event.target.value); }} onPaste={event => {
           const pasted = clipboardImageFiles(event);
           if (!pasted.length) return;
           event.preventDefault();
           markDirty();
           void addGoalFiles(files, pasted, setFiles, setError);
-        }} rows={5} className="mt-1 w-full rounded-md border border-slate-300 p-2" required />
+        }} rows={5} className={`mt-1 w-full rounded-md border p-2 ${objectiveTooLong ? 'border-red-500' : 'border-slate-300'}`} required />
+        {objectiveMaxCharacters !== null && <div id="goal-objective-limit" className={`mt-1 flex flex-wrap items-center justify-between gap-x-3 text-xs ${objectiveTooLong ? 'text-red-600' : 'text-slate-500'}`}>
+          <span>{selectedAgent?.agentType === 'codex' ? 'Codex' : selectedAgent?.agentAlias} accepts up to {objectiveMaxCharacters.toLocaleString('en-US')} Unicode characters for the objective.</span>
+          <output aria-label="Objective character count" aria-live="polite">{objectiveCharacters.toLocaleString('en-US')} / {objectiveMaxCharacters.toLocaleString('en-US')} characters</output>
+        </div>}
         <GoalAttachmentInput files={files} onFilesSelected={markDirty} onChange={nextFiles => { markDirty(); setFiles(nextFiles); }} onError={setError} disabled={submitting} />
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={ultrafix} onChange={event => { markDirty(); setUltrafix(event.target.checked); }} /> Ask the coding agent to use Ultrafix</label>
@@ -339,7 +351,7 @@ function CreateGoalForm({ onCancel, onCreated, onDirtyChange, onSubmittingChange
       </div>
       <div className="flex flex-none justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:px-7">
         <button type="button" onClick={onCancel} disabled={submitting} className={`${buttonClass} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50`}>Cancel</button>
-        <button type="submit" disabled={isDemoMode || submitting || !repository || !agentId || !model || !objective.trim() || !selectedAgent?.goalCapable} title={isDemoMode ? 'Demo mode is read-only' : undefined} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}>{submitting ? 'Starting…' : 'Start goal'}</button>
+        <button type="submit" disabled={isDemoMode || submitting || objectiveTooLong || !repository || !agentId || !model || !objective.trim() || !selectedAgent?.goalCapable} title={isDemoMode ? 'Demo mode is read-only' : undefined} className={`${buttonClass} bg-primary-600 text-white hover:bg-primary-700`}>{submitting ? 'Starting…' : 'Start goal'}</button>
       </div>
     </form>
   );
