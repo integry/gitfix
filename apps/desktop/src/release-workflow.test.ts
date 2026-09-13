@@ -779,6 +779,15 @@ describe('desktop trusted release workflow', () => {
     assert.match(installedWindowsAppSupervisor, /Wait-MsiCriticalTransactionReceipt/);
     assert.match(installedWindowsAppSupervisorBehaviorTest, /DURING_MSI/);
     assert.match(installedWindowsAppSupervisorBehaviorTest, /DURING_OWNERSHIP_CAPTURE/);
+    const ownershipCaptureFixture = installedWindowsAppSupervisorFixture.slice(
+      installedWindowsAppSupervisorFixture.indexOf("'DURING_OWNERSHIP_CAPTURE' {"),
+      installedWindowsAppSupervisorFixture.indexOf("'NEGATIVE_EXIT' {"),
+    );
+    assert.match(
+      ownershipCaptureFixture,
+      /New-OwnedFixtureResources -PublishCommittedReceipt \$false[\s\S]*Write-FixtureCriticalGate 'DURING_OWNERSHIP_CAPTURE'[\s\S]*MsiTransactionState = 'COMMITTED'/,
+      'ownership-capture cancellation must exclude setup latency and still precede durable commit',
+    );
     assert.match(
       installedWindowsAppTest,
       /Registry::HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\propr-desktop\.exe/,

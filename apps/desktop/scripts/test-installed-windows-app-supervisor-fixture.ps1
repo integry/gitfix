@@ -878,9 +878,13 @@ switch ($scenario) {
     Write-FixtureOwnershipManifest $manifest
     Write-FixtureMarker ('{0}|INSTALL|OWNERSHIP_CAPTURE|BEGIN' -f `
       [DateTime]::UtcNow.AddSeconds(60).Ticks)
+    # Build the synthetic ownership inventory before publishing the cancellation
+    # gate. Creating the fixture user/profile can consume the supervisor's entire
+    # transaction grace on a busy runner; the gate is intended to interrupt the
+    # bounded PENDING-to-COMMITTED promotion, not that unrelated setup latency.
+    New-OwnedFixtureResources -PublishCommittedReceipt $false
     Write-FixtureCriticalGate 'DURING_OWNERSHIP_CAPTURE'
     Start-Sleep -Milliseconds 750
-    New-OwnedFixtureResources -PublishCommittedReceipt $false
     $manifest = [IO.File]::ReadAllText($OwnershipManifest, [Text.Encoding]::UTF8) |
       ConvertFrom-Json -ErrorAction Stop
     $manifest.MsiTransactionState = 'COMMITTED'

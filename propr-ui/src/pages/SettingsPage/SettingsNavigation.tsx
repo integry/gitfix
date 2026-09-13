@@ -43,6 +43,8 @@ export interface SettingsNavigationSection {
 interface SettingsNavigationProps {
   sections: SettingsNavigationSection[];
   isReadOnly?: boolean;
+  activeCategory?: SettingsCategoryId;
+  onActiveCategoryChange?(category: SettingsCategoryId): void;
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -54,10 +56,22 @@ export function matchesSettingsSearch(section: SettingsNavigationSection, query:
   return terms.every(term => searchableText.includes(term));
 }
 
-const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isReadOnly = false }) => {
-  const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('models');
+const SettingsNavigation: React.FC<SettingsNavigationProps> = ({
+  sections,
+  isReadOnly = false,
+  activeCategory: controlledActiveCategory,
+  onActiveCategoryChange,
+}) => {
+  const [localActiveCategory, setLocalActiveCategory] = useState<SettingsCategoryId>('models');
   const [query, setQuery] = useState('');
+  const activeCategory = controlledActiveCategory ?? localActiveCategory;
   const normalizedQuery = query.trim();
+
+  const selectCategory = (category: SettingsCategoryId): void => {
+    setLocalActiveCategory(category);
+    onActiveCategoryChange?.(category);
+    setQuery('');
+  };
 
   const matchedSectionIds = useMemo(
     () => new Set(sections.filter(section => matchesSettingsSearch(section, normalizedQuery)).map(section => section.id)),
@@ -83,10 +97,7 @@ const SettingsNavigation: React.FC<SettingsNavigationProps> = ({ sections, isRea
                     role="tab"
                     aria-selected={selected}
                     aria-controls={`settings-panel-${category.id}`}
-                    onClick={() => {
-                      setActiveCategory(category.id);
-                      setQuery('');
-                    }}
+                    onClick={() => selectCategory(category.id)}
                     className={`inline-flex items-center border-b-2 pb-2 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 ${
                       selected
                         ? 'border-teal-600 font-semibold text-teal-700'

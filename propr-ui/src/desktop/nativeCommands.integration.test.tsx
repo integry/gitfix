@@ -26,6 +26,7 @@ const fixture = (platform: NodeJS.Platform = 'darwin') => {
     webContents: { send: (channel: string, value: unknown) => listeners.get(channel)?.({}, value) },
   };
   const restore = vi.fn();
+  const setNativeNotificationsEnabled = vi.fn(async () => undefined);
   const dispatcher = createDesktopNativeCommandDispatcher({
     channel: IPC_CHANNELS.nativeCommand,
     // A different/focused window must not receive commands for this renderer.
@@ -34,7 +35,7 @@ const fixture = (platform: NodeJS.Platform = 'darwin') => {
     activeConnectionScope: () => scope,
     activeNotificationScope: () => null,
     notificationState: () => ({ available: false, enabled: false }),
-    setNativeNotificationsEnabled: async () => undefined,
+    setNativeNotificationsEnabled,
     quit: () => undefined,
   });
   const bridge = createDesktopBridge({
@@ -63,7 +64,13 @@ const fixture = (platform: NodeJS.Platform = 'darwin') => {
     await act(async () => { (item(label).click as () => void)(); });
     await act(async () => { window.dispatchEvent(new HashChangeEvent('hashchange')); });
   };
-  return { ...hook, onConnectInstance, onDiagnostics, item, click, restore, dispatcher, onManageInstances, onChooseInstances, onNavigate,
+  const dispatch = async (command: Parameters<typeof dispatcher.dispatch>[0]) => {
+    await act(async () => { dispatcher.dispatch(command); });
+    await act(async () => { window.dispatchEvent(new HashChangeEvent('hashchange')); });
+  };
+  return { ...hook, onConnectInstance, onDiagnostics, item, click, restore, dispatcher, setNativeNotificationsEnabled,
+    onManageInstances, onChooseInstances, onNavigate,
+    dispatch,
     switchTo(next: DesktopConnectionScope) {
       dispatcher.connectionUnavailable();
       scope = next;
@@ -101,6 +108,20 @@ describe.each(['darwin', 'linux'] as const)('%s menu to dispatcher to preload to
     expect(value.onDiagnostics).toHaveBeenCalledOnce();
     await value.click('Switch Account / Instance…');
     expect(value.onManageInstances).toHaveBeenCalledOnce();
+  });
+
+  it('routes notification settings to its tab from another route and another settings tab', async () => {
+    const value = fixture(platform);
+    await value.click('Tasks');
+
+    await value.dispatch('notification-settings');
+    expect(window.location.hash).toBe('#/settings?tab=notifications');
+    expect(value.setNativeNotificationsEnabled).not.toHaveBeenCalled();
+
+    await act(async () => { window.location.hash = '#/settings?tab=automation'; });
+    await act(async () => { window.dispatchEvent(new HashChangeEvent('hashchange')); });
+    await value.dispatch('notification-settings');
+    expect(window.location.hash).toBe('#/settings?tab=notifications');
   });
 
   it('uses current-account history, retains filters, and drops the forward branch after new navigation', async () => {
