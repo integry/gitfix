@@ -22,6 +22,7 @@ import type { Agent, AgentConfig, AgentRegistryOperationalStatus } from '@propr/
 import type { SyntheticAgentConfig } from '@propr/shared';
 import { applyRoutingStatus, parseConnectAccountStatus, type RoutingState } from './connectAccountStatus.js';
 import { getOrCreatePublicInstanceIdentity } from '../publicInstanceIdentity.js';
+import { timeApiStage } from '../apiPerformanceTiming.js';
 
 interface StatusRoutesDeps {
   redisClient: RedisClientType;
@@ -84,6 +85,7 @@ export function createStatusRoutes(deps: StatusRoutesDeps) {
   const loadSyntheticAgents = configuredSyntheticLoader
     ?? (deps.loadAgents ? async () => [] : loadSyntheticAgentConfigs);
   let agentStatusCache: { expiresAt: number; snapshot: AgentStatusSnapshot } | undefined;
+  let pendingAgentStatusSnapshot: Promise<AgentStatusSnapshot> | undefined;
 
   function getCompatibility(_req: Request, res: Response): void {
     res.json(getProprCompatibilityMetadata(!isDemoMode()));
@@ -198,7 +200,7 @@ export function createStatusRoutes(deps: StatusRoutesDeps) {
       // stalled one independent of the intake method name.
       status.githubEventIntakeStatus = resolveIntakeStatus(intakeMode, routing, status.daemon);
 
-      const agentSnapshot = await getCachedAgentStatusSnapshot();
+      const agentSnapshot = await timeApiStage('status.agent-health', getCachedAgentStatusSnapshot);
       status.agents = agentSnapshot.agents;
       status.claudeAuth = agentSnapshot.claudeAuth;
       status.indexing = await getIndexingStatus(getIndexingQueue);
@@ -242,15 +244,24 @@ export function createStatusRoutes(deps: StatusRoutesDeps) {
     if (agentStatusCache && agentStatusCache.expiresAt > currentTime) {
       return agentStatusCache.snapshot;
     }
-
-    const snapshot = await getAgentStatusSnapshot(
+    // A status burst commonly arrives from several open UI clients at once.
+    // Share an expired-cache refresh so one burst launches one set of Docker
+    // probes and config reads, while retaining the existing freshness TTL.
+    if (pendingAgentStatusSnapshot) return pendingAgentStatusSnapshot;
+    pendingAgentStatusSnapshot = getAgentStatusSnapshot(
       loadAgents, loadSyntheticAgents, agentRegistry, agentHealthTimeoutMs,
-    );
-    agentStatusCache = {
-      snapshot,
-      expiresAt: currentTime + agentStatusCacheTtlMs
-    };
-    return snapshot;
+    ).then(snapshot => {
+      agentStatusCache = {
+        snapshot,
+        // Start freshness when the potentially slow probes finish, rather than
+        // shortening the configured window by their execution time.
+        expiresAt: now() + agentStatusCacheTtlMs,
+      };
+      return snapshot;
+    }).finally(() => {
+      pendingAgentStatusSnapshot = undefined;
+    });
+    return pendingAgentStatusSnapshot;
   }
 }
 
@@ -412,7 +423,7 @@ async function getAgentStatusSnapshot(
   let configuredAgents: AgentConfig[];
   let syntheticAgents: SyntheticAgentConfig[] = [];
   try {
-    configuredAgents = await loadAgents();
+    configuredAgents = await timeApiStage('status.config', loadAgents);
   } catch (error) {
     console.error('Error loading agent status configuration:', error);
     // Configuration availability is part of applicability. Do not mistake a
@@ -421,7 +432,7 @@ async function getAgentStatusSnapshot(
     return { agents: [], claudeAuth: 'unknown' };
   }
   try {
-    syntheticAgents = await loadSyntheticAgents();
+    syntheticAgents = await timeApiStage('status.config', loadSyntheticAgents);
   } catch (error) {
     // Synthetic configuration availability must not suppress or downgrade
     // unrelated direct-agent health.
@@ -429,7 +440,7 @@ async function getAgentStatusSnapshot(
   }
 
   try {
-    await registry.ensureInitialized();
+    await timeApiStage('status.registry', () => registry.ensureInitialized());
   } catch (error) {
     console.error('Error initializing agent registry for status:', error);
   }
@@ -449,7 +460,7 @@ async function getAgentStatusSnapshot(
     ? legacyClaudeAgent
     : undefined;
 
-  const directStatuses = await Promise.all(configuredAgents
+  const directStatuses = await timeApiStage('status.health-probes', () => Promise.all(configuredAgents
     .filter(agent => agent.enabled)
     .map(async (config) => {
       const registeredAgent = registeredById.get(config.id) ?? registeredByAlias.get(config.alias);
@@ -457,9 +468,9 @@ async function getAgentStatusSnapshot(
         return buildConfiguredAgentStatus(config, registry, healthTimeoutMs);
       }
       return buildRegisteredAgentStatus(registeredAgent, healthTimeoutMs);
-    }));
+    })));
 
-  const syntheticStatuses = await Promise.all(syntheticAgents
+  const syntheticStatuses = await timeApiStage('status.health-probes', () => Promise.all(syntheticAgents
     .filter(pool => pool.enabled)
     .map(async pool => {
       const registered = registeredById.get(pool.id) ?? registeredByAlias.get(pool.alias);
@@ -476,10 +487,11 @@ async function getAgentStatusSnapshot(
         alias: pool.alias,
         status: healthy ? 'connected' as const : 'degraded' as const,
       };
-    }));
+    })));
 
   const legacyClaudeStatuses = enabledLegacyClaudeAgent
-    ? [await buildRegisteredAgentStatus(enabledLegacyClaudeAgent, healthTimeoutMs)]
+    ? [await timeApiStage('status.health-probes', () =>
+        buildRegisteredAgentStatus(enabledLegacyClaudeAgent, healthTimeoutMs))]
     : [];
   const agents = [...directStatuses, ...legacyClaudeStatuses, ...syntheticStatuses];
   const claudeApplicable = configuredAgents.some(agent => agent.enabled && agent.type === 'claude')

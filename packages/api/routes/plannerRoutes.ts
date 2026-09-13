@@ -40,6 +40,7 @@ import {
 export { buildUpdatedExecutionConfig, mergeExecutionContextConfig } from './plannerExecutionSettings.js';
 import { linkTodosToDraft, pauseDraft, resumeDraft } from '@propr/core';
 import { isDemoMode } from '../demoMode.js';
+import { timeApiStage } from '../apiPerformanceTiming.js';
 
 const uploadDir = path.join(process.cwd(), 'temp_uploads');
 fs.ensureDirSync(uploadDir);
@@ -131,16 +132,18 @@ export function createPlannerRoutes(deps: PlannerRoutesDeps) {
         });
       }
 
-      let drafts = await query
+      let drafts = await timeApiStage('sql.drafts.list', () => query
         .select('draft_id', 'name', 'repository', 'status', 'updated_at', 'created_at', 'initial_prompt', 'paused', 'paused_at')
-        .orderBy('updated_at', 'desc');
+        .orderBy('updated_at', 'desc'));
 
       if (searchWords.length > 0) { const exactPhrase = search!.trim().toLowerCase(); const scoredDrafts = scoreDrafts(drafts, searchWords, exactPhrase); sortDraftsByScore(scoredDrafts); drafts = removeSearchScore(scoredDrafts); }
 
       const paginatedDrafts = drafts.slice(offset, offset + limit);
       const draftIds = paginatedDrafts.map((d: { draft_id: string }) => d.draft_id);
       if (draftIds.length > 0) {
-        const issues = await db!('plan_issues').whereIn('draft_id', draftIds).select('draft_id', 'status');
+        const issues = await timeApiStage('sql.drafts.issue-status', () =>
+          db!('plan_issues').whereIn('draft_id', draftIds).select('draft_id', 'status')
+        );
         const issueSummaries = buildIssueSummaryMap(issues);
         attachIssueSummaries(paginatedDrafts as Array<Record<string, unknown> & { draft_id: string }>, issueSummaries);
       }

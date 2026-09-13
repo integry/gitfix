@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Knex } from 'knex';
+import { timeApiStage } from '../apiPerformanceTiming.js';
 
 interface StatsRoutesDeps {
   db: Knex;
@@ -325,10 +326,10 @@ export function createStatsRoutes(deps: StatsRoutesDeps) {
 
   async function getGeneratingPlansCount(_req: Request, res: Response): Promise<void> {
     try {
-      const countResult = await db('task_drafts')
+      const countResult = await timeApiStage('sql.generating-plans.count', () => db('task_drafts')
         .count('* as count')
         .where('status', 'generating')
-        .first() as unknown as CountRow | undefined;
+        .first()) as unknown as CountRow | undefined;
 
       res.json({
         count: Number(countResult?.count || 0)

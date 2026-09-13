@@ -80,6 +80,7 @@ import {
 } from './requestRateLimits.js';
 import { desktopAuthService } from './desktopAuthService.js';
 import { prohibitApiResponseCaching } from './apiCacheControl.js';
+import { createApiPerformanceTimingMiddleware } from './apiPerformanceTiming.js';
 import { startConfigReloadSubscription, type ConfigReloadSubscription } from './services/configReloadSubscription.js';
 import {
   assertNoDuplicateRoutes,
@@ -168,6 +169,10 @@ configureApiProxyTrust(app);
 // global or route limiter so success, failure, and saturation responses cannot
 // be cached by a browser or intermediary.
 app.use('/api', prohibitApiResponseCaching);
+
+// Disabled by default. When sampled, this remains ahead of CORS, limiting, body
+// parsing, sessions and Passport without recording any request contents.
+app.use('/api', createApiPerformanceTimingMiddleware());
 
 if (!process.env.FRONTEND_URL) {
   console.error('FRONTEND_URL environment variable is required');

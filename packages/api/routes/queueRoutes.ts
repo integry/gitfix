@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { RedisClientType } from 'redis';
 import { Job, Queue } from 'bullmq';
+import { timeApiStage } from '../apiPerformanceTiming.js';
 
 interface LiveQueueJob {
   id: string;
@@ -24,13 +25,13 @@ export function createQueueRoutes(deps: QueueRoutesDeps) {
       // The header has always treated only active jobs as Running. Waiting and
       // delayed jobs remain separate queue statistics and are intentionally not
       // included in this presentation snapshot.
-      const [waiting, activeJobs, completed, failed, delayed] = await Promise.all([
+      const [waiting, activeJobs, completed, failed, delayed] = await timeApiStage('queue.stats', () => Promise.all([
         taskQueue.getWaitingCount(),
         taskQueue.getJobs(['active']),
         taskQueue.getCompletedCount(),
         taskQueue.getFailedCount(),
         taskQueue.getDelayedCount()
-      ]);
+      ]));
       const liveJobs = serializeLiveJobs(activeJobs);
       const active = liveJobs.length;
       const activeGoals = liveJobs.filter(job => job.name === 'processGoal').length;

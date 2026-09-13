@@ -1,6 +1,7 @@
 import type { Express, RequestHandler } from 'express';
 import { ensureAuthenticated } from './auth.js';
 import { resolveAuthorization } from './authorization.js';
+import { timeApiMiddleware } from './apiPerformanceTiming.js';
 import {
   createDiscoveryRequestRateLimiter,
   createPairingPollRateLimiter,
@@ -35,5 +36,9 @@ export function registerDesktopApiBoundary(
   // Token possession authorizes only this exact self-revocation route. It must
   // precede generic auth so inactive tokens receive a stable terminal contract.
   app.delete('/api/desktop/tokens/current', routes.revokeCurrentToken);
-  app.use('/api', ensureAuthenticated, resolveAuthorization);
+  app.use(
+    '/api',
+    timeApiMiddleware('authentication', ensureAuthenticated),
+    timeApiMiddleware('authorization', resolveAuthorization),
+  );
 }

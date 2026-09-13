@@ -26,6 +26,7 @@ import {
   type MulterFile,
 } from '@propr/core';
 import type { RedisClientType } from 'redis';
+import { timeApiStage } from '../apiPerformanceTiming.js';
 import { stopTaskExecution, type StopTaskExecutionResult } from './dockerRoutes.js';
 import { serializeGoal, type GoalProjectionRow as GoalRow } from '../services/goalProjection.js';
 import {
@@ -310,8 +311,13 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
   const list = async (req: Request, res: Response) => {
     const ownerId = currentOwnerId(req);
     if (!ownerId) return void res.status(401).json({ error: 'Authentication required' });
-    const rows = await deps.db<GoalRow>('goals').where({ owner_id: ownerId }).orderBy('updated_at', 'desc').limit(200);
-    res.json({ goals: await Promise.all(rows.map(row => serializeGoal(deps.db, deps.redisClient, row))) });
+    const rows = await timeApiStage('sql.goals.list', () =>
+      deps.db<GoalRow>('goals').where({ owner_id: ownerId }).orderBy('updated_at', 'desc').limit(200)
+    );
+    const goals = await timeApiStage('goals.projection', () =>
+      Promise.all(rows.map(row => serializeGoal(deps.db, deps.redisClient, row)))
+    );
+    res.json({ goals });
   };
 
   const get = async (req: Request, res: Response) => {

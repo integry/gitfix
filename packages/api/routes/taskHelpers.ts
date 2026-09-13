@@ -1,4 +1,5 @@
 import { Knex } from 'knex';
+import { timeApiStage } from '../apiPerformanceTiming.js';
 
 export interface TaskQuery {
   db: Knex;
@@ -24,18 +25,6 @@ export async function getTasksFromDb(
       db.raw('ROW_NUMBER() OVER(PARTITION BY task_id ORDER BY timestamp DESC) as rn')
     )
     .as('h');
-
-  const processingStartSubquery = db('task_history')
-    .select('task_id', db.raw('MIN(timestamp) as processing_start_timestamp'))
-    .whereIn('state', ['processing', 'claude_execution', 'post_processing'])
-    .groupBy('task_id')
-    .as('ps');
-
-  const completionSubquery = db('task_history')
-    .select('task_id', db.raw('MIN(timestamp) as completion_timestamp'))
-    .whereIn('state', ['completed', 'failed', 'cancelled'])
-    .groupBy('task_id')
-    .as('cs');
 
   const planIssueStatusSubquery = db('plan_issues')
     .select('task_id', 'status as plan_issue_status')
@@ -89,10 +78,7 @@ export async function getTasksFromDb(
     .join(latestHistorySubquery, function() {
       this.on('t.task_id', '=', 'h.task_id').andOn('h.rn', '=', db!.raw('?', [1]));
     })
-    .leftJoin(processingStartSubquery, 'ps.task_id', 't.task_id')
-    .leftJoin(completionSubquery, 'cs.task_id', 't.task_id')
-    .leftJoin(planIssueStatusSubquery, 'pi.task_id', 't.task_id')
-    .joinRaw(critiqueScoreSubquerySql);
+    .leftJoin(planIssueStatusSubquery, 'pi.task_id', 't.task_id');
 
   if (status && status !== 'all') {
     baseQuery.where('h.state', status);
@@ -117,16 +103,36 @@ export async function getTasksFromDb(
     });
   }
 
-  const totalResult = await baseQuery.clone().count('* as total').first();
+  // Count only the filtered task identity/state set. Processing timestamps,
+  // completion timestamps and critique JSON are presentation enrichments and
+  // previously made the count repeat all three full-history joins.
+  const totalResult = await timeApiStage('sql.tasks.count', () =>
+    baseQuery.clone().count('* as total').first()
+  );
   const total = parseInt(String(totalResult?.total || 0), 10);
 
-  const dbTasks = await baseQuery
+  const processingStartSubquery = db('task_history')
+    .select('task_id', db.raw('MIN(timestamp) as processing_start_timestamp'))
+    .whereIn('state', ['processing', 'claude_execution', 'post_processing'])
+    .groupBy('task_id')
+    .as('ps');
+
+  const completionSubquery = db('task_history')
+    .select('task_id', db.raw('MIN(timestamp) as completion_timestamp'))
+    .whereIn('state', ['completed', 'failed', 'cancelled'])
+    .groupBy('task_id')
+    .as('cs');
+
+  const dbTasks = await timeApiStage('sql.tasks.page', () => baseQuery
+    .leftJoin(processingStartSubquery, 'ps.task_id', 't.task_id')
+    .leftJoin(completionSubquery, 'cs.task_id', 't.task_id')
+    .joinRaw(critiqueScoreSubquerySql)
     .select('t.*', 'h.state', 'h.timestamp as state_timestamp', 'h.reason as failedReason',
             'ps.processing_start_timestamp', 'cs.completion_timestamp',
             'pi.plan_issue_status', 'cs_score.critique_score')
     .orderBy('t.created_at', 'desc')
     .limit(limit)
-    .offset(offset);
+    .offset(offset));
 
   const tasks = dbTasks.map((row: Record<string, unknown>) => mapDbTaskToResponse(row));
   return { tasks, total, offset, limit };

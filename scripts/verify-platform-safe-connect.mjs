@@ -12,6 +12,7 @@ const files = [
   'packages/cli/src/orchestrator/index.test.ts',
   'packages/api/test/statusRoutes.test.ts',
 ].map((file) => join(root, file));
+const expectedTestCount = 95;
 
 const result = spawnSync(process.execPath, [
   '--import', 'tsx', '--experimental-test-module-mocks', '--test', ...files,
@@ -37,14 +38,14 @@ const tapValue = (name) => {
 const valid = result.status === 0
   && !result.error
   && !result.signal
-  && tapValue('tests') === 94
-  && tapValue('pass') === 94
+  && tapValue('tests') === expectedTestCount
+  && tapValue('pass') === expectedTestCount
   && tapValue('fail') === 0
   && tapValue('skipped') === 0;
 
 if (!valid) {
-  process.stderr.write('Platform-safe Connect proof did not complete 94/94 within 90000ms.\n');
+  process.stderr.write(`Platform-safe Connect proof did not complete ${expectedTestCount}/${expectedTestCount} within 90000ms.\n`);
   process.exitCode = 1;
 } else {
-  process.stdout.write('Platform-safe Connect proof: tests=94 pass=94 fail=0 skipped=0 budgetMs=90000\n');
+  process.stdout.write(`Platform-safe Connect proof: tests=${expectedTestCount} pass=${expectedTestCount} fail=0 skipped=0 budgetMs=90000\n`);
 }
