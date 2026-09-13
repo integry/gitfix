@@ -3,6 +3,7 @@ import { getQueueStats, getTasks, getSystemStatus } from '../api/proprApi';
 import { getDrafts, DraftListItem } from '../api/plannerApi';
 import { useSocket } from '../contexts/useSocket';
 import { isDesktopRuntime } from '../config/runtimeMode';
+import type { QueueStatsUpdatePayload } from '@propr/shared';
 import {
   buildReviewGroups,
   buildRunningItems,
@@ -23,6 +24,18 @@ import type {
 } from './useHeaderStatsHelpers';
 
 export type { RunningItem } from './useHeaderStatsHelpers';
+
+const LIVE_INVALIDATION_COALESCE_MS = 100;
+
+const queueStatsFingerprint = (payload: QueueStatsUpdatePayload): string => JSON.stringify([
+  payload.stats.waiting,
+  payload.stats.active,
+  payload.stats.activeGoals ?? 0,
+  payload.stats.completed,
+  payload.stats.failed,
+  payload.stats.delayed,
+  payload.stats.total,
+]);
 
 export interface HeaderStats {
   // Running tasks count from queue
@@ -100,6 +113,8 @@ export function useHeaderStats(): HeaderStats {
   // Track if component is mounted
   const isMountedRef = useRef(true);
   const statsRequestRef = useRef(0);
+  const liveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastQueueStatsFingerprintRef = useRef<string | null>(null);
 
   // WebSocket connection for real-time updates
   const { onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, isConnected } = useSocket();
@@ -219,6 +234,17 @@ export function useHeaderStats(): HeaderStats {
     await fetchStats(false);
   }, [fetchStats]);
 
+  // Queue, task, and draft transitions are often emitted together. Treat them
+  // as invalidations and reconcile one authoritative snapshot after the burst
+  // instead of starting overlapping copies of the same five HTTP reads.
+  const scheduleLiveRefresh = useCallback(() => {
+    if (liveRefreshTimerRef.current !== null) return;
+    liveRefreshTimerRef.current = setTimeout(() => {
+      liveRefreshTimerRef.current = null;
+      void fetchStats(false);
+    }, LIVE_INVALIDATION_COALESCE_MS);
+  }, [fetchStats]);
+
   // In the desktop app, the scoped socket is the live lifecycle signal. A
   // disconnect invalidates cached activity immediately; reconnecting performs
   // a fresh authoritative snapshot without changing the saved profile or auth.
@@ -228,6 +254,10 @@ export function useHeaderStats(): HeaderStats {
     const previous = previousSocketConnectionRef.current;
     previousSocketConnectionRef.current = isConnected;
     if (!isConnected) {
+      if (liveRefreshTimerRef.current !== null) {
+        clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
       statsRequestRef.current += 1;
       setRunningItems([]);
       setRunningCount(0);
@@ -250,6 +280,10 @@ export function useHeaderStats(): HeaderStats {
 
     return () => {
       isMountedRef.current = false;
+      if (liveRefreshTimerRef.current !== null) {
+        clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
     };
   }, [fetchStats]);
 
@@ -259,19 +293,22 @@ export function useHeaderStats(): HeaderStats {
 
     // Handle task updates - refresh stats when any task changes state
     const handleTaskUpdate = () => {
-      console.log('[useHeaderStats] Received task update, refreshing stats');
-      fetchStats(false);
+      console.log('[useHeaderStats] Received task update, scheduling stats refresh');
+      scheduleLiveRefresh();
     };
 
     // Handle draft updates - refresh stats when drafts change (affects active plans)
     const handleDraftUpdate = () => {
-      console.log('[useHeaderStats] Received draft update, refreshing stats');
-      fetchStats(false);
+      console.log('[useHeaderStats] Received draft update, scheduling stats refresh');
+      scheduleLiveRefresh();
     };
 
-    const handleQueueStatsUpdate = () => {
-      console.log('[useHeaderStats] Received queue stats update, refreshing stats');
-      fetchStats(false);
+    const handleQueueStatsUpdate = (payload: QueueStatsUpdatePayload) => {
+      const fingerprint = queueStatsFingerprint(payload);
+      if (fingerprint === lastQueueStatsFingerprintRef.current) return;
+      lastQueueStatsFingerprintRef.current = fingerprint;
+      console.log('[useHeaderStats] Received changed queue stats, scheduling stats refresh');
+      scheduleLiveRefresh();
     };
 
     // Subscribe to every event that can change active work.
@@ -284,7 +321,7 @@ export function useHeaderStats(): HeaderStats {
       unsubscribeDraft();
       unsubscribeQueueStats();
     };
-  }, [isConnected, onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, fetchStats]);
+  }, [isConnected, onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, scheduleLiveRefresh]);
 
   // Re-filter when dismissed IDs or timestamps change
   useEffect(() => {

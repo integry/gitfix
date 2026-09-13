@@ -40,3 +40,30 @@ test('queue broadcasts active goal jobs separately from the aggregate active cou
     total: 14,
   });
 });
+
+test('queue periodic snapshots emit only when the aggregate changes', async () => {
+  const emitted: unknown[] = [];
+  const io = {
+    to: () => ({ emit: (_event: string, payload: unknown) => emitted.push(payload) }),
+  };
+  let active = 1;
+  const queue = {
+    getWaitingCount: async () => 0,
+    getJobs: async () => Array.from({ length: active }, () => ({ name: 'processGitHubIssue' })),
+    getCompletedCount: async () => 2,
+    getFailedCount: async () => 0,
+    getDelayedCount: async () => 0,
+  };
+  const broadcaster = new QueueBroadcaster(io as never, queue as never);
+
+  await broadcaster.broadcastQueueStats();
+  await broadcaster.broadcastQueueStats();
+  assert.equal(emitted.length, 1, 'an unchanged fallback snapshot must not create client churn');
+
+  active = 0;
+  await broadcaster.broadcastQueueStats();
+  assert.equal(emitted.length, 2, 'a real queue transition must remain fresh');
+
+  await broadcaster.broadcastQueueStats(true);
+  assert.equal(emitted.length, 3, 'a new subscriber can request an immediate snapshot');
+});

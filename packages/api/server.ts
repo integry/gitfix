@@ -12,7 +12,7 @@ import { authenticateSocketRequest, setupAuth } from './auth.js';
 import { configureDemoMode, createDemoRedisClient, demoModeReadOnlyMiddleware } from './demoMode.js';
 import { resolveGithubAuthMode, resolveGithubEventIntakeMode, validateIntakeModePrerequisites } from '@propr/shared';
 import { initSocketService, closeSocketService } from './services/socketService.js';
-import { corsRejectionHandler, createCorsOriginValidator } from './corsValidation.js';
+import { CORS_PREFLIGHT_MAX_AGE_SECONDS, corsRejectionHandler, createCorsOriginValidator } from './corsValidation.js';
 import {
   createStatusRoutes, createTaskRoutes,
   createTaskHistoryRoutes, createLiveDetailsRoutes,
@@ -194,7 +194,11 @@ app.use((req, res, next) => {
   // which can differ from FRONTEND_URL. Keep other API CORS policy intact.
   const mcpOrigin = process.env.MCP_ENABLED === 'true' ? process.env.MCP_PUBLIC_ORIGIN?.replace(/\/$/, '') : undefined;
   const consentOrigin = req.path.startsWith('/mcp/') && mcpOrigin && req.get('origin') === mcpOrigin;
-  cors({ origin: consentOrigin ? mcpOrigin : validateCorsOrigin, credentials: true })(req, res, next);
+  cors({
+    origin: consentOrigin ? mcpOrigin : validateCorsOrigin,
+    credentials: true,
+    maxAge: CORS_PREFLIGHT_MAX_AGE_SECONDS,
+  })(req, res, next);
 });
 // The `cors` package forwards rejected origins as middleware errors. Handle
 // those immediately so Express never renders its development HTML error page

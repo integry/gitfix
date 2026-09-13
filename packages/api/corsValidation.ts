@@ -17,6 +17,12 @@ import {
 export type CorsOriginCallback = (err: Error | null, allow?: boolean) => void;
 export type CorsOriginValidator = (origin: string | undefined, callback: CorsOriginCallback) => void;
 
+// Desktop REST requests carry a scoped authentication marker, so browsers
+// preflight them. Cache successful policy checks briefly to avoid repeating an
+// OPTIONS request for every read while still revalidating policy changes within
+// a bounded interval.
+export const CORS_PREFLIGHT_MAX_AGE_SECONDS = 10 * 60;
+
 export class CorsOriginError extends Error {
   constructor() {
     super('CORS origin rejected');

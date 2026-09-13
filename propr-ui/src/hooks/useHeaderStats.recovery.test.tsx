@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getQueueStats, getSystemStatus, getTasks } from '../api/proprApi';
 import { getDrafts } from '../api/plannerApi';
 import { useHeaderStats } from './useHeaderStats';
+import type { QueueStatsUpdatePayload } from '@propr/shared';
 
 const socketState = vi.hoisted(() => ({
   isConnected: true,
-  queueCallbacks: new Set<() => void>(),
+  queueCallbacks: new Set<(payload: QueueStatsUpdatePayload) => void>(),
 }));
 
 vi.mock('../api/proprApi', () => ({
@@ -22,7 +23,7 @@ vi.mock('../contexts/useSocket', () => ({
     isConnected: socketState.isConnected,
     onTaskUpdate: () => () => undefined,
     onDraftUpdate: () => () => undefined,
-    onQueueStatsUpdate: (callback: () => void) => {
+    onQueueStatsUpdate: (callback: (payload: QueueStatsUpdatePayload) => void) => {
       socketState.queueCallbacks.add(callback);
       return () => socketState.queueCallbacks.delete(callback);
     },
@@ -47,6 +48,20 @@ const activeJob = {
   repository: 'integry/propr',
   createdAt: '2026-09-09T08:00:00.000Z',
 };
+
+const queuePush = (active: number, completed = 0): QueueStatsUpdatePayload => ({
+  eventType: 'queue:stats:update',
+  stats: {
+    active,
+    activeGoals: 0,
+    waiting: 0,
+    delayed: 0,
+    completed,
+    failed: 0,
+    total: active + completed,
+  },
+  timestamp: '2026-09-13T00:00:00.000Z',
+});
 
 const healthyStatus = {
   daemon: 'Running',
@@ -87,11 +102,41 @@ describe('useHeaderStats desktop recovery', () => {
     expect(result.current.activityStatus).toBe('available');
 
     vi.mocked(getQueueStats).mockResolvedValue(queueSnapshot([]) as never);
-    act(() => socketState.queueCallbacks.forEach(callback => callback()));
+    act(() => socketState.queueCallbacks.forEach(callback => callback(queuePush(0, 1))));
 
     await waitFor(() => expect(result.current.runningCount).toBe(0));
     expect(result.current.runningItems).toEqual([]);
     expect(result.current.activityStatus).toBe('available');
+  });
+
+  it('bounds identical periodic queue invalidations to one HTTP reconciliation', async () => {
+    renderHook(() => useHeaderStats());
+    await waitFor(() => expect(getQueueStats).toHaveBeenCalledTimes(1));
+
+    const payload = queuePush(1);
+    act(() => {
+      socketState.queueCallbacks.forEach(callback => {
+        callback(payload);
+        callback({ ...payload, timestamp: '2026-09-13T00:00:05.000Z' });
+        callback({ ...payload, timestamp: '2026-09-13T00:00:10.000Z' });
+      });
+    });
+
+    await waitFor(() => expect(getQueueStats).toHaveBeenCalledTimes(2));
+    expect(getDrafts).toHaveBeenCalledTimes(2);
+    expect(getTasks).toHaveBeenCalledTimes(2);
+    expect(getSystemStatus).toHaveBeenCalledTimes(2);
+
+    act(() => socketState.queueCallbacks.forEach(callback => callback({
+      ...payload,
+      timestamp: '2026-09-13T00:00:15.000Z',
+    })));
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    expect(getQueueStats).toHaveBeenCalledTimes(2);
+    expect(getDrafts).toHaveBeenCalledTimes(2);
+    expect(getTasks).toHaveBeenCalledTimes(2);
+    expect(getSystemStatus).toHaveBeenCalledTimes(2);
   });
 
   it('invalidates activity during a real transport outage and automatically recovers', async () => {
