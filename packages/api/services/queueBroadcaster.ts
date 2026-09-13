@@ -13,6 +13,7 @@ import {
 export class QueueBroadcaster {
   private queueEvents: QueueEvents | null = null;
   private queueStatsInterval: ReturnType<typeof setInterval> | null = null;
+  private lastBroadcastFingerprint: string | null = null;
   private io: SocketIOServer;
   private queue: Queue;
 
@@ -83,7 +84,7 @@ export class QueueBroadcaster {
   /**
    * Broadcast current queue statistics to subscribed clients
    */
-  async broadcastQueueStats(): Promise<void> {
+  async broadcastQueueStats(force = false): Promise<void> {
     try {
       const [waiting, activeJobs, completed, failed, delayed] = await Promise.all([
         this.queue.getWaitingCount(),
@@ -104,6 +105,14 @@ export class QueueBroadcaster {
         delayed,
         total: waiting + active + completed + failed + delayed
       };
+
+      // The periodic fallback is for recovering missed changes, not a heartbeat.
+      // Avoid making every subscribed client invalidate five API resources when
+      // the authoritative queue snapshot has not changed. A new subscriber can
+      // force one snapshot so it never waits for the next transition.
+      const fingerprint = JSON.stringify(stats);
+      if (!force && fingerprint === this.lastBroadcastFingerprint) return;
+      this.lastBroadcastFingerprint = fingerprint;
 
       const payload: QueueStatsUpdatePayload = {
         eventType: QUEUE_STATS_UPDATE,

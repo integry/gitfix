@@ -7,7 +7,11 @@ import { DESKTOP_RENDERER_ORIGIN } from '@propr/shared';
 import cors from 'cors';
 import express from 'express';
 import { Server as SocketIOServer } from 'socket.io';
-import { corsRejectionHandler, createCorsOriginValidator } from '../corsValidation.js';
+import {
+  CORS_PREFLIGHT_MAX_AGE_SECONDS,
+  corsRejectionHandler,
+  createCorsOriginValidator,
+} from '../corsValidation.js';
 
 // Helper that runs the validator synchronously and reports whether the origin
 // was allowed.
@@ -109,6 +113,7 @@ async function withCorsBoundary(
   app.use(cors({
     origin: createCorsOriginValidator('https://app.propr.dev', '.preview.example.com'),
     credentials: true,
+    maxAge: CORS_PREFLIGHT_MAX_AGE_SECONDS,
   }));
   app.use(corsRejectionHandler);
   app.get('/api/compatibility', (_req, res) => res.json({ compatibility: 'public' }));
@@ -184,6 +189,10 @@ for (const runtimeMode of ['development', 'production'] as const) {
       assert.equal(
         allowedPreflight.headers.get('access-control-allow-headers'),
         'X-ProPR-Desktop-Transport-Scope, Content-Type',
+      );
+      assert.equal(
+        allowedPreflight.headers.get('access-control-max-age'),
+        CORS_PREFLIGHT_MAX_AGE_SECONDS.toString(),
       );
     });
   });

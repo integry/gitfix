@@ -3,6 +3,7 @@ import { getQueueStats, getTasks, getSystemStatus } from '../api/proprApi';
 import { getDrafts, DraftListItem } from '../api/plannerApi';
 import { useSocket } from '../contexts/useSocket';
 import { isDesktopRuntime } from '../config/runtimeMode';
+import type { QueueStatsUpdatePayload } from '@propr/shared';
 import {
   buildReviewGroups,
   buildRunningItems,
@@ -23,6 +24,21 @@ import type {
 } from './useHeaderStatsHelpers';
 
 export type { RunningItem } from './useHeaderStatsHelpers';
+
+const LIVE_INVALIDATION_COALESCE_MS = 100;
+const LIVE_REVALIDATION_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+
+type FetchStatsOutcome = 'succeeded' | 'failed' | 'superseded';
+
+const queueStatsFingerprint = (payload: QueueStatsUpdatePayload): string => JSON.stringify([
+  payload.stats.waiting,
+  payload.stats.active,
+  payload.stats.activeGoals ?? 0,
+  payload.stats.completed,
+  payload.stats.failed,
+  payload.stats.delayed,
+  payload.stats.total,
+]);
 
 export interface HeaderStats {
   // Running tasks count from queue
@@ -100,6 +116,12 @@ export function useHeaderStats(): HeaderStats {
   // Track if component is mounted
   const isMountedRef = useRef(true);
   const statsRequestRef = useRef(0);
+  const liveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveRefreshInFlightRef = useRef(false);
+  const liveRefreshPendingRef = useRef(false);
+  const liveRefreshRetryAttemptRef = useRef(0);
+  const lastQueueStatsFingerprintRef = useRef<string | null>(null);
+  const pendingQueueStatsFingerprintRef = useRef<string | null>(null);
 
   // WebSocket connection for real-time updates
   const { onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, isConnected } = useSocket();
@@ -151,7 +173,7 @@ export function useHeaderStats(): HeaderStats {
   }, []);
 
   // Main fetch function
-  const fetchStats = useCallback(async (isInitialLoad = false) => {
+  const fetchStats = useCallback(async (isInitialLoad = false): Promise<FetchStatsOutcome> => {
     const request = ++statsRequestRef.current;
     try {
       if (isInitialLoad) {
@@ -174,7 +196,7 @@ export function useHeaderStats(): HeaderStats {
         ]),
       ]);
 
-      if (!isMountedRef.current || request !== statsRequestRef.current) return;
+      if (!isMountedRef.current || request !== statsRequestRef.current) return 'superseded';
 
       // Build running activity from generating/refining plans and authoritative
       // active queue jobs. Waiting and delayed jobs are intentionally excluded.
@@ -200,13 +222,15 @@ export function useHeaderStats(): HeaderStats {
       setSystemHealth(buildSystemHealth(statusResponse));
 
       setError(queueResult.errorMessage);
+      return queueResult.errorMessage ? 'failed' : 'succeeded';
     } catch (err) {
-      if (!isMountedRef.current || request !== statsRequestRef.current) return;
+      if (!isMountedRef.current || request !== statsRequestRef.current) return 'superseded';
       console.error('Failed to fetch header stats:', err);
       setRunningItems([]);
       setRunningCount(0);
       setActivityStatus('unavailable');
       setError((err as Error).message);
+      return 'failed';
     } finally {
       if (isMountedRef.current && request === statsRequestRef.current) {
         setIsLoading(false);
@@ -219,39 +243,114 @@ export function useHeaderStats(): HeaderStats {
     await fetchStats(false);
   }, [fetchStats]);
 
-  // In the desktop app, the scoped socket is the live lifecycle signal. A
-  // disconnect invalidates cached activity immediately; reconnecting performs
-  // a fresh authoritative snapshot without changing the saved profile or auth.
+  // Queue, task, and draft transitions are often emitted together. Treat them
+  // as invalidations and reconcile one authoritative snapshot after the burst
+  // instead of starting overlapping copies of the same five HTTP reads.
+  const scheduleLiveRefresh = useCallback(() => {
+    liveRefreshPendingRef.current = true;
+    if (liveRefreshTimerRef.current !== null || liveRefreshInFlightRef.current) return;
+
+    const armRefresh = (delayMs: number) => {
+      liveRefreshTimerRef.current = setTimeout(async () => {
+        liveRefreshTimerRef.current = null;
+        if (!isMountedRef.current || !liveRefreshPendingRef.current) return;
+
+        liveRefreshPendingRef.current = false;
+        liveRefreshInFlightRef.current = true;
+        const reconciledQueueFingerprint = pendingQueueStatsFingerprintRef.current;
+        const outcome = await fetchStats(false);
+        liveRefreshInFlightRef.current = false;
+
+        if (!isMountedRef.current) return;
+        if (outcome === 'succeeded') {
+          liveRefreshRetryAttemptRef.current = 0;
+          if (reconciledQueueFingerprint !== null) {
+            lastQueueStatsFingerprintRef.current = reconciledQueueFingerprint;
+            if (pendingQueueStatsFingerprintRef.current === reconciledQueueFingerprint) {
+              pendingQueueStatsFingerprintRef.current = null;
+            }
+          }
+        } else if (outcome === 'failed'
+          && socketConnectedRef.current
+          && liveRefreshRetryAttemptRef.current < LIVE_REVALIDATION_RETRY_DELAYS_MS.length) {
+          const retryDelay = LIVE_REVALIDATION_RETRY_DELAYS_MS[liveRefreshRetryAttemptRef.current];
+          liveRefreshRetryAttemptRef.current += 1;
+          liveRefreshPendingRef.current = true;
+          armRefresh(retryDelay);
+        } else if (outcome === 'failed') {
+          liveRefreshRetryAttemptRef.current = 0;
+          if (pendingQueueStatsFingerprintRef.current === reconciledQueueFingerprint) {
+            pendingQueueStatsFingerprintRef.current = null;
+          }
+        } else if (socketConnectedRef.current) {
+          // A newer fetch superseded this one. Revalidate once more so this live
+          // invalidation is only committed by a complete, current snapshot.
+          liveRefreshPendingRef.current = true;
+        }
+
+        if (liveRefreshPendingRef.current && liveRefreshTimerRef.current === null) {
+          armRefresh(LIVE_INVALIDATION_COALESCE_MS);
+        }
+      }, delayMs);
+    };
+
+    armRefresh(LIVE_INVALIDATION_COALESCE_MS);
+  }, [fetchStats]);
+
+  // A reconnect can carry a forced queue snapshot whose counts match the last
+  // payload even though drafts, tasks, or health changed while offline. Reset
+  // queue dedup for every runtime and reconcile one authoritative snapshot.
+  // Desktop additionally invalidates cached activity while its scoped socket is
+  // disconnected.
   const previousSocketConnectionRef = useRef<boolean | null>(null);
   useEffect(() => {
-    if (!isDesktopRuntime()) return;
     const previous = previousSocketConnectionRef.current;
     previousSocketConnectionRef.current = isConnected;
     if (!isConnected) {
+      if (liveRefreshTimerRef.current !== null) {
+        clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
+      liveRefreshPendingRef.current = false;
+      liveRefreshRetryAttemptRef.current = 0;
+      pendingQueueStatsFingerprintRef.current = null;
+      lastQueueStatsFingerprintRef.current = null;
       statsRequestRef.current += 1;
-      setRunningItems([]);
-      setRunningCount(0);
-      setActivityStatus('unavailable');
-      setIsLoading(false);
+      if (isDesktopRuntime()) {
+        setRunningItems([]);
+        setRunningCount(0);
+        setActivityStatus('unavailable');
+        setIsLoading(false);
+      }
       return;
     }
     if (previous === false) {
-      setActivityStatus('checking');
-      void fetchStats(false);
+      lastQueueStatsFingerprintRef.current = null;
+      pendingQueueStatsFingerprintRef.current = null;
+      liveRefreshRetryAttemptRef.current = 0;
+      if (isDesktopRuntime()) setActivityStatus('checking');
+      scheduleLiveRefresh();
     }
-  }, [fetchStats, isConnected]);
+  }, [isConnected, scheduleLiveRefresh]);
 
   // Initial load
   useEffect(() => {
     isMountedRef.current = true;
 
     // Initial fetch
-    fetchStats(true);
+    void fetchStats(true).then(outcome => {
+      if (outcome === 'failed' && socketConnectedRef.current) scheduleLiveRefresh();
+    });
 
     return () => {
       isMountedRef.current = false;
+      if (liveRefreshTimerRef.current !== null) {
+        clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
+      liveRefreshPendingRef.current = false;
     };
-  }, [fetchStats]);
+  }, [fetchStats, scheduleLiveRefresh]);
 
   // Subscribe to WebSocket events for real-time updates
   useEffect(() => {
@@ -259,19 +358,23 @@ export function useHeaderStats(): HeaderStats {
 
     // Handle task updates - refresh stats when any task changes state
     const handleTaskUpdate = () => {
-      console.log('[useHeaderStats] Received task update, refreshing stats');
-      fetchStats(false);
+      console.log('[useHeaderStats] Received task update, scheduling stats refresh');
+      scheduleLiveRefresh();
     };
 
     // Handle draft updates - refresh stats when drafts change (affects active plans)
     const handleDraftUpdate = () => {
-      console.log('[useHeaderStats] Received draft update, refreshing stats');
-      fetchStats(false);
+      console.log('[useHeaderStats] Received draft update, scheduling stats refresh');
+      scheduleLiveRefresh();
     };
 
-    const handleQueueStatsUpdate = () => {
-      console.log('[useHeaderStats] Received queue stats update, refreshing stats');
-      fetchStats(false);
+    const handleQueueStatsUpdate = (payload: QueueStatsUpdatePayload) => {
+      const fingerprint = queueStatsFingerprint(payload);
+      if (fingerprint === lastQueueStatsFingerprintRef.current
+        || fingerprint === pendingQueueStatsFingerprintRef.current) return;
+      pendingQueueStatsFingerprintRef.current = fingerprint;
+      console.log('[useHeaderStats] Received changed queue stats, scheduling stats refresh');
+      scheduleLiveRefresh();
     };
 
     // Subscribe to every event that can change active work.
@@ -284,7 +387,7 @@ export function useHeaderStats(): HeaderStats {
       unsubscribeDraft();
       unsubscribeQueueStats();
     };
-  }, [isConnected, onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, fetchStats]);
+  }, [isConnected, onTaskUpdate, onDraftUpdate, onQueueStatsUpdate, scheduleLiveRefresh]);
 
   // Re-filter when dismissed IDs or timestamps change
   useEffect(() => {
