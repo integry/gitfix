@@ -244,8 +244,8 @@ test('goal execution keeps initial prompt identity separate from FIFO continuati
     goalId: 'goal-identity', taskId: 'goal-task-identity', repoOwner: 'acme', repoName: 'repo',
     generation: 0, claimId: 'claim-identity',
   };
-  const initialPrompt = '/goal Ship it\n\nImmutable launch policy';
-  const correction = 'Use the existing API shape instead.';
+  const initialPrompt = '/goal Ship it';
+  const correction = 'Additional ProPR delivery context for the goal above. Use the existing API shape.';
   const captured: AgentTaskOptions[] = [];
   const agent = {
     executeTask: async (options: AgentTaskOptions) => {
@@ -255,7 +255,7 @@ test('goal execution keeps initial prompt identity separate from FIFO continuati
   };
   const goal = {
     goal_id: data.goalId, initial_prompt: initialPrompt, session_id: null, conversation_id: null,
-    requested_model: 'test-model', current_task_id: data.taskId, agent_type: 'claude',
+    requested_model: 'test-model', current_task_id: data.taskId, agent_type: 'codex',
   };
   const prepared = {
     goal, agent, githubToken: 'token', worktree: { worktreePath: '/tmp/worktree', branchName: 'goal/ship-it' },
@@ -269,7 +269,8 @@ test('goal execution keeps initial prompt identity separate from FIFO continuati
 
   assert.equal(captured[0].prompt, initialPrompt);
   assert.equal(captured[0].nativeGoalObjective, initialPrompt);
-  assert.equal(captured[0].initialControlInputId, undefined);
+  assert.equal(captured[0].initialControlInputId, 'input-1');
+  assert.equal(captured[0].initialControlInputMessage, correction);
   assert.equal(captured[1].prompt, correction);
   assert.equal(captured[1].nativeGoalObjective, initialPrompt);
   assert.equal(captured[1].resumeSessionId, 'session-1');

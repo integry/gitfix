@@ -5,12 +5,14 @@ import type { Knex } from 'knex';
 import type { Queue } from 'bullmq';
 import {
   AgentRegistry,
+  CODEX_GOAL_USER_OBJECTIVE_MAX_LENGTH,
   GOAL_CONTINUE_INPUT,
   DEFAULT_GOAL_CHECKPOINT_INTERVAL_MINUTES,
   GOAL_LAUNCH_STRATEGIES,
   MAX_GOAL_CHECKPOINT_INTERVAL_MINUTES,
   MIN_GOAL_CHECKPOINT_INTERVAL_MINUTES,
   buildNativeGoalCommand,
+  buildNativeGoalContext,
   codexGoalPromptValidationError,
   generateGoalTitle,
   getAuthenticatedOctokit,
@@ -302,6 +304,9 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
         ...capability,
         models: agent?.config.supportedModels ?? [],
         defaultModel: agent?.config.defaultModel ?? null,
+        objectiveMaxCharacters: capability.agentType === 'codex'
+          ? CODEX_GOAL_USER_OBJECTIVE_MAX_LENGTH
+          : null,
       };
     });
     res.json({ agents });
@@ -367,15 +372,17 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     if (existing) return void res.json({ goal: await serializeGoal(deps.db, deps.redisClient, existing) });
 
     const launchStrategy = body.launchStrategy as GoalLaunchStrategy;
-    const baseInitialPrompt = buildNativeGoalCommand({
+    const promptOptions = {
       objective: body.objective as string,
       launchStrategy,
       maxParallelTasks: body.maxParallelTasks as number | null | undefined,
       ultrafix: body.ultrafix === true,
       checkpointIntervalMinutes: body.checkpointIntervalMinutes as number | null | undefined,
       visualPreviewSettings: await loadVisualPreviewSettings(body.repository as string),
-    });
-    const selection = await resolveCreationAgent(body, getCapabilities, baseInitialPrompt);
+    };
+    const initialPrompt = buildNativeGoalCommand(promptOptions);
+    const baseInitialContext = buildNativeGoalContext(promptOptions);
+    const selection = await resolveCreationAgent(body, getCapabilities, initialPrompt);
     if ('error' in selection) return void res.status(selection.status).json({ error: selection.error });
     const { agent } = selection;
 
@@ -401,71 +408,92 @@ export function createGoalRoutes(deps: GoalRoutesDeps) {
     let attachmentsPersisted = false;
     try {
       attachments = await storeAttachments(files, goalId);
-      const initialPrompt = appendGoalAttachments(baseInitialPrompt, attachments);
-      const promptError = agent.config.type === 'codex' ? codexGoalPromptValidationError(initialPrompt) : null;
-      if (promptError) return void res.status(400).json({ error: promptError });
-    const row = {
-      goal_id: goalId,
-      owner_id: ownerId,
-      owner_login: req.user!.username,
-      repository: body.repository,
-      title,
-      objective: body.objective as string,
-      launch_strategy: launchStrategy,
-      initial_prompt: initialPrompt,
-      attachments: JSON.stringify(attachments),
-      base_branch: body.baseBranch || null,
-      agent_id: agent.config.id,
-      agent_alias: agent.config.alias,
-      agent_type: agent.config.type,
-      requested_model: body.model,
-      max_parallel_tasks: body.maxParallelTasks || null,
-      ultrafix: body.ultrafix === true,
-      checkpoint_interval_minutes: launchStrategy === 'direct'
-        ? body.checkpointIntervalMinutes ?? DEFAULT_GOAL_CHECKPOINT_INTERVAL_MINUTES
-        : null,
-      desired_state: 'running',
-      current_task_id: taskId,
-      run_generation: 0,
-      run_claim: claimId,
-      create_idempotency_key: createKey,
-      create_idempotency_operation: createOperation,
-      create_payload_hash: createPayloadHash,
-      artifact_refs: JSON.stringify([]),
-      artifact_stats: JSON.stringify({ issues: 0, openIssues: 0, pullRequests: 0, openPullRequests: 0 }),
-      created_at: now,
-      updated_at: now,
-    };
-    try {
-      await deps.db('goals').insert(row);
-      attachmentsPersisted = true;
-    } catch (error) {
-      const raced = await deps.db<GoalRow>('goals').where({
+      const initialContext = appendGoalAttachments(baseInitialContext, attachments);
+      const contextOperation = 'goal.context';
+      const contextKey = `goal-initial-context:${goalId}`;
+      const contextPayloadHash = mutationHash(contextOperation, { goalId, message: initialContext });
+      const row = {
+        goal_id: goalId,
         owner_id: ownerId,
+        owner_login: req.user!.username,
+        repository: body.repository,
+        title,
+        objective: body.objective as string,
+        launch_strategy: launchStrategy,
+        initial_prompt: initialPrompt,
+        attachments: JSON.stringify(attachments),
+        base_branch: body.baseBranch || null,
+        agent_id: agent.config.id,
+        agent_alias: agent.config.alias,
+        agent_type: agent.config.type,
+        requested_model: body.model,
+        max_parallel_tasks: body.maxParallelTasks || null,
+        ultrafix: body.ultrafix === true,
+        checkpoint_interval_minutes: launchStrategy === 'direct'
+          ? body.checkpointIntervalMinutes ?? DEFAULT_GOAL_CHECKPOINT_INTERVAL_MINUTES
+          : null,
+        desired_state: 'running',
+        current_task_id: taskId,
+        run_generation: 0,
+        run_claim: claimId,
         create_idempotency_key: createKey,
-      }).first();
-      if (raced) {
-        if (raced.create_idempotency_operation !== createOperation || raced.create_payload_hash !== createPayloadHash) {
-          return void res.status(409).json({ error: 'Idempotency-Key was already used for a different operation or payload' });
+        create_idempotency_operation: createOperation,
+        create_payload_hash: createPayloadHash,
+        artifact_refs: JSON.stringify([]),
+        artifact_stats: JSON.stringify({ issues: 0, openIssues: 0, pullRequests: 0, openPullRequests: 0 }),
+        created_at: now,
+        updated_at: now,
+      };
+      try {
+        await deps.db.transaction(async trx => {
+          await trx('goals').insert(row);
+          await trx('goal_inputs').insert({
+            input_id: randomUUID(),
+            goal_id: goalId,
+            owner_id: ownerId,
+            idempotency_key: contextKey,
+            operation: contextOperation,
+            payload_hash: contextPayloadHash,
+            kind: 'context',
+            message: initialContext,
+            state: 'pending',
+            created_at: now,
+          });
+        });
+        attachmentsPersisted = true;
+        logger.info({
+          goalId,
+          agentType: agent.config.type,
+          initialPromptCharacters: Array.from(initialPrompt).length,
+          initialContextCharacters: Array.from(initialContext).length,
+        }, 'Created goal with separate objective and delivery-context messages');
+      } catch (error) {
+        const raced = await deps.db<GoalRow>('goals').where({
+          owner_id: ownerId,
+          create_idempotency_key: createKey,
+        }).first();
+        if (raced) {
+          if (raced.create_idempotency_operation !== createOperation || raced.create_payload_hash !== createPayloadHash) {
+            return void res.status(409).json({ error: 'Idempotency-Key was already used for a different operation or payload' });
+          }
+          return void res.json({ goal: await serializeGoal(deps.db, deps.redisClient, raced) });
         }
-        return void res.json({ goal: await serializeGoal(deps.db, deps.redisClient, raced) });
+        throw error;
       }
-      throw error;
-    }
-    const data: GoalJobData = {
-      goalId, taskId, repoOwner, repoName, generation: 0, claimId,
-      input: initialPrompt,
-    };
-    try {
-      await deps.taskQueue.add('processGoal', data, { jobId: goalJobId(goalId, 0), attempts: 1 });
-    } catch {
-      return void res.status(503).json({
-        error: 'Goal was saved but its first attempt could not be queued; recovery will retry it safely',
-        goalId,
-      });
-    }
-    const inserted = await deps.db('goals').where({ goal_id: goalId }).first() as GoalRow;
-    res.status(201).json({ goal: await serializeGoal(deps.db, deps.redisClient, inserted) });
+      const data: GoalJobData = {
+        goalId, taskId, repoOwner, repoName, generation: 0, claimId,
+        input: initialPrompt,
+      };
+      try {
+        await deps.taskQueue.add('processGoal', data, { jobId: goalJobId(goalId, 0), attempts: 1 });
+      } catch {
+        return void res.status(503).json({
+          error: 'Goal was saved but its first attempt could not be queued; recovery will retry it safely',
+          goalId,
+        });
+      }
+      const inserted = await deps.db('goals').where({ goal_id: goalId }).first() as GoalRow;
+      res.status(201).json({ goal: await serializeGoal(deps.db, deps.redisClient, inserted) });
     } finally {
       if (!attachmentsPersisted) await deleteGoalAttachments(attachments);
     }

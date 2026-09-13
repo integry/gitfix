@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import {
   CODEX_GOAL_OBJECTIVE_MAX_LENGTH,
+  CODEX_GOAL_USER_OBJECTIVE_MAX_LENGTH,
   buildGoalPolicyEnvironment,
   buildNativeGoalCommand,
+  buildNativeGoalContext,
   codexGoalPromptValidationError,
   parseGoalCheckpointDeclaration,
 } from '../packages/core/src/goals.ts';
@@ -59,26 +61,30 @@ after(async () => {
 });
 
 describe('native goal provider contract', () => {
-  test('builds the direct strategy as one visible native prompt policy', () => {
-    const prompt = buildNativeGoalCommand({
+  test('separates the direct goal command from ProPR delivery context', () => {
+    const options = {
       objective: 'Ship the dashboard', launchStrategy: 'direct', maxParallelTasks: 3, ultrafix: true,
       checkpointIntervalMinutes: 30,
-    });
-    assert.match(prompt, /^\/goal Ship the dashboard/);
-    assert.match(prompt, /Agent implements directly/);
-    assert.match(prompt, /ProPR creates the draft PR before execution/);
-    assert.match(prompt, /Do not run Git commands/);
-    assert.match(prompt, /approximately every 30 minutes/);
-    assert.match(prompt, /target cadence, not a timer or interruption/);
-    assert.match(prompt, /"checkpointReady":true/);
-    assert.match(prompt, /include and exclude are optional/i);
-    assert.match(prompt, /at most 3 implementation tasks in parallel/);
-    assert.match(prompt, /Ultrafix policy: Enabled/);
-    assert.match(prompt, /ProPR publishes and validates the final checkpoint/);
+    } as const;
+    const prompt = buildNativeGoalCommand(options);
+    const context = buildNativeGoalContext(options);
+    assert.equal(prompt, '/goal Ship the dashboard');
+    assert.doesNotMatch(prompt, /Agent implements directly/);
+    assert.match(context, /Additional ProPR delivery context for the goal above/);
+    assert.match(context, /Agent implements directly/);
+    assert.match(context, /ProPR creates the draft PR before execution/);
+    assert.match(context, /Do not run Git commands/);
+    assert.match(context, /approximately every 30 minutes/);
+    assert.match(context, /target cadence, not a timer or interruption/);
+    assert.match(context, /"checkpointReady":true/);
+    assert.match(context, /include and exclude are optional/i);
+    assert.match(context, /at most 3 implementation tasks in parallel/);
+    assert.match(context, /Ultrafix policy: Enabled/);
+    assert.match(context, /ProPR publishes and validates the final checkpoint/);
   });
 
   test('adds repository visual preview policy and discretionary checkpoint timing to a goal prompt', () => {
-    const prompt = buildNativeGoalCommand({
+    const context = buildNativeGoalContext({
       objective: 'Ship the dashboard',
       launchStrategy: 'direct',
       visualPreviewSettings: {
@@ -88,10 +94,10 @@ describe('native goal provider contract', () => {
       },
     });
 
-    assert.match(prompt, /VISUAL PREVIEW REQUIREMENT/);
-    assert.match(prompt, /Capture desktop and mobile dashboard states/);
-    assert.match(prompt, /Use your discretion about when coherent visual evidence is ready/);
-    assert.match(prompt, /already-open draft PR at checkpoint boundaries/);
+    assert.match(context, /VISUAL PREVIEW REQUIREMENT/);
+    assert.match(context, /Capture desktop and mobile dashboard states/);
+    assert.match(context, /Use your discretion about when coherent visual evidence is ready/);
+    assert.match(context, /already-open draft PR at checkpoint boundaries/);
   });
 
   test('parses and validates the agent checkpoint handoff', () => {
@@ -125,26 +131,26 @@ describe('native goal provider contract', () => {
   });
 
   test('builds orchestration as agent-owned prompt policy without scheduler state', () => {
-    const prompt = buildNativeGoalCommand({
+    const prompt = buildNativeGoalCommand({ objective: 'Ship the platform' });
+    const context = buildNativeGoalContext({
       objective: 'Ship the platform', launchStrategy: 'orchestrate', maxParallelTasks: null, ultrafix: false,
     });
-    assert.match(prompt, /Agent orchestrates through ProPR/);
-    assert.match(prompt, /creating GitHub issues/);
-    assert.match(prompt, /epic PR/);
-    assert.match(prompt, /You—not a ProPR planner—own every planning and hierarchy decision/);
-    assert.match(prompt, /No maximum parallel task count was selected/);
-    assert.match(prompt, /Ultrafix policy: Disabled/);
+    assert.equal(prompt, '/goal Ship the platform');
+    assert.match(context, /Agent orchestrates through ProPR/);
+    assert.match(context, /creating GitHub issues/);
+    assert.match(context, /epic PR/);
+    assert.match(context, /You—not a ProPR planner—own every planning and hierarchy decision/);
+    assert.match(context, /No maximum parallel task count was selected/);
+    assert.match(context, /Ultrafix policy: Disabled/);
     assert.deepEqual(buildGoalPolicyEnvironment('orchestrate'), {
       PROPR_EXECUTION_MODE: 'goal', PROPR_GOAL_LAUNCH_STRATEGY: 'orchestrate',
     });
   });
 
   test('validates the fully rendered Codex prompt with Unicode character semantics', () => {
-    const fixedPrompt = buildNativeGoalCommand({ objective: '', launchStrategy: 'direct' });
-    const objectiveLength = CODEX_GOAL_OBJECTIVE_MAX_LENGTH - Array.from(fixedPrompt).length;
-    const exactObjective = `${'x'.repeat(objectiveLength - 1)}😀`;
-    const exactPrompt = buildNativeGoalCommand({ objective: exactObjective, launchStrategy: 'direct' });
-    const oversizedPrompt = buildNativeGoalCommand({ objective: `${exactObjective}x`, launchStrategy: 'direct' });
+    const exactObjective = `${'x'.repeat(CODEX_GOAL_USER_OBJECTIVE_MAX_LENGTH - 1)}😀`;
+    const exactPrompt = buildNativeGoalCommand({ objective: exactObjective });
+    const oversizedPrompt = buildNativeGoalCommand({ objective: `${exactObjective}x` });
 
     assert.equal(Array.from(exactPrompt).length, CODEX_GOAL_OBJECTIVE_MAX_LENGTH);
     assert.equal(codexGoalPromptValidationError(exactPrompt), null);

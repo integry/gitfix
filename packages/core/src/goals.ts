@@ -7,7 +7,10 @@ export const GOAL_LAUNCH_STRATEGIES = ['direct', 'orchestrate'] as const;
 export type GoalLaunchStrategy = typeof GOAL_LAUNCH_STRATEGIES[number];
 
 export const GOAL_CONTINUE_INPUT = 'ProPR has acknowledged any checkpoint request from the previous turn. Continue working toward the goal.';
+export const NATIVE_GOAL_COMMAND_PREFIX = '/goal ';
 export const CODEX_GOAL_OBJECTIVE_MAX_LENGTH = 4_000;
+export const CODEX_GOAL_USER_OBJECTIVE_MAX_LENGTH = CODEX_GOAL_OBJECTIVE_MAX_LENGTH
+    - Array.from(NATIVE_GOAL_COMMAND_PREFIX).length;
 export const DEFAULT_GOAL_CHECKPOINT_INTERVAL_MINUTES = 15;
 export const MIN_GOAL_CHECKPOINT_INTERVAL_MINUTES = 5;
 export const MAX_GOAL_CHECKPOINT_INTERVAL_MINUTES = 120;
@@ -32,15 +35,22 @@ const launchInstructions: Record<GoalLaunchStrategy, string> = {
     ].join('\n'),
 };
 
-/** Build the exact first input for the single provider-native goal session. */
-export function buildNativeGoalCommand(options: {
+export interface NativeGoalPromptOptions {
     objective: string;
     launchStrategy: GoalLaunchStrategy;
     maxParallelTasks?: number | null;
     ultrafix?: boolean | null;
     checkpointIntervalMinutes?: number | null;
     visualPreviewSettings?: VisualPreviewSettings;
-}): string {
+}
+
+/** Build the bounded first user message that establishes the provider-native goal. */
+export function buildNativeGoalCommand(options: Pick<NativeGoalPromptOptions, 'objective'>): string {
+    return `${NATIVE_GOAL_COMMAND_PREFIX}${options.objective}`;
+}
+
+/** Build ProPR's launch policy for delivery as a separate same-session message. */
+export function buildNativeGoalContext(options: NativeGoalPromptOptions): string {
     const parallelPolicy = options.maxParallelTasks == null
         ? 'Concurrency policy: No maximum parallel task count was selected. Decide and manage concurrency yourself; ProPR does not schedule a plan graph.'
         : `Concurrency policy: Run at most ${options.maxParallelTasks} implementation tasks in parallel. Decide what to parallelize and enforce this limit yourself; ProPR does not schedule a plan graph.`;
@@ -66,8 +76,8 @@ export function buildNativeGoalCommand(options: {
             'ProPR validates the paths, stages only that scope, commits, pushes, records the SHA, and then acknowledges the checkpoint. Unlisted parallel work remains untouched. Continue only after that acknowledgment.',
         ]
         : [];
-    const prompt = [
-        `/goal ${options.objective}`,
+    const context = [
+        'Additional ProPR delivery context for the goal above:',
         '',
         launchInstructions[options.launchStrategy],
         ...checkpointPolicy,
@@ -79,11 +89,11 @@ export function buildNativeGoalCommand(options: {
     const visualPreviewPrompt = options.visualPreviewSettings
         ? buildVisualPreviewPrompt(options.visualPreviewSettings)
         : '';
-    if (!visualPreviewPrompt) return prompt;
+    if (!visualPreviewPrompt) return context;
     const timingPolicy = options.launchStrategy === 'direct'
         ? 'Goal preview timing: Use your discretion about when coherent visual evidence is ready. Generate or refresh it before a checkpoint whenever an in-progress preview would be useful; ProPR publishes current preview files to the already-open draft PR at checkpoint boundaries.'
         : 'Goal preview timing: Use your discretion about when coherent visual evidence is ready. ProPR publishes current preview files after the final goal PR is identified.';
-    return `${prompt}${visualPreviewPrompt}\n${timingPolicy}`;
+    return `${context}${visualPreviewPrompt}\n${timingPolicy}`;
 }
 
 export interface GoalCheckpointDeclaration {

@@ -135,13 +135,20 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
             },
             getCapabilities: async options => {
                 capabilityRequests.push(options);
-                return options?.force ? [] : [{
+                return [{
                     agentId: 'agent-1',
                     agentAlias: 'agent-1',
                     agentType: 'claude',
                     goalCapable: true,
                     lifecycle: null,
                     controls: { liveInput: false, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true },
+                }, {
+                    agentId: 'codex-agent',
+                    agentAlias: 'codex-agent',
+                    agentType: 'codex',
+                    goalCapable: true,
+                    lifecycle: null,
+                    controls: { liveInput: true, inputAtBoundary: true, modelAtBoundary: true, pauseAtBoundary: true },
                 }];
             },
             generateTitle: async () => 'Preview-enabled goal',
@@ -241,6 +248,9 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         await routes.capabilities(recheckRequest, rechecked.res);
         assert.equal(rechecked.state.status, 200);
         assert.deepEqual(capabilityRequests, [{ force: true }]);
+        const capabilityLimits = (rechecked.state.body as { agents: Array<{ agentType: string; objectiveMaxCharacters: number | null }> }).agents;
+        assert.equal(capabilityLimits.find(agent => agent.agentType === 'codex')?.objectiveMaxCharacters, 3_994);
+        assert.equal(capabilityLimits.find(agent => agent.agentType === 'claude')?.objectiveMaxCharacters, null);
 
         const oversizedCodexPrompt = response();
         const oversizedCodexRequest = request('owner-1', {}, {
@@ -262,9 +272,14 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         assert.equal(previewGoal.state.status, 201);
         const previewGoalId = (previewGoal.state.body as { goal: { id: string } }).goal.id;
         const storedPreviewPrompt = (await database('goals').where({ goal_id: previewGoalId }).first()).initial_prompt;
-        assert.match(storedPreviewPrompt, /VISUAL PREVIEW REQUIREMENT/);
-        assert.match(storedPreviewPrompt, /Capture the completed dashboard/);
-        assert.match(storedPreviewPrompt, /already-open draft PR at checkpoint boundaries/);
+        const storedPreviewContext = await database('goal_inputs').where({ goal_id: previewGoalId }).first();
+        assert.equal(storedPreviewPrompt, '/goal Ship the preview');
+        assert.equal(storedPreviewContext.kind, 'context');
+        assert.equal(storedPreviewContext.operation, 'goal.context');
+        assert.equal(storedPreviewContext.state, 'pending');
+        assert.match(storedPreviewContext.message, /VISUAL PREVIEW REQUIREMENT/);
+        assert.match(storedPreviewContext.message, /Capture the completed dashboard/);
+        assert.match(storedPreviewContext.message, /already-open draft PR at checkpoint boundaries/);
         queued.length = 0;
 
         await database('goals').where({ goal_id: 'goal-1' }).update({
@@ -327,7 +342,7 @@ test('goal routes keep metadata owner-scoped and queue ordinary input on the sam
         await routes.input(inputRequest, duplicateInput.res);
         assert.equal(duplicateInput.state.status, 200);
         assert.equal(queued.length, 1);
-        assert.equal(Number((await database('goal_inputs').count('* as count').first()).count), 1);
+        assert.equal(Number((await database('goal_inputs').where({ goal_id: 'goal-1' }).count('* as count').first()).count), 1);
         const mismatchedInput = response();
         const mismatchedRequest = request('owner-1', { goalId: 'goal-1' }, { message: 'A different payload.' });
         mismatchedRequest.get = () => 'owner-input-1';

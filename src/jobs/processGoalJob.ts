@@ -332,6 +332,7 @@ export async function executePreparedGoal(data: GoalJobData, prepared: PreparedG
             resumeSessionId: goal.session_id ?? undefined,
             resumeConversationId: goal.conversation_id ?? undefined,
             initialControlInputId: goal.agent_type === 'codex' ? pendingInput?.input_id : undefined,
+            initialControlInputMessage: goal.agent_type === 'codex' ? pendingInput?.message : undefined,
             initialGoalFeedback: goal.agent_type === 'codex' ? checkpointFeedback : undefined,
             goalControl: control,
             environment: buildGoalPolicyEnvironment(goal.launch_strategy),

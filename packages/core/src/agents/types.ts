@@ -59,6 +59,8 @@ export interface AgentTaskOptions {
     nativeGoalObjective?: string;
     /** Pending FIFO input consumed by the turn being started, when applicable. */
     initialControlInputId?: string;
+    /** Message paired with initialControlInputId when the first Codex turn starts from a different objective. */
+    initialControlInputMessage?: string;
     /** Durable ProPR checkpoint feedback to inject at the resumed Codex boundary. */
     initialGoalFeedback?: string;
     /** Durable controls observed only at provider turn boundaries. */

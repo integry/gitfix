@@ -21,7 +21,7 @@ class FakeConnection {
   closeError: Error | null = null;
   private goalReads = 0;
   private goalStatus: string;
-  private objective = '/goal Ship it\n\nPolicy';
+  private objective = '/goal Ship it';
   private turnResolver?: (message: Record<string, unknown>) => void;
   private nextAgentMessage?: string;
 
@@ -125,10 +125,15 @@ function controls(onCheckpoint?: () => void) {
 function options(control: GoalExecutionControl, resume = false, input = false): AgentTaskOptions {
   return {
     worktreePath: '/tmp/worktree', issueRef: { number: 0, repoOwner: 'acme', repoName: 'repo' },
-    prompt: input ? 'Late guidance' : '/goal Ship it\n\nPolicy', githubToken: 'token',
-    nativeGoalObjective: '/goal Ship it\n\nPolicy', goalControl: control,
+    prompt: resume && input ? 'Late guidance' : '/goal Ship it', githubToken: 'token',
+    nativeGoalObjective: '/goal Ship it', goalControl: control,
     ...(resume ? { resumeSessionId: 'thread-1', resumeConversationId: 'conversation-1' } : {}),
-    ...(input ? { initialControlInputId: 'input-1' } : {}),
+    ...(input ? {
+      initialControlInputId: 'input-1',
+      initialControlInputMessage: resume
+        ? 'Late guidance'
+        : 'Additional ProPR delivery context for the goal above:\n\nPolicy',
+    } : {}),
   };
 }
 
@@ -155,6 +160,16 @@ describe('pinned Codex 0.146 native external-goal activation', () => {
     }
   }
 
+  test('steers initial ProPR context separately from the bounded native objective', async () => {
+    const state = controls();
+    const connection = new FakeConnection(false, 'before');
+    await runGoalProtocol(connection as never, options(state.control, false, true), 'gpt-5.6');
+
+    assert.equal(connection.requests.find(request => request.method === 'thread/goal/set')?.params.objective, '/goal Ship it');
+    assert.match(JSON.stringify(connection.requests.find(request => request.method === 'turn/steer')?.params.input), /Additional ProPR delivery context/);
+    assert.deepEqual(state.delivered, ['input-1']);
+  });
+
   test('a FIFO input racing with an already-complete native goal is closed once', async () => {
     const state = controls();
     const connection = new FakeConnection(true, 'before', true);
@@ -172,14 +187,14 @@ describe('pinned Codex 0.146 native external-goal activation', () => {
     const paused = await runGoalProtocol(fresh as never, options(freshState.control), 'gpt-5.6');
     assert.equal(paused.completion?.status, 'interrupted');
     const nativePause = fresh.requests.find(request => request.method === 'thread/goal/set' && request.params.status === 'paused');
-    assert.equal(nativePause?.params.objective, '/goal Ship it\n\nPolicy');
+    assert.equal(nativePause?.params.objective, '/goal Ship it');
     assert.equal(fresh.requests.filter(request => request.method === 'turn/interrupt').length, 0);
 
     const resumedState = controls();
     const resumed = new FakeConnection(true, 'after', false, 'paused');
     const completed = await runGoalProtocol(resumed as never, options(resumedState.control, true, true), 'gpt-5.6');
     assert.equal(completed.completion?.status, 'completed');
-    assert.equal(resumed.requests.find(request => request.method === 'thread/goal/set')?.params.objective, '/goal Ship it\n\nPolicy');
+    assert.equal(resumed.requests.find(request => request.method === 'thread/goal/set')?.params.objective, '/goal Ship it');
     assert.equal(resumed.requests.find(request => request.method === 'thread/goal/set')?.params.status, 'active');
     assert.equal(resumed.requests.find(request => request.method === 'turn/steer')?.params.input instanceof Array, true);
     assert.deepEqual(resumedState.delivered, ['input-1']);

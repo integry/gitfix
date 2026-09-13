@@ -176,7 +176,11 @@ async function steerInitialGoalInput(
     await connection.request('turn/steer', {
         threadId,
         clientUserMessageId: options.initialControlInputId ?? randomUUID(),
-        input: [{ type: 'text', text: options.initialGoalFeedback ?? options.prompt, text_elements: [] }],
+        input: [{
+            type: 'text',
+            text: options.initialGoalFeedback ?? options.initialControlInputMessage ?? options.prompt,
+            text_elements: [],
+        }],
         expectedTurnId: turnId,
     });
     if (options.initialControlInputId) {
