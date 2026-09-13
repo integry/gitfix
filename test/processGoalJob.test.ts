@@ -259,7 +259,7 @@ test('goal execution keeps initial prompt identity separate from FIFO continuati
   };
   const prepared = {
     goal, agent, githubToken: 'token', worktree: { worktreePath: '/tmp/worktree', branchName: 'goal/ship-it' },
-    pendingInput: { input_id: 'input-1', message: correction },
+    pendingInput: { input_id: 'input-1', message: correction, kind: 'context' },
   };
 
   await executePreparedGoal(data, prepared as never);
@@ -271,6 +271,46 @@ test('goal execution keeps initial prompt identity separate from FIFO continuati
   assert.equal(captured[0].nativeGoalObjective, initialPrompt);
   assert.equal(captured[0].initialControlInputId, 'input-1');
   assert.equal(captured[0].initialControlInputMessage, correction);
+  assert.equal(captured[1].prompt, correction);
+  assert.equal(captured[1].nativeGoalObjective, initialPrompt);
+  assert.equal(captured[1].resumeSessionId, 'session-1');
+});
+
+test('fresh whole-session providers receive the durable context with the first prompt before FIFO input', async () => {
+  const data: GoalJobData = {
+    goalId: 'goal-whole-session', taskId: 'goal-task-whole-session', repoOwner: 'acme', repoName: 'repo',
+    generation: 0, claimId: 'claim-whole-session',
+  };
+  const initialPrompt = '/goal Ship it';
+  const initialContext = 'Additional ProPR delivery context for the goal above:\n\nImmutable launch policy';
+  const correction = 'Use the existing API shape instead.';
+  const captured: AgentTaskOptions[] = [];
+  const agent = {
+    executeTask: async (options: AgentTaskOptions) => {
+      captured.push(options);
+      return { success: false, modelUsed: 'test-model', executionTimeMs: 1, logs: '', modifiedFiles: [] };
+    },
+  };
+  const goal = {
+    goal_id: data.goalId, initial_prompt: initialPrompt, session_id: null, conversation_id: null,
+    requested_model: 'test-model', current_task_id: data.taskId, agent_type: 'claude',
+  };
+  const prepared = {
+    goal, agent, githubToken: 'token', worktree: { worktreePath: '/tmp/worktree', branchName: 'goal/ship-it' },
+    pendingInput: { input_id: 'context-1', message: initialContext, kind: 'context' },
+  };
+
+  await executePreparedGoal(data, prepared as never);
+  await executePreparedGoal({ ...data, generation: 1 }, {
+    ...prepared,
+    goal: { ...goal, session_id: 'session-1' },
+    pendingInput: { input_id: 'input-1', message: correction, kind: 'input' },
+  } as never);
+
+  assert.equal(captured[0].prompt, `${initialPrompt}\n\n${initialContext}`);
+  assert.equal(captured[0].nativeGoalObjective, initialPrompt);
+  assert.equal(captured[0].initialControlInputId, undefined);
+  assert.equal(captured[0].initialControlInputMessage, undefined);
   assert.equal(captured[1].prompt, correction);
   assert.equal(captured[1].nativeGoalObjective, initialPrompt);
   assert.equal(captured[1].resumeSessionId, 'session-1');
