@@ -9,6 +9,7 @@ const socketState = vi.hoisted(() => ({
   isConnected: true,
   queueCallbacks: new Set<(payload: QueueStatsUpdatePayload) => void>(),
 }));
+const runtimeState = vi.hoisted(() => ({ isDesktop: true }));
 
 vi.mock('../api/proprApi', () => ({
   getQueueStats: vi.fn(),
@@ -17,7 +18,7 @@ vi.mock('../api/proprApi', () => ({
 }));
 
 vi.mock('../api/plannerApi', () => ({ getDrafts: vi.fn() }));
-vi.mock('../config/runtimeMode', () => ({ isDesktopRuntime: () => true }));
+vi.mock('../config/runtimeMode', () => ({ isDesktopRuntime: () => runtimeState.isDesktop }));
 vi.mock('../contexts/useSocket', () => ({
   useSocket: () => ({
     isConnected: socketState.isConnected,
@@ -81,10 +82,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-describe('useHeaderStats desktop recovery', () => {
+describe('useHeaderStats live recovery', () => {
   beforeEach(() => {
     socketState.isConnected = true;
     socketState.queueCallbacks.clear();
+    runtimeState.isDesktop = true;
     vi.mocked(getQueueStats).mockResolvedValue(queueSnapshot([activeJob]) as never);
     vi.mocked(getDrafts).mockResolvedValue({ drafts: [], total: 0, page: 1, limit: 20, hasMore: false });
     vi.mocked(getTasks).mockResolvedValue({ tasks: [] });
@@ -92,6 +94,7 @@ describe('useHeaderStats desktop recovery', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     localStorage.clear();
   });
@@ -139,6 +142,99 @@ describe('useHeaderStats desktop recovery', () => {
     expect(getSystemStatus).toHaveBeenCalledTimes(2);
   });
 
+  it('retries a failed reconciliation and commits unchanged queue counts only after recovery', async () => {
+    const { result } = renderHook(() => useHeaderStats());
+    await waitFor(() => expect(getQueueStats).toHaveBeenCalledTimes(1));
+
+    const recoveredDraft = {
+      draft_id: 'draft-recovered',
+      repository: 'integry/propr',
+      name: 'Recovered plan',
+      initial_prompt: 'Recover the missed plan',
+      status: 'generating' as const,
+      created_at: '2026-09-13T00:00:00.000Z',
+      updated_at: '2026-09-13T00:00:00.000Z',
+    };
+    vi.mocked(getDrafts)
+      .mockRejectedValueOnce(new Error('Drafts temporarily unavailable'))
+      .mockResolvedValueOnce({
+        drafts: [recoveredDraft], total: 1, page: 1, limit: 20, hasMore: false,
+      });
+    vi.useFakeTimers();
+
+    const unchangedPayload = queuePush(1);
+    act(() => socketState.queueCallbacks.forEach(callback => callback(unchangedPayload)));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+    expect(getQueueStats).toHaveBeenCalledTimes(2);
+    expect(result.current.activityStatus).toBe('unavailable');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+
+    expect(getQueueStats).toHaveBeenCalledTimes(3);
+    expect(getDrafts).toHaveBeenCalledTimes(3);
+    expect(getTasks).toHaveBeenCalledTimes(3);
+    expect(getSystemStatus).toHaveBeenCalledTimes(3);
+    expect(result.current.activePlans.map(draft => draft.draft_id)).toEqual(['draft-recovered']);
+    expect(result.current.activityStatus).toBe('available');
+    expect(result.current.error).toBeNull();
+
+    act(() => socketState.queueCallbacks.forEach(callback => callback({
+      ...unchangedPayload,
+      timestamp: '2026-09-13T00:00:05.000Z',
+    })));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+
+    expect(getQueueStats).toHaveBeenCalledTimes(3);
+  });
+
+  it('revalidates missed same-count draft and health changes after a web reconnect', async () => {
+    runtimeState.isDesktop = false;
+    const { result, rerender } = renderHook(() => useHeaderStats());
+    await waitFor(() => expect(getQueueStats).toHaveBeenCalledTimes(1));
+
+    const unchangedPayload = queuePush(1);
+    act(() => socketState.queueCallbacks.forEach(callback => callback(unchangedPayload)));
+    await waitFor(() => expect(getQueueStats).toHaveBeenCalledTimes(2));
+
+    socketState.isConnected = false;
+    rerender();
+
+    vi.mocked(getDrafts).mockResolvedValue({
+      drafts: [{
+        draft_id: 'draft-created-offline',
+        repository: 'integry/propr',
+        name: 'Offline plan',
+        initial_prompt: 'Created while the browser socket was disconnected',
+        status: 'generating',
+        created_at: '2026-09-13T00:01:00.000Z',
+        updated_at: '2026-09-13T00:01:00.000Z',
+      }],
+      total: 1,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+    });
+    vi.mocked(getSystemStatus).mockResolvedValue({
+      ...healthyStatus,
+      redis: 'Disconnected',
+    });
+
+    socketState.isConnected = true;
+    rerender();
+    act(() => socketState.queueCallbacks.forEach(callback => callback({
+      ...unchangedPayload,
+      timestamp: '2026-09-13T00:01:05.000Z',
+    })));
+
+    await waitFor(() => expect(getQueueStats).toHaveBeenCalledTimes(3));
+    expect(getDrafts).toHaveBeenCalledTimes(3);
+    expect(getTasks).toHaveBeenCalledTimes(3);
+    expect(getSystemStatus).toHaveBeenCalledTimes(3);
+    expect(result.current.activePlans.map(draft => draft.draft_id)).toEqual(['draft-created-offline']);
+    expect(result.current.systemHealth.redis).toBe('Disconnected');
+  });
+
   it('invalidates activity during a real transport outage and automatically recovers', async () => {
     const { result, rerender } = renderHook(() => useHeaderStats());
     await waitFor(() => expect(result.current.runningCount).toBe(1));
@@ -158,6 +254,6 @@ describe('useHeaderStats desktop recovery', () => {
     await act(async () => recovered.resolve(queueSnapshot([])));
     await waitFor(() => expect(result.current.activityStatus).toBe('available'));
     expect(result.current.runningCount).toBe(0);
-    expect(getQueueStats).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(getQueueStats).toHaveBeenCalledTimes(2));
   });
 });
