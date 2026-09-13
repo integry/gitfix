@@ -88,9 +88,10 @@ npm run make:dmg -w @propr/desktop -- --arch=arm64
 ```
 
 The Linux transaction durability parity gate runs on both x64 and arm64 package jobs.
-Its exact inventory is 140 tests: 86 credential-service (including the 11 credential
-regressions from #2299), 37 profile-store, 10 pairing-shutdown, and 7 pairing-browser.
-`scripts/run-native-durability.mjs` requires exact suite and scenario counts, all 140
+Its exact inventory is 141 tests: 87 credential-service (including active-work v3
+goal-count coverage and the 11 credential regressions from #2299), 37 profile-store,
+10 pairing-shutdown, and 7 pairing-browser.
+`scripts/run-native-durability.mjs` requires exact suite and scenario counts, all 141
 tests passing, zero failures/cancellations/skips, and a successful child-process exit.
 When adding coverage to these suites, reconcile the runner inventory with an actual
 native durability run; extra tests also fail until the inventory is updated. The

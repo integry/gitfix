@@ -2,8 +2,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const EXPECTED = Object.freeze({
-  // Includes scoped logout/recovery and the 11 credential regressions from #2299.
-  'credential-service': 86,
+  // Includes active-work v3 goal-count coverage, scoped logout/recovery, and
+  // the 11 credential regressions from #2299.
+  'credential-service': 87,
   'profile-store': 37,
   'pairing-shutdown': 10,
   'pairing-browser': 7,

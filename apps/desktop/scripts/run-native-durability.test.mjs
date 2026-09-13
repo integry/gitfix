@@ -36,7 +36,7 @@ const harness = `
 `;
 
 const suiteCounts = [
-  ['main-process desktop credential service', 86],
+  ['main-process desktop credential service', 87],
   ['desktop profile store', 37],
   ['desktop pairing service IPC native shutdown lifecycle', 10],
   ['DesktopCredentialService pairing browser sink', 7],
@@ -64,7 +64,7 @@ const completeOutput = [
     'activate-header', 'activate-body', 'cancel-header', 'cancel-body',
     'never-settling-reader-cancel', 'never-settling-body-cancel',
   ].map(category => `NATIVE_PAIRING_SHUTDOWN ${category}`),
-  '# tests 140', '# pass 140', '# fail 0', '# cancelled 0', '# skipped 0', '',
+  '# tests 141', '# pass 141', '# fail 0', '# cancelled 0', '# skipped 0', '',
 ].join('\n');
 
 const run = ({ output = completeOutput, code = 0, signal = null } = {}) => spawnSync(
@@ -73,23 +73,23 @@ const run = ({ output = completeOutput, code = 0, signal = null } = {}) => spawn
   { encoding: 'utf8', timeout: 10_000 },
 );
 
-test('accepts the exact 140-test inventory after both child pipes drain', () => {
+test('accepts the exact 141-test inventory after both child pipes drain', () => {
   const result = run();
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /credential-service: expected=86 executed=86/);
+  assert.match(result.stdout, /credential-service: expected=87 executed=87/);
   assert.match(result.stdout,
-    /Native durability total: expected=140 executed=140 passed=140 failed=0 cancelled=0 skipped=0/);
+    /Native durability total: expected=141 executed=141 passed=141 failed=0 cancelled=0 skipped=0/);
 });
 
 for (const [name, from, to] of [
-  ['stale credential inventory', '1..86', '1..75'],
-  ['extra credential test', '1..86', '1..87'],
+  ['stale credential inventory', '1..87', '1..86'],
+  ['extra credential test', '1..87', '1..88'],
   ['wrong suite distribution', '1..37', '1..36'],
-  ['missing executed test', '# tests 140', '# tests 139'],
-  ['extra executed test', '# tests 140', '# tests 141'],
-  ['missing passing test', '# pass 140', '# pass 139'],
-  ['extra passing test', '# pass 140', '# pass 141'],
+  ['missing executed test', '# tests 141', '# tests 140'],
+  ['extra executed test', '# tests 141', '# tests 142'],
+  ['missing passing test', '# pass 141', '# pass 140'],
+  ['extra passing test', '# pass 141', '# pass 142'],
   ['failed test', '# fail 0', '# fail 1'],
   ['cancelled test', '# cancelled 0', '# cancelled 1'],
   ['skipped test', '# skipped 0', '# skipped 1'],
