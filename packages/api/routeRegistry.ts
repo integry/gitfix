@@ -15,6 +15,7 @@ import {
   requireManageRuntime,
   requireManageSettings,
 } from './permissionGuards.js';
+import { timeApiRouteHandler } from './apiPerformanceTiming.js';
 
 export type RouteMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
 // A route matrix contains handlers with different inferred parameter shapes.
@@ -128,6 +129,12 @@ export function assertNoDuplicateRoutes(routes: RouteEntry[]): void {
 
 export function registerRouteEntries(app: Express, routes: RouteEntry[]): void {
   routes.forEach(([method, path, ...handlers]) => {
-    app[method](path, ...handlers);
+    const finalHandler = handlers.at(-1);
+    if (!finalHandler) return;
+    app[method](
+      path,
+      ...handlers.slice(0, -1),
+      timeApiRouteHandler(method, path, finalHandler as RequestHandler) as RequestHandler<never>,
+    );
   });
 }

@@ -510,6 +510,38 @@ test('/api/status caches agent health checks briefly', async () => {
   assert.deepEqual(first.body().agents, second.body().agents);
 });
 
+test('/api/status coalesces concurrent expired-cache health snapshots', async () => {
+  configureStatusEnv();
+  let healthChecks = 0;
+  let releaseHealthCheck!: () => void;
+  const healthCheckBlocked = new Promise<void>(resolve => { releaseHealthCheck = resolve; });
+  const config = createAgentConfig();
+  const routes = await createRoutes({
+    redisClient: createRedisClient() as never,
+    loadAgents: async () => [config],
+    agentRegistry: createRegistry([
+      createAgent(config, async () => {
+        healthChecks += 1;
+        await healthCheckBlocked;
+        return true;
+      }),
+    ]),
+    getIndexingQueue: async () => createIndexingQueue(),
+    agentStatusCacheTtlMs: 5_000,
+  });
+
+  const responses = Array.from({ length: 12 }, () => createJsonResponse());
+  const requests = responses.map(response => routes.getStatus({} as Request, response.response));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(healthChecks, 1, 'the fixture burst should launch one health probe');
+  releaseHealthCheck();
+  await Promise.all(requests);
+
+  assert.ok(responses.every(response => response.status() === 200));
+  assert.ok(responses.every(response =>
+    (response.body().agents as Array<{ status: string }>)[0]?.status === 'connected'));
+});
+
 test('/api/status marks an unavailable synthetic pool degraded without downgrading direct agents', async () => {
   const direct = createAgentConfig();
   const syntheticConfig: SyntheticAgentConfig = {

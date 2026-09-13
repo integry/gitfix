@@ -38,6 +38,7 @@ import {
 import { captureVisualPreviewCredentialFromAdminLogin } from './services/visualPreviewOAuth.js';
 import { githubUserGrantService } from './githubUserGrantService.js';
 import './authTypes.js';
+import { timeApiStage } from './apiPerformanceTiming.js';
 
 export { refreshGitHubTokenIfNeeded } from './authGithubTokens.js';
 export { getSessionCookieDomain, shouldUseSecureSessionCookie } from './authSession.js';
@@ -496,7 +497,7 @@ export async function ensureAuthenticated(
         }
 
         if (isGitHubTokenExpired(req)) {
-            const refreshResult = await refreshGitHubTokenWithResult(req, true);
+            const refreshResult = await timeApiStage('auth.session-grant-sync', () => refreshGitHubTokenWithResult(req, true));
             if (refreshResult.status === 'reauth-required' || req.user?.githubAuthInvalid) {
                 if (req.user?.githubAuthInvalid) await clearSessionForReauth(req);
                 res.status(401).json({ error: 'GitHub authentication expired', code: 'GITHUB_REAUTH_REQUIRED', message: 'Your GitHub session has expired. Please log in again.' });
@@ -511,7 +512,7 @@ export async function ensureAuthenticated(
             // downstream route can use an access token invalidated by rotation.
             // Temporary proactive-refresh failures do not invalidate a token
             // whose recorded expiry is still in the future.
-            const refreshResult = await refreshGitHubTokenWithResult(req);
+            const refreshResult = await timeApiStage('auth.session-grant-sync', () => refreshGitHubTokenWithResult(req));
             if (req.user?.githubAuthInvalid) {
                 if (req.user?.githubAuthInvalid) await clearSessionForReauth(req);
                 res.status(401).json({ error: 'GitHub authentication expired', code: 'GITHUB_REAUTH_REQUIRED', message: 'Your GitHub session has expired. Please log in again.' });

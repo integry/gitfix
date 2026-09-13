@@ -32,11 +32,19 @@ test('generic task lists exclude native goal backing tasks', async () => {
       { task_id: 'goal-task', state: 'processing', timestamp: now },
     ]);
 
+    const taskListSql: string[] = [];
+    database.on('query', query => { taskListSql.push(query.sql); });
+
     const result = await getTasksFromDb({
       db: database, status: 'all', repository: 'all', limit: 100, offset: 0,
     });
     assert.equal(result.total, 2);
     assert.deepEqual(new Set((result.tasks as Array<{ id: string }>).map(task => task.id)), new Set(['ordinary-task', 'legacy-task']));
+    assert.equal(taskListSql.length, 2);
+    assert.match(taskListSql[0], /count\(\*\)/i);
+    assert.doesNotMatch(taskListSql[0], /processing_start_timestamp|completion_timestamp|critique_score/i);
+    assert.match(taskListSql[1], /processing_start_timestamp/i);
+    assert.match(taskListSql[1], /critique_score/i);
   } finally {
     await database.destroy();
   }
