@@ -3,13 +3,14 @@ import type { DesktopActiveWorkFetchResult } from './credential-service';
 import type { DesktopNativeCommandDispatcher } from './native-commands';
 
 const MAX_RESPONSE_BYTES = 4_096;
+const MAX_ACTIVE_WORK_COUNT = 1_000_000;
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_MINIMUM_REFRESH_INTERVAL_MS = 2_000;
 
 export interface ActiveWorkCounts {
   tasks: number;
   plans: number;
-  goals: null;
+  goals: number | null;
   openGoals: number;
   total: number;
 }
@@ -42,27 +43,35 @@ type TrayState =
   | { status: 'ready'; counts: ActiveWorkCounts };
 
 const isCount = (value: unknown): value is number =>
-  Number.isSafeInteger(value) && (value as number) >= 0;
+  Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_ACTIVE_WORK_COUNT;
 
 export const parseActiveWorkSnapshot = (value: unknown): ActiveWorkCounts | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const snapshot = value as Record<string, unknown>;
-  if (snapshot.schemaVersion !== 2 || snapshot.label !== 'Active work'
+  if ((snapshot.schemaVersion !== 2 && snapshot.schemaVersion !== 3) || snapshot.label !== 'Active work'
     || typeof snapshot.definition !== 'string' || !snapshot.counts
     || typeof snapshot.counts !== 'object' || Array.isArray(snapshot.counts)) return null;
   if (!snapshot.availability || typeof snapshot.availability !== 'object'
     || Array.isArray(snapshot.availability)) return null;
   const availability = snapshot.availability as Record<string, unknown>;
   if (availability.tasks !== 'available' || availability.plans !== 'available'
-    || availability.goals !== 'unsupported' || availability.openGoals !== 'available') return null;
+    || availability.openGoals !== 'available') return null;
   const counts = snapshot.counts as Record<string, unknown>;
-  if (!isCount(counts.tasks) || !isCount(counts.plans) || counts.goals !== null
-    || !isCount(counts.openGoals) || !isCount(counts.total)
-    || counts.total !== counts.tasks + counts.plans) return null;
+  if (!isCount(counts.tasks) || !isCount(counts.plans) || !isCount(counts.openGoals)
+    || !isCount(counts.total)) return null;
+  let goals: number | null;
+  if (snapshot.schemaVersion === 2) {
+    if (availability.goals !== 'unsupported' || counts.goals !== null) return null;
+    goals = null;
+  } else {
+    if (availability.goals !== 'available' || !isCount(counts.goals)) return null;
+    goals = counts.goals;
+  }
+  if (counts.total !== counts.tasks + counts.plans + (goals ?? 0)) return null;
   return {
     tasks: counts.tasks,
     plans: counts.plans,
-    goals: null,
+    goals,
     openGoals: counts.openGoals,
     total: counts.total,
   };
@@ -152,9 +161,8 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
     if (state.status === 'ready') {
       const { counts } = state;
       const exact = (count: number): string => count.toLocaleString('en-US');
-      tray.setToolTip(
-        `ProPR — Active work: ${exact(counts.total)} — Tasks ${exact(counts.tasks)}, Plans ${exact(counts.plans)}, Goals unsupported; Open goals ${exact(counts.openGoals)} (not active)`,
-      );
+      const goalsDetail = counts.goals === null ? 'Goals unsupported' : `Goals ${exact(counts.goals)}`;
+      tray.setToolTip(`ProPR — Active work: ${exact(counts.total)} — Tasks ${exact(counts.tasks)}, Plans ${exact(counts.plans)}, ${goalsDetail}; Goal backlog ${exact(counts.openGoals)} (not executing)`);
       if (options.platform === 'darwin') tray.setTitle(formatTrayCount(counts.total));
       options.setBadgeCount(counts.total);
       const commandState = options.commands.getState();
@@ -165,8 +173,10 @@ export const createDesktopTrayController = (options: DesktopTrayOptions): Deskto
         { label: `Tasks: ${exact(counts.tasks)}`, enabled: commandState.authenticated, click: () => options.commands.dispatch('tasks') },
         { label: `Plans: ${exact(counts.plans)}`, enabled: commandState.authenticated, click: () => options.commands.dispatch('plans') },
         { label: 'Inbox', enabled: commandState.authenticated, click: () => options.commands.dispatch('inbox') },
-        { label: 'Goals: Unsupported (no executing state)', enabled: false },
-        { label: `Open goals (not active): ${exact(counts.openGoals)}`, enabled: false },
+        counts.goals === null
+          ? { label: 'Goals: Unsupported (server upgrade required)', enabled: false }
+          : { label: `Goals: ${exact(counts.goals)}`, enabled: commandState.authenticated, click: () => options.commands.dispatch('goals') },
+        { label: `Goal backlog (not executing): ${exact(counts.openGoals)}`, enabled: false },
         { type: 'separator' },
         { label: 'Switch / Manage Instances…', click: () => options.commands.dispatch('manage-instances') },
         { label: 'Notification Settings…', enabled: commandState.authenticated, click: () => options.commands.dispatch('notification-settings') },
