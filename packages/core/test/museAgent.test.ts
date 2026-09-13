@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { after, test } from 'node:test';
 import { MuseAgent, buildMuseDockerArgs, parseMuseJsonl } from '../src/agents/impl/MuseAgent.js';
+import { cleanupMuseAnalysisWorkspace, ensureMuseAnalysisWorkspace } from '../src/agents/impl/museUtils.js';
 import { createAgentFromConfig } from '../src/agents/createAgentFromConfig.js';
 import { db } from '../src/db/connection.js';
 import type { AgentConfig } from '../src/agents/types.js';
@@ -60,6 +64,24 @@ test('Muse Docker args mount credentials and pass prompts over stdin wrapper', (
     assert.ok(args.includes('--json'));
     assert.ok(args.includes('muse-spark-1.3'));
     assert.ok(!args.includes('Review this change'));
+});
+
+test('Muse analysis workspace is readable by the node runtime user', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-analysis-root-'));
+    const previousRoot = process.env.MUSE_ANALYSIS_ROOT;
+    process.env.MUSE_ANALYSIS_ROOT = root;
+    try {
+        const workspace = ensureMuseAnalysisWorkspace();
+        try {
+            assert.equal(fs.statSync(workspace).mode & 0o777, 0o755);
+        } finally {
+            cleanupMuseAnalysisWorkspace(workspace);
+        }
+    } finally {
+        if (previousRoot === undefined) delete process.env.MUSE_ANALYSIS_ROOT;
+        else process.env.MUSE_ANALYSIS_ROOT = previousRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });
 
 test('agent factory constructs Muse with goal mode disabled', () => {

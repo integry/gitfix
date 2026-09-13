@@ -157,7 +157,14 @@ export function buildMuseDockerArgs(config: AgentConfig, params: MuseDockerArgsP
 export function ensureMuseAnalysisWorkspace(): string {
     const root = process.env.MUSE_ANALYSIS_ROOT || '/tmp/git-processor';
     fs.mkdirSync(root, { recursive: true, mode: 0o755 });
-    return fs.mkdtempSync(path.join(root, 'muse-analysis-'));
+    const workspace = fs.mkdtempSync(path.join(root, 'muse-analysis-'));
+    // mkdtempSync creates the directory 0700 owned by the API process (root).
+    // The Muse container runs as the unprivileged `node` user and must be able
+    // to read the read-only workspace mount, so relax it like Vibe does.
+    try {
+        fs.chmodSync(workspace, 0o755);
+    } catch { /* best-effort */ }
+    return workspace;
 }
 
 export function cleanupMuseAnalysisWorkspace(workspace: string | undefined): void {
