@@ -7,6 +7,7 @@ import {
   type DesktopNotificationPreferences,
   type DesktopNotificationScope,
   type DesktopNotificationSettings,
+  type DesktopNotificationTestResult,
   type DesktopPlatform,
   type DesktopTaskTransition,
 } from './shared/contract';
@@ -30,12 +31,18 @@ interface StoredPreferences {
 
 export interface NativeNotificationHandle {
   close(): void;
-  onClose?(listener: () => void): void;
 }
 
 export interface NativeNotificationPayload {
   title: string;
   body: string;
+}
+
+export interface NativeNotificationEvents {
+  click(): void;
+  close(): void;
+  failed(): void;
+  shown(): void;
 }
 
 interface PendingNotice {
@@ -56,10 +63,11 @@ export interface NativeNotificationServiceOptions {
   platform: DesktopPlatform;
   isSupported(): boolean;
   isActiveScope(scope: DesktopNotificationScope): boolean;
-  show(payload: NativeNotificationPayload, onClick: () => void): NativeNotificationHandle;
+  show(payload: NativeNotificationPayload, events: NativeNotificationEvents): NativeNotificationHandle;
   navigate(path: string): void;
   now?: () => number;
   batchDelayMs?: number;
+  testDeliveryTimeoutMs?: number;
   beforePersist?(): Promise<void>;
   log?(level: 'warn' | 'error', event: string): void;
   onSettingsChanged?(scope?: DesktopNotificationScope): void;
@@ -77,6 +85,19 @@ const MAX_STORED_ACCOUNTS = 1_000;
 const MAX_INDIVIDUAL_BURST = 3;
 const DELIVERY_RATE_WINDOW_MS = 30_000;
 const MAX_DELIVERIES_PER_WINDOW = 6;
+const TEST_DELIVERY_TIMEOUT_MS = 3_000;
+
+type NativeNotificationDeliveryStatus = Exclude<DesktopNotificationTestResult['status'], 'not-attempted'>;
+
+interface NativeNotificationAttempt {
+  delivery: Promise<NativeNotificationDeliveryStatus>;
+}
+
+interface LiveNotification {
+  handle: NativeNotificationHandle;
+  scope: DesktopNotificationScope;
+  cancel(): void;
+}
 
 const copyDefaults = (): DesktopNotificationPreferences => ({
   ...DEFAULT_DESKTOP_NOTIFICATION_PREFERENCES,
@@ -191,6 +212,7 @@ export class NativeNotificationService {
   readonly #options: NativeNotificationServiceOptions;
   readonly #now: () => number;
   readonly #batchDelayMs: number;
+  readonly #testDeliveryTimeoutMs: number;
   #state: StoredPreferences = { version: 1, accounts: {} };
   #loaded: Promise<void> | null = null;
   #writeTail: Promise<void> = Promise.resolve();
@@ -199,7 +221,7 @@ export class NativeNotificationService {
   #seen = new Map<string, true>();
   #terminal = new Map<string, true>();
   #taskTransitions = new Map<string, TaskTransitionCursor>();
-  #live = new Set<NativeNotificationHandle>();
+  #live = new Set<LiveNotification>();
   #accountScope: DesktopNotificationScope | null = null;
   #deliveryTimes: number[] = [];
   #closed = false;
@@ -208,6 +230,7 @@ export class NativeNotificationService {
     this.#options = options;
     this.#now = options.now ?? Date.now;
     this.#batchDelayMs = options.batchDelayMs ?? 750;
+    this.#testDeliveryTimeoutMs = options.testDeliveryTimeoutMs ?? TEST_DELIVERY_TIMEOUT_MS;
   }
 
   capability(): DesktopNotificationCapability {
@@ -277,17 +300,20 @@ export class NativeNotificationService {
     await this.#update(scope, { enabled }, true);
   }
 
-  async test(scope: DesktopNotificationScope): Promise<{ invoked: boolean }> {
+  async test(scope: DesktopNotificationScope): Promise<DesktopNotificationTestResult> {
     this.#requireActiveScope(scope);
     this.#activateScope(scope);
     await this.#load();
     const settings = this.#settings(scope);
-    if (!settings.capability.supported || !settings.preferences.enabled) return { invoked: false };
-    const invoked = this.#display(scope, {
+    if (!settings.capability.supported || !settings.preferences.enabled) {
+      return { status: 'not-attempted' };
+    }
+    const attempt = this.#display(scope, {
       title: 'Desktop notifications are ready',
       body: 'ProPR can send task status updates on this device.',
     }, '/tasks');
-    return { invoked };
+    if (!attempt) return { status: 'not-attempted' };
+    return { status: await this.#boundedTestDelivery(attempt.delivery) };
   }
 
   async publish(
@@ -349,8 +375,12 @@ export class NativeNotificationService {
       this.#batchTimer = null;
     }
     if (!scope || (this.#accountScope && sameScope(this.#accountScope, scope))) {
-      for (const notification of this.#live) notification.close();
-      this.#live.clear();
+      for (const notification of [...this.#live]) {
+        if (scope && !sameScope(notification.scope, scope)) continue;
+        this.#live.delete(notification);
+        notification.cancel();
+        notification.handle.close();
+      }
     }
   }
 
@@ -463,17 +493,72 @@ export class NativeNotificationService {
     }
   }
 
-  #display(scope: DesktopNotificationScope, payload: NativeNotificationPayload, path: string): boolean {
-    if (this.#closed || !this.#isCurrentScope(scope) || this.#availableDeliveries() === 0) return false;
+  #display(
+    scope: DesktopNotificationScope,
+    payload: NativeNotificationPayload,
+    path: string,
+  ): NativeNotificationAttempt | null {
+    if (this.#closed || !this.#isCurrentScope(scope) || this.#availableDeliveries() === 0) return null;
     this.#deliveryTimes.push(this.#now());
-    let handle: NativeNotificationHandle;
-    handle = this.#options.show(payload, () => {
-      this.#live.delete(handle);
-      if (!this.#closed && this.#isCurrentScope(scope)) this.#options.navigate(path);
+    let settleDelivery!: (status: NativeNotificationDeliveryStatus) => void;
+    let deliverySettled = false;
+    let terminal = false;
+    let live: LiveNotification | null = null;
+    const delivery = new Promise<NativeNotificationDeliveryStatus>(resolve => {
+      settleDelivery = status => {
+        if (deliverySettled) return;
+        deliverySettled = true;
+        resolve(status);
+      };
     });
-    this.#live.add(handle);
-    handle.onClose?.(() => this.#live.delete(handle));
-    return true;
+    const remove = (): void => {
+      terminal = true;
+      if (live) this.#live.delete(live);
+    };
+    const fail = (): void => {
+      if (terminal) return;
+      remove();
+      settleDelivery('failed');
+      this.#options.log?.('warn', 'desktop.notifications.delivery_failed');
+    };
+    try {
+      const handle = this.#options.show(payload, {
+        click: () => {
+          remove();
+          settleDelivery('accepted');
+          if (!this.#closed && this.#isCurrentScope(scope)) this.#options.navigate(path);
+        },
+        close: () => {
+          remove();
+          settleDelivery('cancelled');
+        },
+        failed: fail,
+        shown: () => settleDelivery('accepted'),
+      });
+      live = {
+        handle,
+        scope: { ...scope },
+        cancel: () => settleDelivery('cancelled'),
+      };
+      if (!terminal) this.#live.add(live);
+    } catch {
+      fail();
+    }
+    return { delivery };
+  }
+
+  async #boundedTestDelivery(
+    delivery: Promise<NativeNotificationDeliveryStatus>,
+  ): Promise<NativeNotificationDeliveryStatus> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unconfirmed = new Promise<NativeNotificationDeliveryStatus>(resolve => {
+      timer = setTimeout(() => resolve('unconfirmed'), this.#testDeliveryTimeoutMs);
+    });
+    try {
+      return await Promise.race([delivery, unconfirmed]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   #availableDeliveries(): number {

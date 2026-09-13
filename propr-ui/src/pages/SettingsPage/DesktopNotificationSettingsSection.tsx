@@ -95,6 +95,7 @@ const DesktopNotificationSettingsSection: React.FC = () => {
   }, [notifications, scope]);
 
   if (!notifications || !scope) return null;
+  const capability = settings?.capability;
 
   const update = async (change: Partial<DesktopNotificationPreferences>): Promise<void> => {
     const generation = scopeGeneration.current;
@@ -127,9 +128,17 @@ const DesktopNotificationSettingsSection: React.FC = () => {
     try {
       const result = await notifications.bridge.test(scope);
       if (operationIsCurrent()) {
-        setTestResult(result.invoked
-          ? 'Test sent. Your operating system decides whether a banner is displayed.'
-          : 'The native notification service is unavailable or disabled.');
+        const messages: Record<typeof result.status, string> = {
+          accepted: 'The operating system accepted the test notification. A banner may still be suppressed by notification settings, Focus, or Do Not Disturb.',
+          failed: capability?.platform === 'darwin'
+            ? 'macOS rejected the test notification. Temporary builds may not meet macOS signing requirements; use a signed, installed build to validate delivery.'
+            : 'The operating system rejected the test notification. Check the desktop logs for the privacy-safe delivery failure event.',
+          unconfirmed: 'The notification request was submitted, but the operating system did not confirm delivery. No banner is assumed.',
+          'not-attempted': 'The native notification service is unavailable, disabled, or temporarily rate limited.',
+          cancelled: 'The test notification was cancelled before delivery was confirmed.',
+        };
+        if (result.status === 'failed') setError(messages.failed);
+        else setTestResult(messages[result.status]);
       }
     } catch (testError) {
       if (operationIsCurrent()) {
@@ -140,7 +149,6 @@ const DesktopNotificationSettingsSection: React.FC = () => {
     }
   };
 
-  const capability = settings?.capability;
   const unsupported = capability?.supported === false;
   const windowsDeferred = capability?.reason === 'platform-deferred';
   const disabled = busy || !settings || unsupported;
@@ -213,7 +221,7 @@ const DesktopNotificationSettingsSection: React.FC = () => {
         </div>
       )}
 
-      {testResult && <p role="status" className="mt-3 text-xs text-green-700">{testResult}</p>}
+      {testResult && <p role="status" className="mt-3 text-xs text-gray-700">{testResult}</p>}
       {error && <p role="alert" className="mt-3 text-xs text-red-600">{error}</p>}
     </section>
   );
