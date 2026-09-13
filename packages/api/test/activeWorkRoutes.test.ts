@@ -21,6 +21,15 @@ before(async () => {
     table.boolean('is_completed').notNullable();
     table.text('linked_draft_id').nullable();
   });
+  await database.schema.createTable('goals', table => {
+    table.text('goal_id').primary();
+    table.text('owner_id').notNullable();
+    table.text('desired_state').notNullable();
+    table.text('result_state').nullable();
+    table.text('current_task_id').notNullable();
+    table.integer('run_generation').notNullable();
+    table.text('run_claim').nullable();
+  });
 });
 
 after(async () => database.destroy());
@@ -31,9 +40,10 @@ const instanceAuthorization: InstanceAuthorization = {
   source: 'managed',
 };
 
-const authorizedRequest = (userId: string): Request => ({
+const authorizedRequest = (userId: string, schemaVersion?: string): Request => ({
   user: { id: userId },
   authorization: instanceAuthorization,
+  query: schemaVersion ? { schemaVersion } : {},
 } as Request);
 
 const responseRecorder = (): {
@@ -53,6 +63,7 @@ const responseRecorder = (): {
 test('idle goal backlog is reported as open and cannot inflate active work', async () => {
   await database('task_drafts').del();
   await database('repo_todos').del();
+  await database('goals').del();
   await database('task_drafts').insert([
     { draft_id: 'generating-a', user_id: 'user-a', status: 'generating' },
     { draft_id: 'refining-a', user_id: 'user-a', status: 'refining' },
@@ -90,7 +101,7 @@ test('idle goal backlog is reported as open and cannot inflate active work', asy
   assert.deepEqual(recorded.body(), {
     schemaVersion: 2,
     label: 'Active work',
-    definition: ACTIVE_WORK_DEFINITION,
+    definition: 'Running tasks + generating or refining plans; open goals are reported separately',
     availability: {
       tasks: 'available',
       plans: 'available',
@@ -101,9 +112,73 @@ test('idle goal backlog is reported as open and cannot inflate active work', asy
   });
 });
 
+test('v3 counts current executing owned goals separately from ordinary tasks and plans', async () => {
+  await database('task_drafts').del();
+  await database('repo_todos').del();
+  await database('goals').del();
+  await database('task_drafts').insert([
+    { draft_id: 'generating-a', user_id: 'user-a', status: 'generating' },
+    { draft_id: 'generating-b', user_id: 'user-b', status: 'generating' },
+  ]);
+  await database('goals').insert([
+    { goal_id: 'executing', owner_id: 'user-a', desired_state: 'running', result_state: null, current_task_id: 'goal-task-1', run_generation: 2, run_claim: 'claim-2' },
+    { goal_id: 'paused', owner_id: 'user-a', desired_state: 'paused', result_state: null, current_task_id: 'goal-task-2', run_generation: 0, run_claim: 'claim-paused' },
+    { goal_id: 'queued', owner_id: 'user-a', desired_state: 'running', result_state: null, current_task_id: 'goal-task-3', run_generation: 0, run_claim: 'claim-queued' },
+    { goal_id: 'completed', owner_id: 'user-a', desired_state: 'running', result_state: 'completed', current_task_id: 'goal-task-4', run_generation: 0, run_claim: 'claim-completed' },
+    { goal_id: 'other-owner', owner_id: 'user-b', desired_state: 'running', result_state: null, current_task_id: 'goal-task-5', run_generation: 0, run_claim: 'claim-other' },
+    { goal_id: 'other-owner-2', owner_id: 'user-b', desired_state: 'running', result_state: null, current_task_id: 'goal-task-7', run_generation: 1, run_claim: 'claim-other-2' },
+    { goal_id: 'stale-attempt', owner_id: 'user-a', desired_state: 'running', result_state: null, current_task_id: 'goal-task-6', run_generation: 3, run_claim: 'claim-current' },
+  ]);
+  const requestedStates: string[][] = [];
+  const activeJobs = [
+    { id: 'ordinary-task', name: 'processGitHubIssue', data: { number: 2358 } },
+    { id: 'goal-executing', name: 'processGoal', data: { goalId: 'executing', taskId: 'goal-task-1', generation: 2, claimId: 'claim-2' } },
+    { id: 'goal-executing-duplicate', name: 'processGoal', data: { goalId: 'executing', taskId: 'goal-task-1', generation: 2, claimId: 'claim-2' } },
+    { id: 'goal-paused', name: 'processGoal', data: { goalId: 'paused', taskId: 'goal-task-2', generation: 0, claimId: 'claim-paused' } },
+    { id: 'goal-completed', name: 'processGoal', data: { goalId: 'completed', taskId: 'goal-task-4', generation: 0, claimId: 'claim-completed' } },
+    { id: 'goal-other-owner', name: 'processGoal', data: { goalId: 'other-owner', taskId: 'goal-task-5', generation: 0, claimId: 'claim-other' } },
+    { id: 'goal-other-owner-2', name: 'processGoal', data: { goalId: 'other-owner-2', taskId: 'goal-task-7', generation: 1, claimId: 'claim-other-2' } },
+    { id: 'goal-stale-attempt', name: 'processGoal', data: { goalId: 'stale-attempt', taskId: 'goal-task-6', generation: 2, claimId: 'claim-old' } },
+  ];
+  const routes = createActiveWorkRoutes({
+    db: database,
+    taskQueue: { getJobs: async (states: string[]) => { requestedStates.push(states); return activeJobs; } } as never,
+  });
+
+  const current = responseRecorder();
+  await routes.getActiveWork(authorizedRequest('user-a', '3'), current.response);
+
+  assert.equal(current.status(), 200);
+  assert.deepEqual(requestedStates, [['active']]);
+  assert.deepEqual(current.body(), {
+    schemaVersion: 3,
+    label: 'Active work',
+    definition: ACTIVE_WORK_DEFINITION,
+    availability: { tasks: 'available', plans: 'available', goals: 'available', openGoals: 'available' },
+    counts: { tasks: 1, plans: 1, goals: 1, openGoals: 0, total: 3 },
+  });
+
+  const legacy = responseRecorder();
+  await routes.getActiveWork(authorizedRequest('user-a'), legacy.response);
+  assert.deepEqual(legacy.body(), {
+    schemaVersion: 2,
+    label: 'Active work',
+    definition: 'Running tasks + generating or refining plans; open goals are reported separately',
+    availability: { tasks: 'available', plans: 'available', goals: 'unsupported', openGoals: 'available' },
+    counts: { tasks: 2, plans: 1, goals: null, openGoals: 0, total: 3 },
+  });
+
+  const otherOwner = responseRecorder();
+  await routes.getActiveWork(authorizedRequest('user-b', '3'), otherOwner.response);
+  assert.deepEqual((otherOwner.body().counts as Record<string, unknown>), {
+    tasks: 1, plans: 1, goals: 2, openGoals: 0, total: 4,
+  });
+});
+
 test('authorized instance account sees canonical active jobs and unresolved accounts stay isolated', async () => {
   await database('task_drafts').del();
   await database('repo_todos').del();
+  await database('goals').del();
   const issueJobData: IssueJobData = {
     repoOwner: 'integry',
     repoName: 'propr',

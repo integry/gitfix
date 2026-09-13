@@ -6,17 +6,17 @@ import { createDesktopTrayController, formatTrayCount, parseActiveWorkSnapshot }
 
 const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 10));
 
-const snapshot = (tasks: number, plans: number, openGoals: number): Response => Response.json({
-  schemaVersion: 2,
+const snapshot = (tasks: number, plans: number, openGoals: number, goals = 0): Response => Response.json({
+  schemaVersion: 3,
   label: 'Active work',
-  definition: 'Running tasks + generating or refining plans; open goals are reported separately',
+  definition: 'Running non-goal tasks + generating or refining plans + executing native goals; open goals are reported separately',
   availability: {
     tasks: 'available',
     plans: 'available',
-    goals: 'unsupported',
+    goals: 'available',
     openGoals: 'available',
   },
-  counts: { tasks, plans, goals: null, openGoals, total: tasks + plans },
+  counts: { tasks, plans, goals, openGoals, total: tasks + plans + goals },
 });
 
 class FakeTray {
@@ -59,6 +59,13 @@ describe('desktop system tray', () => {
       availability: { tasks: 'available', plans: 'available', goals: 'unsupported', openGoals: 'available' },
       counts: { tasks: 2, plans: 3, goals: null, openGoals: 40, total: 5 },
     }), { tasks: 2, plans: 3, goals: null, openGoals: 40, total: 5 });
+    assert.deepEqual(parseActiveWorkSnapshot({
+      schemaVersion: 3,
+      label: 'Active work',
+      definition: 'definition',
+      availability: { tasks: 'available', plans: 'available', goals: 'available', openGoals: 'available' },
+      counts: { tasks: 2, plans: 3, goals: 4, openGoals: 40, total: 9 },
+    }), { tasks: 2, plans: 3, goals: 4, openGoals: 40, total: 9 });
     assert.equal(parseActiveWorkSnapshot({
       schemaVersion: 2,
       label: 'Active work',
@@ -66,6 +73,15 @@ describe('desktop system tray', () => {
       availability: { tasks: 'available', plans: 'available', goals: 'unsupported', openGoals: 'available' },
       counts: { tasks: 2, plans: 3, goals: null, openGoals: 40, total: 45 },
     }), null);
+    for (const goals of [-1, 1_000_001, '1']) {
+      assert.equal(parseActiveWorkSnapshot({
+        schemaVersion: 3,
+        label: 'Active work',
+        definition: 'definition',
+        availability: { tasks: 'available', plans: 'available', goals: 'available', openGoals: 'available' },
+        counts: { tasks: 2, plans: 3, goals, openGoals: 0, total: 5 + Number(goals) },
+      }), null);
+    }
     assert.equal(formatTrayCount(0), '0');
     assert.equal(formatTrayCount(99), '99');
     assert.equal(formatTrayCount(100), '99+');
@@ -107,16 +123,17 @@ describe('desktop system tray', () => {
     assert.match(fakeTray.tooltip, /Active work: 0/);
     assert.ok(menuTemplate.some(item => item.label === 'Tasks: 0'));
 
-    next = snapshot(73, 25, 5);
+    next = snapshot(73, 25, 5, 1);
     controller.refresh();
     await tick();
-    assert.equal(fakeTray.title, '98');
-    assert.match(fakeTray.tooltip, /Active work: 98/);
-    assert.match(fakeTray.tooltip, /Open goals 5 \(not active\)/);
+    assert.equal(fakeTray.title, '99');
+    assert.match(fakeTray.tooltip, /Active work: 99/);
+    assert.match(fakeTray.tooltip, /Goals 1/);
+    assert.match(fakeTray.tooltip, /Goal backlog 5 \(not executing\)/);
     assert.ok(menuTemplate.some(item => item.label === 'Plans: 25'));
-    assert.ok(menuTemplate.some(item => item.label === 'Goals: Unsupported (no executing state)'));
-    assert.ok(menuTemplate.some(item => item.label === 'Open goals (not active): 5'));
-    assert.equal(badges.at(-1), 98);
+    assert.ok(menuTemplate.some(item => item.label === 'Goals: 1'));
+    assert.ok(menuTemplate.some(item => item.label === 'Goal backlog (not executing): 5'));
+    assert.equal(badges.at(-1), 99);
 
     fakeTray.listeners.get('click')?.();
     assert.equal(fakeTray.popups, 1, 'primary activation opens the actionable menu');
@@ -300,6 +317,7 @@ describe('desktop system tray', () => {
 
   it('drops scoped stale responses and marks network failures unavailable instead of zero', async () => {
     const fakeTray = new FakeTray();
+    const badges: number[] = [];
     let resolveFetch!: (value: { status: 'response'; response: Response }) => void;
     const pending = new Promise<{ status: 'response'; response: Response }>(resolve => { resolveFetch = resolve; });
     let request = 0;
@@ -308,7 +326,7 @@ describe('desktop system tray', () => {
       icon: {} as NativeImage,
       createTray: () => fakeTray as unknown as Tray,
       buildMenu: () => ({} as Menu),
-      setBadgeCount: () => false,
+      setBadgeCount: count => { badges.push(count); return true; },
       fetchActiveWork: async () => {
         request += 1;
         if (request === 1) return pending;
@@ -328,11 +346,13 @@ describe('desktop system tray', () => {
     await tick();
     assert.match(fakeTray.tooltip, /Instance changed/);
     assert.doesNotMatch(fakeTray.tooltip, /Active work: 18/);
+    assert.equal(badges.at(-1), 0, 'an instance switch clears the previous account badge');
 
     controller.connectionAvailable();
     await tick();
     assert.match(fakeTray.tooltip, /Active work unavailable — Instance unavailable/);
     assert.doesNotMatch(fakeTray.tooltip, /Active work: 0/);
+    assert.equal(badges.at(-1), 0, 'a failed reconnect cannot restore stale counts');
     controller.close();
   });
 

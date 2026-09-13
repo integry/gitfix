@@ -171,6 +171,43 @@ afterEach(async () => {
 });
 
 describe('main-process desktop credential service', () => {
+  it('negotiates active-work v3 while remaining able to receive a legacy server response', async () => {
+    const store = await createStore();
+    const profile = await store.save({ id: 'active-work', label: 'Active work', apiBaseUrl: 'https://active.example.test' });
+    await store.writeCredential(credential(profile.id, profile.apiBaseUrl, 'A'));
+    const requests: URL[] = [];
+    const service = createCredentialService({
+      profiles: store,
+      clientName: 'Active work negotiation test',
+      openPairingBrowser: async () => undefined,
+      fetch: async input => {
+        const url = new URL(input.toString());
+        requests.push(url);
+        if (url.pathname === '/api/desktop/discovery') return json(discovery);
+        if (url.pathname === '/api/desktop/active-work') {
+          return json({
+            schemaVersion: 2,
+            label: 'Active work',
+            definition: 'legacy',
+            availability: { tasks: 'available', plans: 'available', goals: 'unsupported', openGoals: 'available' },
+            counts: { tasks: 1, plans: 2, goals: null, openGoals: 3, total: 3 },
+          });
+        }
+        return json({ username: 'octocat' });
+      },
+    });
+    const ready = await service.probe(profile);
+    assert.equal(ready.status, 'ready');
+    if (ready.status !== 'ready') return;
+    await service.activate(ready.activationTicket);
+
+    const result = await service.fetchActiveWork(new AbortController().signal);
+
+    assert.equal(result.status, 'response');
+    const activeWorkRequest = requests.find(url => url.pathname === '/api/desktop/active-work');
+    assert.equal(activeWorkRequest?.searchParams.get('schemaVersion'), '3');
+  });
+
   for (const offline of [false, true]) {
     it(`logs out only the active bearer durably with server ${offline ? 'offline' : 'connected'}`, async () => {
       const store = await createStore();
