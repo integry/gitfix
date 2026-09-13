@@ -240,7 +240,7 @@ interface PreparedGoalAttempt {
     agent: Agent;
     githubToken: string;
     worktree: { worktreePath: string; branchName: string };
-    pendingInput: { input_id: string; message: string } | null;
+    pendingInput: { input_id: string; message: string; kind: string } | null;
     checkpointFeedback?: string;
 }
 
@@ -310,8 +310,16 @@ async function prepareClaimedGoalAttempt(data: GoalJobData, claimed: GoalRow): P
 export async function executePreparedGoal(data: GoalJobData, prepared: PreparedGoalAttempt): Promise<AgentExecutionResult> {
     const { goal, agent, githubToken, worktree, pendingInput, checkpointFeedback } = prepared;
     const freshSession = !goal.session_id;
+    // Codex steers the durable delivery context as a same-turn second message.
+    // The other providers have no steer capability, so their first invocation
+    // must carry the context inside the initial prompt to govern from the start.
+    const initialContextInput = freshSession && goal.agent_type !== 'codex' && pendingInput?.kind === 'context'
+        ? pendingInput
+        : null;
     const prompt = freshSession
-        ? goal.initial_prompt
+        ? initialContextInput
+            ? `${goal.initial_prompt}\n\n${initialContextInput.message}`
+            : goal.initial_prompt
         : pendingInput?.message
             ?? checkpointFeedback
             ?? GOAL_CONTINUE_INPUT;
@@ -332,6 +340,7 @@ export async function executePreparedGoal(data: GoalJobData, prepared: PreparedG
             resumeSessionId: goal.session_id ?? undefined,
             resumeConversationId: goal.conversation_id ?? undefined,
             initialControlInputId: goal.agent_type === 'codex' ? pendingInput?.input_id : undefined,
+            initialControlInputMessage: goal.agent_type === 'codex' ? pendingInput?.message : undefined,
             initialGoalFeedback: goal.agent_type === 'codex' ? checkpointFeedback : undefined,
             goalControl: control,
             environment: buildGoalPolicyEnvironment(goal.launch_strategy),
@@ -340,7 +349,7 @@ export async function executePreparedGoal(data: GoalJobData, prepared: PreparedG
                     job: data, goal, sessionId, conversationId,
                     acknowledgeControls: !pendingInput,
                 });
-                if (pendingInput && goal.agent_type !== 'codex' && !freshSession) {
+                if (pendingInput && goal.agent_type !== 'codex' && (!freshSession || initialContextInput)) {
                     await control.markInputDelivered(pendingInput.input_id, `session:${sessionId}`);
                 }
                 if (freshSession && goal.agent_type !== 'codex') {

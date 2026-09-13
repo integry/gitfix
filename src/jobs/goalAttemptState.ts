@@ -232,9 +232,11 @@ export function createGoalExecutionControl(job: GoalJobData): GoalExecutionContr
     };
 }
 
-export async function firstPendingGoalInput(goal: GoalRow): Promise<{ input_id: string; message: string } | null> {
+export async function firstPendingGoalInput(
+    goal: GoalRow,
+): Promise<{ input_id: string; message: string; kind: string } | null> {
     return await db('goal_inputs')
         .where({ goal_id: goal.goal_id, owner_id: goal.owner_id, state: 'pending' })
         .orderBy('sequence', 'asc')
-        .first('input_id', 'message') ?? null;
+        .first('input_id', 'message', 'kind') ?? null;
 }
